@@ -1,0 +1,194 @@
+@import "tailwindcss";
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CNTP OPS — DESIGN SYSTEM
+   Tailwind v4 CSS-first config. All tokens live in @theme.
+   Fonts: Geist (display/headings) · Inter (body) · Geist Mono (data)
+   Aesthetic: sophisticated industrial ops — Linear meets Bloomberg.
+══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── Fonts — next/font injects the vars, @theme references them ── */
+  --font-display: var(--font-display, 'Geist', sans-serif);
+  --font-body:    var(--font-body,    'Inter', sans-serif);
+  --font-mono:    var(--font-mono,    'Geist Mono', monospace);
+
+  /* ── Brand — deep forest green ── */
+  --color-brand:       #0D1F0D;
+  --color-brand-dark:  #060F06;
+  --color-brand-mid:   #1A3A1A;
+  --color-brand-hover: #162B16;
+
+  /* ── Accent ── */
+  --color-accent:       #2E7D32;
+  --color-accent-light: #4CAF50;
+  --color-accent-bg:    #E8F5E9;
+
+  /* ── Surfaces ── */
+  --color-surface:        #F5F5F4;
+  --color-surface-card:   #FFFFFF;
+  --color-surface-raised: #FAFAF9;
+  --color-surface-rule:   #E7E5E4;
+  --color-surface-dim:    #EDEDE B;
+
+  /* ── Text ── */
+  --color-text:       #1C1917;
+  --color-text-muted: #78716C;
+  --color-text-faint: #A8A29E;
+
+  /* ── Status ── */
+  --color-ok:       #15803D;
+  --color-ok-bg:    #F0FDF4;
+  --color-warn:     #C2410C;
+  --color-warn-bg:  #FFF7ED;
+  --color-err:      #B91C1C;
+  --color-err-bg:   #FEF2F2;
+  --color-info:     #1D4ED8;
+  --color-info-bg:  #EFF6FF;
+
+  /* ── Status aliases (used in older components) ── */
+  --color-status-ok:     #15803D;
+  --color-status-warn:   #C2410C;
+  --color-status-err:    #B91C1C;
+  --color-status-info:   #1D4ED8;
+  --color-status-okBg:   #F0FDF4;
+  --color-status-warnBg: #FFF7ED;
+  --color-status-errBg:  #FEF2F2;
+  --color-status-infoBg: #EFF6FF;
+
+  /* ── Shadows ── */
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-menu: 0 10px 38px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BASE RESET
+══════════════════════════════════════════════════════════════════════════ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Remove number spinners */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+input[type=number] { -moz-appearance: textfield; }
+
+/* Fine scrollbar */
+::-webkit-scrollbar        { width: 4px; height: 4px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--color-surface-rule); border-radius: 4px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TYPOGRAPHY CLASSES
+   Tailwind v4 auto-generates font-display / font-body / font-mono from
+   @theme, but we also declare explicit classes as a safety net.
+══════════════════════════════════════════════════════════════════════════ */
+.font-display { font-family: var(--font-display) !important; }
+.font-body    { font-family: var(--font-body)    !important; }
+.font-mono    { font-family: var(--font-mono)    !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CARD COMPONENTS
+══════════════════════════════════════════════════════════════════════════ */
+.card {
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-surface-rule);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.card-glass {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BADGE / PILL
+══════════════════════════════════════════════════════════════════════════ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.badge-ok   { background: var(--color-ok-bg);   color: var(--color-ok);         border-color: rgba(21,128,61,0.2);   }
+.badge-warn { background: var(--color-warn-bg);  color: var(--color-warn);       border-color: rgba(194,65,12,0.2);   }
+.badge-err  { background: var(--color-err-bg);   color: var(--color-err);        border-color: rgba(185,28,28,0.2);   }
+.badge-info { background: var(--color-info-bg);  color: var(--color-info);       border-color: rgba(29,78,216,0.2);   }
+.badge-gray { background: var(--color-surface);  color: var(--color-text-muted); border-color: var(--color-surface-rule); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DATA TABLE
+══════════════════════════════════════════════════════════════════════════ */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-surface-rule);
+  background: var(--color-surface);
+}
+.data-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--color-surface-rule);
+  color: var(--color-text);
+  vertical-align: middle;
+  font-size: 13px;
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td      { background: var(--color-surface-raised); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ANIMATIONS
+══════════════════════════════════════════════════════════════════════════ */
+@keyframes fade-in    { from { opacity: 0; }                              to { opacity: 1; }                  }
+@keyframes slide-up   { from { opacity: 0; transform: translateY(6px); }  to { opacity: 1; transform: none; } }
+@keyframes slide-down { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes shake      { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@keyframes spin       { to { transform: rotate(360deg); } }
+@keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.animate-in         { animation: fade-in    0.15s ease both; }
+.slide-up           { animation: slide-up   0.18s ease both; }
+.slide-down         { animation: slide-down 0.15s ease both; }
+.shake              { animation: shake      0.25s ease; }
+.animate-spin       { animation: spin       1s linear infinite; }
+.animate-pulse-soft { animation: pulse-soft 2s ease-in-out infinite; }
+
+.stagger > *:nth-child(1) { animation: slide-up .18s ease both 0ms;   }
+.stagger > *:nth-child(2) { animation: slide-up .18s ease both 35ms;  }
+.stagger > *:nth-child(3) { animation: slide-up .18s ease both 70ms;  }
+.stagger > *:nth-child(4) { animation: slide-up .18s ease both 105ms; }
+.stagger > *:nth-child(5) { animation: slide-up .18s ease both 140ms; }
+.stagger > *:nth-child(6) { animation: slide-up .18s ease both 175ms; }

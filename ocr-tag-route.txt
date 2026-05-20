@@ -1,0 +1,209 @@
+import { NextRequest, NextResponse } from 'next/server'
+
+export interface ParsedTag {
+  lot_number:    string | null
+  serial_number: string | null
+  product_type:  string | null
+  variant:       string | null
+  weight_kg:     string | null
+  tag_date:      string | null
+  leaf_shade:    string | null
+}
+
+const PROMPT = `This is a rooibos factory bag tag with printed labels and handwritten values.
+Read every handwritten value carefully and return ONLY valid JSON, no markdown.
+
+{"lot_number":"text next to Lot No","serial_number":"text next to Bag No","product_type":"title printed at top of tag","variant":"which of CON/ORG/RA has a tick or X — return CON, ORG, or RA","weight_kg":"the weight number e.g. 352.5","tag_date":"date next to Date of Receipt as yyyy-MM-dd","leaf_shade":"which grade letter A/B/C is ticked, or null"}
+
+Use null for anything you cannot read. Do not guess.`
+
+// Model cascade — each has a completely separate quota bucket.
+// If one is rate-limited, the next is tried automatically.
+// gemini-2.5-flash is the current recommended production model (April 2026).
+const MODELS = [
+  'gemini-2.5-flash',       // Current flagship — separate quota
+  'gemini-2.0-flash-lite',  // Lightweight fallback — separate quota
+  'gemini-1.5-flash',       // Older generation — its own quota bucket
+]
+
+const BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+
+function assessConfidence(fields: ParsedTag): 'high' | 'medium' | 'low' {
+  const required = [fields.lot_number, fields.serial_number, fields.weight_kg]
+  const filled   = Object.values(fields).filter(v => v !== null && v !== '').length
+  if (required.every(f => f !== null) && filled >= 5) return 'high'
+  if (required.filter(f => f !== null).length >= 2)    return 'medium'
+  return 'low'
+}
+
+function normaliseFields(fields: ParsedTag): ParsedTag {
+  if (fields.variant) {
+    const v = fields.variant.toUpperCase()
+    if      (v.includes('RA') && v.includes('ORG'))  fields.variant = 'RA-ORG'
+    else if (v.includes('RA') && v.includes('CON'))  fields.variant = 'RA-CON'
+    else if (v.includes('ORG'))                       fields.variant = 'ORG'
+    else if (v.includes('CON') || v.includes('CONV')) fields.variant = 'CON'
+  }
+  if (fields.lot_number)    fields.lot_number    = fields.lot_number.toUpperCase().trim()
+  if (fields.serial_number) fields.serial_number = fields.serial_number.toUpperCase().trim()
+  return fields
+}
+
+const emptyFields = (): ParsedTag => ({
+  lot_number: null, serial_number: null, product_type: null,
+  variant: null, weight_kg: null, tag_date: null, leaf_shade: null,
+})
+
+// ── GET: Warmup ping ──────────────────────────────────────────────────────────
+export async function GET() {
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) {
+    return NextResponse.json({ status: 'error', message: 'GEMINI_API_KEY not set' }, { status: 500 })
+  }
+  return NextResponse.json({ status: 'ready', models: MODELS })
+}
+
+// ── POST: OCR a tag image ─────────────────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  try {
+    const { image, mimeType = 'image/jpeg' } = await req.json()
+
+    if (!image) {
+      return NextResponse.json({ error: 'No image provided' }, { status: 400 })
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY
+    if (!apiKey) {
+      return NextResponse.json({ error: 'GEMINI_API_KEY not configured in .env.local' }, { status: 500 })
+    }
+
+    const body = JSON.stringify({
+      contents: [{
+        parts: [
+          { text: PROMPT },
+          { inline_data: { mime_type: mimeType, data: image } },
+        ],
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 1024,
+      },
+    })
+
+    // Try each model — stop at first success, skip on 429 or 404
+    let lastError = 'All Gemini models are quota-limited. Enable billing at console.cloud.google.com.'
+    let geminiRes: Response | null = null
+    let usedModel = ''
+
+    for (const model of MODELS) {
+      const controller = new AbortController()
+      const timeout    = setTimeout(() => controller.abort(), 20000)
+
+      try {
+        const res = await fetch(`${BASE}/${model}:generateContent?key=${apiKey}`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal:  controller.signal,
+          body,
+        })
+        clearTimeout(timeout)
+
+        if (res.status === 429 || res.status === 404) {
+          const errBody = await res.json().catch(() => ({}))
+          lastError = (errBody as any)?.error?.message ?? lastError
+          console.warn(`[OCR] ${model} unavailable (${res.status}), trying next…`)
+          continue
+        }
+
+        geminiRes = res
+        usedModel = model
+        break
+
+      } catch (err: any) {
+        clearTimeout(timeout)
+        if (err.name === 'AbortError') {
+          lastError = `${model} timed out`
+          console.warn(`[OCR] ${model} timed out, trying next…`)
+          continue
+        }
+        throw err
+      }
+    }
+
+    if (!geminiRes) {
+      return NextResponse.json({ error: lastError }, { status: 429 })
+    }
+
+    if (!geminiRes.ok) {
+      const errBody = await geminiRes.json().catch(() => ({}))
+      const errMsg  = (errBody as any)?.error?.message ?? 'Gemini request failed'
+      console.error('Gemini error:', JSON.stringify(errBody, null, 2))
+      return NextResponse.json({ error: errMsg }, { status: 502 })
+    }
+
+    const geminiData = await geminiRes.json()
+
+    // Full debug — log everything so we can see what Gemini actually returned
+    console.log('[OCR] Full Gemini response:', JSON.stringify(geminiData, null, 2))
+
+    const candidate  = geminiData?.candidates?.[0]
+    const finishReason = candidate?.finishReason
+    console.log('[OCR] Finish reason:', finishReason)
+
+    const rawText = candidate?.content?.parts?.[0]?.text ?? ''
+    console.log('[OCR] Raw text:', rawText)
+
+    if (!rawText) {
+      // Gemini returned no text — log why
+      const blockReason = geminiData?.promptFeedback?.blockReason
+      console.error('[OCR] No text returned. Block reason:', blockReason, 'Finish reason:', finishReason)
+      return NextResponse.json(
+        { error: `Gemini returned no text. Finish: ${finishReason ?? 'unknown'}, Block: ${blockReason ?? 'none'}` },
+        { status: 502 }
+      )
+    }
+
+    const clean = rawText.replace(/```json|```/g, '').trim()
+    console.log('[OCR] Cleaned text:', clean)
+
+    let fields: ParsedTag
+    try {
+      fields = JSON.parse(clean)
+    } catch {
+      // JSON parse failed — try to extract JSON from the response
+      const jsonMatch = clean.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        try {
+          fields = JSON.parse(jsonMatch[0])
+          console.log('[OCR] Extracted JSON from response')
+        } catch {
+          console.error(`[OCR] Could not parse extracted JSON:`, jsonMatch[0])
+          fields = emptyFields()
+        }
+      } else {
+        console.error(`[OCR] No JSON found in response:`, clean)
+        fields = emptyFields()
+      }
+    }
+
+    fields = normaliseFields(fields)
+    const confidence = assessConfidence(fields)
+
+    console.log(`[OCR] Success via ${usedModel} — confidence: ${confidence}`)
+
+    return NextResponse.json(
+      { fields, raw_text: rawText, confidence, model: usedModel },
+      { headers: { 'Cache-Control': 'private, max-age=60' } }
+    )
+
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      return NextResponse.json(
+        { error: 'OCR timeout — Gemini took too long.' },
+        { status: 504 }
+      )
+    }
+    console.error('OCR route error:', err)
+    return NextResponse.json({ error: err.message ?? 'Unknown error' }, { status: 500 })
+  }
+}

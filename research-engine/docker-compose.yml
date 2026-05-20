@@ -1,0 +1,21 @@
+services:
+  # The Brain (AI)
+  ollama:
+    image: ollama/ollama
+    container_name: rooibos_brain
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    # Keeps tinyllama loaded in memory — 638MB so cold start is ~3s not 28s.
+    # sleep 8 gives ollama serve time to fully initialize before loading the model.
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 8 && ollama run tinyllama --keepalive 24h & wait"]
+
+  # The Memory (Vector Database)
+  chromadb:
+    image: chromadb/chroma
+    container_name: rooibos_memory
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
