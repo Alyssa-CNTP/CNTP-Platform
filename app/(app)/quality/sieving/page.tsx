@@ -139,6 +139,8 @@ function mapDbRow(r: any) {
 function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: any) {
   const allMesh = [...new Set([...specDef.meshForORG,...specDef.meshForCON])].sort()
   const [draft, setDraft] = useState(JSON.parse(JSON.stringify(customSpecs)))
+  const [newGrade, setNewGrade] = useState(SD_GRADES[0])
+  const [newVariant, setNewVariant] = useState(SD_VARIANTS[0])
 
   return (
     <div style={{background:'#f8fafc',border:'2px solid #7c3aed',borderRadius:10,padding:16,marginBottom:14}}>
@@ -192,6 +194,26 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
             ))}
           </tbody>
         </table>
+      </div>
+      {/* Add new Grade+Variant combination */}
+      <div style={{marginTop:12,padding:'10px 14px',background:'#faf5ff',borderRadius:8,border:'1px dashed #c4b5fd',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{fontSize:11,fontWeight:700,color:'#7c3aed',whiteSpace:'nowrap'}}>+ Add combination:</span>
+        <select value={newGrade} onChange={e=>setNewGrade(e.target.value)} style={{padding:'5px 8px',borderRadius:5,border:'1px solid #d1d5db',fontSize:11,background:'#fff'}}>
+          {SD_GRADES.map(g=><option key={g}>{g}</option>)}
+        </select>
+        <select value={newVariant} onChange={e=>setNewVariant(e.target.value)} style={{padding:'5px 8px',borderRadius:5,border:'1px solid #d1d5db',fontSize:11,background:'#fff'}}>
+          {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
+        </select>
+        <button onClick={()=>{
+          const key=`${newGrade}|${newVariant}`
+          if(draft[key]){alert('This combination already exists');return}
+          const emptyRow:any={}
+          allMesh.forEach((m:string)=>{emptyRow[m]=[0,0]})
+          if(specDef.hasLeafShade) emptyRow['Leaf Shade']=[0,0]
+          setDraft((d:any)=>({...d,[key]:emptyRow}))
+        }} style={{padding:'5px 16px',borderRadius:5,border:'none',background:'#7c3aed',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+          Add Row
+        </button>
       </div>
     </div>
   )
@@ -561,13 +583,13 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
             </div>
           ))}
         <div>
-          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Market</label>
+          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Grade</label>
           <select value={fields.grade} onChange={e=>setF('grade',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
             {SD_GRADES.map(g=><option key={g}>{g}</option>)}
           </select>
         </div>
         <div>
-          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Grade</label>
+          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Variant</label>
           <select value={fields.variant} onChange={e=>setF('variant',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
             {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
           </select>
@@ -678,6 +700,7 @@ export default function SievingPage() {
   const [isRetest,       setIsRetest]       = useState(false)
   const [anomalyWarn,    setAnomalyWarn]    = useState('')
   const [lotMsg,         setLotMsg]         = useState('')
+  const [highlightedRunId, setHighlightedRunId] = useState<any>(null)
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
 
   // Load PA levels from raw material records for lot auto-fill
@@ -698,12 +721,17 @@ export default function SievingPage() {
       })
   }, [db])
 
-  const blankForm = () => ({
-    date: new Date().toISOString().slice(0,10),
-    lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
-    runType:'in-process', qcName:'', time:'', needleCount:'', leafShade:'',
-    bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'',
-  })
+  const blankForm = () => {
+    const now = new Date()
+    const hh = String(now.getHours()).padStart(2,'0')
+    const mm = String(now.getMinutes()).padStart(2,'0')
+    return {
+      date: now.toISOString().slice(0,10),
+      lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
+      runType:'in-process', qcName:'', time:`${hh}:${mm}`, needleCount:'', leafShade:'',
+      bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'',
+    }
+  }
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
 
@@ -750,6 +778,7 @@ export default function SievingPage() {
     if (latest.grade)        fields.grade = latest.grade
     if (latest.variant)      fields.variant = latest.variant
     if (latest.serialNumber) fields.serialNumber = latest.serialNumber
+    if (latest.leafShade)    fields.leafShade = latest.leafShade
     // Auto-fill PA level from raw material PA records
     const paFromLookup = paLookup[lotNum.trim().toUpperCase()]
     if (paFromLookup) fields.paLevel = paFromLookup
@@ -779,12 +808,26 @@ export default function SievingPage() {
     // Anomaly detection
     const meshKeys = activeMesh.map(m => m.replace(' (%)',' (g)'))
     const allVals = meshKeys.map(k=>parseFloat(newGrams[k])).filter(v=>!isNaN(v)&&v>0)
+    const warns: string[] = []
     if (allVals.length>=2) {
       const total = allVals.reduce((a,b)=>a+b,0)
-      if (total>0&&total<50) setAnomalyWarn(`⚠ Total grams is only ${total.toFixed(1)}g — this seems very low.`)
-      else if (total>500)    setAnomalyWarn(`⚠ Total grams is ${total.toFixed(1)}g — this seems unusually high.`)
-      else setAnomalyWarn('')
-    } else setAnomalyWarn('')
+      if (total>0&&total<50) warns.push(`Total grams only ${total.toFixed(1)}g — very low`)
+      else if (total>500)    warns.push(`Total grams ${total.toFixed(1)}g — unusually high`)
+    }
+    // Per-fraction outlier check against recent similar runs
+    const recentSimilar = productRuns.filter((r:any)=>r.variant===form.variant&&r.runType==='in-process').slice(-20)
+    if (recentSimilar.length>=3 && Object.keys(pcts).length>0) {
+      activeMesh.forEach(m=>{
+        const newPct=parseFloat(pcts[m]); if(isNaN(newPct)) return
+        const hist=recentSimilar.map((r:any)=>parseFloat(r[m])).filter((v:any)=>!isNaN(v)&&v>0)
+        if(hist.length<3) return
+        const mean=hist.reduce((a:number,b:number)=>a+b,0)/hist.length
+        const std=Math.sqrt(hist.map((v:number)=>(v-mean)**2).reduce((a:number,b:number)=>a+b,0)/hist.length)
+        if(std>1.5&&Math.abs(newPct-mean)>2.5*std) warns.push(`${m.replace(' (%)','')}: ${newPct.toFixed(1)}% far from avg ${mean.toFixed(1)}%`)
+      })
+    }
+    setAnomalyWarn(warns.length?`⚠ ${warns.join(' | ')}`:'')
+
   }
 
   function validate(f: any, retest = false) {
@@ -983,103 +1026,131 @@ export default function SievingPage() {
 
       {/* New Run Form */}
       {showForm && canWrite && (
-        <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:10,padding:16,marginBottom:16}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <div style={{fontWeight:700,fontSize:13,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
+        <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
             <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setLotMsg('')}}
-              style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#6b7280'}}>×</button>
+              style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
 
-          {errors._dupTime&&<div style={{padding:'6px 10px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:8}}>⚠ {errors._dupTime}</div>}
-          {errors._mesh&&<div style={{padding:'6px 10px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:8}}>⚠ {errors._mesh}</div>}
-          {anomalyWarn&&<div style={{padding:'6px 10px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:8}}>{anomalyWarn}</div>}
-          {lotMsg&&<div style={{padding:'4px 10px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:6,fontSize:10,color:'#166534',marginBottom:8}}>{lotMsg}</div>}
+          {/* Run Type — prominent tablet-friendly selector */}
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:10,fontWeight:700,color:errors.runType?'#dc2626':'#6b7280',display:'block',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}}>Run Type *</label>
+            <div style={{display:'flex',gap:8}}>
+              {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC','#166534']] as const).map(([val,label,col])=>(
+                <button key={val} type="button" onClick={()=>setF('runType',val)}
+                  style={{flex:1,padding:'13px 16px',borderRadius:8,border:`2px solid ${form.runType===val?col:'#d1d5db'}`,
+                    background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
+                    fontSize:14,fontWeight:700,cursor:'pointer',transition:'all 0.15s',
+                    boxShadow:form.runType===val?`0 2px 8px ${col}44`:'none'}}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:12}}>
+          {errors._dupTime&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupTime}</div>}
+          {errors._mesh&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10}}>⚠ {errors._mesh}</div>}
+          {anomalyWarn&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10,fontWeight:600}}>{anomalyWarn}</div>}
+          {lotMsg&&<div style={{padding:'6px 12px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:6,fontSize:10,color:'#166534',marginBottom:10}}>{lotMsg}</div>}
+
+          {/* Row 1: basic info */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr)',gap:12,marginBottom:14}}>
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.date?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Date *</label>
-              <input type="date" value={form.date} onChange={e=>setF('date',e.target.value)} style={{...inputSt,borderColor:errors.date?'#fca5a5':'#d1d5db'}}/>
+              <label style={{fontSize:10,fontWeight:700,color:errors.date?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Date *</label>
+              <input type="date" value={form.date} onChange={e=>setF('date',e.target.value)} style={{...inputSt,borderColor:errors.date?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="date"/>
             </div>
             {!specDef.noLotNumber&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.lotNumber?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Lot Number *</label>
-              <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);if(Object.keys(auto).length)setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db'}}/>
+              <label style={{fontSize:10,fontWeight:700,color:errors.lotNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Lot Number *</label>
+              <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);if(Object.keys(auto).length)setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Serial Number {form.runType==='in-process'?'*':''}</label>
-              <input value={form.serialNumber} onChange={e=>setF('serialNumber',e.target.value)} style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':'#d1d5db'}}/>
+              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. {form.runType==='in-process'?'*':''}</label>
+              <input value={form.serialNumber} onChange={e=>setF('serialNumber',e.target.value)} style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="serialNumber"/>
             </div>
-            <div style={{gridColumn:'1 / -1'}}>
-              <label style={{fontSize:10,fontWeight:700,color:errors.grade?'#dc2626':'#374151',display:'block',marginBottom:5,textTransform:'uppercase'}}>Market *</label>
-              <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-                {SD_GRADES.map(g=>(
-                  <button key={g} type="button" onClick={()=>setF('grade',g)}
-                    style={{padding:'5px 14px',borderRadius:6,border:`2px solid ${form.grade===g?'#1f4e79':'#d1d5db'}`,
-                      background:form.grade===g?'#1f4e79':'#fff',color:form.grade===g?'#fff':'#374151',
-                      fontSize:11,fontWeight:700,cursor:'pointer',transition:'all 0.15s'}}>
-                    {g}
-                  </button>
-                ))}
-              </div>
-              <ErrMsg field="grade"/>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>QC Controller *</label>
+              <input value={form.qcName} onChange={e=>setF('qcName',e.target.value)} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <ErrMsg field="qcName"/>
             </div>
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.variant?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Grade *</label>
-              <select value={form.variant} onChange={e=>setF('variant',e.target.value)} style={{...inputSt,background:'#fff',borderColor:errors.variant?'#fca5a5':'#d1d5db'}}>
+              <label style={{fontSize:10,fontWeight:700,color:errors.time?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Time {form.runType==='in-process'?'*':''}</label>
+              <input type="text" placeholder="HH:MM" value={form.time} onChange={e=>setF('time',e.target.value)} style={{...inputSt,borderColor:errors.time?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <ErrMsg field="time"/>
+            </div>
+          </div>
+
+          {/* Grade tabs */}
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:10,fontWeight:700,color:errors.grade?'#dc2626':'#374151',display:'block',marginBottom:6,textTransform:'uppercase'}}>Grade *</label>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              {SD_GRADES.map(g=>(
+                <button key={g} type="button" onClick={()=>setF('grade',g)}
+                  style={{flex:1,minWidth:80,padding:'9px 16px',borderRadius:7,border:`2px solid ${form.grade===g?'#1f4e79':'#d1d5db'}`,
+                    background:form.grade===g?'#1f4e79':'#fff',color:form.grade===g?'#fff':'#374151',
+                    fontSize:13,fontWeight:700,cursor:'pointer',transition:'all 0.15s'}}>
+                  {g}
+                </button>
+              ))}
+            </div>
+            <ErrMsg field="grade"/>
+          </div>
+
+          {/* Variant + physical properties */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr)',gap:12,marginBottom:14}}>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:errors.variant?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Variant *</label>
+              <select value={form.variant} onChange={e=>setF('variant',e.target.value)} style={{...inputSt,background:'#fff',borderColor:errors.variant?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}>
                 {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
               </select>
               <ErrMsg field="variant"/>
             </div>
+            {!specDef.noBulkDensity&&<div>
+              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g)</label>
+              <input type="number" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,padding:'9px 10px',fontSize:13}}/>
+            </div>}
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.runType?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Run Type *</label>
-              <select value={form.runType} onChange={e=>setF('runType',e.target.value)} style={{...inputSt,background:'#fff',borderColor:errors.runType?'#fca5a5':'#d1d5db'}}>
-                <option value="in-process">In-Process</option>
-                <option value="final">Final QC</option>
+              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                PA Level {form.paLevel&&<span style={{fontSize:9,color:'#166534',fontWeight:400,marginLeft:4}}>✓ auto</span>}
+              </label>
+              <select value={form.paLevel||form.manualPaLevel} onChange={e=>setF('paLevel',e.target.value)}
+                style={{...inputSt,background:form.paLevel?'#f0fdf4':'#fff',borderColor:form.paLevel?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}>
+                <option value="">— not set —</option>
+                {['P0','P1','P2','P3','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
               </select>
             </div>
-            <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>QC Controller *</label>
-              <input value={form.qcName} onChange={e=>setF('qcName',e.target.value)} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db'}}/>
-              <ErrMsg field="qcName"/>
-            </div>
-            {form.runType==='in-process'&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.time?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Time *</label>
-              <input type="text" placeholder="HH:MM" value={form.time} onChange={e=>setF('time',e.target.value)} style={{...inputSt,borderColor:errors.time?'#fca5a5':'#d1d5db'}}/>
-              <ErrMsg field="time"/>
-            </div>}
-            {!specDef.noBulkDensity&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Bulk Density (cc/100g)</label>
-              <input type="number" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={inputSt}/>
-            </div>}
-            {specDef.hasNeedleCount&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Needle Count</label>
-              <input type="number" step="any" value={form.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={inputSt}/>
-            </div>}
             {specDef.hasLeafShade&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.leafShade?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Leaf Shade (1–11)</label>
-              <input type="number" min="1" max="11" step="1" value={form.leafShade} onChange={e=>setF('leafShade',e.target.value)} style={{...inputSt,borderColor:errors.leafShade?'#fca5a5':'#d1d5db'}}/>
+              <label style={{fontSize:10,fontWeight:700,color:errors.leafShade?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                Leaf Shade (1–11) {form.leafShade&&<span style={{fontSize:9,color:'#166534',fontWeight:400,marginLeft:4}}>✓ auto</span>}
+              </label>
+              <input type="number" min="1" max="11" step="1" value={form.leafShade} onChange={e=>setF('leafShade',e.target.value)} style={{...inputSt,borderColor:errors.leafShade?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="leafShade"/>
             </div>}
+            {specDef.hasNeedleCount&&form.runType!=='final'&&<div>
+              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Needle Count</label>
+              <input type="number" step="any" value={form.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={{...inputSt,padding:'9px 10px',fontSize:13}}/>
+            </div>}
             <div style={{gridColumn:'1 / -1'}}>
-              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Comment</label>
-              <input value={form.comment} onChange={e=>setF('comment',e.target.value)} style={inputSt}/>
+              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Comment</label>
+              <input value={form.comment} onChange={e=>setF('comment',e.target.value)} style={{...inputSt,padding:'9px 10px',fontSize:13}}/>
             </div>
           </div>
 
-          {/* Sieve fractions */}
-          {activeMesh.length>0&&(
-            <div style={{background:'#fff',borderRadius:8,border:'1px solid #e5e7eb',padding:14,marginBottom:12}}>
+          {/* Sieve fractions — in-process only */}
+          {form.runType!=='final'&&activeMesh.length>0&&(
+            <div style={{background:'#fff',borderRadius:8,border:'1px solid #e5e7eb',padding:14,marginBottom:14}}>
               <div style={{fontWeight:700,fontSize:12,color:'#1f4e79',marginBottom:10}}>⚙ Sieve Results</div>
               <div style={{overflowX:'auto'}}>
                 <table style={{borderCollapse:'collapse',fontSize:11,width:'100%'}}>
                   <thead><tr style={{background:'#1f4e79',color:'#fff'}}>
-                    <th style={{padding:'5px 8px',textAlign:'left'}}>Fraction</th>
-                    <th style={{padding:'5px 8px',textAlign:'center'}}>Grams (g)</th>
-                    <th style={{padding:'5px 8px',textAlign:'center'}}>Result (%)</th>
-                    <th style={{padding:'5px 8px',textAlign:'center'}}>Spec</th>
-                    <th style={{padding:'5px 8px',textAlign:'center'}}>Status</th>
+                    <th style={{padding:'6px 8px',textAlign:'left'}}>Fraction</th>
+                    <th style={{padding:'6px 8px',textAlign:'center'}}>Grams (g)</th>
+                    <th style={{padding:'6px 8px',textAlign:'center'}}>Result (%)</th>
+                    <th style={{padding:'6px 8px',textAlign:'center'}}>Spec</th>
+                    <th style={{padding:'6px 8px',textAlign:'center'}}>Status</th>
                   </tr></thead>
                   <tbody>
                     {activeMesh.map((m,i)=>{
@@ -1088,18 +1159,18 @@ export default function SievingPage() {
                       const chk=sdChk(form[m],spec)
                       return (
                         <tr key={m} style={{background:i%2===0?'#fff':'#f9fafb',borderBottom:'1px solid #f3f4f6'}}>
-                          <td style={{padding:'4px 8px',fontWeight:600}}>{m}</td>
-                          <td style={{padding:'3px 8px'}}>
+                          <td style={{padding:'5px 8px',fontWeight:600}}>{m}</td>
+                          <td style={{padding:'4px 8px'}}>
                             <input type="number" step="any" value={gramValues[gKey]||''} onChange={e=>handleGramChange(gKey,e.target.value)}
-                              placeholder="g" style={{width:90,padding:'4px 6px',border:'1px solid #bfdbfe',borderRadius:5,fontSize:11,textAlign:'center',boxSizing:'border-box'}}/>
+                              placeholder="g" style={{width:100,padding:'6px 8px',border:'1px solid #bfdbfe',borderRadius:5,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
                           </td>
-                          <td style={{padding:'4px 8px',textAlign:'center',fontFamily:'monospace',fontWeight:700,color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'#374151'}}>
+                          <td style={{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontWeight:700,fontSize:13,color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'#374151'}}>
                             {form[m]?form[m]+'%':'—'}
                           </td>
-                          <td style={{padding:'4px 8px',textAlign:'center',fontSize:10,color:'#6b7280'}}>
+                          <td style={{padding:'5px 8px',textAlign:'center',fontSize:10,color:'#6b7280'}}>
                             {spec&&!(spec[0]===0&&spec[1]===0)?`${spec[0]}–${spec[1]}%`:'—'}
                           </td>
-                          <td style={{padding:'4px 8px',textAlign:'center',fontSize:10,fontWeight:700,color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'#9ca3af'}}>
+                          <td style={{padding:'5px 8px',textAlign:'center',fontSize:11,fontWeight:700,color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'#9ca3af'}}>
                             {chk==='fail'?'⚠ FAIL':chk==='pass'?'✓':'—'}
                           </td>
                         </tr>
@@ -1110,18 +1181,21 @@ export default function SievingPage() {
               </div>
             </div>
           )}
+          {form.runType==='final'&&<div style={{padding:'10px 14px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:7,marginBottom:14,fontSize:11,color:'#166534'}}>
+            ✓ Final QC — no sieve fractions required. Enter bulk density and leaf shade above.
+          </div>}
 
           {/* Retest + save */}
           <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
-            <label style={{display:'flex',alignItems:'center',gap:6,fontSize:11,cursor:'pointer',fontWeight:500}}>
-              <input type="checkbox" checked={isRetest} onChange={e=>setIsRetest(e.target.checked)} style={{width:15,height:15}}/>
+            <label style={{display:'flex',alignItems:'center',gap:7,fontSize:12,cursor:'pointer',fontWeight:500}}>
+              <input type="checkbox" checked={isRetest} onChange={e=>setIsRetest(e.target.checked)} style={{width:17,height:17}}/>
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
               <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setLotMsg('')}}
-                style={{padding:'7px 16px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Cancel</button>
+                style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
               <button onClick={addRun} disabled={saving}
-                style={{padding:'7px 20px',borderRadius:7,border:'none',background:saving?'#9ca3af':'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:saving?'default':'pointer'}}>
+                style={{padding:'10px 26px',borderRadius:7,border:'none',background:saving?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:saving?'default':'pointer'}}>
                 {saving?'Saving…':'✓ Save Run'}
               </button>
             </div>
@@ -1138,8 +1212,10 @@ export default function SievingPage() {
           activeSpecs={activeSpecs}
           activeProduct={activeProduct}
           onDotClick={(runId) => {
+            setHighlightedRunId(runId)
             const el = document.getElementById(`run-row-${runId}`)
             el?.scrollIntoView({ behavior:'smooth', block:'center' })
+            setTimeout(() => setHighlightedRunId(null), 3000)
           }}
         />
       )}
@@ -1170,13 +1246,14 @@ export default function SievingPage() {
             <tbody>
               {filteredRuns.map((row:any,i:number)=>{
                 const vios: string[] = row.violations||[]
-                const rowBg = vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
+                const isHighlighted = row.id === highlightedRunId
+                const rowBg = isHighlighted?'#fef9c3':vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
                 const mesh  = sdGetMesh(activeProduct, row.variant)
                 const gs    = gradeStyle(row.grade)
                 const sc    = statusColors(row.passStatus)
                 return (
                   <React.Fragment key={row.id}>
-                  <tr id={`run-row-${row.id}`} style={{background:rowBg,borderBottom:'1px solid #f3f4f6'}}>
+                  <tr id={`run-row-${row.id}`} style={{background:rowBg,borderBottom:'1px solid #f3f4f6',transition:'background 0.6s',outline:isHighlighted?'2px solid #fbbf24':'none',outlineOffset:'-2px'}}>
                     {canWrite&&<td style={{padding:'3px 4px',textAlign:'center'}}>
                       <button onClick={()=>setEditRunId(editRunId===row.id?null:row.id)}
                         style={{background:'none',border:`1px solid ${editRunId===row.id?'#166534':'#d1d5db'}`,borderRadius:4,color:editRunId===row.id?'#166534':'#374151',cursor:'pointer',fontSize:11,padding:'2px 6px',marginBottom:2,display:'block'}}>
