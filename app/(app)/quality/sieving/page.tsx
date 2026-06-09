@@ -702,6 +702,7 @@ export default function SievingPage() {
   const [lotMsg,         setLotMsg]         = useState('')
   const [highlightedRunId, setHighlightedRunId] = useState<any>(null)
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
+  const [rLookup,        setRLookup]        = useState<Record<string,string>>({})
 
   // Load PA levels from raw material records for lot auto-fill
   useEffect(() => {
@@ -718,6 +719,24 @@ export default function SievingPage() {
           if (lot && lvl) map[lot] = lvl
         })
         setPaLookup(map)
+      })
+  }, [db])
+
+  // Load R-grades from residue analysis records for lot auto-fill
+  useEffect(() => {
+    db.schema('qms').from('quality_records')
+      .select('batch_number,data_json')
+      .eq('workcenter','rawMaterial')
+      .eq('workflow','residue')
+      .then(({ data }: { data: any[] | null }) => {
+        if (!data) return
+        const map: Record<string,string> = {}
+        data.forEach((r: any) => {
+          const lot = (r.batch_number || '').trim().toUpperCase()
+          const grade = r.data_json?.overall_r_grade || ''
+          if (lot && grade) map[lot] = grade
+        })
+        setRLookup(map)
       })
   }, [db])
 
@@ -779,10 +798,12 @@ export default function SievingPage() {
     if (latest.variant)      fields.variant = latest.variant
     if (latest.serialNumber) fields.serialNumber = latest.serialNumber
     if (latest.leafShade)    fields.leafShade = latest.leafShade
-    // Auto-fill PA level from raw material PA records
+    // Auto-fill PA level and R-grade from raw material records
     const paFromLookup = paLookup[lotNum.trim().toUpperCase()]
+    const rFromLookup  = rLookup[lotNum.trim().toUpperCase()]
     if (paFromLookup) fields.paLevel = paFromLookup
-    setLotMsg(fields.grade ? `✓ Auto-filled from previous run — ${latest.grade} · ${latest.variant}${paFromLookup ? ` · PA: ${paFromLookup}` : ''}` : '')
+    const extras = [paFromLookup ? `PA: ${paFromLookup}` : '', rFromLookup ? `R: ${rFromLookup}` : ''].filter(Boolean).join(' · ')
+    setLotMsg(fields.grade ? `✓ Auto-filled from previous run — ${latest.grade} · ${latest.variant}${extras ? ` · ${extras}` : ''}` : '')
     return fields
   }
 
