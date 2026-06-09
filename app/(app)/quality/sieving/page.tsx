@@ -75,13 +75,13 @@ const SIEVING_SPECS_DB: Record<string,any> = {
   },
 }
 
-const SD_GRADES   = ['Conventional Export','Conventional Local','Organic Export','Organic Local']
-const SD_VARIANTS = ['CON','ORG']
+const SD_GRADES   = ['Export','Export Bland','Domestic']
+const SD_VARIANTS = ['CON','ORG','RA-ORG','RA-CON','FT-CON','FT-ORG']
 const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function sdIsOrg(v: string) { return v==='ORG' || v.toLowerCase().includes('organic') }
+function sdIsOrg(v: string) { return v==='ORG' || v==='RA-ORG' || v==='FT-ORG' || v.toLowerCase().includes('organic') }
 function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []
   return sdIsOrg(variant) ? s.meshForORG : s.meshForCON
@@ -97,9 +97,9 @@ function sdChk(value: any, range: [number,number]|null): 'pass'|'fail'|'neutral'
 
 function gradeStyle(g: string) {
   if (!g) return {bg:'#f3f4f6',color:'#374151'}
-  if (g.includes('Exp Blend')) return {bg:'#fef3c7',color:'#92400e'}
-  if (g.includes('Export'))    return {bg:'#dbeafe',color:'#1e40af'}
-  if (g.includes('Domestic'))  return {bg:'#dcfce7',color:'#166534'}
+  if (g==='Export Bland') return {bg:'#fef3c7',color:'#92400e'}
+  if (g==='Export')       return {bg:'#dbeafe',color:'#1e40af'}
+  if (g==='Domestic')     return {bg:'#dcfce7',color:'#166534'}
   return {bg:'#f3f4f6',color:'#374151'}
 }
 function statusColors(s: string) {
@@ -561,13 +561,13 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
             </div>
           ))}
         <div>
-          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Grade</label>
+          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Market</label>
           <select value={fields.grade} onChange={e=>setF('grade',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
             {SD_GRADES.map(g=><option key={g}>{g}</option>)}
           </select>
         </div>
         <div>
-          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Variant</label>
+          <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Grade</label>
           <select value={fields.variant} onChange={e=>setF('variant',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
             {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
           </select>
@@ -1011,15 +1011,22 @@ export default function SievingPage() {
               <input value={form.serialNumber} onChange={e=>setF('serialNumber',e.target.value)} style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':'#d1d5db'}}/>
               <ErrMsg field="serialNumber"/>
             </div>
-            <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.grade?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Grade *</label>
-              <select value={form.grade} onChange={e=>setF('grade',e.target.value)} style={{...inputSt,background:'#fff',borderColor:errors.grade?'#fca5a5':'#d1d5db'}}>
-                {SD_GRADES.map(g=><option key={g}>{g}</option>)}
-              </select>
+            <div style={{gridColumn:'1 / -1'}}>
+              <label style={{fontSize:10,fontWeight:700,color:errors.grade?'#dc2626':'#374151',display:'block',marginBottom:5,textTransform:'uppercase'}}>Market *</label>
+              <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                {SD_GRADES.map(g=>(
+                  <button key={g} type="button" onClick={()=>setF('grade',g)}
+                    style={{padding:'5px 14px',borderRadius:6,border:`2px solid ${form.grade===g?'#1f4e79':'#d1d5db'}`,
+                      background:form.grade===g?'#1f4e79':'#fff',color:form.grade===g?'#fff':'#374151',
+                      fontSize:11,fontWeight:700,cursor:'pointer',transition:'all 0.15s'}}>
+                    {g}
+                  </button>
+                ))}
+              </div>
               <ErrMsg field="grade"/>
             </div>
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.variant?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Variant *</label>
+              <label style={{fontSize:10,fontWeight:700,color:errors.variant?'#dc2626':'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Grade *</label>
               <select value={form.variant} onChange={e=>setF('variant',e.target.value)} style={{...inputSt,background:'#fff',borderColor:errors.variant?'#fca5a5':'#d1d5db'}}>
                 {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
               </select>
