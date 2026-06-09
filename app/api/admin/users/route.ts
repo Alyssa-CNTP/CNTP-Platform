@@ -1,138 +1,160 @@
-// app/api/admin/users/[id]/route.ts
+// app/api/admin/users/route.ts
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
 
-// ─── PATCH — update role, permissions, name, password, confirm email ──────────
+// ─── GET — list all users ─────────────────────────────────────────────────────
 
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const caller = await getCallerPermissions()
-  const body   = await req.json()
-  const admin  = getAdminClient()
+export async function GET() {
+  try {
+    const caller = await getCallerPermissions()
+    if (!caller.can('can_manage_users') && !caller.can('can_edit_permissions'))
+      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
 
-  // Fetch the target user's department to enforce manager-scoped editing
-  const { data: targetRow } = await admin
-    .schema('production' as any)
-    .from('app_roles')
-    .select('department, role')
-    .eq('user_id', params.id)
-    .maybeSingle()
-
-  const targetDept = (targetRow as any)?.department
-
-  // Managers can only edit users in their own department
-  const canEditThisUser =
-    caller.can('can_manage_users') ||                              // IT full access
-    (caller.can('can_edit_permissions') && targetDept === caller.department)
-
-  if (!canEditThisUser)
-    return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
-
-  // ── Update department + role ─────────────────────────────────────────────────
-  if (body.department !== undefined || body.role !== undefined) {
-    if (!caller.can('can_change_roles'))
-      return NextResponse.json({ error: 'Permission denied — cannot change roles' }, { status: 403 })
-
-    // Only IT can change department
-    if (body.department !== undefined && caller.department !== 'IT')
-      return NextResponse.json({ error: 'Only IT can change a user\'s department' }, { status: 403 })
-
-    const updates: any = {}
-    if (body.department !== undefined) updates.department = body.department
-    if (body.role       !== undefined) updates.role       = body.role
-    if (body.sectionId  !== undefined) updates.section_id = body.sectionId ?? null
-
-    const { error } = await admin
-      .schema('production' as any)
+    // Use the session client (authenticated role) to query shared.app_roles.
+    // The admin (service_role) client cannot access the shared schema via PostgREST
+    // because Supabase's "Exposed schemas" setting only grants anon/authenticated,
+    // not service_role. The session client runs as the caller's authenticated role
+    // and the caller has already been verified to have can_manage_users above.
+    const sessionClient = await getSessionClient()
+    const { data: roleRows, error: rolesErr } = await sessionClient
+      .schema('shared' as any)
       .from('app_roles')
-      .update(updates)
-      .eq('user_id', params.id)
+      .select('id, user_id, full_name, department, role, section_id, permissions, is_active, created_at')
+      .order('created_at', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (rolesErr) {
+      console.error('[api/admin/users GET] app_roles query error:', rolesErr)
+      return NextResponse.json({ error: rolesErr.message }, { status: 500 })
+    }
+
+    // Admin client is only needed for auth.admin.listUsers (no schema access required)
+    const admin = getAdminClient()
+    const listResult = await admin.auth.admin.listUsers({ perPage: 1000 })
+    if (listResult.error) {
+      console.error('[api/admin/users GET] listUsers error:', listResult.error)
+      return NextResponse.json({ error: listResult.error.message }, { status: 500 })
+    }
+    const authUsers = listResult.data?.users ?? []
+
+    const authMap = new Map(authUsers.map(u => [u.id, u]))
+
+    const result = (roleRows ?? []).map((r: any) => {
+      const au = authMap.get(r.user_id)
+      return {
+        id:              r.user_id,
+        display_name:    r.full_name || au?.user_metadata?.full_name || au?.email?.split('@')[0] || '—',
+        email:           au?.email ?? '—',
+        email_confirmed: !!au?.email_confirmed_at,
+        department:      r.department,
+        role:            r.role,
+        section_id:      r.section_id,
+        permissions:     r.permissions ?? {},
+        is_active:       r.is_active ?? true,
+        created_at:      r.created_at,
+        last_sign_in:    au?.last_sign_in_at ?? null,
+      }
+    })
+
+    const roleUserIds = new Set((roleRows ?? []).map((r: any) => r.user_id))
+    const orphans = authUsers
+      .filter(au => !roleUserIds.has(au.id))
+      .map(au => ({
+        id:              au.id,
+        display_name:    au.user_metadata?.full_name || au.email?.split('@')[0] || '—',
+        email:           au.email ?? '—',
+        email_confirmed: !!au.email_confirmed_at,
+        department:      null,
+        role:            null,
+        section_id:      null,
+        permissions:     {},
+        is_active:       true,
+        created_at:      au.created_at,
+        last_sign_in:    au.last_sign_in_at ?? null,
+        no_role:         true,
+      }))
+
+    return NextResponse.json([...result, ...orphans])
+  } catch (err: any) {
+    console.error('[api/admin/users GET] unhandled exception:', err)
+    return NextResponse.json({ error: err?.message ?? 'Internal server error' }, { status: 500 })
   }
+}
 
-  // ── Update permission overrides ──────────────────────────────────────────────
-  if (body.permissions !== undefined) {
-    if (!caller.can('can_edit_permissions'))
-      return NextResponse.json({ error: 'Permission denied — cannot edit permissions' }, { status: 403 })
+// ─── POST — create a new user ─────────────────────────────────────────────────
 
-    const { error } = await admin
-      .schema('production' as any)
-      .from('app_roles')
-      .update({ permissions: body.permissions })
-      .eq('user_id', params.id)
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  // ── Update display name ──────────────────────────────────────────────────────
-  if (body.fullName !== undefined) {
+export async function POST(req: NextRequest) {
+  try {
+    const caller = await getCallerPermissions()
     if (!caller.can('can_manage_users'))
       return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
 
-    const { error } = await admin.auth.admin.updateUserById(params.id, {
-      user_metadata: { full_name: body.fullName, display_name: body.fullName },
-    })
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    const body = await req.json()
+    const { email, full_name, department, role, section_id, send_invite } = body
+
+    if (!email?.trim())      return NextResponse.json({ error: 'Email is required' },      { status: 400 })
+    if (!full_name?.trim())  return NextResponse.json({ error: 'Full name is required' },  { status: 400 })
+    if (!department?.trim()) return NextResponse.json({ error: 'Department is required' }, { status: 400 })
+    if (!role?.trim())       return NextResponse.json({ error: 'Role is required' },       { status: 400 })
+
+    const admin         = getAdminClient()
+    const sessionClient = await getSessionClient()
+    let userId: string
+
+    if (send_invite) {
+      // Send invite email — user sets their own password via the link
+      const { data, error } = await admin.auth.admin.inviteUserByEmail(
+        email.trim().toLowerCase(),
+        {
+          data:       { full_name: full_name.trim() },
+          redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/reset-password`,
+        }
+      )
+      if (error) {
+        console.error('[api/admin/users POST] inviteUserByEmail error:', error)
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      userId = data.user.id
+    } else {
+      // Create account directly — supervisor manages the password
+      const { data, error } = await admin.auth.admin.createUser({
+        email:         email.trim().toLowerCase(),
+        password:      body.password || crypto.randomUUID().slice(0, 16),
+        email_confirm: true,
+        user_metadata: { full_name: full_name.trim() },
+      })
+      if (error) {
+        console.error('[api/admin/users POST] createUser error:', error)
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      userId = data.user.id
+    }
+
+    // Insert role row into shared.app_roles.
+    // Must use sessionClient (authenticated role) — service_role lacks PostgREST
+    // access to the 'shared' schema (not in Supabase's Exposed schemas list).
+    // Upsert — safe whether or not the DB trigger already created a pending row
+    const { error: roleErr } = await sessionClient
+      .schema('shared' as any)
+      .from('app_roles')
+      .upsert({
+        user_id:     userId,
+        full_name:   full_name.trim(),
+        department:  department.trim(),
+        role:        role.trim().toLowerCase().replace(/\s+/g, '_'),
+        section_id:  section_id?.trim() || null,
+        permissions: body.permissions ?? {},
+        is_active:   true,
+      }, { onConflict: 'user_id' })
+
+    if (roleErr) {
+      console.error('[api/admin/users POST] insert app_roles error:', roleErr)
+      return NextResponse.json({ error: roleErr.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true, userId })
+  } catch (err: any) {
+    console.error('[api/admin/users POST] unhandled exception:', err)
+    return NextResponse.json({ error: err?.message ?? 'Internal server error' }, { status: 500 })
   }
-
-  // ── Reset password (admin sets directly) ────────────────────────────────────
-  if (body.password !== undefined) {
-    if (!caller.can('can_reset_passwords'))
-      return NextResponse.json({ error: 'Permission denied — cannot reset passwords' }, { status: 403 })
-    if (!body.password || body.password.length < 8)
-      return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 })
-
-    const { error } = await admin.auth.admin.updateUserById(params.id, { password: body.password })
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  // ── Send password reset email ────────────────────────────────────────────────
-  if (body.sendPasswordReset) {
-    if (!caller.can('can_reset_passwords'))
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
-
-    const { data: { user }, error: getErr } = await admin.auth.admin.getUserById(params.id)
-    if (getErr || !user?.email) return NextResponse.json({ error: 'User not found' }, { status: 404 })
-
-    const { error } = await admin.auth.resetPasswordForEmail(user.email, {
-      redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/reset-password`,
-    })
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  // ── Confirm email manually ───────────────────────────────────────────────────
-  if (body.confirmEmail) {
-    if (!caller.can('can_confirm_emails'))
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
-
-    const { error } = await admin.auth.admin.updateUserById(params.id, { email_confirm: true })
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true })
-}
-
-// ─── DELETE — remove a user ───────────────────────────────────────────────────
-// IT only — managers cannot delete users
-
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const caller = await getCallerPermissions()
-  if (!caller.can('can_manage_users'))
-    return NextResponse.json({ error: 'Permission denied — only IT can delete users' }, { status: 403 })
-  if (params.id === caller.userId)
-    return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 })
-
-  const admin = getAdminClient()
-  await admin.schema('production' as any).from('app_roles').delete().eq('user_id', params.id)
-  const { error } = await admin.auth.admin.deleteUser(params.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  return NextResponse.json({ success: true })
 }

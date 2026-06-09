@@ -710,10 +710,16 @@ export default function SievingPage() {
   // Load all runs
   const load = useCallback(async () => {
     setLoading(true); setSdError('')
-    const { data, error } = await db.schema('qms').from('sd_runs').select('*').order('created_at',{ascending:false})
+    const [{ data, error }, legacyRes] = await Promise.all([
+      db.schema('qms').from('sd_runs').select('*').order('created_at',{ascending:false}),
+      fetch('/api/quality/legacy-public?table=sd_runs&limit=2000').then(r=>r.json()),
+    ])
     if (error) { setSdError(error.message); setLoading(false); return }
+    const qmsKeys = new Set((data || []).map((r: any) => (r.lot_number||'')+'|'+(r.date||'')+'|'+(r.run_type||'')))
+    const legData = (legacyRes.data || []).filter((r: any) => !qmsKeys.has((r.lot_number||'')+'|'+(r.date||'')+'|'+(r.run_type||'')))
+    const allData = [...(data || []), ...legData]
     const grouped: Record<string,any[]> = {}
-    ;(data || []).forEach((r: any) => {
+    allData.forEach((r: any) => {
       const mapped = mapDbRow(r)
       const p = mapped.product || 'Fine Leaf'
       if (!grouped[p]) grouped[p] = []

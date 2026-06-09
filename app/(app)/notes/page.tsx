@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
@@ -11,23 +11,7 @@ interface Note {
   title: string
   body: string
   created_at: string
-  author: string
   pinned: boolean
-}
-
-const STORAGE_KEY = 'cntp_notes_v1'
-
-function loadNotes(): Note[] {
-  if (typeof window === 'undefined') return []
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
-  } catch {
-    return []
-  }
-}
-
-function saveNotes(notes: Note[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(notes))
 }
 
 export default function NotesPage() {
@@ -39,14 +23,24 @@ export default function NotesPage() {
   const [saved, setSaved]           = useState(false)
 
   useEffect(() => {
-    const loaded = loadNotes()
-    setNotes(loaded)
-    if (loaded.length > 0) {
-      const first = loaded[0]
-      setActiveId(first.id)
-      setEditTitle(first.title)
-      setEditBody(first.body)
+    async function load() {
+      try {
+        const db = getDb()
+        const { data } = await db
+          .from('notes')
+          .select('id,title,body,created_at,pinned')
+          .order('pinned', { ascending: false })
+          .order('created_at', { ascending: false })
+        const loaded = (data ?? []) as Note[]
+        setNotes(loaded)
+        if (loaded.length > 0) {
+          setActiveId(loaded[0].id)
+          setEditTitle(loaded[0].title)
+          setEditBody(loaded[0].body)
+        }
+      } catch {}
     }
+    load()
   }, [])
 
   function selectNote(note: Note) {
@@ -56,43 +50,45 @@ export default function NotesPage() {
     setSaved(false)
   }
 
-  function newNote() {
-    const note: Note = {
-      id:         crypto.randomUUID(),
-      title:      'New note',
-      body:       '',
-      created_at: new Date().toISOString(),
-      author:     displayName,
-      pinned:     false,
-    }
-    const updated = [note, ...notes]
-    setNotes(updated)
-    saveNotes(updated)
-    selectNote(note)
+  async function newNote() {
+    try {
+      const db = getDb()
+      const { data, error } = await db
+        .from('notes')
+        .insert({ title: 'New note', body: '', pinned: false })
+        .select('id,title,body,created_at,pinned')
+        .single()
+      if (error || !data) return
+      const note = data as Note
+      setNotes(prev => [note, ...prev])
+      selectNote(note)
+    } catch {}
   }
 
-  function saveActive() {
+  async function saveActive() {
     if (!activeId) return
-    const updated = notes.map(n =>
-      n.id === activeId ? { ...n, title: editTitle, body: editBody } : n
-    )
-    setNotes(updated)
-    saveNotes(updated)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    try {
+      const db = getDb()
+      await db
+        .from('notes')
+        .update({ title: editTitle, body: editBody, updated_at: new Date().toISOString() })
+        .eq('id', activeId)
+      setNotes(prev => prev.map(n => n.id === activeId ? { ...n, title: editTitle, body: editBody } : n))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch {}
   }
 
-  function deleteNote(id: string) {
+  async function deleteNote(id: string) {
+    try {
+      const db = getDb()
+      await db.from('notes').delete().eq('id', id)
+    } catch {}
     const updated = notes.filter(n => n.id !== id)
     setNotes(updated)
-    saveNotes(updated)
     if (activeId === id) {
       if (updated.length > 0) selectNote(updated[0])
-      else {
-        setActiveId(null)
-        setEditTitle('')
-        setEditBody('')
-      }
+      else { setActiveId(null); setEditTitle(''); setEditBody('') }
     }
   }
 
@@ -135,7 +131,7 @@ export default function NotesPage() {
                 {note.title || 'Untitled'}
               </div>
               <div className="font-mono text-[10px] text-text-muted mt-0.5">
-                {format(new Date(note.created_at), 'd MMM · HH:mm')} · {note.author}
+                {format(new Date(note.created_at), 'd MMM · HH:mm')}
               </div>
               <div className="text-[11px] text-text-muted mt-1 line-clamp-2 leading-relaxed">
                 {note.body || 'Empty note…'}
@@ -185,7 +181,7 @@ export default function NotesPage() {
 
             {activeNote && (
               <div className="px-6 py-2 border-t border-surface-rule font-mono text-[10px] text-text-muted">
-                Created {format(new Date(activeNote.created_at), 'd MMMM yyyy, HH:mm')} by {activeNote.author}
+                Created {format(new Date(activeNote.created_at), 'd MMMM yyyy, HH:mm')}
               </div>
             )}
           </>

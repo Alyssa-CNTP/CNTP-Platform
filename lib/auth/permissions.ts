@@ -52,6 +52,13 @@ export type PermissionKey =
   | 'can_edit_count'
   | 'can_view_all_sections'
   | 'can_view_ops_dashboard'
+  // Production — Live Capture
+  | 'can_start_live_session'
+  | 'can_scan_inputs'
+  | 'can_add_outputs'
+  | 'can_reset_operator_pin'
+  | 'can_view_live_history'
+  | 'can_approve_session'
   // Sales & Marketing
   | 'can_access_sales'
   | 'can_access_marketing'
@@ -72,6 +79,9 @@ export type PermissionKey =
   | 'can_run_migrations'
   | 'can_access_dev_tools'
   | 'can_manage_integrations'
+  // Ticketing & Workspace
+  | 'can_assign_tickets'
+  | 'can_access_workspace'
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>
 
@@ -83,11 +93,15 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_reopen_runs','can_delete_runs','can_add_samples','can_edit_samples',
   'can_add_tastings','can_edit_tastings','can_add_sieving_runs','can_delete_sieving_runs',
   'can_edit_sieving_specs','can_submit_count','can_edit_count','can_view_all_sections',
-  'can_view_ops_dashboard','can_access_sales','can_access_marketing','can_access_research',
+  'can_view_ops_dashboard',
+  'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
+  'can_view_live_history','can_approve_session',
+  'can_access_sales','can_access_marketing','can_access_research',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
+  'can_assign_tickets', 'can_access_workspace',
 ]
 
 // ─── Departments ──────────────────────────────────────────────────────────────
@@ -136,7 +150,10 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'quality_default',  label: 'Quality (Default)', desc: 'All permissions off — toggle on what they need' },
   ],
   Production: [
-    { role: 'production_default', label: 'Production (Default)', desc: 'All permissions off — toggle on what they need' },
+    { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
+    { role: 'floor_operator',        label: 'Floor Operator',           desc: 'PIN-based tablet access only — no system login' },
+    { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs' },
+    { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Morning count and live capture history view only' },
   ],
   Management: [
     { role: 'management_default', label: 'Management (Default)', desc: 'All permissions off — toggle on what they need' },
@@ -164,12 +181,34 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
 
   // ── Legacy role aliases (for existing Supabase users) ─────────────────────
   admin:            { ...ALL_ON },           // maps to senior_developer
-  supervisor:       {                        // maps to production manager
+  supervisor:       {                        // maps to production_supervisor
     can_submit_count: true, can_edit_count: true,
-    can_view_all_sections: true, can_view_ops_dashboard: true, can_export_csv: true,
+    can_view_all_sections: true, can_view_ops_dashboard: true,
+    can_start_live_session: true, can_scan_inputs: true,
+    can_add_outputs: true, can_reset_operator_pin: true,
+    can_approve_session: true, can_export_csv: true,
   },
-  operator:         { can_submit_count: true, can_view_ops_dashboard: true },
+  operator:         {                        // maps to warehouse_supervisor
+    can_submit_count: true, can_view_ops_dashboard: true,
+    can_view_live_history: true,
+  },
   section_operator: { can_submit_count: true, can_view_ops_dashboard: true },
+
+  // ── Production roles ───────────────────────────────────────────────────────
+  floor_operator: {},   // no system permissions — PIN only
+
+  production_supervisor: {
+    can_submit_count: true, can_edit_count: true,
+    can_view_all_sections: true, can_view_ops_dashboard: true,
+    can_start_live_session: true, can_scan_inputs: true,
+    can_add_outputs: true, can_reset_operator_pin: true,
+    can_approve_session: true, can_export_csv: true,
+  },
+
+  warehouse_supervisor: {
+    can_submit_count: true, can_view_ops_dashboard: true,
+    can_view_live_history: true,
+  },
 
   // ── IT — Co-Developer: everything except destructive system ops ────────────
   co_developer: Object.fromEntries(
@@ -289,6 +328,18 @@ export const PERMISSION_GROUPS: {
     ],
   },
   {
+    group: 'Production — Live Capture',
+    department: 'Production',
+    permissions: [
+      { key: 'can_start_live_session',  label: 'Start a live capture session' },
+      { key: 'can_scan_inputs',         label: 'Scan bags in' },
+      { key: 'can_add_outputs',         label: 'Add output bags & print labels' },
+      { key: 'can_reset_operator_pin',  label: 'Reset operator PIN (notifies Management)' },
+      { key: 'can_view_live_history',   label: 'View live capture session history' },
+      { key: 'can_approve_session',     label: 'Approve and lock a session' },
+    ],
+  },
+  {
     group: 'Sales',
     department: 'Sales',
     permissions: [
@@ -336,6 +387,13 @@ export const PERMISSION_GROUPS: {
       { key: 'can_run_migrations',      label: 'Run data migrations' },
       { key: 'can_access_dev_tools',    label: 'Access developer tools' },
       { key: 'can_manage_integrations', label: 'Manage integrations' },
+    ],
+  },
+  {
+    group: 'Ticketing & Workspace',
+    permissions: [
+      { key: 'can_assign_tickets',   label: 'Assign tickets to users (manager role)' },
+      { key: 'can_access_workspace', label: 'Access personal workspace board' },
     ],
   },
 ]

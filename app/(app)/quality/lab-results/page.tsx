@@ -557,20 +557,28 @@ export default function LabResultsPage() {
 
   const load = useCallback(async (tab: TestType) => {
     setLoading(true); setError('')
-    const { data, error:err } = await db.schema('qms').from('lab_results')
-      .select('*').eq('test_type', tab).order('created_at', { ascending:false })
+    const [{ data: qmsData, error: err }, legacyRes] = await Promise.all([
+      db.schema('qms').from('lab_results')
+        .select('*').eq('test_type', tab).order('created_at', { ascending:false }),
+      fetch('/api/quality/legacy-public?table=lab_results').then(r => r.json()).catch(() => ({ data: [] })),
+    ])
     if (err) { setError(err.message); setLoading(false); return }
-    setRecords(p=>({...p,[tab]:(data as LabResult[])??[]}))
+    const legacy = (legacyRes.data ?? []).filter((r: any) => r.test_type === tab)
+    const qmsIds = new Set((qmsData ?? []).map((r: any) => r.batch_no + '|' + r.test_type))
+    const uniqueLegacy = legacy.filter((r: any) => !qmsIds.has(r.batch_no + '|' + r.test_type))
+    const merged = [...(qmsData ?? []), ...uniqueLegacy]
+      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    setRecords(p=>({...p,[tab]: merged as LabResult[]}))
     setLoading(false)
   }, [db])
 
   useEffect(() => { load(activeTab) }, [activeTab, load])
 
   const loadHistory = useCallback(async () => {
-    const { data } = await db.schema('public').from('quality_records').select('*')
-      .eq('workcenter','rawMaterial').order('created_at', { ascending:false }).limit(100)
-    setHistoryRecs((data as any[])??[])
-  }, [db])
+    const res = await fetch('/api/quality/legacy-public?table=lab_results&limit=500')
+    const json = await res.json()
+    setHistoryRecs(json.data ?? [])
+  }, [])
 
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
 
@@ -623,7 +631,7 @@ export default function LabResultsPage() {
       {/* Header */}
       <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap' }}>
         <div>
-          <div style={{ fontWeight:800, fontSize:20, marginBottom:2 }}>Lab Results</div>
+          <div style={{ fontWeight:800, fontSize:20, marginBottom:2 }}>Final Product Lab Results</div>
           <div style={{ fontSize:11, color:'#6b7280' }}>Upload COA PDFs · Gemini extracts structured data</div>
         </div>
         <div style={{ display:'flex', gap:8, marginLeft:'auto', flexWrap:'wrap' }}>

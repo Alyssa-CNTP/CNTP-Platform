@@ -56,8 +56,8 @@ export default function SalesLoginPage() {
       // 2. Fetch role from your profiles / app_roles table
       //    Adjust schema/table name to match your existing setup
       const { data: roleData } = await supabase
-        .schema('production')          // ← change if your schema is different
-        .from('app_roles')             // ← change to 'profiles' if that's where role lives
+        .schema('shared' as any)
+        .from('app_roles')
         .select('role')
         .eq('user_id', authData.user.id)
         .single()

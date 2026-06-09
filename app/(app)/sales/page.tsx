@@ -5,17 +5,20 @@
 // Tabs: Overview · Customers · Products · OKRs · Intelligence
 // Data: seeded from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx
 
-import React, { useState } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   TrendingUp, TrendingDown, Users, Package,
   BarChart3, Target, ChevronRight, Search,
-  Cpu, AlertTriangle, CheckCircle2, Clock,
-  ArrowUpRight, ArrowDownRight, Layers,
+  AlertTriangle, CheckCircle2, Clock,
+  ArrowUpRight, ArrowDownRight, Layers, Globe2,
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie,
+  CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
+import SignalCard   from '@/components/intelligence/SignalCard'
+import SignalDrawer from '@/components/intelligence/SignalDrawer'
+import type { Signal } from '@/components/intelligence/types'
 
 // ─── Real data from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx ─────────────────
 
@@ -171,22 +174,44 @@ function Tab({ label, active, onClick }: { label: string; active: boolean; onCli
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-type TabKey = 'overview' | 'customers' | 'products' | 'okrs' | 'intelligence'
+type TabKey = 'overview' | 'customers' | 'products' | 'okrs'
 
 export default function SalesPage() {
   const [tab, setTab]             = useState<TabKey>('overview')
   const [search, setSearch]       = useState('')
   const [tierFilter, setTier]     = useState('ALL')
-  const [intelQuery, setQuery]    = useState('')
-  const [intelResp, setResp]      = useState('')
-  const [intelLoading, setLoad]   = useState(false)
+
+  // Market Pulse — signal data
+  const [signals,        setSignals]        = useState<Signal[]>([])
+  const [signalsLoading, setSignalsLoading] = useState(true)
+  const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null)
+
+  useEffect(() => {
+    fetch('/api/signals?limit=200')
+      .then(r => r.json())
+      .then(d => setSignals(d.signals ?? []))
+      .catch(() => {})
+      .finally(() => setSignalsLoading(false))
+  }, [])
+
+  const regionData = useMemo(() => {
+    const counts = new Map<string, number>()
+    signals.forEach(s => { if (s.region) counts.set(s.region, (counts.get(s.region) ?? 0) + 1) })
+    return Array.from(counts.entries())
+      .map(([region, count]) => ({ region, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+  }, [signals])
+
+  const opportunities = useMemo(() => signals.filter(s => s.classification === 'opportunity').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
+  const competitors   = useMemo(() => signals.filter(s => s.classification === 'competitor').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
+  const tradeSignals  = useMemo(() => signals.filter(s => s.keyword_group === 'trade').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
 
   const TABS: { key: TabKey; label: string }[] = [
-    { key: 'overview',      label: 'Overview'      },
-    { key: 'customers',     label: 'Customers'     },
-    { key: 'products',      label: 'Product Mix'   },
-    { key: 'okrs',          label: 'OKRs'          },
-    { key: 'intelligence',  label: 'Intelligence'  },
+    { key: 'overview',  label: 'Overview'    },
+    { key: 'customers', label: 'Customers'   },
+    { key: 'products',  label: 'Product Mix' },
+    { key: 'okrs',      label: 'OKRs'        },
   ]
 
   const filteredCustomers = CUSTOMERS.filter(c => {
@@ -196,26 +221,6 @@ export default function SalesPage() {
       (tierFilter === 'ALL' || c.tier === tierFilter)
     )
   })
-
-  const runIntel = async (q: string) => {
-    if (!q.trim()) return
-    setLoad(true)
-    setResp('')
-    try {
-      const context = `CNTP YTD Jan-Apr 2026: Revenue R70.5M (vs R229.9M 2025, -69.3% YoY — volume shift not pricing loss). Gross margin R24.5M at 34.7% (2025: 39.8%). Volume 1,092,439kg (-73.4% YoY). Avg Rev/kg R64.55 (+15.3% pricing improvement). Bulk R69.5M (98.6%), VA R982k (1.4%). Super Grade SKU = 47.1% of volume. Top 3 SKUs = 76% of volume. 31 active SKUs. Full year target: R248.9M.`
-      const res  = await fetch('/api/sales', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'agent', prompt: q, context }),
-      })
-      const data = await res.json()
-      setResp(data.response ?? 'No response received.')
-    } catch {
-      setResp('Intelligence engine unavailable. Please try again.')
-    } finally {
-      setLoad(false)
-    }
-  }
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -353,6 +358,73 @@ export default function SalesPage() {
                   Pricing uplift of +15.3% Rev/kg confirms commercial performance is improving. Apr 2026 revenue of R24.9M exceeded monthly target.
                 </p>
               </div>
+
+              {/* Market Pulse */}
+              <div className="space-y-4">
+                <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <SectionLabel text="Market Pulse · Signal volume by region" />
+                      <p className="text-[11px] text-text-muted -mt-2">Live signals from n8n · updated daily at 06:00</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-status-ok" style={{ boxShadow: '0 0 6px var(--color-status-ok)' }} />
+                      <span className="font-mono text-[9px] text-text-faint uppercase tracking-wider">Live</span>
+                    </div>
+                  </div>
+                  {signalsLoading ? (
+                    <div className="h-[160px] flex items-center justify-center text-text-faint text-[12px]">Loading…</div>
+                  ) : regionData.length === 0 ? (
+                    <div className="h-[160px] flex items-center justify-center text-text-faint text-[12px]">No regional data yet — signals will appear once n8n is live</div>
+                  ) : (
+                    <div className="h-[160px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={regionData} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-surface-rule)" vertical={false} />
+                          <XAxis dataKey="region" tick={{ fontSize: 11, fill: 'var(--color-text-muted)' }} axisLine={{ stroke: 'var(--color-surface-rule)' }} tickLine={false} />
+                          <YAxis tick={{ fontSize: 11, fill: 'var(--color-text-muted)' }} axisLine={false} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ background: 'var(--color-surface-card)', border: '1px solid var(--color-surface-rule)', borderRadius: 8, fontSize: 12 }}
+                            cursor={{ fill: 'var(--color-surface)' }}
+                          />
+                          <Bar dataKey="count" fill="var(--color-brand)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {[
+                    { title: 'Opportunities', icon: TrendingUp, items: opportunities, accent: 'var(--color-status-ok)' },
+                    { title: 'Competitor Activity', icon: Globe2, items: competitors, accent: 'var(--color-status-danger)' },
+                    { title: 'Trade Signals', icon: BarChart3, items: tradeSignals, accent: 'var(--color-brand)' },
+                  ].map(col => (
+                    <section key={col.title} className="bg-surface-card rounded-xl border border-surface-rule flex flex-col max-h-[480px]">
+                      <header className="flex items-center justify-between px-4 py-3 border-b border-surface-rule">
+                        <div className="flex items-center gap-2">
+                          <col.icon size={13} style={{ color: col.accent }} />
+                          <h3 className="font-display font-semibold text-[13px] text-text">{col.title}</h3>
+                        </div>
+                        <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-surface-rule text-text-muted bg-surface">{col.items.length}</span>
+                      </header>
+                      <div className="flex-1 overflow-y-auto p-3 grid gap-2">
+                        {signalsLoading ? (
+                          <p className="text-center text-text-faint text-[12px] py-4">Loading…</p>
+                        ) : col.items.length === 0 ? (
+                          <p className="text-center text-text-faint text-[12px] py-4">No signals yet</p>
+                        ) : (
+                          col.items.slice(0, 12).map(s => (
+                            <SignalCard key={s.id} signal={s} compact onClick={setSelectedSignal} />
+                          ))
+                        )}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </div>
+
+              <SignalDrawer signal={selectedSignal} onClose={() => setSelectedSignal(null)} />
 
               {/* Engine mix */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -632,96 +704,6 @@ export default function SalesPage() {
                 </div>
               ))}
             </>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              INTELLIGENCE
-          ════════════════════════════════════════════════════════════════ */}
-          {tab === 'intelligence' && (
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 min-h-[600px]">
-              {/* Left: query cards */}
-              <div className="space-y-6">
-                <div>
-                  <SectionLabel text="Market intelligence · CNTP data loaded as context" />
-                  <p className="text-[13px] text-text-muted leading-relaxed">
-                    The engine has your current CNTP YTD numbers loaded. Ask it to compare against market benchmarks, 
-                    suggest account actions, or scout new markets. Your raw customer data never leaves your server — only 
-                    aggregated metrics are used as context.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {[
-                    { tag: 'Pricing',        q: 'How does our R64.55/kg avg pricing compare to global bulk rooibos market benchmarks?' },
-                    { tag: 'Market entry',   q: 'What is the demand outlook for rooibos in Germany and Poland? We have two T2 accounts there.' },
-                    { tag: 'VA strategy',    q: 'Our VA revenue is only 1.4% of total. What realistic target should we set and how do we grow it?' },
-                    { tag: 'Volume recovery',q: 'Which markets should we target to recover the 73% YoY volume decline?' },
-                    { tag: 'Rosehip synergy',q: 'What is the current rosehip market outlook and how does it complement our rooibos VA engine?' },
-                    { tag: 'Account risk',   q: 'Analyse T3 accounts with <15% GP and recommend exit or reprice approach with talking points.' },
-                    { tag: 'Japan relationship', q: 'How do we protect and grow our Japan relationship while diversifying into new markets?' },
-                    { tag: 'Competitor scan',q: 'Who are the main competing bulk rooibos exporters and what are their pricing and positioning strategies?' },
-                  ].map((s, i) => (
-                    <button key={i} onClick={() => { setQuery(s.q); runIntel(s.q) }}
-                      className="text-left p-4 bg-surface-card border border-surface-rule rounded-xl hover:border-brand hover:shadow-card transition-all group">
-                      <div className="font-mono text-[9px] uppercase tracking-wider text-brand mb-2 font-bold">{s.tag}</div>
-                      <p className="text-[12px] text-text-muted leading-relaxed group-hover:text-text transition-colors">{s.q}</p>
-                      <div className="mt-3 text-[11px] text-brand flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        Run query <ChevronRight size={11}/>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Right: terminal */}
-              <div className="bg-surface-card border border-surface-rule rounded-xl flex flex-col lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-180px)]">
-                <div className="px-4 py-3 border-b border-surface-rule flex items-center gap-2">
-                  <Cpu size={13} className="text-brand" />
-                  <span className="font-mono text-[11px] font-bold text-text uppercase tracking-wider">Intelligence Engine</span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${intelLoading ? 'bg-amber-400 animate-pulse' : 'bg-green-500'}`} />
-                    <span className="font-mono text-[10px] text-text-muted">{intelLoading ? 'PROCESSING' : 'READY'}</span>
-                  </div>
-                </div>
-
-                <div className="flex-1 p-4 overflow-y-auto text-[12px] leading-relaxed text-text font-mono min-h-[300px]">
-                  {intelLoading ? (
-                    <div className="h-full flex flex-col items-center justify-center gap-3 text-text-muted">
-                      <div className="w-8 h-8 border-2 border-surface-rule border-t-brand rounded-full animate-spin" />
-                      <span className="animate-pulse text-[11px]">Synthesising intelligence…</span>
-                    </div>
-                  ) : intelResp ? (
-                    <div className="whitespace-pre-wrap">{intelResp}</div>
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-center text-text-muted gap-3">
-                      <Cpu size={32} className="text-surface-rule" />
-                      <div>
-                        <p className="text-[12px] font-medium">Select a query card</p>
-                        <p className="text-[11px] mt-1">or type your own question below</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="p-3 border-t border-surface-rule">
-                  <div className="relative">
-                    <textarea
-                      value={intelQuery}
-                      onChange={e => setQuery(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runIntel(intelQuery) }}}
-                      placeholder="Ask about market conditions, account strategy, pricing…"
-                      rows={3}
-                      className="w-full text-[12px] bg-surface border border-surface-rule rounded-lg p-2.5 pr-10 text-text placeholder:text-text-muted focus:outline-none focus:border-brand resize-none"
-                    />
-                    <button onClick={() => runIntel(intelQuery)}
-                      className="absolute bottom-3 right-2 w-7 h-7 bg-brand rounded-md flex items-center justify-center text-white hover:opacity-90">
-                      <ChevronRight size={13}/>
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-text-muted mt-1.5 font-mono">Enter ↵ to send · Shift+Enter for new line</p>
-                </div>
-              </div>
-            </div>
           )}
 
         </div>

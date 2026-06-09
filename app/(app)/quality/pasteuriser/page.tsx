@@ -796,36 +796,42 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   // Load batches from DB
   useEffect(() => {
     setDbLoading(true)
-    db.schema('qms').from('quality_records').select('*')
-      .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
-      .order('created_at',{ascending:false})
-      .then(({ data }: { data: any[] | null }) => {
-        if (!data) return
-        const loaded = data.map((r: any) => {
-          let d: any = {}
-          try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
-          const b = { ...d, _db_id: r.id }
-          return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
-            const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
-            return da < db2 ? -1 : da > db2 ? 1 : 0
-          })}
-        }).filter((b: any) => b.id)
-        setBatches(loaded)
-        if (loaded.length > 0) setActiveBatchId(loaded[0].id)
-      })
-      .finally(() => setDbLoading(false))
+    Promise.all([
+      db.schema('qms').from('quality_records').select('*')
+        .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
+        .order('created_at',{ascending:false}),
+      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()).then(j => ({ data: j.pasteuriser_runs ?? [] })),
+    ]).then(([{ data: qmsData }, { data: legacyData }]) => {
+      const parseRec = (r: any, isLegacy = false): any => {
+        let d: any = {}
+        try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+        if (!d.id) return null
+        const b = { ...d, _db_id: isLegacy ? undefined : r.id }
+        return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
+          const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
+          return da < db2 ? -1 : da > db2 ? 1 : 0
+        })}
+      }
+      const fromQms    = (qmsData    || []).map((r: any) => parseRec(r, false)).filter(Boolean)
+      const fromLegacy = (legacyData || []).map((r: any) => parseRec(r, true)).filter(Boolean)
+      const seen = new Set(fromQms.map((b: any) => b.id))
+      const all  = [...fromQms, ...fromLegacy.filter((b: any) => !seen.has(b.id))]
+      setBatches(all as any)
+      if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
+    }).finally(() => setDbLoading(false))
   }, [])
 
   // Load historical batches from public schema (read-only reference, never modified)
   const loadPubHistory = useCallback(async () => {
     setPubLoading(true)
-    // Use explicit public schema — getDb() defaults to 'production' schema
-    const { data } = await db.schema('public').from('quality_records')
-      .select('*')
-      .eq('workcenter', 'pasteuriser')
-      .order('created_at', { ascending: false })
-      .limit(200)
-    setPubBatches(data ?? [])
+    const [legacyRes, { data: current }] = await Promise.all([
+      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()),
+      db.schema('qms').from('quality_records').select('*')
+        .eq('workcenter', 'pasteuriser').order('created_at', { ascending: false }).limit(200),
+    ])
+    const merged = [...(current ?? []), ...(legacyRes.quality_records ?? [])]
+      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    setPubBatches(merged)
     setPubLoading(false)
   }, [db])
 

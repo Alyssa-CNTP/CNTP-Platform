@@ -3,8 +3,61 @@
 import { useState, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import Sidebar from '@/components/layout/Sidebar'
-import Topbar  from '@/components/layout/Topbar'
+import type { PermissionKey } from '@/lib/auth/permissions'
+import Sidebar          from '@/components/layout/Sidebar'
+import Topbar           from '@/components/layout/Topbar'
+import NotificationBell from '@/components/layout/NotificationBell'
+import { LanguageProvider } from '@/lib/i18n/context'
+
+// ─── Route access rules ────────────────────────────────────────────────────────
+// Mirrors Sidebar NAV. IT bypasses all. More-specific prefixes must come first.
+// /dashboard, /settings, /axis/request are always open (excluded below).
+
+const ROUTE_GUARDS: Array<{
+  prefix:       string
+  departments?: string[]
+  permission?:  PermissionKey
+  itOnly?:      boolean
+}> = [
+  // AXIS — IT only (except /axis/request, excluded in guard logic)
+  { prefix: '/axis/consideration', itOnly: true },
+  { prefix: '/axis/changelog',     itOnly: true },
+  { prefix: '/axis/projects',      itOnly: true },
+  { prefix: '/axis',               itOnly: true },
+
+  // Quality — Sales can only reach customer-specs
+  { prefix: '/quality/customer-specs', departments: ['IT','Quality','Sales'], permission: 'can_edit_customer_specs' },
+  { prefix: '/quality',                departments: ['IT','Quality'] },
+
+  // Production
+  { prefix: '/count',                departments: ['IT','Production'], permission: 'can_submit_count'       },
+  { prefix: '/info',                 departments: ['IT','Production'], permission: 'can_view_ops_dashboard' },
+  { prefix: '/production/operations',departments: ['IT','Management'] },
+  { prefix: '/production/live',      departments: ['IT','Production'] },
+  { prefix: '/production',           departments: ['IT','Production'] },
+
+  // Logistics (barcode-driven receiving, warehouse, dispatch)
+  { prefix: '/logistics',        departments: ['IT','Production','Quality','Management'] },
+
+  // Management
+  { prefix: '/status',     departments: ['IT'] },
+  { prefix: '/management', departments: ['IT','Management'] },
+
+  // Sales & Research
+  { prefix: '/research',   departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_research' },
+  { prefix: '/sales',      departments: ['IT','Sales','Management'], permission: 'can_access_sales'    },
+
+  // Marketing
+  { prefix: '/marketing',  departments: ['IT','Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
+
+  // Intelligence — `can_access_intelligence` is a planned permission key honoured
+  // by the /api/signals route; cast until it's added to PermissionKey.
+  { prefix: '/intelligence', departments: ['IT', 'Sales', 'Management', 'Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+
+  // Admin
+  { prefix: '/users',      permission: 'can_manage_users' },
+  { prefix: '/tags',       departments: ['IT','Production'] },
+]
 
 // ─── Route metadata ────────────────────────────────────────────────────────────
 
@@ -13,49 +66,115 @@ const ROUTE_META: Record<string, {
   variant: 'default' | 'research' | 'sales' | 'management'
   chips?:  Array<{ label: string; color: 'green' | 'amber' | 'gray' | 'blue' | 'red' | 'purple' }>
 }> = {
-  '/dashboard':              { title: 'Dashboard',         variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
-  '/count':                  { title: 'Morning count',     variant: 'default',    chips: [{ label: 'BHW · Blackheath', color: 'gray' }] },
-  '/recount':                { title: 'Recount',           variant: 'default' },
-  '/production':             { title: 'Live capture',      variant: 'default' },
-  '/info':                   { title: 'Section info',      variant: 'default' },
-  '/status':                 { title: 'Platform analytics',variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
-  '/users':                  { title: 'Users & roles',     variant: 'default' },
-  '/settings':               { title: 'Account settings',  variant: 'default' },
-  '/tags':                   { title: 'Bag tags',          variant: 'default' },
+  '/dashboard':              { title: 'Dashboard',              variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
+  '/count':                  { title: 'Stock Count',            variant: 'default',    chips: [{ label: 'BHW · Blackheath', color: 'gray' }] },
+  '/production':             { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
+  '/production/live':        { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
+  '/production/live/capture':{ title: 'Capture Session',        variant: 'default' },
+  '/info':                   { title: 'Section Information',    variant: 'default' },
+  '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
+  '/users':                  { title: 'Users & Roles',          variant: 'default' },
+  '/settings':               { title: 'Account Settings',       variant: 'default' },
+  '/tags':                   { title: 'Bag Tracking',           variant: 'default' },
 
   // Quality section
-  '/quality/raw-material':   { title: 'Raw material',      variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
-  '/quality/pasteuriser':    { title: 'Pasteuriser',       variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
-  '/quality/granule':        { title: 'Granule line',      variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
-  '/quality/sieving':        { title: 'Sieving',           variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
-  '/quality/lab-results':    { title: 'Lab results',       variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
-  '/quality/customer-specs': { title: 'Customer specs',    variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
+  '/quality/raw-material':   { title: 'Raw Material',           variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
+  '/quality/pasteuriser':    { title: 'Pasteuriser',            variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
+  '/quality/granule':        { title: 'Granule Line',           variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
+  '/quality/sieving':        { title: 'Sieving',                variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
+  '/quality/lab-results':    { title: 'Final Product Lab Results', variant: 'default', chips: [{ label: 'Quality', color: 'blue' }] },
+  '/quality/customer-specs': { title: 'Customer Specifications', variant: 'default',   chips: [{ label: 'Quality', color: 'blue' }] },
 
   // Management section
-  '/management':             { title: 'Management overview', variant: 'management', chips: [{ label: 'Read only', color: 'purple' }] },
-  '/management/recounts':    { title: 'Recount review',      variant: 'management' },
+  '/management':                   { title: 'Management',           variant: 'management' },
+  '/production/operations':        { title: 'Production Operations', variant: 'management', chips: [{ label: 'IT + Management', color: 'purple' }] },
 
   // Sales section
-  '/sales':                  { title: 'Sales overview',    variant: 'sales' },
-  '/sales/customers':        { title: 'Accounts',          variant: 'sales' },
-  '/sales/intelligence':     { title: 'Intelligence',      variant: 'sales' },
-  '/sales/targets':          { title: 'Targets & OKRs',    variant: 'sales' },
+  '/sales':                  { title: 'Sales Overview',         variant: 'sales' },
+  '/sales/customers':        { title: 'Accounts',               variant: 'sales' },
+  '/sales/intelligence':     { title: 'Intelligence',           variant: 'sales' },
+  '/sales/targets':          { title: 'Targets & OKRs',         variant: 'sales' },
 
   // Research
-  '/research':               { title: 'Research engine',   variant: 'research' },
+  '/research':               { title: 'Research Engine',        variant: 'research' },
+
+  // Marketing
+  '/marketing':              { title: 'Marketing',              variant: 'sales',   chips: [{ label: 'Live', color: 'green' }] },
+
+  // Intelligence
+  '/intelligence':              { title: 'Signal Engine',            variant: 'sales', chips: [{ label: 'Live', color: 'green' }] },
+  '/intelligence/sales':        { title: 'Sales Intelligence',       variant: 'sales' },
+  '/intelligence/expansion':    { title: 'Expansion Intelligence',   variant: 'sales' },
+  '/intelligence/marketing':    { title: 'Marketing Intelligence',   variant: 'sales' },
+  '/intelligence/south-africa': { title: 'South Africa',             variant: 'sales' },
+  '/intelligence/linkedin':     { title: 'LinkedIn Intelligence',    variant: 'sales', chips: [{ label: 'Phase 2', color: 'purple' }] },
+
+  // Logistics — barcode operations layer
+  '/logistics':                    { title: 'Logistics',              variant: 'default', chips: [{ label: 'Live', color: 'green' }] },
+  '/logistics/receiving':          { title: 'Receiving',              variant: 'default' },
+  '/logistics/warehouse':          { title: 'Warehouse',              variant: 'default' },
+  '/logistics/dispatch':           { title: 'Dispatch',               variant: 'default' },
+
+  // AXIS — IT change & project tracking
+  '/axis':                   { title: 'AXIS',                    variant: 'default', chips: [{ label: 'IT', color: 'purple' }] },
+  '/axis/consideration':     { title: 'Consideration Board',     variant: 'default', chips: [{ label: 'IT', color: 'purple' }] },
+  '/axis/projects':          { title: 'Projects',                variant: 'default', chips: [{ label: 'IT', color: 'purple' }] },
+  '/axis/changelog':         { title: 'Change Log',              variant: 'default', chips: [{ label: 'IT', color: 'purple' }] },
+  '/axis/request':           { title: 'Submit a Request',        variant: 'default' },
+  '/axis/standards':         { title: 'Dev Standards & Protocol', variant: 'default', chips: [{ label: 'IT', color: 'purple' }] },
+  '/suggest':                { title: 'Suggestions',             variant: 'default' },
 }
 
 // ─── Layout ────────────────────────────────────────────────────────────────────
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false)
-  const { user, loading } = useAuth()
+  const { user, loading, permissionsReady, isIT, isFullAdmin, department, role, p, signOut } = useAuth()
   const router   = useRouter()
   const pathname = usePathname()
 
+  // Session check — redirect to login if unauthenticated
   useEffect(() => {
     if (!loading && !user) router.replace('/login')
   }, [user, loading, router])
+
+  // Authorization guard — department first, then per-user permission
+  useEffect(() => {
+    if (loading || !permissionsReady || !user) return
+
+    // Always-open routes
+    if (
+      pathname === '/dashboard' ||
+      pathname === '/settings'  ||
+      pathname === '/suggest'   ||
+      pathname === '/axis/request' ||
+      pathname.startsWith('/axis/request/')
+    ) return
+
+    // Find the most specific matching rule (longest prefix wins)
+    const guard = ROUTE_GUARDS
+      .filter(g => pathname === g.prefix || pathname.startsWith(g.prefix + '/'))
+      .sort((a, b) => b.prefix.length - a.prefix.length)[0]
+
+    if (!guard) return
+
+    // IT-only routes (AXIS internals) — only IT dept or full admin
+    if (guard.itOnly && !isIT && !isFullAdmin) { router.replace('/dashboard'); return }
+
+    // If the user has the required permission explicitly enabled, they get through
+    // regardless of department. Permission is the single source of truth.
+    const hasExplicitPermission = guard.permission && !isFullAdmin && p(guard.permission)
+    if (isFullAdmin || hasExplicitPermission) return
+
+    // No explicit permission — enforce department check
+    if (guard.departments && !(department && guard.departments.includes(department))) {
+      router.replace('/dashboard'); return
+    }
+    // Department matches but permission still required
+    if (guard.permission && !p(guard.permission)) {
+      router.replace('/dashboard'); return
+    }
+  }, [loading, permissionsReady, user, pathname, isIT, isFullAdmin, department, p, router])
 
   if (loading) {
     return (
@@ -77,19 +196,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const meta = ROUTE_META[routeKey] ?? { title: 'CNTP Ops', variant: 'default' as const }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface">
-      <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <Topbar
-          title={meta.title}
-          onMobileMenu={() => setMobileOpen(true)}
-          chips={meta.chips ?? []}
-          variant={meta.variant}
-        />
-        <main className="flex-1 overflow-y-auto overflow-x-hidden">
-          {children}
-        </main>
+    <LanguageProvider>
+      <div className="flex h-screen overflow-hidden bg-surface">
+        <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <Topbar
+            title={meta.title}
+            onMobileMenu={() => setMobileOpen(true)}
+            chips={meta.chips ?? []}
+            variant={meta.variant}
+            rightSlot={<NotificationBell />}
+          />
+          <main className="flex-1 overflow-y-auto overflow-x-hidden">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </LanguageProvider>
   )
 }

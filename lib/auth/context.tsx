@@ -24,6 +24,8 @@ interface AuthContextValue {
   role:        string | null
   department:  Department | null
   sectionId:   string | null
+  fullName:    string | null
+  permissions: Permissions
   displayName: string
   initials:    string
   loading:          boolean
@@ -39,20 +41,23 @@ interface AuthContextValue {
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ error: string | null }>
 
   // Convenience checks
-  isIT:        boolean   // IT department
-  isQuality:   boolean   // Quality department
-  isProduction:boolean   // Production department
-  isSales:     boolean   // Sales department
-  isMarketing: boolean   // Marketing department
-  isManagement:boolean   // Management department
+  isIT:          boolean   // IT department — grants AXIS access only
+  isFullAdmin:   boolean   // senior_developer role — bypasses ALL permission checks
+  isQuality:     boolean   // Quality department
+  isProduction:  boolean   // Production department
+  isSales:       boolean   // Sales department
+  isMarketing:   boolean   // Marketing department
+  isManagement:  boolean   // Management department
+  isSupervisor:  boolean   // role === 'supervisor'
+  isFloor:       boolean   // role in ['operator','section_operator']
 
   // Cross-department checks (used by sidebar + route guards)
-  canAccessQuality:    boolean   // can see quality section
-  canAccessProduction: boolean   // can see production section
-  canAccessSales:      boolean   // can see sales section
-  canAccessMarketing:  boolean   // can see marketing section
-  canAccessManagement: boolean   // can see management section
-  canAccessAdmin:      boolean   // can see /users page
+  canAccessQuality:    boolean
+  canAccessProduction: boolean
+  canAccessSales:      boolean
+  canAccessMarketing:  boolean
+  canAccessManagement: boolean
+  canAccessAdmin:      boolean
 
   userId: string | null
 }
@@ -62,36 +67,77 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user,       setUser]       = useState<User | null>(null)
-  const [session,    setSession]    = useState<Session | null>(null)
-  const [role,       setRole]       = useState<string | null>(null)
-  const [department, setDepartment] = useState<Department | null>(null)
-  const [sectionId,  setSectionId]  = useState<string | null>(null)
-  const [resolved,   setResolved]   = useState<Record<PermissionKey, boolean> | null>(null)
-  const [loading,    setLoading]    = useState(true)
+  const [user,        setUser]        = useState<User | null>(null)
+  const [session,     setSession]     = useState<Session | null>(null)
+  const [role,        setRole]        = useState<string | null>(null)
+  const [department,  setDepartment]  = useState<Department | null>(null)
+  const [sectionId,   setSectionId]   = useState<string | null>(null)
+  const [fullName,    setFullName]    = useState<string | null>(null)
+  const [permissions, setPermissions] = useState<Permissions>({})
+  const [resolved,    setResolved]    = useState<Record<PermissionKey, boolean> | null>(null)
+  const [loading,     setLoading]     = useState(true)
+
+  // Decode a JWT (base64url) without a library
+  function decodeJwt(token: string): Record<string, any> | null {
+    try {
+      const b64 = token.split('.')[1]
+      if (!b64) return null
+      const padded = b64.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice((b64.length + 2) % 4 || 2)
+      return JSON.parse(atob(padded))
+    } catch { return null }
+  }
 
   const fetchRole = useCallback(async (userId: string) => {
     try {
+      // ── Priority 1: JWT custom claims (set by Supabase hook on login) ──
+      // These are cryptographically signed — cannot be tampered with.
+      // Available once the custom_access_token_hook is registered in Supabase.
+      const { data: { session } } = await getDb().auth.getSession()
+      const payload = session?.access_token ? decodeJwt(session.access_token) : null
+
+      if (payload && 'user_role' in payload) {
+        // Hook is active — trust the JWT
+        const r   = (payload.user_role   as string) || null
+        const d   = (payload.user_dept   as Department) || null
+        const sid = (payload.user_section as string) || null
+        const fn  = (payload.user_name   as string) || null
+        const ov  = (payload.user_perms  as Permissions) || {}
+
+        setRole(r)
+        setDepartment(d)
+        setSectionId(sid)
+        setFullName(fn)
+        setPermissions(ov)
+        setResolved(resolveAllPermissions(r, ov))
+        return
+      }
+
+      // ── Fallback: DB query (before hook is configured, or for service accounts) ──
       const { data } = await getDb()
-        .schema('production')
+        .schema('shared')
         .from('app_roles')
-        .select('role, department, section_id, permissions')
+        .select('role, department, section_id, permissions, full_name')
         .eq('user_id', userId)
         .maybeSingle()
 
       const r   = (data as any)?.role       as string | null
       const d   = (data as any)?.department as Department | null
       const sid = (data as any)?.section_id as string | null
+      const fn  = (data as any)?.full_name  as string | null
       const ov  = ((data as any)?.permissions ?? {}) as Permissions
 
       setRole(r)
       setDepartment(d)
       setSectionId(sid)
+      setFullName(fn)
+      setPermissions(ov)
       setResolved(resolveAllPermissions(r, ov))
     } catch {
       setRole(null)
       setDepartment(null)
       setSectionId(null)
+      setFullName(null)
+      setPermissions({})
       setResolved(resolveAllPermissions(null, {}))
     }
   }, [])
@@ -172,6 +218,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [resolved])
 
   const displayName =
+    fullName ||
     (user?.user_metadata?.full_name  as string) ||
     (user?.user_metadata?.display_name as string) ||
     user?.email?.split('@')[0] || '—'
@@ -185,26 +232,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Department flags
   const isIT         = department === 'IT'
+  const isFullAdmin  = role === 'senior_developer'
   const isQuality    = department === 'Quality'
   const isProduction = department === 'Production'
   const isSales      = department === 'Sales'
   const isMarketing  = department === 'Marketing'
   const isManagement = department === 'Management'
 
+  // Role flags
+  const isSupervisor = role === 'supervisor'
+  const isFloor      = role === 'operator' || role === 'section_operator'
+
   // Access flags — IT can access everything, others only their dept + what's toggled
-  const canAccessQuality    = isIT || isQuality    || p('can_upload_pdfs') || p('can_view_history')
-  const canAccessProduction = isIT || isProduction || p('can_submit_count') || p('can_view_ops_dashboard')
-  const canAccessSales      = isIT || isSales      || p('can_access_sales')
-  const canAccessMarketing  = isIT || isMarketing  || p('can_access_marketing')
-  const canAccessManagement = isIT || isManagement || p('can_view_management')
+  const canAccessQuality    = isFullAdmin || isIT || isQuality    || p('can_upload_pdfs') || p('can_view_history')
+  const canAccessProduction = isFullAdmin || isIT || isProduction || p('can_submit_count') || p('can_view_ops_dashboard')
+  const canAccessSales      = isFullAdmin || isIT || isSales      || p('can_access_sales')
+  const canAccessMarketing  = isFullAdmin || isIT || isMarketing  || p('can_access_marketing')
+  const canAccessManagement = isFullAdmin || isIT || isManagement || p('can_view_management')
   const canAccessAdmin      = p('can_manage_users') || p('can_reset_passwords') || p('can_view_audit_log')
 
   const value: AuthContextValue = {
-    user, session, role, department, sectionId,
+    user, session, role, department, sectionId, fullName, permissions,
     displayName, initials, loading,
     p, signIn, signOut, changePassword,
     permissionsReady: resolved !== null,
-    isIT, isQuality, isProduction, isSales, isMarketing, isManagement,
+    isIT, isFullAdmin, isQuality, isProduction, isSales, isMarketing, isManagement,
+    isSupervisor, isFloor,
     canAccessQuality, canAccessProduction, canAccessSales,
     canAccessMarketing, canAccessManagement, canAccessAdmin,
     userId: user?.id ?? null,

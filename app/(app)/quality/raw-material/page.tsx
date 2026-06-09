@@ -1887,14 +1887,24 @@ export default function RawMaterialPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await db
-      .schema('qms')
-      .from('quality_records')
-      .select('*')
-      .eq('workcenter', 'rawMaterial')
-      .order('created_at', { ascending: false })
+    const [{ data: qmsData, error }, legacyRes] = await Promise.all([
+      db.schema('qms').from('quality_records').select('*')
+        .eq('workcenter', 'rawMaterial').order('created_at', { ascending: false }),
+      fetch('/api/quality/legacy-public?table=quality_records&workcenter=rawMaterial&limit=1000')
+        .then(r => r.json()).catch(() => ({ data: [] })),
+    ])
     if (!error) {
-      setRecords((data as QRecord[]) ?? [])
+      // public.quality_records has data_json as TEXT — parse it
+      const legacy = (legacyRes.data ?? []).map((r: any) => ({
+        ...r,
+        data_json: typeof r.data_json === 'string' ? (() => { try { return JSON.parse(r.data_json) } catch { return {} } })() : (r.data_json ?? {}),
+      }))
+      // Deduplicate: qms records take priority, dedup by batch_number + workflow
+      const qmsKeys = new Set((qmsData ?? []).map((r: any) => `${r.batch_number}|${r.workflow}`))
+      const uniqueLegacy = legacy.filter((r: any) => !qmsKeys.has(`${r.batch_number}|${r.workflow}`))
+      const merged = [...(qmsData ?? []), ...uniqueLegacy]
+        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      setRecords(merged as QRecord[])
       setLastUpdated(new Date())
     }
     setLoading(false)

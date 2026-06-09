@@ -31,12 +31,14 @@ export interface ScanResult {
 }
 
 interface BagScannerProps {
-  rowLabel:     string
-  sessionId?:   string | null
-  sectionId?:   string
-  sectionName?: string
-  onConfirm:    (result: ScanResult) => void
-  className?:   string
+  rowLabel:              string
+  sessionId?:            string | null
+  sectionId?:            string
+  sectionName?:          string
+  onConfirm:             (result: ScanResult) => void
+  className?:            string
+  sessionVariant?:       string | null
+  blockFinishedProducts?: boolean
 }
 
 type ScanMode  = 'qr' | 'camera' | 'ocr'
@@ -48,8 +50,17 @@ const VARIANT_MAP: Record<string, string> = {
   'RA-Conventional': 'RA-CON', 'RA-Organic': 'RA-ORG',
 }
 
+function variantFamilyBS(v: string | null | undefined): 'conventional' | 'organic' | null {
+  if (!v) return null
+  const n = v.toUpperCase().replace(/\s+/g,'')
+  if (n === 'CON' || n === 'CONVENTIONAL' || n === 'RA-CON' || n === 'RACONVENTIONAL') return 'conventional'
+  if (n === 'ORG' || n === 'ORGANIC' || n === 'RA-ORG' || n === 'RAORGANIC' || n === 'FT-ORG') return 'organic'
+  return null
+}
+
 export default function BagScanner({
-  rowLabel, sessionId, sectionId = '', sectionName = '', onConfirm, className = ''
+  rowLabel, sessionId, sectionId = '', sectionName = '', onConfirm, className = '',
+  sessionVariant, blockFinishedProducts = true,
 }: BagScannerProps) {
   const [state,      setState]      = useState<ScanState>('idle')
   const [mode,       setMode]       = useState<ScanMode>('qr')
@@ -96,11 +107,34 @@ export default function BagScanner({
       const { data, error } = await db
         .schema('production')
         .from('bag_tags')
-        .select('serial_number, product_type, lot_number, weight_kg, variant, tag_date, section_id, section_name, local_export')
+        .select('serial_number, product_type, lot_number, weight_kg, variant, tag_date, section_id, section_name, local_export, consumed_at_section')
         .eq('serial_number', serial)
         .maybeSingle()
       if (error) throw error
       if (data) {
+        // 1. Already consumed
+        if ((data as any).consumed_at_section) {
+          setState('error')
+          setErrorMsg(`⛔ Bag ${serial} was already consumed at ${(data as any).consumed_at_section}. Scan a fresh bag.`)
+          return
+        }
+        // 2. Finished product block
+        if (blockFinishedProducts !== false && data.product_type && /blend/i.test(data.product_type)) {
+          setState('error')
+          setErrorMsg(`⛔ Finished product "${data.product_type}" cannot be used as a raw material input. Scan a raw leaf or intermediate bag.`)
+          return
+        }
+        // 3. Variant family check
+        if (sessionVariant && data.variant) {
+          const sessFam = variantFamilyBS(sessionVariant)
+          const bagFam  = variantFamilyBS(data.variant)
+          if (sessFam && bagFam && sessFam !== bagFam) {
+            setState('error')
+            setErrorMsg(`⛔ Variant mismatch — session is ${sessionVariant} (${sessFam}) but bag ${serial} is ${data.variant} (${bagFam}). Scan the correct bag.`)
+            return
+          }
+        }
+        // 4. All checks passed
         setResult({
           serial_number: data.serial_number,
           product_type:  data.product_type,
