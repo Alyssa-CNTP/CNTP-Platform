@@ -5,6 +5,26 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Alyssa (session 2)
+
+**Files changed:**
+- `app/(app)/workspace/page.tsx`
+- `scripts/staging_migration.sql` (new)
+- `scripts/staging_migration_workspace_axis.sql` (new)
+- `scripts/staging_fix_grants_and_columns.sql` (new)
+- `scripts/staging_fix_qms_schema.sql` (new)
+- Supabase staging: qms, workspace, axis schemas + full data migration
+
+**Changes:**
+- Locked `/workspace` page to Alyssa UUID only — no role or permission override can grant access to anyone else
+- Created full staging database schema: `qms` (35 tables), `workspace` (2 tables), `axis` (13 tables)
+- Migrated 3,795 rows from production to staging across all schemas — staging is now a complete mirror of production
+- Fixed service_role sequence grants so serial ID inserts work correctly
+- Corrected column type mismatches in qms tables (Gustav's original setup had wrong types)
+- Exposed `qms`, `workspace`, `axis` schemas in staging Supabase API settings
+
+---
+
 ## 2026-06-10 — Alyssa
 
 **Files changed:**
