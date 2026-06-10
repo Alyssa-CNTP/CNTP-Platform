@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Alyssa (session 4)
+
+**Files changed:**
+- `components/search/CommandSearch.tsx` (new)
+- `app/api/search/batch/route.ts` (new)
+- `components/layout/Sidebar.tsx`
+- `app/(app)/layout.tsx`
+
+**Changes:**
+- Added global `Cmd+K` / `Ctrl+K` batch/lot search accessible from anywhere in the app
+- Search queries `qms.quality_records`, `production.prod_sessions`, `production.bag_tags`, and `sales.signals` in parallel
+- Results are permission-gated server-side — Production sections only appear for users with `can_view_ops_dashboard`, Sales only for users with `can_access_sales`
+- Sidebar gains a search button below the brand header (dispatches `open-command-search` event)
+- `CommandSearch` mounted once in the app layout — modal overlay with debounced 300ms search, grouped results by schema, `Esc` to close
+
+---
+
 ## 2026-06-10 — Alyssa (session 3)
 
 **Files changed:**
