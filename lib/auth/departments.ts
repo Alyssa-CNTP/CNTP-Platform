@@ -31,7 +31,7 @@ export const DEPARTMENT_META = {
       { value: 'lab_technician',  label: 'Lab Technician' },
       { value: 'quality_auditor', label: 'Quality Auditor' },
     ],
-    defaultRoute: '/qms',
+    defaultRoute: '/quality/sieving',
   },
   Sales: {
     label: 'Sales',
@@ -62,7 +62,7 @@ export const DEPARTMENT_META = {
       { value: 'director',   label: 'Director' },
       { value: 'analyst',    label: 'Analyst' },
     ],
-    defaultRoute: '/',
+    defaultRoute: '/dashboard',
   },
 } as const
 
