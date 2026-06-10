@@ -13,7 +13,7 @@ import {
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare,
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
-  Sparkles, Flag, Network, Cpu, Ticket, Flower2,
+  Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -192,6 +192,59 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
               </div>
             </div>
           )}
+        </div>
+
+        {/* ── Search button ────────────────────────────────────── */}
+        <div style={{ padding: collapsed ? '8px 10px' : '8px 10px', borderBottom: '1px solid #EBEBEB' }}>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('open-command-search'))}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: collapsed ? '6px 0' : '6px 10px',
+              justifyContent: collapsed ? 'center' : undefined,
+              borderRadius: 7,
+              border: '1px solid #E5E7EB',
+              background: '#F9FAFB',
+              cursor: 'pointer',
+              color: '#9CA3AF',
+              transition: 'background 120ms, color 120ms, border-color 120ms',
+            }}
+            onMouseEnter={e => {
+              const el = e.currentTarget as HTMLElement
+              el.style.background = '#F3F4F6'
+              el.style.color = '#374151'
+              el.style.borderColor = '#D1D5DB'
+            }}
+            onMouseLeave={e => {
+              const el = e.currentTarget as HTMLElement
+              el.style.background = '#F9FAFB'
+              el.style.color = '#9CA3AF'
+              el.style.borderColor = '#E5E7EB'
+            }}
+          >
+            <Search size={13} style={{ flexShrink: 0 }} />
+            {!collapsed && (
+              <>
+                <span style={{ fontSize: 12, letterSpacing: '-0.01em', flex: 1, textAlign: 'left' }}>
+                  Search lots...
+                </span>
+                <kbd style={{
+                  fontSize: 10,
+                  border: '1px solid #E5E7EB',
+                  borderRadius: 4,
+                  padding: '1px 4px',
+                  fontFamily: 'monospace',
+                  color: '#9CA3AF',
+                  background: '#fff',
+                }}>
+                  {typeof navigator !== 'undefined' && navigator.platform?.startsWith('Mac') ? '⌘K' : 'Ctrl+K'}
+                </kbd>
+              </>
+            )}
+          </button>
         </div>
 
         {/* ── Navigation ───────────────────────────────────────── */}

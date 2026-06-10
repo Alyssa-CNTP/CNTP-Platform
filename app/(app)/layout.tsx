@@ -7,6 +7,7 @@ import type { PermissionKey } from '@/lib/auth/permissions'
 import Sidebar          from '@/components/layout/Sidebar'
 import Topbar           from '@/components/layout/Topbar'
 import NotificationBell from '@/components/layout/NotificationBell'
+import CommandSearch    from '@/components/search/CommandSearch'
 import { LanguageProvider } from '@/lib/i18n/context'
 
 // ─── Route access rules ────────────────────────────────────────────────────────
@@ -211,6 +212,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             {children}
           </main>
         </div>
+        <CommandSearch />
       </div>
     </LanguageProvider>
   )
