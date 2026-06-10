@@ -384,25 +384,25 @@ CREATE TABLE IF NOT EXISTS qms.pasteuriser__residue_pesticides (
 -- pasteuriser__microbiology
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS qms.pasteuriser__microbiology (
-    id                 serial PRIMARY KEY,
-    batch_no           text,
-    file_name          text,
-    uploaded_by        text,
-    uploaded_at        timestamptz DEFAULT now(),
-    lab                text,
-    lab_no             text,
-    order_no           text,
-    date_received      text,
-    date_issued        text,
-    tpc_cfu_g          text,
-    ecoli_cfu_g        text,
-    mould_cfu_g        text,
-    yeast_cfu_g        text,
+    id               serial PRIMARY KEY,
+    batch_no         text,
+    file_name        text,
+    uploaded_by      text,
+    uploaded_at      timestamptz DEFAULT now(),
+    lab              text,
+    lab_no           text,
+    order_no         text,
+    date_received    text,
+    date_issued      text,
+    tpc_cfu_g        text,
+    ecoli_cfu_g      text,
+    mould_cfu_g      text,
+    yeast_cfu_g      text,
     staph_aureus_cfu_g text,
-    salmonella_25g     text,
-    listeria           text,
-    overall_status     text,
-    comment            text
+    salmonella_25g   text,
+    listeria         text,
+    overall_status   text,
+    comment          text
 );
 
 -- ---------------------------------------------------------------------------
@@ -811,6 +811,7 @@ CREATE TABLE IF NOT EXISTS qms.leaf_shade_predictions (
 -- =============================================================================
 -- GRANTS
 -- =============================================================================
+
 GRANT USAGE ON SCHEMA qms TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA qms TO authenticated;
 GRANT SELECT ON ALL TABLES IN SCHEMA qms TO anon;
