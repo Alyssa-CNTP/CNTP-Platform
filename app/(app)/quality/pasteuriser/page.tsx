@@ -565,6 +565,30 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   const total = PAST_SIEVE_COLS.reduce((s,c) => s + (parseFloat(row[c.key]) || 0), 0)
   const orderViolations = checkSieveOrder(row)
 
+  // ── Variation / outlier detection vs the other samples in this batch ──
+  // Mirrors the sieving dashboard logic: flag a value only when the batch
+  // already has real spread (std > floor) AND the new value sits >2.5 std away.
+  const priorSamples = (batch.samples || []).filter((s:any) => s.id !== (initialRow as any)?.id)
+  const anomalyWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const hist = priorSamples.map((s:any) => parseFloat(s[key])).filter((v:number) => !isNaN(v))
+      if (hist.length < 3) return
+      const mean = hist.reduce((a:number,b:number)=>a+b,0)/hist.length
+      const std  = Math.sqrt(hist.map((v:number)=>(v-mean)**2).reduce((a:number,b:number)=>a+b,0)/hist.length)
+      if (std > stdFloor && Math.abs(n-mean) > 2.5*std)
+        warns.push(`${label}: ${n}${unit} far from batch avg ${mean.toFixed(1)}${unit}`)
+    }
+    if (row.has_sieve) PAST_SIEVE_COLS.forEach(c => checkField(c.key, c.label, row[c.key], 1.0, '%'))
+    if (row.has_mb) {
+      checkField('moisture', 'Moisture', row.moisture, 0.3, '%')
+      checkField('untapped_bd', 'BD', row.untapped_bd, 5, '')
+    }
+    checkField('hourly_temp', 'Temp', row.hourly_temp, 1.0, '°C')
+    return warns
+  })()
+
   function submit() {
     if (!row.time.trim())  { alert('Time is required'); return }
     if (!row.date)         { alert('Date is required'); return }
@@ -611,7 +635,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number']].map(([k,l,t]) => (
               <div key={k}>
                 <label className={`${lbl} ${k==='date'?'text-info':''}`}>{l as string}</label>
-                <input type={t as string} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
+                <input type={t as string} inputMode={t==='number'?'numeric':undefined} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
@@ -622,7 +646,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 const tempSt = pastChk(row.hourly_temp, tempSpec)
                 return (
                   <>
-                    <input type="number" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
+                    <input type="number" inputMode="decimal" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
                       className={`${inp} w-full ${tempSt==='fail' ? 'border-err bg-err/5' : tempSt==='pass' ? 'border-ok/50' : ''}`} />
                     {tempSt==='fail' && (
                       <p className="mt-1 text-[10px] font-semibold text-err">
@@ -677,8 +701,8 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                             {sp ? `${sp.min!=null?sp.min+'–':'≤'}${sp.max??''}%` : '—'}
                           </td>
                           <td className="px-2 py-1.5">
-                            <input type="number" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
-                              placeholder="g" className={`${inp} w-24 text-center border-info/40 bg-info/5`} />
+                            <input type="number" inputMode="decimal" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
+                              placeholder="g" className={`${inp} w-24 text-center border-info/40 bg-info/5 text-[15px] py-2`} />
                           </td>
                           <td className="px-2 py-1.5">
                             <div className={`px-3 py-1.5 rounded-lg border text-center font-mono font-bold text-[13px] ${fail ? 'border-err/40 bg-err/8 text-err' : st === 'pass' ? 'border-ok/40 bg-ok/8 text-ok' : 'border-surface-rule bg-surface text-text-muted'}`}>
@@ -718,7 +742,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                   return (
                     <div key={k as string}>
                       <label className={lbl}>{l as string}{sp && <span className="text-[9px] text-text-faint ml-1">{sp.min!=null?`${sp.min}–${sp.max}`:sp.max!=null?`≤${sp.max}`:''}</span>}</label>
-                      <input type="number" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
+                      <input type="number" inputMode="decimal" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
                         className={`${inp} w-full ${st==='fail'?'border-err/40 bg-err/8':st==='pass'?'border-ok/40 bg-ok/8':''}`} />
                       {st==='fail' && <div className="text-[9px] text-err mt-0.5">⚠ Out of spec</div>}
                     </div>
@@ -727,10 +751,24 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 {['1','2','3'].map(n => (
                   <div key={n}>
                     <label className={lbl}>Weight Check {n} (kg)</label>
-                    <input type="number" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" inputMode="decimal" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Variation / outlier warnings (non-blocking) */}
+          {anomalyWarnings.length > 0 && (
+            <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
+              <div className="flex items-center gap-2 font-bold text-[12px] text-warn mb-1">
+                <AlertTriangle size={14} /> Unusual variation — please double-check before saving
+              </div>
+              <ul className="list-disc pl-5 space-y-0.5">
+                {anomalyWarnings.map((w,i) => (
+                  <li key={i} className="text-[11px] text-warn">{w}</li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -789,6 +827,80 @@ function BatchCompleteness({ batch }: { batch:Batch }) {
 }
 
 // ─── Run Dashboard ────────────────────────────────────────────────────────────
+
+// ─── Runs Overview Dashboard ──────────────────────────────────────────────────
+// At-a-glance summary across all active runs + a live moisture/temperature trend
+// for the currently selected batch.
+
+function RunsOverview({ batches, activeBatch }: { batches: Batch[]; activeBatch: Batch | null }) {
+  const active    = batches.filter(b => !b.final_result)
+  const completed = batches.filter(b => !!b.final_result)
+  const passRate  = completed.length ? Math.round(completed.filter(b=>b.final_result==='Pass').length/completed.length*100) : null
+
+  const activeSamples = active.flatMap(b => b.samples || [])
+  const moistVals = activeSamples.map(s => parseFloat(s.moisture as any)).filter(n=>!isNaN(n))
+  const tempVals  = activeSamples.map(s => parseFloat(s.hourly_temp as any)).filter(n=>!isNaN(n))
+  const avgMoist  = moistVals.length ? moistVals.reduce((a,b)=>a+b,0)/moistVals.length : null
+  const avgTemp   = tempVals.length  ? tempVals.reduce((a,b)=>a+b,0)/tempVals.length   : null
+
+  const sieveFails = active.reduce((acc,b) => acc + (b.samples||[]).filter(s =>
+    s.has_sieve && PAST_SIEVE_COLS.some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(b.customer,c.key,b._spec,b.batch_specs))==='fail')
+  ).length, 0)
+
+  const trend = (activeBatch?.samples || []).map((s,i) => ({
+    name: s.time || `#${i+1}`,
+    Moisture: !isNaN(parseFloat(s.moisture as any))    ? parseFloat(s.moisture as any)    : null,
+    Temp:     !isNaN(parseFloat(s.hourly_temp as any)) ? parseFloat(s.hourly_temp as any) : null,
+  })).filter(d => d.Moisture!=null || d.Temp!=null)
+
+  const cards: Array<{label:string,value:string|number,color:string}> = [
+    { label:'Active Runs',    value: active.length,                                  color:'text-brand' },
+    { label:'Samples (live)', value: activeSamples.length,                           color:'text-text' },
+    { label:'Avg Moisture',   value: avgMoist!=null?`${avgMoist.toFixed(1)}%`:'—',   color: avgMoist!=null&&avgMoist>8.5?'text-err':'text-ok' },
+    { label:'Avg Temp',       value: avgTemp!=null?`${avgTemp.toFixed(0)}°C`:'—',    color: avgTemp!=null&&avgTemp<85?'text-err':'text-ok' },
+    { label:'Sieve Fails',    value: sieveFails,                                     color: sieveFails>0?'text-err':'text-ok' },
+    { label:'Pass Rate',      value: passRate!=null?`${passRate}%`:'—',              color:'text-ok' },
+  ]
+
+  return (
+    <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="font-display font-bold text-[15px] text-text">📊 Runs Overview</div>
+        <div className="text-[11px] text-text-muted">{active.length} active · {completed.length} completed</div>
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+        {cards.map(c => (
+          <div key={c.label} className="bg-surface rounded-xl border border-surface-rule px-3 py-2.5 text-center">
+            <div className="font-mono text-[9px] uppercase tracking-wide text-text-muted mb-0.5">{c.label}</div>
+            <div className={`font-display font-bold text-[20px] ${c.color}`}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+      {trend.length >= 2 && (
+        <div>
+          <div className="text-[11px] font-semibold text-text-muted mb-1">
+            {activeBatch?.batch_number} — Moisture & Temperature trend
+          </div>
+          <div style={{ width:'100%', height:180 }}>
+            <ResponsiveContainer>
+              <LineChart data={trend} margin={{ top:5, right:10, left:-15, bottom:0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                <XAxis dataKey="name" tick={{ fontSize:10 }} />
+                <YAxis yAxisId="m" tick={{ fontSize:10 }} domain={['auto','auto']} />
+                <YAxis yAxisId="t" orientation="right" tick={{ fontSize:10 }} domain={['auto','auto']} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize:11 }} />
+                <ReferenceLine yAxisId="m" y={8.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value:'Moisture max', fontSize:9, fill:'#ef4444' }} />
+                <Line yAxisId="m" type="monotone" dataKey="Moisture" stroke="#f97316" strokeWidth={2} connectNulls dot={{ r:3 }} />
+                <Line yAxisId="t" type="monotone" dataKey="Temp"     stroke="#0ea5e9" strokeWidth={2} connectNulls dot={{ r:3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const db     = getDb()
@@ -1005,6 +1117,9 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       {/* ── ACTIVE VIEW ── */}
       {dashView === 'active' && (
         <div className="space-y-4">
+          {/* Runs overview dashboard */}
+          <RunsOverview batches={batches} activeBatch={activeBatch} />
+
           {/* Batch selector */}
           <div className="flex gap-2 flex-wrap items-center">
             <button onClick={() => setShowNewBatch(true)}
