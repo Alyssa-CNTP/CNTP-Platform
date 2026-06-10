@@ -141,57 +141,86 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
   const [draft, setDraft] = useState(JSON.parse(JSON.stringify(customSpecs)))
   const [newGrade, setNewGrade] = useState(SD_GRADES[0])
   const [newVariant, setNewVariant] = useState(SD_VARIANTS[0])
+  // track renamed keys: originalKey -> newKey parts
+  const [renames, setRenames] = useState<Record<string,{grade:string,variant:string}>>(
+    () => Object.fromEntries(Object.keys(customSpecs).map(k => { const [g,v]=k.split('|'); return [k,{grade:g||'',variant:v||''}] }))
+  )
+
+  function applyRenames(d: any) {
+    const out: any = {}
+    Object.keys(d).forEach(k => {
+      const r = renames[k]
+      const newKey = r ? `${r.grade}|${r.variant}` : k
+      out[newKey] = d[k]
+    })
+    return out
+  }
 
   return (
     <div style={{background:'#f8fafc',border:'2px solid #7c3aed',borderRadius:10,padding:16,marginBottom:14}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <div style={{fontWeight:700,fontSize:13,color:'#7c3aed'}}>✏️ Edit Specifications — {product}</div>
         <div style={{display:'flex',gap:8}}>
-          <button onClick={()=>onSave(draft)} style={{padding:'5px 16px',borderRadius:6,border:'none',background:'#7c3aed',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>Save Specs</button>
+          <button onClick={()=>onSave(applyRenames(draft))} style={{padding:'5px 16px',borderRadius:6,border:'none',background:'#7c3aed',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>Save Specs</button>
           <button onClick={onClose} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Cancel</button>
         </div>
       </div>
       <div style={{overflowX:'auto',borderRadius:8}}>
         <table style={{borderCollapse:'collapse',fontSize:11,width:'100%'}}>
           <thead><tr style={{background:'#7c3aed',color:'#fff'}}>
-            <th style={{padding:'6px 10px',textAlign:'left'}}>Grade|Variant</th>
+            <th style={{padding:'6px 10px',textAlign:'left',minWidth:160}}>Grade</th>
+            <th style={{padding:'6px 10px',textAlign:'left',minWidth:100}}>Variant</th>
             {allMesh.map(m=><th key={m} style={{padding:'6px 6px',textAlign:'center'}}>{m.replace(' (%)','')}</th>)}
             {specDef.hasLeafShade&&<th style={{padding:'6px 6px',textAlign:'center'}}>Leaf Shade</th>}
+            <th style={{padding:'6px 6px',textAlign:'center'}}>Del</th>
           </tr></thead>
           <tbody>
-            {Object.entries(draft).map(([vk,s]: any,i)=>(
+            {Object.entries(draft).map(([vk,s]: any,i)=>{
+              const r = renames[vk] || { grade: vk.split('|')[0]||'', variant: vk.split('|')[1]||'' }
+              return (
               <tr key={vk} style={{background:i%2===0?'#fff':'#faf5ff',borderBottom:'1px solid #ede9fe'}}>
-                <td style={{padding:'4px 10px',fontFamily:'monospace',fontSize:10,fontWeight:700,color:'#7c3aed'}}>{vk}</td>
-                {allMesh.map(m=>(
+                <td style={{padding:'4px 6px'}}>
+                  <input value={r.grade} onChange={e=>setRenames(prev=>({...prev,[vk]:{...r,grade:e.target.value}}))}
+                    style={{width:'100%',padding:'3px 6px',border:'1px solid #d1d5db',borderRadius:4,fontSize:11,fontFamily:'monospace',color:'#7c3aed',fontWeight:700}}/>
+                </td>
+                <td style={{padding:'4px 6px'}}>
+                  <select value={r.variant} onChange={e=>setRenames(prev=>({...prev,[vk]:{...r,variant:e.target.value}}))}
+                    style={{width:'100%',padding:'3px 6px',border:'1px solid #d1d5db',borderRadius:4,fontSize:11,background:'#fff'}}>
+                    {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
+                  </select>
+                </td>
+                {allMesh.map(m=>{
+                  const val = s[m] ?? [0,0]
+                  return (
                   <td key={m} style={{padding:'3px 4px',textAlign:'center'}}>
-                    {s[m] ? (
-                      <div style={{display:'flex',gap:2,justifyContent:'center'}}>
-                        {[0,1].map(j=>(
-                          <input key={j} type="number" step="1" value={s[m][j]??''} onChange={e=>{
-                            const v=e.target.value===''?0:parseFloat(e.target.value)
-                            setDraft((d:any)=>{const nd=JSON.parse(JSON.stringify(d));nd[vk][m][j]=v;return nd})
-                          }} style={{width:36,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
-                        ))}
-                      </div>
-                    ) : <span style={{color:'#d1d5db',fontSize:10}}>—</span>}
+                    <div style={{display:'flex',gap:2,justifyContent:'center'}}>
+                      {[0,1].map(j=>(
+                        <input key={j} type="number" step="1" value={val[j]??0} onChange={e=>{
+                          const v=e.target.value===''?0:parseFloat(e.target.value)
+                          setDraft((d:any)=>{const nd=JSON.parse(JSON.stringify(d));if(!nd[vk][m])nd[vk][m]=[0,0];nd[vk][m][j]=v;return nd})
+                        }} style={{width:36,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
+                      ))}
+                    </div>
                   </td>
-                ))}
+                )})}
                 {specDef.hasLeafShade&&(
                   <td style={{padding:'3px 4px',textAlign:'center'}}>
-                    {s['Leaf Shade'] ? (
-                      <div style={{display:'flex',gap:2,justifyContent:'center'}}>
-                        {[0,1].map(j=>(
-                          <input key={j} type="number" step="1" value={s['Leaf Shade'][j]??''} onChange={e=>{
-                            const v=e.target.value===''?null:parseFloat(e.target.value)
-                            setDraft((d:any)=>{const nd=JSON.parse(JSON.stringify(d));nd[vk]['Leaf Shade'][j]=v;return nd})
-                          }} style={{width:36,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
-                        ))}
-                      </div>
-                    ) : <span style={{color:'#d1d5db',fontSize:10}}>—</span>}
+                    <div style={{display:'flex',gap:2,justifyContent:'center'}}>
+                      {[0,1].map(j=>(
+                        <input key={j} type="number" step="1" value={s['Leaf Shade']?.[j]??0} onChange={e=>{
+                          const v=e.target.value===''?0:parseFloat(e.target.value)
+                          setDraft((d:any)=>{const nd=JSON.parse(JSON.stringify(d));if(!nd[vk]['Leaf Shade'])nd[vk]['Leaf Shade']=[0,0];nd[vk]['Leaf Shade'][j]=v;return nd})
+                        }} style={{width:36,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
+                      ))}
+                    </div>
                   </td>
                 )}
+                <td style={{padding:'3px 6px',textAlign:'center'}}>
+                  <button onClick={()=>{ setDraft((d:any)=>{const nd={...d};delete nd[vk];return nd}); setRenames(prev=>{const np={...prev};delete np[vk];return np}) }}
+                    style={{background:'none',border:'none',color:'#dc2626',cursor:'pointer',fontSize:14,padding:'0 4px'}}>🗑</button>
+                </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>
@@ -211,6 +240,7 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
           allMesh.forEach((m:string)=>{emptyRow[m]=[0,0]})
           if(specDef.hasLeafShade) emptyRow['Leaf Shade']=[0,0]
           setDraft((d:any)=>({...d,[key]:emptyRow}))
+          setRenames(prev=>({...prev,[key]:{grade:newGrade,variant:newVariant}}))
         }} style={{padding:'5px 16px',borderRadius:5,border:'none',background:'#7c3aed',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>
           Add Row
         </button>
@@ -1087,7 +1117,7 @@ export default function SievingPage() {
             </div>
             {!specDef.noLotNumber&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.lotNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Lot Number *</label>
-              <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);if(Object.keys(auto).length)setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
             <div>
