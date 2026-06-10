@@ -745,7 +745,8 @@ export default function SievingPage() {
         const map: Record<string,string> = {}
         data.forEach((r: any) => {
           const lot = (r.batch_number || '').trim().toUpperCase()
-          const lvl = r.data_json?.pa_level || r.data_json?.level || ''
+          const dj = typeof r.data_json === 'string' ? (() => { try { return JSON.parse(r.data_json) } catch { return {} } })() : (r.data_json ?? {})
+          const lvl = dj.pa_level || dj.level || ''
           if (lot && lvl) map[lot] = lvl
         })
         setPaLookup(map)
@@ -763,7 +764,8 @@ export default function SievingPage() {
         const map: Record<string,string> = {}
         data.forEach((r: any) => {
           const lot = (r.batch_number || '').trim().toUpperCase()
-          const grade = r.data_json?.overall_r_grade || ''
+          const dj = typeof r.data_json === 'string' ? (() => { try { return JSON.parse(r.data_json) } catch { return {} } })() : (r.data_json ?? {})
+          const grade = dj.overall_r_grade || ''
           if (lot && grade) map[lot] = grade
         })
         setRLookup(map)
