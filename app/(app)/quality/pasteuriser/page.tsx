@@ -63,6 +63,7 @@ const PAST_SPEC_DEFAULTS: Record<string,{min:number|null,max:number|null}> = {
   gt6:  { min:null, max:1 }, gt10: { min:null, max:1 }, gt12: { min:null, max:5 },
   gt16: { min:10,  max:20 }, gt20: { min:20,  max:35 }, gt60: { min:35,  max:50 },
   dust: { min:null, max:1 }, moisture: { min:null, max:8.5 }, untapped_bd: { min:280, max:340 },
+  hourly_temp: { min: 85, max: null },
 }
 
 const PASS_COLORS: Record<string,[string,string,string]> = {
@@ -158,6 +159,7 @@ function getPastSpec(custName: string, field: string, batchSpec: any, batchSpecs
       dust: {min:batchSpecsOverride.dust_min, max:batchSpecsOverride.dust_max},
       moisture:    {min:null, max:batchSpecsOverride.moisture_max},
       untapped_bd: {min:batchSpecsOverride.bd_min, max:batchSpecsOverride.bd_max},
+      hourly_temp: {min:batchSpecsOverride.temp_min ?? 85, max:batchSpecsOverride.temp_max ?? null},
     }
     const v = MAP[field]
     if (v) {
@@ -606,13 +608,31 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
 
           {/* Identity fields */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number'],['hourly_temp','Temp (°C)','number']].map(([k,l,t]) => (
+            {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number']].map(([k,l,t]) => (
               <div key={k}>
                 <label className={`${lbl} ${k==='date'?'text-info':''}`}>{l as string}</label>
                 <input type={t as string} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
+            <div>
+              <label className={lbl}>Temp (°C)</label>
+              {(() => {
+                const tempSpec = spec('hourly_temp')
+                const tempSt = pastChk(row.hourly_temp, tempSpec)
+                return (
+                  <>
+                    <input type="number" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
+                      className={`${inp} w-full ${tempSt==='fail' ? 'border-err bg-err/5' : tempSt==='pass' ? 'border-ok/50' : ''}`} />
+                    {tempSt==='fail' && (
+                      <p className="mt-1 text-[10px] font-semibold text-err">
+                        ⚠ Temp below spec (min {tempSpec?.min}°C)
+                      </p>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
             <div>
               <label className={lbl}>Compares to Ref?</label>
               <select value={row.compares_to_ref} onChange={e => set('compares_to_ref', e.target.value)} className={`${inp} w-full`}>
@@ -1767,34 +1787,10 @@ function SpecificationsTab({ isAdmin }: { isAdmin:boolean }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { key:'rundash',    label:'🏭 Run Dashboard'  },
-  { key:'sensorial',  label:'🍵 Sensorial Table' },
-  { key:'micro',      label:'🦠 Microbiology'   },
-  { key:'residue',    label:'🌿 Residue'        },
-  { key:'heavymetals',label:'⚗️ Heavy Metals'   },
-  { key:'eto',        label:'🧪 EtO'            },
-  { key:'aflatoxin',  label:'🍄 Aflatoxins'     },
-  { key:'mosh',       label:'🛢 MOSH/MOAH'      },
-  { key:'pa',         label:'💊 PAs'            },
-  { key:'glyphosate', label:'🧫 Glyphosate'     },
-  { key:'specs',      label:'📋 Specifications' },
+  { key:'rundash',   label:'🏭 Run Dashboard'  },
+  { key:'sensorial', label:'🍵 Sensorial Table' },
+  { key:'specs',     label:'📋 Specifications' },
 ]
-
-const TEST_TYPE_MAP: Record<string,string> = {
-  micro:'micro', residue:'residue', heavymetals:'heavy_metals',
-  eto:'eto', aflatoxin:'aflatoxins', mosh:'mosh_moah', pa:'pa_final', glyphosate:'glyphosate',
-}
-
-const TEST_TITLE_MAP: Record<string,{title:string,icon:string}> = {
-  micro:       { title:'Microbiology',              icon:'🦠' },
-  residue:     { title:'Residue / Pesticides',       icon:'🌿' },
-  heavymetals: { title:'Heavy Metals',               icon:'⚗️' },
-  eto:         { title:'Ethylene Oxide',             icon:'🧪' },
-  aflatoxin:   { title:'Aflatoxins & Mycotoxins',    icon:'🍄' },
-  mosh:        { title:'MOSH / MOAH',               icon:'🛢' },
-  pa:          { title:'PA/TA Final (Pasteuriser)',  icon:'💊' },
-  glyphosate:  { title:'Glyphosate',                icon:'🧫' },
-}
 
 // ─── PastSensorialTable ──────────────────────────────────────────────────────
 // Full batch-level central table: sieve averages + sensorial averages per batch
@@ -2040,16 +2036,9 @@ export default function PasteuriserPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-5 max-w-[1400px] w-full mx-auto">
-        {tab === 'rundash'    && <RunDashboard isAdmin={canWriteQuality} />}
-        {tab === 'sensorial'  && <PastSensorialTable canWrite={canWriteQuality} />}
-
-        {/* Generic test tabs */}
-        {['micro','residue','heavymetals','eto','aflatoxin','mosh','pa','glyphosate'].includes(tab) && (() => {
-          const { title, icon } = TEST_TITLE_MAP[tab]
-          return <TestTab title={title} icon={icon} testType={TEST_TYPE_MAP[tab]} isAdmin={canWriteQuality} />
-        })()}
-
-        {tab === 'specs' && <SpecificationsTab isAdmin={canWriteQuality} />}
+        {tab === 'rundash'   && <RunDashboard isAdmin={canWriteQuality} />}
+        {tab === 'sensorial' && <PastSensorialTable canWrite={canWriteQuality} />}
+        {tab === 'specs'     && <SpecificationsTab isAdmin={canWriteQuality} />}
       </div>
     </div>
   )
