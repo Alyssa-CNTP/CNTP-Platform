@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Gustav (staging login fix)
+
+**Files changed:**
+- QUALITY_MIGRATION_NOTES.md
+
+**Changes:**
+- Fixed staging login: added gustav@, alyssa@, jan@ to staging `auth.users` with matching UUIDs and password hashes from production
+- Added matching `shared.app_roles` rows with full permissions
+- Fixed `confirmation_token` NULL issue causing Supabase auth crash
+- Updated `NEXT_PUBLIC_SUPABASE_ANON_KEY` in VPS `.env.local` to correct staging key
+- Granted schema/table permissions on `shared` and `production` to authenticated role
+- Rebuilt and restarted staging app
+- Remaining manual step: add `shared`, `production`, `qms` to exposed schemas in Supabase dashboard (Project Settings → API)
+- Updated QUALITY_MIGRATION_NOTES.md with full session handoff notes
+
+---
+
 ## 2026-06-10 — Gustav
 
 **Files changed:**
