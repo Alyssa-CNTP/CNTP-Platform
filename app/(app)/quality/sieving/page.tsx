@@ -164,7 +164,7 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
                 <td style={{padding:'4px 10px',fontFamily:'monospace',fontSize:10,fontWeight:700,color:'#7c3aed'}}>{vk}</td>
                 {allMesh.map(m=>(
                   <td key={m} style={{padding:'3px 4px',textAlign:'center'}}>
-                    {s[m]&&!(s[m][0]===0&&s[m][1]===0) ? (
+                    {s[m] ? (
                       <div style={{display:'flex',gap:2,justifyContent:'center'}}>
                         {[0,1].map(j=>(
                           <input key={j} type="number" step="1" value={s[m][j]??''} onChange={e=>{
@@ -788,28 +788,31 @@ export default function SievingPage() {
   // Auto-fill grade/variant from previous runs for same lot
   const lookupLot = (lotNum: string) => {
     if (!lotNum?.trim()) { setLotMsg(''); return {} }
+    const key = lotNum.trim().toUpperCase()
+    const paFromLookup = paLookup[key]
+    const rFromLookup  = rLookup[key]
     const allRuns = Object.values(runs).flat()
-    const matches = allRuns.filter((r:any) => (r.lotNumber||'').trim().toUpperCase()===lotNum.trim().toUpperCase())
+    const matches = allRuns.filter((r:any) => (r.lotNumber||'').trim().toUpperCase()===key)
       .sort((a:any,b:any)=>new Date(b.timestamp||0).getTime()-new Date(a.timestamp||0).getTime())
-    if (!matches.length) { setLotMsg(''); return {} }
-    const latest: any = matches[0]
     const fields: any = {}
-    if (latest.grade)        fields.grade = latest.grade
-    if (latest.variant)      fields.variant = latest.variant
-    if (latest.serialNumber) fields.serialNumber = latest.serialNumber
-    if (latest.leafShade)    fields.leafShade = latest.leafShade
-    // Auto-fill PA level and R-grade from raw material records
-    const paFromLookup = paLookup[lotNum.trim().toUpperCase()]
-    const rFromLookup  = rLookup[lotNum.trim().toUpperCase()]
+    if (matches.length) {
+      const latest: any = matches[0]
+      if (latest.grade)        fields.grade = latest.grade
+      if (latest.variant)      fields.variant = latest.variant
+      if (latest.serialNumber) fields.serialNumber = latest.serialNumber
+      if (latest.leafShade)    fields.leafShade = latest.leafShade
+    }
     if (paFromLookup) fields.paLevel = paFromLookup
     const extras = [paFromLookup ? `PA: ${paFromLookup}` : '', rFromLookup ? `R: ${rFromLookup}` : ''].filter(Boolean).join(' · ')
-    setLotMsg(fields.grade ? `✓ Auto-filled from previous run — ${latest.grade} · ${latest.variant}${extras ? ` · ${extras}` : ''}` : '')
+    const runMsg = matches.length ? `✓ Auto-filled from previous run — ${fields.grade} · ${fields.variant}` : ''
+    const rawMsg = extras ? `📋 Raw material: ${extras}` : ''
+    setLotMsg([runMsg, rawMsg].filter(Boolean).join('  ·  '))
     return fields
   }
 
   // Auto-calculate % from grams
   const calcPercents = (grams: Record<string,string>) => {
-    const meshKeys = activeMesh.map(m => m.replace(' (%)','  (g)'))
+    const meshKeys = activeMesh.map(m => m.replace(' (%)',' (g)'))
     const total = meshKeys.reduce((sum,mk)=>{ const v=parseFloat(grams[mk]); return sum+(isNaN(v)?0:v) },0)
     if (total<=0) return {}
     const pcts: any = {}
