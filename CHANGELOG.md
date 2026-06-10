@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Gustav (granule specs: stop per-run duplication, select from library)
+
+**Files changed:**
+- app/(app)/quality/granule/page.tsx
+- Supabase staging migration: granule_specs_unique_type_customer
+
+**Changes:**
+- New Granule Run modal now **selects a saved specification** from the library (dropdown) instead of re-entering one each run; the selected spec is shown read-only and a snapshot is copied into the run
+- Removed the auto-upsert that created a new `granule_specs` row on every run (root cause of duplicates — it relied on an onConflict target that didn't exist)
+- Added `UNIQUE(type_grade, customer)` constraint on `qms.granule_specs` so duplicates can no longer form
+- Specifications tab "add" now shows a friendly message when a grade+customer spec already exists (edit it instead)
+- Specs are created/edited only in the Specifications tab
+- Data cleanup (staging): collapsed duplicate granule specs — merged all CNTP-own customer variants to blank, kept one canonical spec per grade (Super Grade id 16, Super Fine id 15), deleted the rest. Existing runs unaffected (they carry their own spec_json snapshot)
+
+---
+
 ## 2026-06-10 — Gustav (pasteuriser variation flags + overview dashboard)
 
 **Files changed:**
