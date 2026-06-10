@@ -182,7 +182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [fetchRole])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await getDb().auth.signInWithPassword({
+    const { error, data } = await getDb().auth.signInWithPassword({
       email: email.trim().toLowerCase(),
       password,
     })
@@ -192,10 +192,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { error: 'Invalid email or password' }
       return { error: error.message }
     }
+    // Fire-and-forget: log sign-in to audit trail
+    fetch('/api/admin/audit/auth-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'sign_in', email: data?.user?.email }),
+    }).catch(() => {})
     return { error: null }
   }, [])
 
   const signOut = useCallback(async () => {
+    // Write sign-out event before the session is invalidated
+    await fetch('/api/admin/audit/auth-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'sign_out' }),
+    }).catch(() => {})
     await getDb().auth.signOut()
     setRole(null); setDepartment(null); setSectionId(null); setResolved(null)
   }, [])
