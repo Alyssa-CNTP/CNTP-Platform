@@ -5,6 +5,28 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Alyssa (session 3)
+
+**Files changed:**
+- `app/(app)/users/page.tsx`
+- `app/api/admin/audit/route.ts` (new)
+- `app/api/admin/audit/auth-event/route.ts` (new)
+- `lib/auth/context.tsx`
+- `C:\Users\Alyssa\Documents\Supabase Scripts\05_audit_log_grants.sql` (local only)
+
+**Changes:**
+- Rebuilt Users & Access page with two top-level tabs: **Users** and **Audit Log**
+- Audit Log tab restricted to Alyssa + Jan UUIDs at both API and UI level — hardcoded, no permission toggle can grant or revoke this
+- Audit log shows sign-in, sign-out, and data change events with actor name, action badge, timestamp, and context
+- Added `/api/admin/audit` route — reads `axis.audit_log`, enriches rows with display names from `shared.app_roles`
+- Added `/api/admin/audit/auth-event` route — writes `sign_in` / `sign_out` events to `axis.audit_log`
+- `lib/auth/context.tsx` — `signIn` fires audit event after successful auth; `signOut` awaits audit write before invalidating the session
+- `PermissionsPanel` gains a **Cross-department view access** section — shows view/access permissions from departments other than the user's own (blue-accented, collapsed by default). Allows e.g. a Quality person to be granted Management dashboard view without a role change
+- Users table now shows **active permission count** alongside override count — so you can see what a user can actually do, not just how many overrides they have
+- SQL: `05_audit_log_grants.sql` — grants `service_role` INSERT on `axis.audit_log`, adds `event_type` column
+
+---
+
 ## 2026-06-10 — Alyssa (session 2)
 
 **Files changed:**
