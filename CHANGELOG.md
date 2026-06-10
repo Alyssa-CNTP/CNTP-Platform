@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Gustav
+
+**Files changed:**
+- app/(app)/quality/sieving/page.tsx
+
+**Changes:**
+- Added R-grade (residue) lookup alongside PA level in sieving lot auto-fill
+- New `rLookup` state fetches `workflow='residue'` records from `qms.quality_records` and maps batch number → `overall_r_grade`
+- `lookupLot()` now auto-fills and displays both P-value (PA level) and R-value (residue grade) in the lot message, e.g. `PA: P1 · R: R-0`
+- Staging Supabase populated with ~375 PA/TA records and ~250 residue records copied from production (GS, VS, MAT batch numbers)
+
+---
+
 ## 2026-06-09 — Gustav
 
 **Files changed:**
