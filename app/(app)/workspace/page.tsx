@@ -370,7 +370,8 @@ export default function WorkspacePage() {
   const [newProject, setNewProject] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
 
-  const canAccess = isIT || p('can_access_workspace')
+  const ALYSSA_UUID = 'df6cc2b1-c0ec-47ed-bb2e-b07771f3bf0e'
+  const canAccess = userId === ALYSSA_UUID
 
   useEffect(() => {
     if (!al && !canAccess) router.replace('/dashboard')
