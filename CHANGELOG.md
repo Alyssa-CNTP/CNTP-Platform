@@ -5,49 +5,55 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Alyssa
+
+**Files changed:**
+- `.env.local` (VPS only — not committed)
+- Supabase staging: `shared` schema, `shared.app_roles` table
+
+**Changes:**
+- Discovered staging Supabase (`qjqkpockmujecjgmdple`) was created fresh by Gustav today with no user profiles configured
+- Fixed `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` on VPS — was pointing to production project key, now correctly set to staging
+- Exposed `shared` schema in Supabase staging API settings (Project Settings → API → Exposed schemas)
+- Created `shared.app_roles` table with `user_id UNIQUE` constraint
+- Added user roles: Alyssa Krishna (`senior_developer` / IT), Gustav (`quality_default` / Quality — Quality module only)
+- Restarted PM2 with updated environment
+
+---
+
 ## 2026-06-10 — Gustav
 
 **Files changed:**
-- app/(app)/quality/sieving/page.tsx
+- `app/(app)/quality/sieving/page.tsx`
+- `scripts/restart-staging.sh` (new)
+- `QUALITY_MIGRATION_NOTES.md` (new)
+- Supabase staging: `qms` schema permissions + data migration
 
 **Changes:**
-- Added R-grade (residue) lookup alongside PA level in sieving lot auto-fill
-- New `rLookup` state fetches `workflow='residue'` records from `qms.quality_records` and maps batch number → `overall_r_grade`
-- `lookupLot()` now auto-fills and displays both P-value (PA level) and R-value (residue grade) in the lot message, e.g. `PA: P1 · R: R-0`
-- Staging Supabase populated with ~375 PA/TA records and ~250 residue records copied from production (GS, VS, MAT batch numbers)
+- Fixed `data_json` parsing for PA/R-grade lookups in sieving lot auto-fill
+- Fixed `lookupLot()` to fire PA/R fill even when no prior sieving runs exist for the lot
+- Fixed double-space typo in `calcPercents` that broke gram → percent calculation
+- Fixed spec editor: editable Grade name, always-visible mesh inputs, delete row button, PA auto-fill always fires on save
+- Granted `SELECT/INSERT/UPDATE/DELETE` on all `qms` tables to `authenticated` role in staging Supabase
+- Migrated ~375 PA/TA records and ~250 residue records from production into `qms.quality_records` on staging
+- Added R-grade (residue) lookup alongside PA level — auto-fills both in lot message, e.g. `PA: P1 · R: R-0`
 
 ---
 
 ## 2026-06-09 — Gustav
 
 **Files changed:**
-- app/(app)/quality/sieving/page.tsx
+- `app/(app)/quality/sieving/page.tsx`
 
 **Changes:**
-- Grade tabs renamed: Market→Grade (Export/Export Bland/Domestic); Variant dropdown (CON/ORG/RA-ORG/RA-CON/FT-CON/FT-ORG)
-- Run Type moved to top of New Run form as large tablet-friendly In-Process / Final QC buttons
-- Time auto-fills to current time when opening a new run (editable)
-- Leaf shade auto-filled from previous runs of the same lot number
-- PA Level shows auto-fill indicator when pulled from raw material PA lookup
-- Final QC mode hides sieve fractions table and needle count; only bulk density, leaf shade, PA level required
-- Per-fraction outlier detection flags values >2.5 std dev from recent similar runs before saving
-- Clicking a dot in the trend chart highlights the matching table row with a yellow glow for 3 seconds
-- Spec Editor: Add Row button to add new Grade+Variant spec combinations not in the default database
-- Inline edit form labels updated to match (Grade/Variant)
-- Larger touch targets and responsive grid layout optimised for tablet use
-
----
-
-## 2026-06-09 — Gustav (earlier)
-
-**Files changed:**
-- app/(app)/quality/sieving/page.tsx
-
-**Changes:**
-- Replaced Grade dropdown with tab-style buttons: Export, Export Bland, Domestic
-- Renamed Variant dropdown to Grade with expanded options: CON, ORG, RA-ORG, RA-CON, FT-CON, FT-ORG
-- Updated sdIsOrg() to treat RA-ORG and FT-ORG as organic variants
-- Updated gradeStyle() badge colours to match new market names
-- Applied same label changes in the inline edit form
+- Replaced grade dropdown with tab buttons: Export, Export Bland, Domestic
+- Added Variant dropdown: CON, ORG, RA-ORG, RA-CON, FT-CON, FT-ORG
+- Run Type moved to top of New Run form as large tablet-friendly In-Process / Final QC toggle buttons
+- Time auto-fills to current time on new run (editable); leaf shade auto-fills from previous runs of same lot
+- Final QC mode hides sieve fractions and needle count — only bulk density, leaf shade, PA required
+- Per-fraction outlier detection flags values more than 2.5 std dev from recent similar runs
+- Trend chart dot click highlights matching table row with yellow glow for 3 seconds
+- Spec Editor: Add Row button for new Grade + Variant combinations not in the default database
+- Tablet-optimised layout with larger touch targets and responsive grid
 
 ---
