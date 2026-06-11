@@ -8,15 +8,8 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import { getDefaultRoute } from '@/lib/auth/departments'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient } from '@/lib/supabase/client'
 import { Loader2, AlertCircle } from 'lucide-react'
-
-// Create once at module level — avoids recreation on every render
-// and prevents iOS Safari hydration mismatches
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
 
 export default function LoginPage() {
   const [error,     setError]     = useState('')
@@ -31,7 +24,7 @@ export default function LoginPage() {
 
   async function handleMicrosoft() {
     setMsLoading(true); setError('')
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { error } = await getSupabaseClient().auth.signInWithOAuth({
       provider: 'azure',
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
