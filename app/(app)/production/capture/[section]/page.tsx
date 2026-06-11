@@ -5,7 +5,7 @@ import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
-  ClipboardList, PenLine, Save,
+  ClipboardList, PenLine, Save, Sparkles,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -14,10 +14,11 @@ import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData,
 } from '@/components/production/capture/SievingCapture'
+import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 
-type Tab = 'production' | 'signoff'
+type Tab = 'production' | 'cleaning' | 'signoff'
 const n = (v: string) => parseFloat(v) || 0
 
 function CaptureScreen() {
@@ -312,7 +313,7 @@ function CaptureScreen() {
 
       {/* Tabs */}
       <div className="flex border-b border-stone-200 px-4 flex-shrink-0 bg-white">
-        {([['production', 'Production', ClipboardList], ['signoff', 'Sign-off', PenLine]] as const).map(([id, label, Icon]) => (
+        {([['production', 'Production', ClipboardList], ['cleaning', 'Cleaning', Sparkles], ['signoff', 'Sign-off', PenLine]] as const).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors ${tab === id ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
             <Icon size={14} /> {label}
@@ -341,6 +342,13 @@ function CaptureScreen() {
                 </button>
               )}
             </>
+          )}
+
+          {tab === 'cleaning' && (
+            <CleaningPanel
+              sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
+              operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name, pin: verifiedOp.pin } : null}
+            />
           )}
 
           {tab === 'signoff' && (
