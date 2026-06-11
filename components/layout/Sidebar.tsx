@@ -30,6 +30,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: '/dashboard',                 label: 'Dashboard',                  icon: LayoutDashboard, group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['IT','Production'] },
+  { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
   { href: '/production/live',           label: 'Live Capture',               icon: Factory,         group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
   { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['IT','Management'] },
   { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
@@ -81,7 +82,14 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
   const pathname  = usePathname()
   const { department, role, displayName, initials, signOut, p, isIT, isFullAdmin } = useAuth()
 
-  const visibleNav = NAV.filter(item => {
+  // Floor operators get a sandboxed, app-like nav — their own dashboard + capture only.
+  // No general dashboard, no settings, no other modules.
+  const isFloorOperator = role === 'floor_operator'
+  const FLOOR_NAV: NavItem[] = [
+    { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
+  ]
+
+  const visibleNav = isFloorOperator ? FLOOR_NAV : NAV.filter(item => {
     if (item.href === '/dashboard' || item.href === '/settings') return true
     if (item.href === '/suggest') return true
     if (item.itOnly && !isIT && !isFullAdmin) return false
@@ -279,6 +287,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
                   (href === '/axis' && pathname.startsWith('/axis/projects')) ||
                   (href !== '/management' && href !== '/sales' && href !== '/dashboard' && href !== '/axis' && href !== '/intelligence' && href !== '/production' && pathname.startsWith(href + '/')) ||
                   (href === '/production/live' && pathname.startsWith('/production/live')) ||
+                  (href === '/production/capture' && pathname.startsWith('/production/capture')) ||
                   (href === '/management'   && pathname === '/management') ||
                   (href === '/sales'        && pathname === '/sales') ||
                   (href === '/intelligence' && pathname === '/intelligence')

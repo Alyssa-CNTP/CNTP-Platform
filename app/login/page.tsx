@@ -135,6 +135,9 @@ export default function LoginPage() {
                 Use your <strong>@rooibostea.co.za</strong> Microsoft account or email.<br/>
                 Forgotten your password? Contact your IT administrator.
               </p>
+              <p style={{ marginTop: 10 }}>
+                Floor operator? <a href="/floor" style={{ color: '#1A3A0E', fontWeight: 600 }}>Sign in with your PIN →</a>
+              </p>
             </div>
 
           </div>

@@ -28,6 +28,88 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Alyssa (session 9)
+
+**Fix missing operators table + remove section PIN + operator dashboard sandbox**
+
+- `supabase/migrations/20260611_004_operators.sql` — NEW. Creates `production.operators` (it never existed on the clean DB — that was the `relation "production.operators" does not exist` error). Includes the auth-link columns + RLS, so it supersedes migration 003 (003 becomes a no-op; run 004).
+- `app/(app)/production/capture/[section]/page.tsx` — removed the per-section PIN gate. Operators log in once at `/floor`; the capture screen now resolves the signed-in operator from `operators.user_id` for sign-off attribution. No second PIN.
+- `app/(app)/layout.tsx` — floor operators are sandboxed: any route outside `/production/capture` redirects to it. They never reach the general dashboard or settings. Added topbar titles for the capture/operators routes.
+- `components/layout/Sidebar.tsx` — floor operators get a custom nav ("My Dashboard" → capture) instead of the full sidebar; no Dashboard/Settings/other modules.
+- `app/(app)/production/capture/page.tsx` — now doubles as the operator dashboard: personalized greeting ("Hi {name}") and an at-a-glance overview (my sections / in progress / completed) above the assigned-section cards.
+
+**Deploy note:** Run `20260611_004_operators.sql` in Supabase (staging). Skip 003. Add operators via **Capture → Operators** (provisions their login) — not the old SQL seed.
+
+---
+
+## 2026-06-11 — Alyssa (session 8)
+
+**Operator login (name + PIN, no Microsoft email) + Operators admin**
+
+Floor operators now sign in themselves with their name + 4-digit PIN, backed by a hidden Supabase auth account (synthetic email) so row-level security and route guards work normally. Provisioning uses the same service-role pattern as `app/api/admin/users`. Decision confirmed with developer: per-operator real login (not shared-tablet).
+
+**Files changed:**
+- `supabase/migrations/20260611_003_operator_auth.sql` — NEW. Adds `user_id` + `auth_email` to `production.operators` (unique indexes) linking each operator to its hidden auth user.
+- `lib/production/operator-auth.ts` — NEW. Synthetic email generator + deterministic `deriveAuthPassword(pin,email)` (satisfies Supabase's ≥6-char rule; effective secret stays the 4-digit PIN) + `FLOOR_OPERATOR_PERMISSIONS`. Shared by server (provisioning) and client (login).
+- `app/api/production/operators/route.ts` — NEW. POST creates an operator: auth user (service role) → `production.operators` row → `shared.app_roles` row (Production / floor_operator / capture permissions). PATCH updates incl. PIN→password sync; auto-provisions auth for legacy SQL-seeded operators.
+- `app/api/production/operators/[id]/route.ts` — NEW. DELETE removes the operator + app_roles + auth user.
+- `app/api/floor/operators/route.ts` — NEW. Public list (id, display name, synthetic email — never PIN) for the unauthenticated floor login.
+- `app/floor/page.tsx` — NEW. Floor login: pick name → numeric PIN pad → signs in via `signInWithPassword` with the derived password → redirects to `/production/capture`. Outside the `(app)` auth gate.
+- `app/(app)/production/operators/page.tsx` — NEW (built this session). Supervisor/IT admin to add/edit/deactivate/remove operators; now provisions through the API so logins are created.
+- `app/login/page.tsx` — added a "Floor operator? Sign in with your PIN" link to `/floor`.
+- `lib/supabase/database.types.ts` — added `user_id` / `auth_email` to the operators type.
+
+**Gating:** operator management requires `can_reset_operator_pin` (production supervisors) or `can_manage_users` (IT).
+
+**Deploy note:** Run `20260611_003_operator_auth.sql` in Supabase (staging). `SUPABASE_SERVICE_ROLE_KEY` must be set (already used by the admin users API). SQL-seeded operators won't have logins until re-saved through the Operators screen.
+
+---
+
+## 2026-06-11 — Alyssa (session 7)
+
+**New Phase-1 manual capture system (Sieving Tower vertical slice)**
+
+Built a brand-new manual-capture flow at `/production/capture`, separate from the barcode-scanning `/production/live`. Both share the same DB schema, Acumatica code derivation, and label printer, so flipping a section to scanning later (Phase 2) is a config change, not a rewrite. Architecture confirmed with developer: roster + PIN identity, autofilled headers, barcode generation per output bag, Sieving first as the proven template.
+
+**Files changed:**
+- `supabase/migrations/20260611_002_shift_assignments.sql` — NEW. `shift_assignments` table: supervisor rosters operators (operator_ids[]) onto a section/shift/date with pre-set lot/variant/production-orders. One per (date, shift, section); RLS + updated_at trigger.
+- `lib/supabase/database.types.ts` — added `shift_assignments` + `operators` table types and `ShiftAssignment`/`Operator` exports.
+- `lib/production/capture-config.ts` — NEW. Section mode (manual/scan) registry, variant options (full Acumatica words), variant→short mapping, destination→grade options, serial generation helper, tolerance constant.
+- `components/production/capture/SignaturePad.tsx` — NEW. Reusable touch/stylus signature pad → base64 PNG.
+- `components/production/capture/PinGate.tsx` — NEW. Roster+PIN identity gate; operator confirms with 4-digit PIN against `production.operators`.
+- `components/production/capture/SievingCapture.tsx` — NEW. Sieving debagging (bucket-elevator spillage excluded from balance + farm-bag inputs) and bagging (per output type: weight/batch/destination/QC → generates serial, derives Acumatica code, upserts bag_tags immediately, prints barcode label). Exports `sievingTotals` for mass balance.
+- `app/(app)/production/capture/page.tsx` — NEW. Operator landing: shows today's rostered sections for the current shift with assigned operator names + session status; supervisors get an "Assign sections" button.
+- `app/(app)/production/capture/assign/page.tsx` — NEW. Supervisor assignment board: pick date/shift, multi-select operators per section (filtered by their section_ids), set lot/variant/POs, save → upserts shift_assignments.
+- `app/(app)/production/capture/[section]/page.tsx` — NEW. Capture orchestrator: loads assignment → autofills header, PIN gate, session lifecycle (draft/submit/approve), writes prod_sessions/prod_debagging/prod_bagging/prod_mass_balance, stores operator+supervisor signatures to session_signatures, live mass-balance strip, 30s autosave. Non-built sections show "coming soon".
+- `components/layout/Sidebar.tsx` — added "Capture" nav entry above "Live Capture".
+- `lib/production/types.ts` — reverted the `RefiningFormState.line` type change (it broke the legacy refining page; that field is an internal form discriminator, not the DB section_id).
+
+**Deploy note:** Run `20260611_002_shift_assignments.sql` in Supabase SQL Editor (staging) before using the new flow.
+
+---
+
+## 2026-06-11 — Alyssa (session 6)
+
+**Files changed:**
+- `supabase/migrations/20260611_001_production_capture.sql`
+- `lib/supabase/database.types.ts`
+- `lib/production/types.ts`
+- `app/(app)/production/section/page.tsx`
+
+**Changes:**
+- Added `draft_data jsonb NOT NULL DEFAULT '{}'` column to `prod_sessions` in the clean migration — required for tablet draft restore without a JSON blob notes column
+- Rewrote `lib/supabase/database.types.ts` — full typed schema for all 7 new production tables (`prod_sessions`, `bag_tags`, `prod_debagging`, `prod_bagging`, `prod_mass_balance`, `session_signatures`, `scan_events`) plus existing stock-count tables
+- Fixed `lib/production/types.ts` `PRODUCTION_SECTIONS` IDs from short codes (`sieve`,`ref1`,`ref2`,`gran`,`blend`,`past`) to canonical IDs (`sieving`,`refining1`,`refining2`,`granule`,`blender`,`pasteuriser`) matching the migration's CHECK constraint; also fixed `RefiningFormState.line` type
+- Rebuilt `app/(app)/production/section/page.tsx` from scratch — clean orchestration shell around existing form components with proper DB writes:
+  - Session lifecycle: load existing draft → resume, or create new on first save
+  - `saveDraft`: writes to `prod_sessions`, `prod_debagging`, `prod_bagging`, `prod_mass_balance`, `bag_tags`; no longer sets `balance_kg` (it is a computed column)
+  - Mass balance strip: live variance calculation shown in header, warns if outside 15 kg tolerance
+  - Signatures: stored to `session_signatures` table with `signer_role`, `signer_name`, `signature_b64`; also updates `op_signed/sup_signed` flags on session
+  - Auto-save: every 30 s and on page visibility change, writes `draft_data` to session row
+  - Removed ~200-line stale SQL comment block that was at the top of the old file
+
+---
+
 ## 2026-06-11 — Alyssa (session 5)
 
 **Files changed:**
