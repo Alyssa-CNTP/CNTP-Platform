@@ -75,6 +75,8 @@ const ROUTE_META: Record<string, {
   '/production':             { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
   '/production/live':        { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
   '/production/live/capture':{ title: 'Capture Session',        variant: 'default' },
+  '/production/capture':     { title: 'Production Capture',      variant: 'default' },
+  '/production/operators':   { title: 'Operators',              variant: 'default' },
   '/info':                   { title: 'Section Information',    variant: 'default' },
   '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
   '/users':                  { title: 'Users & Roles',          variant: 'default' },
@@ -185,6 +187,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (loading || !permissionsReady || !user) return
 
+    // Floor operators are sandboxed to their capture area + custom dashboard.
+    // They never see the general dashboard, settings, or any other module.
+    if (role === 'floor_operator') {
+      if (!pathname.startsWith('/production/capture')) router.replace('/production/capture')
+      return
+    }
+
     // Always-open routes
     if (
       pathname === '/dashboard' ||
@@ -217,7 +226,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (guard.permission && !p(guard.permission)) {
       router.replace('/dashboard'); return
     }
-  }, [loading, permissionsReady, user, pathname, isIT, isFullAdmin, department, p, router])
+  }, [loading, permissionsReady, user, pathname, isIT, isFullAdmin, department, role, p, router])
 
   if (loading) {
     return (
