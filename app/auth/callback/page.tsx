@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter }           from 'next/navigation'
-import { createClient }        from '@supabase/supabase-js'
+import { getSupabaseClient }   from '@/lib/supabase/client'
 import Image                   from 'next/image'
 import { Loader2 }             from 'lucide-react'
 
@@ -15,10 +15,7 @@ export default function AuthCallbackPage() {
   const [status, setStatus] = useState<'loading' | 'error'>('loading')
 
   useEffect(() => {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    )
+    const supabase = getSupabaseClient()
 
     const code = new URLSearchParams(window.location.search).get('code')
 
