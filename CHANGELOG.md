@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Alyssa (session 3)
+
+**Files changed:**
+- `app/login/page.tsx`
+- `app/auth/callback/page.tsx`
+
+**Changes:**
+- Fixed "doesn't have a role yet" banner appearing after Microsoft OAuth login
+- Root cause: both pages were calling `createClient()` from `@supabase/supabase-js` independently, creating separate GoTrueClient instances alongside the app singleton — caused 401 on `shared.app_roles` query because the session established during OAuth was not visible to the singleton client used by `fetchRole()` in `auth/context.tsx`
+- Fix: replaced both `createClient()` calls with `getSupabaseClient()` from `lib/supabase/client.ts` — entire app now shares one client instance with consistent session state; multiple GoTrueClient warning eliminated
+
+---
+
 ## 2026-06-11 — Alyssa (session 2)
 
 **Files changed:**
