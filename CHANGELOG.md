@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Alyssa (session 5)
+
+**Files changed:**
+- `app/(app)/quality/lab-results/page.tsx`
+
+**Changes:**
+- Fixed Final Product Lab Results page crashing on load with `TypeError: Cannot read properties of undefined (reading 'length')`
+- Root cause: `TEST_TYPES` defines 8 tab types (`micro`, `residue`, `heavy_metals`, `eto`, `aflatoxins`, `mosh_moah`, `pa_final`, `glyphosate`) but `records` state was only initialised with 6 keys — `pa_final` and `glyphosate` were `undefined`. Tab bar rendering `records[t.key].length` for those two tabs crashed the whole page.
+- Fix: added `pa_final:[]` and `glyphosate:[]` to the records initial state.
+
+---
+
 ## 2026-06-11 — Alyssa (session 4)
 
 **Files changed:**
