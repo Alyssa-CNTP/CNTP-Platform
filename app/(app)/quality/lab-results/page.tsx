@@ -18,6 +18,8 @@ const TEST_TYPES = [
   { key:'eto',         label:'🧪 EtO',             icon:'🧪', desc:'Ethylene oxide + 2-Chloroethanol' },
   { key:'aflatoxins',  label:'🍄 Aflatoxins',      icon:'🍄', desc:'B1 · B2 · G1 · G2 · Ochratoxin A' },
   { key:'mosh_moah',   label:'🛢 MOSH/MOAH',       icon:'🛢', desc:'Mineral oil hydrocarbons' },
+  { key:'pa_final',    label:'💊 PAs',             icon:'💊', desc:'PA/TA Final · EU limits · Scopolamine' },
+  { key:'glyphosate',  label:'🧫 Glyphosate',      icon:'🧫', desc:'Glyphosate · AMPA · Glufosinate' },
 ] as const
 
 type TestType = typeof TEST_TYPES[number]['key']

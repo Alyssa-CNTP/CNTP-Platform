@@ -5,6 +5,52 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-10 — Gustav (granule specs: stop per-run duplication, select from library)
+
+**Files changed:**
+- app/(app)/quality/granule/page.tsx
+- Supabase staging migration: granule_specs_unique_type_customer
+
+**Changes:**
+- New Granule Run modal now **selects a saved specification** from the library (dropdown) instead of re-entering one each run; the selected spec is shown read-only and a snapshot is copied into the run
+- Removed the auto-upsert that created a new `granule_specs` row on every run (root cause of duplicates — it relied on an onConflict target that didn't exist)
+- Added `UNIQUE(type_grade, customer)` constraint on `qms.granule_specs` so duplicates can no longer form
+- Specifications tab "add" now shows a friendly message when a grade+customer spec already exists (edit it instead)
+- Specs are created/edited only in the Specifications tab
+- Data cleanup (staging): collapsed duplicate granule specs — merged all CNTP-own customer variants to blank, kept one canonical spec per grade (Super Grade id 16, Super Fine id 15), deleted the rest. Existing runs unaffected (they carry their own spec_json snapshot)
+
+---
+
+## 2026-06-10 — Gustav (pasteuriser variation flags + overview dashboard)
+
+**Files changed:**
+- app/(app)/quality/pasteuriser/page.tsx
+
+**Changes:**
+- Added variation/outlier detection to the pasteuriser sample entry modal — flags sieve fractions, moisture, BD and temperature that sit >2.5 std deviations from the batch's other samples (non-blocking warning banner)
+- Temperature spec validation: input turns red with a warning when below spec (default min 85°C, overridable per batch via temp_min/temp_max)
+- Tablet-friendly numeric entry: sieve grams, temperature, moisture, BD and weight inputs now trigger the numeric keypad (inputMode decimal/numeric); larger sieve gram inputs
+- New "Runs Overview" dashboard at the top of Active Runs — KPI cards (active runs, live samples, avg moisture, avg temp, sieve fails, pass rate) plus a live moisture & temperature trend chart for the selected batch
+
+---
+
+## 2026-06-10 — Gustav (staging login fix)
+
+**Files changed:**
+- QUALITY_MIGRATION_NOTES.md
+
+**Changes:**
+- Fixed staging login: added gustav@, alyssa@, jan@ to staging `auth.users` with matching UUIDs and password hashes from production
+- Added matching `shared.app_roles` rows with full permissions
+- Fixed `confirmation_token` NULL issue causing Supabase auth crash
+- Updated `NEXT_PUBLIC_SUPABASE_ANON_KEY` in VPS `.env.local` to correct staging key
+- Granted schema/table permissions on `shared` and `production` to authenticated role
+- Rebuilt and restarted staging app
+- Remaining manual step: add `shared`, `production`, `qms` to exposed schemas in Supabase dashboard (Project Settings → API)
+- Updated QUALITY_MIGRATION_NOTES.md with full session handoff notes
+
+---
+
 ## 2026-06-10 — Alyssa (session 3)
 
 **Files changed:**
@@ -60,7 +106,6 @@ Format: date · developer · files changed · description of code changes.
 - Created `shared.app_roles` table with `user_id UNIQUE` constraint
 - Added user roles: Alyssa Krishna (`senior_developer` / IT), Gustav (`quality_default` / Quality — Quality module only)
 - Restarted PM2 with updated environment
-
 ---
 
 ## 2026-06-10 — Gustav

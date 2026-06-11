@@ -222,58 +222,45 @@ function SieveTable({ grams, pcts, focusedSieve, setFocusedSieve, specJson, erro
 
 function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: (f: any) => void; onClose: () => void }) {
   const today = new Date().toISOString().split('T')[0]
-  const blankSpec = (): Record<string, any> => ({
-    moisture_max: '', bd_min: '', bd_max: '',
-    ...Object.fromEntries(GRANULE_SIEVES.map(s => [`sieve_${s.key}`, { min: '', max: '' }])),
-  })
 
   const [form, setForm] = useState<{
     batch_number: string; qc_name: string; production_date: string;
     type_grade: string; customer: string; is_cntp: boolean; reference_used: string;
-    spec_json: Record<string, any>
+    spec_id: number | null; spec_json: Record<string, any>
   }>({
     batch_number: '', qc_name: '', production_date: today,
     type_grade: '', customer: '', is_cntp: true, reference_used: '',
-    spec_json: blankSpec(),
+    spec_id: null, spec_json: {},
   })
   const [errors, setErrors] = useState<string[]>([])
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
-  const setSpec = (k: string, v: any) => setForm(f => ({ ...f, spec_json: { ...f.spec_json, [k]: v } }))
-  const setSpecSieve = (frac: string, bound: string, v: string) =>
-    setForm(f => ({ ...f, spec_json: { ...f.spec_json, [`sieve_${frac}`]: { ...(f.spec_json[`sieve_${frac}`] || {}), [bound]: v } } }))
 
-  // Auto-fill specs when type_grade or customer changes
-  useEffect(() => {
-    if (!form.type_grade) return
-    const customerMatch = specs.find(s =>
-      s.type_grade === form.type_grade && s.customer &&
-      s.customer.toLowerCase() === (form.customer || '').toLowerCase()
-    )
-    const genericMatch = specs.find(s => s.type_grade === form.type_grade && (!s.customer || s.customer === ''))
-    const match = customerMatch || genericMatch
-    if (!match) return
+  // Select a saved spec from the library — copies a snapshot into the run.
+  function selectSpec(idStr: string) {
+    const id = parseInt(idStr, 10)
+    const spec = specs.find(s => s.id === id)
+    if (!spec) { setForm(f => ({ ...f, spec_id: null, type_grade: '', customer: '', spec_json: {} })); return }
     const sieveSpecs: Record<string, any> = {}
     GRANULE_SIEVES.forEach(s => {
-      const sp = match.sieve_specs?.[s.key]
+      const sp = spec.sieve_specs?.[s.key]
       sieveSpecs[`sieve_${s.key}`] = { min: sp?.min ?? '', max: sp?.max ?? '' }
     })
     setForm(f => ({
       ...f,
-      spec_json: { moisture_max: match.moisture_max ?? '', bd_min: match.bd_min ?? '', bd_max: match.bd_max ?? '', ...sieveSpecs }
+      spec_id: spec.id,
+      type_grade: spec.type_grade,
+      customer: spec.customer || '',
+      spec_json: { moisture_max: spec.moisture_max ?? '', bd_min: spec.bd_min ?? '', bd_max: spec.bd_max ?? '', ...sieveSpecs },
     }))
-  }, [form.type_grade, form.customer, specs])
+  }
 
   function validate() {
     const errs: string[] = []
     if (!form.batch_number.trim()) errs.push('Batch Number')
     if (!form.qc_name.trim()) errs.push('Quality Controller')
     if (!form.production_date) errs.push('Production Date')
-    if (!form.type_grade) errs.push('Type & Grade')
-    const sp = form.spec_json
-    if (!sp.moisture_max && sp.moisture_max !== '') errs.push('Max Moisture')
-    if (!sp.bd_min && sp.bd_min !== '') errs.push('Min Bulk Density')
-    if (!sp.bd_max && sp.bd_max !== '') errs.push('Max Bulk Density')
+    if (!form.spec_id) errs.push('Specification')
     setErrors(errs)
     return errs.length === 0
   }
@@ -284,6 +271,7 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
   }
 
   const fieldErr = (name: string) => errors.includes(name)
+  const sp = form.spec_json
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
@@ -307,18 +295,16 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
                   className={`${inp} w-full ${fieldErr(label.replace(' *',''))?'border-err/40':''}`} />
               </div>
             ))}
-            <div>
-              <label className={`${lbl} ${fieldErr('Type & Grade')?'text-err':''}`}>Type & Grade *</label>
-              <select value={form.type_grade} onChange={e => set('type_grade', e.target.value)}
-                className={`${inp} w-full ${fieldErr('Type & Grade')?'border-err/40':''}`}>
-                <option value="">— Select grade —</option>
-                {GRANULE_TYPE_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
-              </select>
-            </div>
             <div className="col-span-2">
-              <label className={lbl}>Customer <span className="text-text-faint font-normal normal-case">(blank = CNTP own)</span></label>
-              <input value={form.customer} onChange={e => set('customer', e.target.value)}
-                placeholder="e.g. Kunitaro — leave blank for generic" className={`${inp} w-full`} />
+              <label className={`${lbl} ${fieldErr('Specification')?'text-err':''}`}>Specification *</label>
+              <select value={form.spec_id ?? ''} onChange={e => selectSpec(e.target.value)}
+                className={`${inp} w-full ${fieldErr('Specification')?'border-err/40':''}`}>
+                <option value="">— Select a saved specification —</option>
+                {specs.map(s => <option key={s.id} value={s.id}>{s.type_grade}{s.customer ? ` — ${s.customer}` : ''}</option>)}
+              </select>
+              {specs.length === 0 && (
+                <div className="text-[11px] text-warn mt-1">No specifications saved yet — add one in the Specifications tab first.</div>
+              )}
             </div>
             <div className="col-span-2">
               <label className={lbl}>Reference Used</label>
@@ -338,48 +324,45 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
             ))}
           </div>
 
-          {/* Specifications */}
-          <div className="border-t border-surface-rule pt-4">
-            <div className="font-mono text-[10px] uppercase tracking-wide text-brand font-bold mb-3">
-              📐 Specifications <span className="text-err">*</span>
-              <span className="text-text-faint font-normal normal-case ml-2">Required — enter limits for violation flagging</span>
-            </div>
-            <div className="grid grid-cols-3 gap-3 mb-4">
-              {([['Max Moisture (%)','moisture_max'],['Min Bulk Density','bd_min'],['Max Bulk Density','bd_max']] as const).map(([label, key]) => (
-                <div key={key}>
-                  <label className={`${lbl} ${fieldErr(label)?'text-err':''}`}>{label}</label>
-                  <input type="number" step="any" value={(form.spec_json as any)[key]}
-                    onChange={e => setSpec(key, e.target.value)}
-                    className={`${inp} w-full ${fieldErr(label)?'border-err/40':''}`} />
-                </div>
-              ))}
-            </div>
-            <div className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-2">Sieve Specs (% min / max)</div>
-            <div className="rounded-xl border border-surface-rule overflow-hidden">
-              <table className="w-full text-left" style={{ fontSize: 11, borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr className="bg-surface border-b border-surface-rule">
-                    {['Fraction','Min %','Max %'].map(h => <th key={h} className="px-3 py-2 font-mono text-[9px] uppercase text-text-muted">{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-surface-rule">
-                  {GRANULE_SIEVES.map((s, i) => (
-                    <tr key={s.key} className={i % 2 === 1 ? 'bg-surface/50' : ''}>
-                      <td className="px-3 py-1.5 font-semibold">{s.label}</td>
-                      {(['min','max'] as const).map(b => (
-                        <td key={b} className="px-2 py-1">
-                          <input type="number" step="any"
-                            value={form.spec_json[`sieve_${s.key}`]?.[b] || ''}
-                            onChange={e => setSpecSieve(s.key, b, e.target.value)}
-                            className={`${inp} w-full text-center`} style={{ width: 80 }} />
-                        </td>
-                      ))}
+          {/* Selected specification (read-only — managed in the Specifications tab) */}
+          {form.spec_id && (
+            <div className="border-t border-surface-rule pt-4">
+              <div className="font-mono text-[10px] uppercase tracking-wide text-brand font-bold mb-3">
+                📐 Specification — {form.type_grade}{form.customer ? ` · ${form.customer}` : ''}
+                <span className="text-text-faint font-normal normal-case ml-2">read-only · edit in the Specifications tab</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                {([['Max Moisture (%)','moisture_max'],['Min Bulk Density','bd_min'],['Max Bulk Density','bd_max']] as const).map(([label, key]) => (
+                  <div key={key}>
+                    <label className={lbl}>{label}</label>
+                    <div className={`${inp} w-full bg-surface text-text-muted`}>{(sp as any)[key] !== '' && (sp as any)[key] != null ? (sp as any)[key] : '—'}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-2">Sieve Specs (% min / max)</div>
+              <div className="rounded-xl border border-surface-rule overflow-hidden">
+                <table className="w-full text-left" style={{ fontSize: 11, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr className="bg-surface border-b border-surface-rule">
+                      {['Fraction','Min %','Max %'].map(h => <th key={h} className="px-3 py-2 font-mono text-[9px] uppercase text-text-muted">{h}</th>)}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule">
+                    {GRANULE_SIEVES.map((s, i) => {
+                      const v = sp[`sieve_${s.key}`] || {}
+                      return (
+                        <tr key={s.key} className={i % 2 === 1 ? 'bg-surface/50' : ''}>
+                          <td className="px-3 py-1.5 font-semibold">{s.label}</td>
+                          <td className="px-3 py-1.5 text-center font-mono">{v.min !== '' && v.min != null ? v.min : '—'}</td>
+                          <td className="px-3 py-1.5 text-center font-mono">{v.max !== '' && v.max != null ? v.max : '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
@@ -1721,7 +1704,12 @@ function GranuleSpecsTab({ isAdmin }: { isAdmin: boolean }) {
     if (!form.type_grade) { setErr('Type & Grade is required'); return }
     setSaving(true); setErr('')
     const { data, error } = await db.schema('qms').from('granule_specs').insert({ ...form, moisture_max: form.moisture_max || null, bd_min: form.bd_min || null, bd_max: form.bd_max || null }).select().single()
-    if (error) { setErr(error.message); setSaving(false); return }
+    if (error) {
+      setErr(error.code === '23505'
+        ? 'A specification for this grade & customer already exists — edit that one instead.'
+        : error.message)
+      setSaving(false); return
+    }
     setSpecs(p => [...p, data]); setForm(emptyForm()); setShowNew(false); setSaving(false)
   }
 
@@ -1917,13 +1905,8 @@ export default function GranulePage() {
       spec_json: form.spec_json || {}, reference_used: form.reference_used || '', overall_status: 'Pass',
     }).select().single()
     if (error) { alert(error.message); return }
-    // Auto-save spec to library if meaningful
-    const sp = form.spec_json || {}
-    if (form.type_grade && sp.moisture_max !== '' && sp.bd_min !== '' && sp.bd_max !== '') {
-      const sieveSpecs: Record<string, any> = {}
-      GRANULE_SIEVES.forEach(s => { const sv = sp[`sieve_${s.key}`]; if (sv && (sv.min !== '' || sv.max !== '')) sieveSpecs[s.key] = { min: sv.min !== '' ? parseFloat(sv.min) : null, max: sv.max !== '' ? parseFloat(sv.max) : null } })
-      db.schema('qms').from('granule_specs').upsert({ type_grade: form.type_grade, customer: form.customer || '', moisture_max: parseFloat(sp.moisture_max), bd_min: parseFloat(sp.bd_min), bd_max: parseFloat(sp.bd_max), sieve_specs: sieveSpecs }, { onConflict: 'type_grade,customer' }).then(() => {})
-    }
+    // Specs are managed only in the Specifications tab — runs reference a saved
+    // spec (snapshot copied into spec_json), so no spec rows are created here.
     setRuns(prev => [{ ...data, samples: [], tastings: [] }, ...prev])
     setShowNewRun(false)
   }
