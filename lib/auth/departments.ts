@@ -69,5 +69,5 @@ export const DEPARTMENT_META = {
 export type Department = keyof typeof DEPARTMENT_META
 
 export function getDefaultRoute(department: string): string {
-  return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/'
+  return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/dashboard'
 }
