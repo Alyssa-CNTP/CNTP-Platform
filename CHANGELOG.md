@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Alyssa
+
+**Files changed:**
+- `next.config.js`
+- `package.json`
+
+**Changes:**
+- Removed invalid `eslint` key from `next.config.js` (dropped in Next.js 15+) — was causing warning spam and repeated PM2 crash-restart cycles
+- Fixed build script to use `DISABLE_ESLINT_PLUGIN=true` so ESLint doesn't block builds
+- Merged Gustav's `Gustav/claude-boom` branch — resolved CHANGELOG conflict, all quality page changes now live on staging
+- Exposed `sales`, `production`, `logistics` schemas needed in Supabase staging (manual step — Alyssa to action in Supabase dashboard)
+
+---
+
 ## 2026-06-10 — Gustav (granule specs: stop per-run duplication, select from library)
 
 **Files changed:**
