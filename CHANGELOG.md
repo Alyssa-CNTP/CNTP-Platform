@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Gustav (maintenance workflow v2: breakdown vs planned split, role views, planner, QC loop)
+
+**Files changed:**
+- app/(app)/maintenance/page.tsx
+- Supabase staging migration: maintenance_workflow_v2
+
+**Changes:**
+- **Raise Job Card moved to the top** of the Job Cards tab, open to everyone; now has a **short description + optional detailed description**
+- Job cards split into **two workflows**: 🔴 Breakdown (urgent) and 📋 Scheduled/Planned (multi-select maintenance types, Breakdown removed from the type list)
+- **Breakdown flow:** auto-assigns directly to the **technician on duty** from a new duty roster (maintenance manager informed, not the allocator); timer runs from the moment the card is raised; technician still accepts
+- **Planned flow:** new cards pop to the top of the manager's board for allocation — manager picks internal technician **or external company**, and toggles whether a **QC check is required** for the job
+- **Clarify loop:** if the manager doesn't understand the request, they send the card back to the raiser with a comment; raiser updates the description and resubmits
+- **QC checks now YES / NO / N/A**; any YES requires a QC comment and returns the card to the technician (reopen counted, manager informed via log); on the same card log work continues
+- "Not satisfactory" verification by the originator also returns the card to the technician instead of closing it
+- **Spares / critical equipment used** logged by the technician per job card — linked to and **decrements the Stock & Spares register**; new usage-log table on the Stock tab; tools-used field (required focus for external jobs)
+- **Comment box on every card at every stage** + full per-card log (every comment and transition kept in `maintenance.job_card_logs` for analysis)
+- **Role views** (to be locked to real users later): Manager (full board + new-card allocation panel + planner + roster), Technician (only their assigned cards), QC (QC queue by station), Raiser (dashboard of own cards: outstanding/needs-input/in-progress/completed + full log, no manager controls)
+- **Technician planner calendar** (manager): week grid per technician with estimated time slots linked to job cards
+- **Duty roster editor** (manager) driving the breakdown auto-assign, and a **station/area → QC officer map** that routes completed jobs to the right QC
+- New tables: `job_card_logs`, `job_card_spares`, `duty_roster`, `area_qc`, `tech_schedule`; `job_cards` gained `workflow`, `long_desc`, `qc_required`, `external`, `external_company`, `tools_used`, `reopen_count` and a `clarify` status
+
+---
+
 ## 2026-06-11 — Alyssa (session 5)
 
 **Files changed:**
