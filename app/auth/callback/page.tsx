@@ -1,8 +1,14 @@
 'use client'
 // app/auth/callback/page.tsx
 // Handles OAuth redirect from Microsoft/Azure.
-// Supabase sends the user here with ?code=... after Microsoft login.
-// Exchanges the code for a session then redirects to the dashboard.
+//
+// IMPORTANT: createBrowserClient (@supabase/ssr) has detectSessionInUrl:true by default.
+// It automatically exchanges the ?code= param for a session when the page loads.
+// We must NOT manually call exchangeCodeForSession — that would be a second attempt
+// to use the PKCE verifier (already consumed by the auto-exchange), causing:
+//   "PKCE code verifier not found in storage"
+//
+// Instead: just listen for SIGNED_IN via onAuthStateChange and redirect.
 
 import { useEffect, useState } from 'react'
 import { useRouter }           from 'next/navigation'
@@ -17,49 +23,55 @@ export default function AuthCallbackPage() {
   useEffect(() => {
     const supabase = getSupabaseClient()
 
-    const code = new URLSearchParams(window.location.search).get('code')
+    // Listen for the session that createBrowserClient establishes automatically.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        // Detect first-ever sign-in: created_at ≈ last_sign_in_at (within 30s)
+        const user      = session.user
+        const created   = new Date(user.created_at).getTime()
+        const lastLogin = user.last_sign_in_at ? new Date(user.last_sign_in_at).getTime() : created
+        const isNew     = Math.abs(created - lastLogin) < 30_000
 
-    if (!code) {
-      // No code — might be a hash-based implicit flow fallback
-      router.replace('/dashboard')
-      return
-    }
-
-    supabase.auth.exchangeCodeForSession(code)
-      .then(async ({ data, error }) => {
-        if (error) {
-          console.error('OAuth callback error:', error.message)
-          setStatus('error')
-          setTimeout(() => router.replace('/login'), 3000)
-          return
-        }
-
-        // Detect first-ever sign-in: created_at and last_sign_in_at are within 30s of each other
-        const user = data.session?.user
-        if (user) {
-          const created   = new Date(user.created_at).getTime()
-          const lastLogin = user.last_sign_in_at ? new Date(user.last_sign_in_at).getTime() : created
-          const isNew     = Math.abs(created - lastLogin) < 30_000
-
-          if (isNew) {
-            // Fire-and-forget — send auth token so the endpoint can verify the caller
-            const accessToken = data.session?.access_token
-            fetch('/api/auth/notify-new-user', {
-              method:  'POST',
-              headers: {
-                'Content-Type':  'application/json',
-                'Authorization': `Bearer ${accessToken ?? ''}`,
-              },
-              body: JSON.stringify({
-                email: user.email,
-                name:  user.user_metadata?.full_name ?? user.user_metadata?.name ?? '',
-              }),
-            }).catch(() => {/* ignore */})
-          }
+        if (isNew) {
+          fetch('/api/auth/notify-new-user', {
+            method:  'POST',
+            headers: {
+              'Content-Type':  'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              email: user.email,
+              name:  user.user_metadata?.full_name ?? user.user_metadata?.name ?? '',
+            }),
+          }).catch(() => {/* ignore */})
         }
 
         router.replace('/dashboard')
+      }
+    })
+
+    // If the session was already established before this listener registered
+    // (e.g. fast auto-exchange completed synchronously), redirect immediately.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) router.replace('/dashboard')
+    })
+
+    // Timeout fallback — if nothing happens in 15s, something went wrong
+    const fallback = setTimeout(() => {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          router.replace('/dashboard')
+        } else {
+          setStatus('error')
+          setTimeout(() => router.replace('/login'), 3000)
+        }
       })
+    }, 15_000)
+
+    return () => {
+      subscription.unsubscribe()
+      clearTimeout(fallback)
+    }
   }, [router])
 
   return (
