@@ -13,7 +13,7 @@ import {
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare,
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
-  Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
+  Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search, Wrench,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -45,6 +45,10 @@ const NAV: NavItem[] = [
   { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['IT','Quality'], permission: 'can_create_runs' },
   { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['IT','Quality'], permission: 'can_upload_pdfs' },
   { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['IT','Quality'], permission: 'can_add_sieving_runs' },
+
+  // Maintenance — own section (not Quality). Open to all for now; per-user
+  // permissions will be added as roles are defined.
+  { href: '/maintenance',               label: 'Maintenance',                icon: Wrench,          group: 'Maintenance' },
 
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },
   { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },

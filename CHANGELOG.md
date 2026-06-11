@@ -47,6 +47,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Gustav (new Maintenance module — own section + dedicated schema)
+
+**Files changed:**
+- app/(app)/maintenance/page.tsx (new)
+- components/layout/Sidebar.tsx
+- app/(app)/layout.tsx
+- Supabase staging migration: create_maintenance_schema (+ seed data)
+
+**Changes:**
+- New standalone **Maintenance** section in the sidebar (own group, separate from Quality) at `/maintenance` — replica of the approved maintenance system design with four tabs: Job Cards, Scheduled Maintenance (Weekly / Monthly / Annual-Calibration), Stock & Spares, Analytics
+- New dedicated `maintenance` schema in the **staging** database (additive only — no existing schema touched) with tables: `job_cards`, `checklist_templates`, `checklist_completions`, `annual_items`, `spare_parts`, `offsite_equipment`; grants mirror the `qms` pattern
+- Job card workflow persisted to the database: raised → forwarded to a technician by the maintenance manager → technician prompted to accept (timer starts) → work done + root cause → QC post-maintenance check (6 FSSC questions) → originator verification (satisfactory / not) → complete. Card numbers continue the paper register (`JC-26/268` onwards via DB sequence)
+- New job card form: area (32 locations), machine, maintenance types, description with keyword-based AI suggestion, photo upload (downscaled client-side)
+- Weekly/monthly checklists seeded from the QM-FM forms (6 weekly + 18 monthly areas); tick-state, fault flags, task notes and comments saved per ISO week / per month
+- Annual register seeded with 20 calibration/inspection/YPM/service items; due-date colour coding (overdue/urgent/soon/plan/ok), supplier email draft, editable notes
+- Spare parts register (12 parts) and offsite equipment tracking (3 items) seeded
+- Analytics computed from live job-card data: totals, recorded repair time, avg time-to-close, completion rate, job cards by area, workload by technician
+- Seeded 24 job cards (20 historical from the May paper register + 4 current examples)
+- Route is open to all logged-in users for now; per-user permissions to be added as roles are defined
+- **Manual step required:** add `maintenance` to Exposed Schemas in the Supabase staging dashboard (Project Settings → API), same as was done for `qms`/`shared`/`production`, otherwise the page cannot query the schema
+
+---
+
 ## 2026-06-10 — Gustav (granule specs: stop per-run duplication, select from library)
 
 **Files changed:**

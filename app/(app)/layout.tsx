@@ -89,6 +89,9 @@ const ROUTE_META: Record<string, {
   '/quality/lab-results':    { title: 'Final Product Lab Results', variant: 'default', chips: [{ label: 'Quality', color: 'blue' }] },
   '/quality/customer-specs': { title: 'Customer Specifications', variant: 'default',   chips: [{ label: 'Quality', color: 'blue' }] },
 
+  // Maintenance section — own module, separate from Quality
+  '/maintenance':            { title: 'Maintenance',            variant: 'default',    chips: [{ label: 'FSSC 22000', color: 'green' }] },
+
   // Management section
   '/management':                   { title: 'Management',           variant: 'management' },
   '/production/operations':        { title: 'Production Operations', variant: 'management', chips: [{ label: 'IT + Management', color: 'purple' }] },
