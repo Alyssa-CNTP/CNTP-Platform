@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-11 — Alyssa (session 2)
+
+**Files changed:**
+- `app/(app)/layout.tsx`
+- `app/page.tsx`
+- `lib/auth/departments.ts`
+
+**Changes:**
+- Added inactivity auto sign-out: 60 minutes of no activity signs the user out automatically
+- Warning banner appears 5 minutes before sign-out showing a countdown timer and "Stay signed in" button
+- Fixed root route `/` — was an old duplicate login page (no Microsoft button); now correctly redirects signed-in users to `/dashboard` and others to `/login`
+- Fixed `getDefaultRoute()` fallback from `/` to `/dashboard` — prevents redirect loop for users with no department assigned yet (new Microsoft sign-ins before role is assigned)
+- Azure app registration confirmed correct — no changes needed
+
+---
+
 ## 2026-06-11 — Alyssa
 
 **Files changed:**
