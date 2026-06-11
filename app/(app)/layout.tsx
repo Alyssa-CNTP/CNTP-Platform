@@ -1,6 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+
+const INACTIVITY_MS = 60 * 60 * 1000  // 60 minutes until sign-out
+const WARNING_MS    =  5 * 60 * 1000  // show warning 5 mins before
 import { useRouter, usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import type { PermissionKey } from '@/lib/auth/permissions'
@@ -129,10 +132,46 @@ const ROUTE_META: Record<string, {
 // ─── Layout ────────────────────────────────────────────────────────────────────
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const [mobileOpen, setMobileOpen] = useState(false)
+  const [mobileOpen,  setMobileOpen]  = useState(false)
+  const [showWarning, setShowWarning] = useState(false)
+  const [countdown,   setCountdown]   = useState(0)
   const { user, loading, permissionsReady, isIT, isFullAdmin, department, role, p, signOut } = useAuth()
   const router   = useRouter()
   const pathname = usePathname()
+
+  // ── Inactivity auto sign-out ───────────────────────────────────────────────
+  const timeoutRef   = useRef<ReturnType<typeof setTimeout>  | null>(null)
+  const warningRef   = useRef<ReturnType<typeof setTimeout>  | null>(null)
+  const intervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const clearAll = useCallback(() => {
+    if (timeoutRef.current)  clearTimeout(timeoutRef.current)
+    if (warningRef.current)  clearTimeout(warningRef.current)
+    if (intervalRef.current) clearInterval(intervalRef.current)
+  }, [])
+
+  const resetTimer = useCallback(() => {
+    clearAll()
+    setShowWarning(false)
+    // Warning banner 5 mins before sign-out
+    warningRef.current = setTimeout(() => {
+      setShowWarning(true)
+      setCountdown(WARNING_MS / 1000)
+      intervalRef.current = setInterval(() =>
+        setCountdown(c => (c <= 1 ? (clearInterval(intervalRef.current!), 0) : c - 1)), 1000)
+    }, INACTIVITY_MS - WARNING_MS)
+    // Sign out after full inactivity period
+    timeoutRef.current = setTimeout(() => { clearAll(); signOut() }, INACTIVITY_MS)
+  }, [clearAll, signOut])
+
+  useEffect(() => {
+    if (!user) return
+    const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'] as const
+    const handle = () => resetTimer()
+    events.forEach(e => window.addEventListener(e, handle, { passive: true }))
+    resetTimer()
+    return () => { clearAll(); events.forEach(e => window.removeEventListener(e, handle)) }
+  }, [user, resetTimer, clearAll])
 
   // Session check — redirect to login if unauthenticated
   useEffect(() => {
@@ -196,6 +235,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const meta = ROUTE_META[routeKey] ?? { title: 'CNTP Ops', variant: 'default' as const }
 
+  const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
   return (
     <LanguageProvider>
       <div className="flex h-screen overflow-hidden bg-surface">
@@ -214,6 +255,29 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
         <CommandSearch />
       </div>
+
+      {/* Inactivity warning — appears 5 mins before auto sign-out */}
+      {showWarning && (
+        <div style={{
+          position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, display: 'flex', alignItems: 'center', gap: 16,
+          background: '#1A3A0E', color: '#fff', borderRadius: 12,
+          padding: '14px 24px', boxShadow: '0 8px 32px rgba(0,0,0,0.30)',
+          fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap',
+        }}>
+          <span>⚠️ Signing out in <strong>{fmtCountdown(countdown)}</strong> due to inactivity</span>
+          <button
+            onClick={resetTimer}
+            style={{
+              background: '#fff', color: '#1A3A0E', border: 'none',
+              borderRadius: 8, padding: '6px 18px', fontSize: 13,
+              fontWeight: 700, cursor: 'pointer', marginLeft: 4,
+            }}
+          >
+            Stay signed in
+          </button>
+        </div>
+      )}
     </LanguageProvider>
   )
 }
