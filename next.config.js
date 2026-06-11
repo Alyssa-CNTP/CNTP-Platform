@@ -3,9 +3,7 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // Note: eslint key was removed in Next.js 15+. ESLint is disabled via --no-lint in build script.
 };
 
 module.exports = nextConfig;
