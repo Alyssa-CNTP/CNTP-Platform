@@ -549,7 +549,7 @@ export default function LabResultsPage() {
   const db = getDb()
 
   const [activeTab,   setActiveTab]   = useState<TestType>('micro')
-  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[] })
+  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[] })
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState('')
   const [pending,     setPending]     = useState<any|null>(null)
