@@ -157,15 +157,13 @@ function CaptureScreen() {
   function buildBag(sid: string) {
     const rows: any[] = []
     let bagNo = 1
-    Object.entries(data.outputs).forEach(([type, bags]) => {
-      bags.forEach(b => {
-        if (n(b.weight) === 0) return
-        rows.push({
-          session_id: sid, bag_no: bagNo++, output_group: 'B',
-          bag_serial_no: b.serial, lot_number: b.batch || null, product_type: type,
-          acumatica_id: b.acumaticaId || null, variant: assignment?.variant ?? null,
-          kg: n(b.weight),
-        })
+    data.outputs.forEach(b => {
+      if (n(b.weight) === 0) return
+      rows.push({
+        session_id: sid, bag_no: bagNo++, output_group: 'B',
+        bag_serial_no: b.serial, lot_number: b.batch || null, product_type: b.productType,
+        acumatica_id: b.code || null, variant: assignment?.variant ?? null,
+        kg: n(b.weight),
       })
     })
     return rows
@@ -334,8 +332,6 @@ function CaptureScreen() {
                 value={data}
                 onChange={setData}
                 genSerial={genSerial}
-                dateStr={dateParam}
-                sectionCode={meta.code}
               />
               {!locked && (
                 <button onClick={saveDraft} disabled={saving}

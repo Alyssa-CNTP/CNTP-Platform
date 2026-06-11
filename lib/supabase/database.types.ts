@@ -208,6 +208,53 @@ export interface Database {
         Update: Partial<Database['production']['Tables']['shift_assignments']['Insert']>
       }
 
+      // ── cleaning_stations (QR-tagged equipment/rooms) ───────
+      cleaning_stations: {
+        Row: {
+          id: string; section_id: string; area: string; qr_code: string
+          label: string; active: boolean; created_at: string
+        }
+        Insert: Omit<Database['production']['Tables']['cleaning_stations']['Row'], 'id' | 'created_at'> & { id?: string }
+        Update: Partial<Database['production']['Tables']['cleaning_stations']['Insert']>
+      }
+
+      // ── cleaning_records (one cleaning event per section/shift) ─
+      cleaning_records: {
+        Row: {
+          id: string; session_id: string | null; section_id: string; date: string
+          shift: Shift; status: 'in_progress' | 'operator_signed' | 'supervisor_verified'
+          operator_id: string | null; operator_name: string | null; operator_signed_at: string | null
+          supervisor_name: string | null; supervisor_verified_at: string | null
+          exceptions_count: number; created_at: string; updated_at: string
+        }
+        Insert: Omit<Database['production']['Tables']['cleaning_records']['Row'], 'id' | 'created_at' | 'updated_at'> & { id?: string }
+        Update: Partial<Database['production']['Tables']['cleaning_records']['Insert']>
+      }
+
+      // ── cleaning_logs (immutable audit trail) ────────────────
+      cleaning_logs: {
+        Row: {
+          id: string; record_id: string
+          action: 'area_confirmed' | 'task_exception' | 'station_scan' | 'photo' | 'operator_sign' | 'supervisor_verify'
+          area: string | null; task_key: string | null; detail: Json
+          actor_id: string | null; actor_name: string | null; at: string
+        }
+        Insert: Omit<Database['production']['Tables']['cleaning_logs']['Row'], 'id' | 'at'> & { id?: string }
+        Update: never  // append-only — immutable audit trail
+      }
+
+      // ── inventory_items (master Acumatica list) ──────────────
+      inventory_items: {
+        Row: {
+          inventory_id: string; description: string | null; item_class: string | null
+          category_code: string | null; product_group: string | null; grade: string | null
+          qc_grade: string | null; variant: string | null; base_unit: string | null
+          item_status: string | null; active: boolean; created_at: string
+        }
+        Insert: Omit<Database['production']['Tables']['inventory_items']['Row'], 'created_at'> & { created_at?: string }
+        Update: Partial<Database['production']['Tables']['inventory_items']['Insert']>
+      }
+
       // ── operators (PIN-verified floor operators) ─────────────
       operators: {
         Row: {
@@ -331,4 +378,8 @@ export type AppRole           = Database['production']['Tables']['app_roles']['R
 export type DevReport         = Database['production']['Tables']['dev_reports']['Row']
 export type ShiftAssignment   = Database['production']['Tables']['shift_assignments']['Row']
 export type Operator          = Database['production']['Tables']['operators']['Row']
+export type CleaningStation   = Database['production']['Tables']['cleaning_stations']['Row']
+export type CleaningRecord    = Database['production']['Tables']['cleaning_records']['Row']
+export type CleaningLog       = Database['production']['Tables']['cleaning_logs']['Row']
+export type InventoryItem     = Database['production']['Tables']['inventory_items']['Row']
 export type UserRole          = 'admin' | 'supervisor' | 'management' | 'operator'
