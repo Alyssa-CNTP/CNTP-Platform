@@ -184,7 +184,7 @@ Fields: `type`, `grade`, `moisture_max`, `bd_min`, `bd_max`, plus sieve columns
 
 ---
 
-## Changes Made This Session
+## Changes Made This Session (2026-06-10)
 
 | Change | File | Description |
 |---|---|---|
@@ -194,6 +194,36 @@ Fields: `type`, `grade`, `moisture_max`, `bd_min`, `bd_max`, plus sieve columns
 | Spec editor | `sieving/page.tsx` | Editable Grade name input, Variant dropdown, always-visible mesh inputs, delete row button |
 | Staging DB grants | Supabase migration | Granted SELECT/INSERT/UPDATE/DELETE to authenticated role on all qms tables |
 | Data migration | Supabase staging | ~375 PA records + ~250 residue records copied from prod into `qms.quality_records` |
+
+---
+
+## Staging Login Fix (2026-06-10)
+
+### Root cause chain
+1. `auth.users` in staging was empty — no users could log in at all
+2. `NEXT_PUBLIC_SUPABASE_ANON_KEY` in VPS `.env.local` pointed to **production** (`sxzjjcyuzyfneesnsjna`) while URL pointed to staging — mismatched keys caused silent auth failure
+3. Inserted users had `NULL` in `confirmation_token` — Supabase auth panicked with `"converting NULL to string is unsupported"`
+4. `shared` and `production` schemas not exposed in staging PostgREST API settings — caused infinite spinner after login
+
+### What was done
+- Added 3 users to staging `auth.users`: `gustav@rooibostea.co.za`, `alyssa@rooibostea.co.za`, `jan@rooibostea.co.za` (same UUIDs + bcrypt password hashes as production)
+- Added matching `shared.app_roles` rows for all 3 (same roles/permissions as production)
+- Fixed `instance_id = '00000000-0000-0000-0000-000000000000'` and nullable token fields
+- Updated `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` to staging anon key
+- Ran `npm run build && pm2 restart cntp-staging` to bake new env vars into bundle
+- Granted `USAGE` on `shared` and `production` schemas to `anon` + `authenticated`
+- Granted `SELECT/INSERT/UPDATE/DELETE` on all tables in `shared` and `production` to `authenticated`
+
+### Still needed (manual step — requires Supabase dashboard)
+Go to **app.supabase.com → staging project → Project Settings → API → Exposed schemas** and add:
+- `shared`
+- `production`
+- `qms`
+
+This is required for PostgREST to serve queries to these schemas. Without it the app spins after login.
+
+### Remaining `.env.local` issue
+`SUPABASE_SERVICE_ROLE_KEY` still has the **production** service role key. This only affects server-side admin API routes (user management, admin actions). Get the staging service role key from the Supabase dashboard (Project Settings → API) and update `.env.local` on the VPS, then rebuild.
 
 ---
 
