@@ -1,9 +1,10 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
-import { Activity, Package, Scale, CheckCircle2, AlertTriangle, RefreshCw, Layers } from 'lucide-react'
+import { Activity, Package, Scale, CheckCircle2, AlertTriangle, RefreshCw, Layers, ChevronRight } from 'lucide-react'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 
 /**
@@ -29,6 +30,7 @@ const STATUS = {
 
 export function LiveCaptureKPIs() {
   const today = format(new Date(), 'yyyy-MM-dd')
+  const shiftNow = (() => { const h = new Date().getHours(); return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night' })()
   const [rows, setRows] = useState<SectionRow[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -111,8 +113,8 @@ export function LiveCaptureKPIs() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-surface-rule bg-surface text-left">
-                {['Section', 'Status', 'kg in', 'kg out', 'Variance', 'Bags'].map(h => (
-                  <th key={h} className="px-4 py-2.5 font-mono text-[10px] text-text-muted uppercase tracking-wide">{h}</th>
+                {['Section', 'Status', 'kg in', 'kg out', 'Variance', 'Bags', ''].map((h, i) => (
+                  <th key={i} className="px-4 py-2.5 font-mono text-[10px] text-text-muted uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -121,8 +123,10 @@ export function LiveCaptureKPIs() {
                 const m = sectionMeta(r.sectionId)
                 const st = (STATUS as any)[r.status] ?? STATUS.none
                 const flag = r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG
+                const href = `/production/capture/${r.sectionId}?date=${today}&shift=${shiftNow}`
                 return (
-                  <tr key={r.sectionId} className="hover:bg-surface transition-colors">
+                  <tr key={r.sectionId} className="hover:bg-surface transition-colors cursor-pointer"
+                    onClick={() => { window.location.href = href }}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
@@ -138,6 +142,7 @@ export function LiveCaptureKPIs() {
                       {r.kgIn ? `${r.variance > 0 ? '+' : ''}${r.variance.toFixed(1)}` : '—'}{flag ? ' ⚠' : ''}
                     </td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text">{r.bags || '—'}</td>
+                    <td className="px-4 py-3 text-right"><Link href={href} onClick={e => e.stopPropagation()} className="inline-flex text-text-muted hover:text-brand"><ChevronRight size={15} /></Link></td>
                   </tr>
                 )
               })}
