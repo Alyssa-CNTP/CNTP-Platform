@@ -58,6 +58,7 @@ function CaptureScreen() {
   const productionsRef = useRef<Production[]>(productions); productionsRef.current = productions
   const sessionRef = useRef<string | null>(null); sessionRef.current = sessionId
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
+  const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData) =>
@@ -139,13 +140,33 @@ function CaptureScreen() {
     load()
   }, [sectionId, dateParam, shift])
 
-  // ── Auto-save every 20s — full persist (draft + structured rows) ─────────
+  // Reliable save — ensures a session exists (in case the open-time create
+  // failed) then persists. Used by the debounce, the hide-flush, and the backstop.
+  async function flushSave() {
+    let sid = sessionRef.current
+    if (!sid && ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
+    if (sid && persistRef.current) { try { await persistRef.current(productionsRef.current, sid) } catch {} }
+  }
+  const flushRef = useRef(flushSave); flushRef.current = flushSave
+
+  // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
-    const t = setInterval(() => {
-      const sid = sessionRef.current
-      if (!sid || !persistRef.current) return
-      persistRef.current(productionsRef.current, sid).catch(() => {})
-    }, 20_000)
+    if (loading) return
+    const t = setTimeout(() => { flushRef.current() }, 2500)
+    return () => clearTimeout(t)
+  }, [productions, loading])
+
+  // ── Flush on tab hide / app background / page close (tablet screen-lock) ──
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden') flushRef.current() }
+    document.addEventListener('visibilitychange', onHide)
+    window.addEventListener('pagehide', onHide)
+    return () => { document.removeEventListener('visibilitychange', onHide); window.removeEventListener('pagehide', onHide) }
+  }, [])
+
+  // ── Backstop interval (active tabs) ───────────────────────────────────────
+  useEffect(() => {
+    const t = setInterval(() => { flushRef.current() }, 20_000)
     return () => clearInterval(t)
   }, [])
 
@@ -170,6 +191,7 @@ function CaptureScreen() {
     setSessionId(id)
     return id
   }
+  ensureRef.current = ensureSession
 
   // ── Build structured rows from SievingData ───────────────────────────────
   function buildDebag(prods: Production[], sid: string) {
