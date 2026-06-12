@@ -376,17 +376,12 @@ function CaptureScreen() {
         </div>
         <div className="flex-1 min-w-0">
           <h1 className="font-semibold text-[20px] text-text leading-tight">{meta.name}</h1>
-          <p className="text-[11px] text-text-muted capitalize mt-0.5">{shift} shift · {format(parseISO(dateParam + 'T12:00:00'), 'd MMM yyyy')}</p>
+          <p className="text-[11px] text-text-muted mt-0.5 truncate">
+            <span className="capitalize">{shift} shift</span> · {format(parseISO(dateParam + 'T12:00:00'), 'd MMM')}
+            {opNames.length ? <> · {opNames.join(', ')}</> : null}
+          </p>
         </div>
         <span className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 ${statusColor}`}>{statusLabel}</span>
-      </div>
-
-      {/* Autofilled header card */}
-      <div className="mx-4 mb-2 px-4 py-3 bg-white border border-stone-200 rounded-xl flex flex-wrap items-center gap-x-4 gap-y-1.5 flex-shrink-0">
-        <span className="flex items-center gap-1.5 text-[12px] text-text-muted font-mono"><Users size={12} />{opNames.join(', ') || '—'}</span>
-        {assignment.variant    && <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-stone-50 border border-stone-100">{assignment.variant}</span>}
-        {assignment.lot_number && <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-stone-50 border border-stone-100">Lot {assignment.lot_number}</span>}
-        {verifiedOp && <span className="ml-auto flex items-center gap-1 text-[11px] text-ok"><CheckCircle2 size={12} />{verifiedOp.display_name || verifiedOp.name}</span>}
       </div>
 
       {/* Mass balance meter */}
