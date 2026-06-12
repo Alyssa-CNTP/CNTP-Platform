@@ -14,7 +14,7 @@ import { INP } from '@/components/production/shared/ui'
 
 const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
 
-export function RaiseJobCardForm({ onDone }: { onDone?: () => void }) {
+export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => void; initialWorkflow?: 'breakdown' | 'planned' }) {
   const { ui, actions, derived } = useMaintenanceContext()
   const { isProduction, p } = useAuth()
   const { nj, setNj, saving, setPopup } = ui
@@ -22,6 +22,14 @@ export function RaiseJobCardForm({ onDone }: { onDone?: () => void }) {
   const fRef = useRef<HTMLInputElement>(null)
   const canRaiseBreakdown = isProduction || p('can_raise_breakdown')
   const isBd = nj.workflow === 'breakdown'
+
+  // Open straight into the requested mode (Report Breakdown vs New Job Card).
+  useEffect(() => {
+    if (initialWorkflow) {
+      const wf = initialWorkflow === 'breakdown' && !canRaiseBreakdown ? 'planned' : initialWorkflow
+      setNj(prev => ({ ...prev, workflow: wf, type: [] }))
+    }
+  }, [initialWorkflow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // If the user can't raise breakdowns, never leave the form on the breakdown tab.
   useEffect(() => {
