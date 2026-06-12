@@ -43,24 +43,17 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
 
   return (
     <div className={`card p-4 ${isBd ? 'border-err/40' : ''}`}>
-      <div className="text-sm font-semibold text-text mb-3">Raise Job Card</div>
+      {/* The breakdown-vs-planned choice is made BEFORE this form opens (the
+          Report Breakdown / New Job Card buttons) — shown here as a fixed mode,
+          not a second selector. */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="text-sm font-semibold text-text">Raise Job Card</div>
+        <span className={`badge ${isBd ? 'badge-err' : 'badge-info'}`}>{isBd ? 'BREAKDOWN — URGENT' : 'SCHEDULED / PLANNED'}</span>
+      </div>
 
-      {canRaiseBreakdown ? (
-        <div className="flex gap-2 mb-3">
-          <button
-            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold ${isBd ? 'bg-err text-white' : 'bg-surface-dim text-text-muted hover:bg-surface-rule'}`}
-            onClick={() => setNj(p => ({ ...p, workflow: 'breakdown', type: [] }))}>
-            Breakdown — Urgent
-          </button>
-          <button
-            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold ${!isBd ? 'bg-info text-white' : 'bg-surface-dim text-text-muted hover:bg-surface-rule'}`}
-            onClick={() => setNj(p => ({ ...p, workflow: 'planned' }))}>
-            Scheduled / Planned
-          </button>
-        </div>
-      ) : (
+      {initialWorkflow === 'breakdown' && !canRaiseBreakdown && (
         <div className="rounded-lg bg-surface-dim border border-surface-rule p-2.5 mb-3 text-[12px] text-text-muted">
-          Breakdowns can only be raised by Production — contact the maintenance manager. This will be raised as a scheduled / planned job card.
+          Breakdowns can only be raised by Production — contact the maintenance manager. This will be raised as a scheduled / planned job card instead.
         </div>
       )}
 
