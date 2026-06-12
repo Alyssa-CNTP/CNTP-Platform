@@ -5,7 +5,7 @@ import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
-  ClipboardList, PenLine, Save, Sparkles,
+  ClipboardList, PenLine, Save, Sparkles, Info, Plus,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -88,7 +88,8 @@ function CaptureScreen() {
       }
 
       const { data: sess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift).maybeSingle()
+        .select('id,status,draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle()
       const aVariant = (assign as any)?.variant ?? 'Conventional'
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data
@@ -341,6 +342,25 @@ function CaptureScreen() {
     setTab('production')
   }
 
+  // After a session is locked, start a fresh session for the next variant/grade.
+  async function startNewProduction() {
+    const aV = assignment?.variant ?? 'Conventional'
+    const aL = assignment?.lot_number ?? ''
+    const { data: row } = await getDb().schema('production').from('prod_sessions').insert({
+      section_id: sectionId, date: dateParam, shift, status: 'draft',
+      operator_names: opNames.length ? opNames : null,
+      lot_number: aL || null, variant: aV || null,
+      production_orders: assignment?.production_orders ?? null, created_by: user?.id ?? null,
+    } as any).select('id').maybeSingle()
+    if (row) {
+      setSessionId((row as any).id)
+      setStatus('draft')
+      setProductions([emptyProduction(aV, aL)])
+      setActiveIdx(0)
+      setTab('production')
+    }
+  }
+
   const statusLabel = status === 'approved' ? 'Signed off' : status === 'submitted' ? 'Awaiting sign-off' : status === 'draft' ? 'Draft' : 'New'
   const statusColor = status === 'approved' ? 'bg-ok/10 text-ok' : status === 'submitted' ? 'bg-info/10 text-info' : status === 'draft' ? 'bg-warn/10 text-warn' : 'bg-stone-100 text-stone-500'
 
@@ -408,6 +428,22 @@ function CaptureScreen() {
         <div className="px-4 py-5 max-w-[800px] space-y-5">
           {tab === 'production' && active && (
             <>
+              {locked ? (
+                <div className="bg-ok/5 border border-ok/30 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This production is signed off &amp; locked.</div>
+                  <p className="text-[12px] text-text-muted">To capture another variant or grade on this line, start a new production — same steps as before.</p>
+                  <button onClick={startNewProduction}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
+                    <Plus size={16} /> Start new production
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
+                  <Info size={14} className="shrink-0 mt-0.5" />
+                  <span><strong>Debagging</strong> = what goes in. <strong>Bagging</strong> = what comes out (each bag prints a barcode). Totals add up for you.</span>
+                </div>
+              )}
+
               {/* Production switcher — a shift can run several productions / variants */}
               <div className="flex items-center gap-2 flex-wrap">
                 {productions.map((p, i) => (
@@ -494,6 +530,12 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
 
   return (
     <div className="space-y-5">
+      {(status === 'new' || status === 'draft') && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
+          <Info size={14} className="shrink-0 mt-0.5" />
+          <span>Check your totals below, then sign your name and tap submit. Your supervisor approves and locks it after.</span>
+        </div>
+      )}
       {/* Mass balance summary */}
       <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
         <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Mass balance</span>
