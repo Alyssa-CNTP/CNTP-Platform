@@ -15,7 +15,7 @@ import { format, parseISO, formatDistanceToNow } from 'date-fns'
 import {
   Search, X, Package, Printer, ArrowRight, Clock, ChevronRight,
   Filter, Activity, BarChart3, Layers, AlertTriangle, CheckCircle2,
-  Loader2, Eye, Scan, TrendingUp, MapPin, History, Database,
+  Loader2, Eye, Scan, TrendingUp, MapPin, History, Database, Calendar,
 } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -860,70 +860,33 @@ function FiltersStrip({
         )}
       </div>
 
-      {/* Chips row */}
-      <div className="flex items-end gap-2 flex-wrap">
+      {/* Section pills + date (status & variant live in the KPI tiles above) */}
+      <div className="flex items-center gap-2 flex-wrap">
         {!isOperator && (
-          <div className="flex flex-col gap-1 min-w-[120px]">
-            <label className="text-[9px] font-semibold text-stone-400 uppercase tracking-wide">Section</label>
-            <select
-              value={filters.section}
-              onChange={e => onChange({ section: e.target.value })}
-              className="px-3 py-2 rounded-xl border border-stone-200 text-[12px] outline-none bg-white focus:border-stone-400"
-            >
-              <option value="all">All sections</option>
-              {SECTIONS_LIST.map(s => (
-                <option key={s} value={s}>{SECTION_DISPLAY[s] ?? s}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-semibold text-stone-400 uppercase tracking-wide">From date</label>
-          <input
-            type="date"
-            value={filters.date}
-            onChange={e => onChange({ date: e.target.value })}
-            className="px-3 py-2 rounded-xl border border-stone-200 text-[12px] outline-none bg-white focus:border-stone-400"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1 min-w-[110px]">
-          <label className="text-[9px] font-semibold text-stone-400 uppercase tracking-wide">Status</label>
-          <select
-            value={filters.status}
-            onChange={e => onChange({ status: e.target.value as Filters['status'] })}
-            className="px-3 py-2 rounded-xl border border-stone-200 text-[12px] outline-none bg-white focus:border-stone-400"
-          >
-            <option value="all">All status</option>
-            <option value="on_floor">On floor</option>
-            <option value="consumed">Consumed</option>
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-1 min-w-[140px]">
-          <label className="text-[9px] font-semibold text-stone-400 uppercase tracking-wide">Variant</label>
-          <select
-            value={filters.variant}
-            onChange={e => onChange({ variant: e.target.value })}
-            className="px-3 py-2 rounded-xl border border-stone-200 text-[12px] outline-none bg-white focus:border-stone-400"
-          >
-            <option value="all">All variants</option>
-            {VARIANTS.map(v => (
-              <option key={v} value={v}>{VARIANT_PILL[v]?.label ?? v} — {v}</option>
-            ))}
-          </select>
-        </div>
-
-        {hasFilters && (
-          <div className="flex items-end pb-0.5">
-            <button
-              onClick={onClear}
-              className="flex items-center gap-1 px-3 py-2 rounded-xl border border-stone-200 text-[12px] text-stone-500 hover:bg-stone-50 transition-colors"
-            >
-              <X size={11} /> Clear
+          <>
+            <button onClick={() => onChange({ section: 'all' })}
+              className={`px-3 py-1.5 rounded-full text-[12px] font-medium border transition-colors ${filters.section === 'all' ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}>
+              All sections
             </button>
-          </div>
+            {SECTIONS_LIST.map(s => (
+              <button key={s} onClick={() => onChange({ section: filters.section === s ? 'all' : s })}
+                className={`px-3 py-1.5 rounded-full text-[12px] font-medium border transition-colors ${filters.section === s ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}>
+                {SECTION_DISPLAY[s] ?? s}
+              </button>
+            ))}
+            <span className="w-px h-5 bg-stone-200 mx-1" />
+          </>
+        )}
+        <div className="flex items-center gap-1.5">
+          <Calendar size={13} className="text-stone-400" />
+          <input type="date" value={filters.date} onChange={e => onChange({ date: e.target.value })}
+            className="px-2.5 py-1.5 rounded-full border border-stone-200 text-[12px] outline-none bg-white focus:border-brand" />
+        </div>
+        {hasFilters && (
+          <button onClick={onClear}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-stone-200 text-[12px] text-stone-500 hover:bg-stone-50 transition-colors ml-auto">
+            <X size={11} /> Clear
+          </button>
         )}
       </div>
     </div>
