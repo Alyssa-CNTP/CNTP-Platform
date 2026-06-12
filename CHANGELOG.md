@@ -5,6 +5,93 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 5: UI ↔ server wiring + interactive grids)
+
+Connected the Phase 2 UI to the Phase 3 server routes so gating, roster routing, notifications and chat photos fire end-to-end, surfaced the real staff directory, and made the roster/planner/QC grids interactive.
+
+**Files changed:**
+- `lib/maintenance/useMaintenanceData.ts` — added `staff` (fetched from `/api/maintenance/staff`, TECHS fallback); repointed `createJC`→`POST /api/maintenance/job-cards` (Production-only breakdown gate + roster auto-route + notifications now fire; 403 surfaced), `allocate`→`POST …/[id]/assign` (carries `assigned_user_id`+name, pre-fills on-duty suggestion), `verifyCard`→`POST …/[id]/verify` (bounce-back notification fires); `addRoster`/`addSlot` persist `technician_user_id`, `saveAreaQc` persists `qc_user_id`; `addSlotFor` for click-to-add planner cells.
+- `lib/maintenance/types.ts` — `Staff` type; `technician_user_id` on `Roster`/`Slot`, `qc_user_id` on `AreaQc`, `size`/`mime` on chat attachments.
+- `components/maintenance/RaiseJobCardForm.tsx` — breakdown toggle gated on `isProduction || can_raise_breakdown` (UX layer over the API gate).
+- `components/maintenance/JobCardItem.tsx` — allocation picker uses real staff (name + user id) + on-duty pre-fill.
+- `components/maintenance/JobCardChat.tsx` — wired to the real chat backend: send/upload via the card-messages routes, photo thumbnails + upload spinner + tap-to-enlarge lightbox, @mentions resolve to real staff user-ids.
+- `app/(app)/maintenance/job-cards/[cardId]/page.tsx` — loads/sends chat via the card-messages API + photo upload; passes the staff directory in.
+- `app/(app)/maintenance/job-cards/page.tsx` — clickable status filter tiles; **interactive roster** (weekly view, "on duty now" highlight, staff-driven, drives breakdown routing), **click-to-add/remove planner cells**, inline staff-driven **QC area map**.
+- `supabase/migrations/20260612_001_maintenance_user_links.sql` — also adds `maintenance.tech_schedule.technician_user_id` (planner slots now reference a real user).
+
+---
+
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 2: frontend restructure & reskin)
+
+Reskinned the whole maintenance module to the app's design system and split the four in-page tabs into real sidebar routes; the workflow logic was moved verbatim (no behaviour change).
+
+**Files changed:**
+- `lib/maintenance/{types,constants,helpers,useMaintenanceData,roles}.ts` — NEW. Extracted the monolith: interfaces + `ChatMessage`; constants with a token-based `STATUS_STYLE` (replaces hex `STATUS_COLOR`); pure helpers (`calClass` replaces hex `calCol`); a `useMaintenanceData()` hook owning the single 11-table load + all ~20 mutations + derived selectors; `deriveMaintRole(useAuth())` (replaces the mock view-switcher).
+- `app/(app)/maintenance/layout.tsx` — NEW. `MaintenanceDataProvider` mounts the data hook once so all sub-routes share one load (preserves cross-tab optimistic updates).
+- `app/(app)/maintenance/{page,job-cards/page,job-cards/[cardId]/page,scheduled/page,stock/page}.tsx` — NEW. The four tabs split into routes; `page.tsx` is the dashboard landing.
+- `components/maintenance/{StatusBadge,Timer,RaiseJobCardForm,JobCardItem,JobCardChat}.tsx` — NEW. Extracted + reskinned `renderCard`/raise-form/badges/timer; `JobCardChat` is a WhatsApp-style fork of `axis/CommentThread` (bubbles, @mention autocomplete against `/api/maintenance/staff`, camera/gallery photo attach).
+- `components/layout/Sidebar.tsx` — single Maintenance row → four (Dashboard / Job Cards / Scheduled / Stock & Spares); active-state fixed so `/maintenance` only matches exactly.
+- `app/(app)/layout.tsx` — ROUTE_META titles for the three sub-routes.
+- IA: the Raise Job Card form moved out of the always-open top into a primary button + `BottomSheet`; board rows link to a `[cardId]` detail route; inline dark theme removed in favour of `.card`/tokens/`INP`/`.data-table`.
+
+---
+
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 4: analytics dashboard & AI analyst)
+
+A custom maintenance dashboard with the existing KPIs plus smart reliability analytics, recharts visuals, clickable drill-downs, and a Gemini AI analyst.
+
+**Files changed:**
+- `components/maintenance/MaintenanceDashboard.tsx` — NEW. Smart KPI strip (MTTR, reactive ratio, top downtime asset, chronic assets, critical spares, weekly compliance) + recharts visuals: MTTR trend, breakdown-vs-planned with % reactive line, downtime-by-machine Pareto, repeat-offender machines, technician workload, status pie, top spares, weekly/monthly compliance gauges. Clickable cards/bars open a drill-down modal listing the underlying job cards. Builds the compact aggregate blob for the AI analyst.
+- `components/maintenance/AiAnalystPanel.tsx` — NEW. Posts the aggregates to the analyst API, renders summary/highlights/recommendations/watchlist, caches the daily insight in `sessionStorage`, and offers a follow-up chat over the data.
+- `app/api/maintenance/insights/route.ts` + `ask/route.ts` — NEW. Reuse `queryGeminiDetailed` (no new key) with a CMMS-reliability system prompt; send aggregates only (not raw rows) to keep tokens low.
+- `app/(app)/maintenance/page.tsx` — replaced the Phase 4 placeholder with the dashboard + AI panel.
+
+**Deploy note:** reuses the existing `GEMINI_API_KEY`; the panel reports gracefully if it's unset.
+
+---
+
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 3: assignment, notifications & job-card chat)
+
+Backend for roster-based assignment, multi-channel notifications, the manager bounce-back loop, and the WhatsApp-style in-card chat. (Frontend wiring of these endpoints lands with the Phase 2 UI.)
+
+**Files changed:**
+- `supabase/migrations/20260612_002_maintenance_notifications_chat.sql` — NEW. `maintenance.notifications` (per-user feed; in `maintenance` not `shared` so the service-role client can write on behalf of other users, while each user reads only their own via RLS), `maintenance.card_messages` (chat thread, separate from the immutable `job_card_logs`), and a private `maintenance-card-photos` storage bucket.
+- `lib/notifications/email.ts` — shared Office365 sender lifted from `notify-new-user` (`sendEmail` + `ctaEmail`), skips when SMTP unset.
+- `lib/notifications/urgent.ts` — provider-agnostic WhatsApp/SMS (Meta Cloud API or Twilio); **skips silently** when `WHATSAPP_PROVIDER` unset, so breakdowns ship without the provider decision.
+- `lib/notifications/index.ts` — `notify()` orchestrator: fans out to in-app + email + urgent, each best-effort.
+- `lib/notifications/recipients.ts` — resolves user ids → name/email/phone (auth.users + app_roles); `getMaintenanceManagerIds()`.
+- `lib/maintenance/roster.ts` — `resolveOnDutyTechnician()` for breakdown auto-routing.
+- `app/api/maintenance/job-cards/route.ts` — server-side create; **Production-only breakdown gate**, breakdown auto-routes to the on-duty technician (urgent notify) and informs the manager.
+- `app/api/maintenance/job-cards/[id]/assign/route.ts` — manager allocation (`can_allocate_jobs`), GET suggests the rostered tech, notifies the assignee.
+- `app/api/maintenance/job-cards/[id]/verify/route.ts` — verify; **not-satisfied bounces the card back to the technician** + notifies; satisfied closes the card and auto-deletes its chat photos.
+- `app/api/maintenance/job-cards/[id]/archive/route.ts` — optional SharePoint/OneDrive photo archive (manager-gated, uses the caller's Microsoft token, degrades gracefully).
+- `app/api/maintenance/card-messages/route.ts` + `upload/route.ts` — chat read (signed photo URLs) / post (fires @mention notifications) / photo upload to the private bucket.
+- `components/layout/NotificationBell.tsx` — merges the per-user `maintenance.notifications` feed (urgent flagged red, deep-links to the card, marks read on open).
+
+**Deploy notes:**
+- Run `20260612_002_maintenance_notifications_chat.sql` in Supabase (staging first). Confirm the `maintenance-card-photos` bucket exists (create it manually in Storage if the `storage.buckets` insert was blocked) and is **private**.
+- Optional env for urgent alerts: `WHATSAPP_PROVIDER` = `meta` (`WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE`) or `twilio` (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`). Left unset → urgent channel is skipped; in-app + email still fire.
+
+---
+
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 1: data & identity foundation)
+
+First of four phases overhauling the maintenance module (reskin + sidebar routes + real users/assignment + notifications + in-card chat + AI analytics dashboard). Phase 1 lays the identity/permission groundwork — no user-facing UI change yet.
+
+**Files changed:**
+- `lib/auth/permissions.ts` — added **Maintenance** department, roles (`maintenance_manager`, `maintenance_technician`, `maintenance_qc`, `maintenance_default`), permission keys (`can_raise_breakdown`, `can_raise_planned`, `can_allocate_jobs`, `can_qc_jobs`, `can_verify_jobs`), role defaults, and a Maintenance permission group for the user-admin toggle UI.
+- `lib/auth/context.tsx` — added `isMaintenance` and `canAccessMaintenance` (open to Maintenance + Management + Production, since Production raises breakdowns).
+- `app/(app)/layout.tsx` — added a `/maintenance` route guard (`IT`, `Maintenance`, `Production`, `Management`); one rule covers all sub-routes via the longest-prefix matcher.
+- `supabase/migrations/20260612_001_maintenance_user_links.sql` — NEW. Additive/idempotent: `maintenance.job_cards.assigned_user_id` + `raised_by_user_id`, `maintenance.duty_roster.technician_user_id`, `maintenance.area_qc.qc_user_id`, and `shared.app_roles.phone` (for urgent WhatsApp/SMS).
+- `app/api/maintenance/staff/route.ts` — NEW. GET lists Maintenance-dept users (name/email/phone/role) to replace the hardcoded `TECHS` array and drive @mention/assignment; POST onboards a maintenance user (manager-gated via `can_allocate_jobs`), reusing the `admin/users` invite/create flow but hardcoding the Maintenance department.
+
+**Deploy notes:**
+- Run `20260612_001_maintenance_user_links.sql` in the Supabase SQL editor (staging first) **before** deploying — the staff route reads the new `phone` column.
+- Schema baseline of the 11 existing `maintenance.*` tables was intentionally **not** hand-written (the `card_no` auto-generation trigger and exact defaults can't be reproduced safely without DB access); capture it later via a Supabase `pg_dump` if a reproducible baseline is needed.
+- The 5 legacy technician names stay as a frontend fallback; real users populate the new `*_user_id` columns as they are onboarded via **Maintenance → Staff**.
+
+---
+
 ## 2026-06-11 — Gustav (maintenance workflow v2: breakdown vs planned split, role views, planner, QC loop)
 
 **Files changed:**

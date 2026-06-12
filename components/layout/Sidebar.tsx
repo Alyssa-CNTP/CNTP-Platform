@@ -13,7 +13,8 @@ import {
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare,
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
-  Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search, Wrench,
+  Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
+  CalendarCheck,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -49,7 +50,10 @@ const NAV: NavItem[] = [
 
   // Maintenance — own section (not Quality). Open to all for now; per-user
   // permissions will be added as roles are defined.
-  { href: '/maintenance',               label: 'Maintenance',                icon: Wrench,          group: 'Maintenance' },
+  { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance' },
+  { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance' },
+  { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance' },
+  { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance' },
 
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },
   { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },
@@ -285,12 +289,13 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
                 const isActive =
                   pathname === href ||
                   (href === '/axis' && pathname.startsWith('/axis/projects')) ||
-                  (href !== '/management' && href !== '/sales' && href !== '/dashboard' && href !== '/axis' && href !== '/intelligence' && href !== '/production' && pathname.startsWith(href + '/')) ||
+                  (href !== '/management' && href !== '/sales' && href !== '/dashboard' && href !== '/axis' && href !== '/intelligence' && href !== '/production' && href !== '/maintenance' && pathname.startsWith(href + '/')) ||
                   (href === '/production/live' && pathname.startsWith('/production/live')) ||
                   (href === '/production/capture' && pathname.startsWith('/production/capture')) ||
                   (href === '/management'   && pathname === '/management') ||
                   (href === '/sales'        && pathname === '/sales') ||
-                  (href === '/intelligence' && pathname === '/intelligence')
+                  (href === '/intelligence' && pathname === '/intelligence') ||
+                  (href === '/maintenance'  && pathname === '/maintenance')
 
                 return (
                   <Link

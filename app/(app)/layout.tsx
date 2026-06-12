@@ -40,6 +40,10 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/live',      departments: ['IT','Production'] },
   { prefix: '/production',           departments: ['IT','Production'] },
 
+  // Maintenance — own module. Production needs access to raise breakdowns.
+  // One rule covers all sub-routes via the longest-prefix matcher.
+  { prefix: '/maintenance',      departments: ['IT','Maintenance','Production','Management'] },
+
   // Logistics (barcode-driven receiving, warehouse, dispatch)
   { prefix: '/logistics',        departments: ['IT','Production','Quality','Management'] },
 
@@ -93,6 +97,9 @@ const ROUTE_META: Record<string, {
 
   // Maintenance section — own module, separate from Quality
   '/maintenance':            { title: 'Maintenance',            variant: 'default',    chips: [{ label: 'FSSC 22000', color: 'green' }] },
+  '/maintenance/job-cards':  { title: 'Job Cards',              variant: 'default' },
+  '/maintenance/scheduled':  { title: 'Scheduled Maintenance',  variant: 'default' },
+  '/maintenance/stock':      { title: 'Stock & Spares',         variant: 'default' },
 
   // Management section
   '/management':                   { title: 'Management',           variant: 'management' },
