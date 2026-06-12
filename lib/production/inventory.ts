@@ -84,6 +84,22 @@ export function productionOrderItems(all: InventoryItem[], sectionId: string, va
 }
 
 /**
+ * Recent batch / lot numbers used at this section — for type-ahead suggestions
+ * so operators reuse an existing batch instead of re-typing (and risking typos).
+ */
+export async function recentBatches(sectionId: string): Promise<string[]> {
+  const { data } = await getDb().schema('production').from('bag_tags')
+    .select('lot_number').eq('section_id', sectionId).not('lot_number', 'is', null)
+    .order('created_at', { ascending: false }).limit(150)
+  const seen = new Set<string>(); const out: string[] = []
+  ;(data ?? []).forEach((r: any) => {
+    const l = (r.lot_number ?? '').trim()
+    if (l && l !== 'NOT TRACKED' && !seen.has(l)) { seen.add(l); out.push(l) }
+  })
+  return out.slice(0, 40)
+}
+
+/**
  * Next-step nudge — a gentle prompt about what's likely missing. Rule-based.
  */
 export function nextStepNudge(sectionId: string, hasByType: Record<string, number>): string | null {

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer } from 'lucide-react'
-import { suggestOutputs, loadAllInventory, filterInventory } from '@/lib/production/inventory'
+import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
 import { DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -22,14 +22,18 @@ const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text
  * Easy output picker: the few items that fit the section + variant up top
  * (AI-suggested), full 630-item master search only when the operator looks.
  */
-export function OutputPicker({ sectionId, variantWord, defaultBatch, onAdd, onClose }: {
+export function OutputPicker({ sectionId, variantWord, defaultBatch, batchHints = [], onAdd, onClose }: {
   sectionId: string
   variantWord: string
   defaultBatch: string
+  batchHints?: string[]
   onAdd: (p: PickedOutput) => void
   onClose: () => void
 }) {
   const suggestions = suggestOutputs(sectionId, variantWord)
+  const [dbBatches, setDbBatches] = useState<string[]>([])
+  useEffect(() => { recentBatches(sectionId).then(setDbBatches) }, [sectionId])
+  const batchOptions = Array.from(new Set([...batchHints, ...dbBatches].filter(Boolean)))
   const [query, setQuery]     = useState('')
   const [all, setAll]         = useState<InventoryItem[]>([])
   const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; isLeaf: boolean } | null>(null)
@@ -94,7 +98,10 @@ export function OutputPicker({ sectionId, variantWord, defaultBatch, onAdd, onCl
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch</label>
-                <input value={batch} onChange={e => setBatch(e.target.value)} className={INP} />
+                <input list="batch-options" value={batch} onChange={e => setBatch(e.target.value)} className={INP} placeholder="Type or pick a batch" />
+                <datalist id="batch-options">
+                  {batchOptions.map(b => <option key={b} value={b} />)}
+                </datalist>
               </div>
               {picked.isLeaf && (
                 <div className="space-y-1 col-span-2">

@@ -430,11 +430,11 @@ function CaptureScreen() {
             <>
               {locked ? (
                 <div className="bg-ok/5 border border-ok/30 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This production is signed off &amp; locked.</div>
-                  <p className="text-[12px] text-text-muted">To capture another variant or grade on this line, start a new production — same steps as before.</p>
+                  <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
+                  <p className="text-[12px] text-text-muted">To capture a different variant or grade on this line, create a <strong>new batch record</strong> — same steps as before. The locked record above stays saved.</p>
                   <button onClick={startNewProduction}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
-                    <Plus size={16} /> Start new production
+                    <Plus size={16} /> Create new batch record
                   </button>
                 </div>
               ) : (
