@@ -82,12 +82,16 @@ export default function JobCardDetailPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-[900px] mx-auto">
-      <Link href="/maintenance/job-cards" className="inline-flex items-center gap-1.5 text-[13px] text-text-muted hover:text-text mb-4"><ArrowLeft size={15} /> Back to job cards</Link>
+    <div className="p-4 sm:p-6 max-w-[900px] mx-auto space-y-4">
+      <div>
+        <Link href="/maintenance/job-cards" className="inline-flex items-center gap-1.5 text-[13px] text-text-muted hover:text-text transition"><ArrowLeft size={15} /> Back to job cards</Link>
+        <h1 className="text-2xl font-semibold text-text mt-2">{card.card_no}</h1>
+        <p className="text-sm text-text-muted mt-0.5">{card.area}{card.machine ? ' · ' + card.machine : ''} — raised by {card.raised_by}</p>
+      </div>
 
       <JobCardItem j={card} roles={cardRoles} />
 
-      <div className="card p-4 mt-4 h-[520px] flex flex-col">
+      <div className="rounded-xl border border-surface-rule bg-surface-card shadow-sm p-4 h-[520px] flex flex-col">
         <JobCardChat
           cardId={card.id}
           messages={messages}

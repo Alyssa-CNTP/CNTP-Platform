@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Plus } from 'lucide-react'
+import { Plus, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import BottomSheet from '@/components/ui/BottomSheet'
 import { useMaintenanceContext } from '../layout'
@@ -40,6 +40,9 @@ export default function JobCardsPage() {
   const [seg, setSeg] = useState(0) // 0 board, 1 planner, 2 roster & qc
   const [filt, setFilt] = useState('all')
   const [raiseOpen, setRaiseOpen] = useState(false)
+  const [raiseMode, setRaiseMode] = useState<'breakdown' | 'planned'>('planned')
+  const canRaiseBreakdown = auth.isProduction || auth.p('can_raise_breakdown')
+  const openRaise = (mode: 'breakdown' | 'planned') => { setRaiseMode(mode); setRaiseOpen(true) }
   const [plannerWeekStart, setPlannerWeekStart] = useState(() => {
     const d = new Date(); const day = d.getDay() || 7
     d.setDate(d.getDate() - day + 1); d.setHours(0, 0, 0, 0); return d
@@ -60,12 +63,37 @@ export default function JobCardsPage() {
 
   return (
     <div className="p-4 sm:p-6 max-w-[1400px] mx-auto">
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <h1 className="text-2xl font-semibold text-text">Job Cards</h1>
-        <button onClick={() => setRaiseOpen(true)} className="bg-brand text-white rounded-lg px-4 py-2.5 text-sm font-semibold inline-flex items-center gap-1.5">
-          <Plus size={16} /> Raise Job Card
-        </button>
+      <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-text">Job Cards</h1>
+          <p className="text-sm text-text-muted mt-1">Report breakdowns, raise planned work, and track every job to close-out.</p>
+        </div>
+        <div className="flex gap-2">
+          {canRaiseBreakdown && (
+            <button onClick={() => openRaise('breakdown')}
+              className="bg-err text-white rounded-lg px-4 py-2.5 text-sm font-semibold inline-flex items-center gap-1.5 shadow-sm hover:brightness-110">
+              <AlertTriangle size={16} /> Report Breakdown
+            </button>
+          )}
+          <button onClick={() => openRaise('planned')}
+            className="border border-surface-rule bg-surface-card text-text rounded-lg px-4 py-2.5 text-sm font-semibold inline-flex items-center gap-1.5 hover:border-text/30">
+            <Plus size={16} /> New Job Card
+          </button>
+        </div>
       </div>
+
+      {/* Urgent breakdown banner for Production — makes the action unmissable */}
+      {canRaiseBreakdown && (
+        <button onClick={() => openRaise('breakdown')}
+          className="w-full mb-5 flex items-center gap-3 text-left rounded-xl border border-err/20 bg-err/5 px-4 py-3 hover:bg-err/10 transition">
+          <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-err/10 text-err shrink-0"><AlertTriangle className="w-5 h-5" /></span>
+          <span className="flex-1">
+            <span className="block text-sm font-semibold text-text">Machine down? Report a breakdown</span>
+            <span className="block text-[12px] text-text-muted">Goes straight to the on-duty technician{derived.duty ? ` (${derived.duty})` : ''} — timer starts immediately.</span>
+          </span>
+          <span className="text-err text-sm font-semibold shrink-0">Report →</span>
+        </button>
+      )}
 
       {role.canManage && (
         <div className="flex gap-1.5 mb-4 flex-wrap">
@@ -79,30 +107,20 @@ export default function JobCardsPage() {
       {role.canManage && seg === 0 && (
         <div>
           {newCards.length > 0 && (
-            <div className="card p-4 mb-4 border border-warn/30">
-              <div className="text-sm font-semibold text-warn mb-2">New Job Cards — Awaiting Your Allocation ({newCards.length})</div>
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-warn" />
+                <h2 className="text-sm font-semibold text-text">Awaiting allocation</h2>
+                <span className="text-[11px] text-text-muted tabular-nums">{newCards.length}</span>
+              </div>
               <div className="stagger">{newCards.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
             </div>
           )}
 
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 mb-4">
-            {STATUSES.map(s => (
-              <button
-                key={s}
-                onClick={() => setFilt(f => (f === s ? 'all' : s))}
-                className={`card p-2.5 text-center min-h-[60px] transition-colors ${filt === s ? 'ring-2 ring-brand' : 'hover:bg-surface-dim'}`}>
-                <div className="text-xl font-semibold text-text tabular-nums">{cnt(s)}</div>
-                <div className="text-[10px] text-text-muted uppercase tracking-wide">{s.replace(/_/g, ' ')}</div>
-              </button>
-            ))}
-          </div>
-
-          <div className="flex gap-1.5 mb-4 flex-wrap">
-            {['all', ...STATUSES].map(f => (
-              <button key={f} className={SEG(filt === f)} onClick={() => setFilt(f)}>
-                {f === 'all' ? 'Active' : f.replace(/_/g, ' ').toUpperCase() + ' (' + cnt(f) + ')'}
-              </button>
-            ))}
+          {/* Light, clickable status filter */}
+          <div className="flex flex-wrap gap-1.5 mb-4">
+            <Chip active={filt === 'all'} onClick={() => setFilt('all')} label="Active" count={jcs.filter(j => j.status !== 'complete').length} />
+            {STATUSES.map(s => <Chip key={s} active={filt === s} onClick={() => setFilt(f => (f === s ? 'all' : s))} label={s.replace(/_/g, ' ')} count={cnt(s)} />)}
           </div>
 
           <div className="stagger">
@@ -306,10 +324,20 @@ export default function JobCardsPage() {
 
       <BottomSheet open={raiseOpen} onClose={() => setRaiseOpen(false)} center={false}>
         <div className="bg-surface-card rounded-t-2xl lg:rounded-2xl max-h-[90vh] overflow-y-auto p-1">
-          <RaiseJobCardForm onDone={() => setRaiseOpen(false)} />
+          <RaiseJobCardForm onDone={() => setRaiseOpen(false)} initialWorkflow={raiseMode} />
         </div>
       </BottomSheet>
     </div>
+  )
+}
+
+function Chip({ active, onClick, label, count }: { active: boolean; onClick: () => void; label: string; count: number }) {
+  return (
+    <button onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition ${active ? 'bg-brand text-white' : 'bg-surface-card border border-surface-rule text-text-muted hover:border-text/30'}`}>
+      <span className="capitalize">{label}</span>
+      <span className={`tabular-nums text-[11px] ${active ? 'text-white/80' : 'text-text-faint'}`}>{count}</span>
+    </button>
   )
 }
 

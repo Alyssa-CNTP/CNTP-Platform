@@ -123,7 +123,7 @@ export default function MaintenanceDashboard() {
       </div>
 
       {/* Charts — segmented to avoid overload */}
-      <div className="card p-4">
+      <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
         <div className="flex items-center gap-1 mb-4 bg-surface-dim rounded-lg p-1 w-fit">
           {([['reliability', 'Reliability'], ['people', 'People'], ['spares', 'Spares & compliance']] as [Tab, string][]).map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)}
@@ -223,7 +223,7 @@ function Kpi({ label, value, hint, tone, onClick }: { label: string; value: stri
   const dot = { ok: 'bg-ok', warn: 'bg-warn', err: 'bg-err', info: 'bg-info' }[tone]
   return (
     <button onClick={onClick} disabled={!onClick}
-      className={`card p-4 text-left ${onClick ? 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer' : 'cursor-default'} transition`}>
+      className={`rounded-xl border border-surface-rule bg-surface-card p-4 text-left transition ${onClick ? 'shadow-sm hover:border-text/25 hover:shadow-md cursor-pointer' : 'cursor-default'}`}>
       <div className="flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full ${dot}`} /><span className="text-[10px] uppercase tracking-wider text-text-muted">{label}</span></div>
       <div className="text-xl font-semibold text-text mt-1.5 truncate">{value}</div>
       <div className="text-[10px] text-text-faint mt-0.5">{hint}</div>
