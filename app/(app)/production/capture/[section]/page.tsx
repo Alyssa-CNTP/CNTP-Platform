@@ -439,38 +439,18 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {/* Production switcher — a shift can run several productions / variants */}
+              {/* This batch record's variant + destination + lot */}
               <div className="flex items-center gap-2 flex-wrap">
-                {productions.map((p, i) => (
-                  <button key={p.id} onClick={() => setActiveIdx(i)}
-                    className={`px-3 py-1.5 rounded-xl border text-[12px] font-medium transition-colors ${i === activeIdx ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
-                    P{i + 1} · {variantToShort(p.variant as any)}
-                  </button>
-                ))}
-                {!locked && (
-                  <button onClick={addProduction} className="px-3 py-1.5 rounded-xl border border-dashed border-stone-300 text-stone-500 text-[12px] font-medium hover:border-brand hover:text-brand">
-                    + Production
-                  </button>
-                )}
-              </div>
-
-              {/* Active production's variant + lot (editable — each production can differ) */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] text-text-muted">Production {activeIdx + 1}:</span>
                 <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
-                  className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
+                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
                   {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                 </select>
                 <select value={active.grade ?? 'A'} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
-                  className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
+                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
                   {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <input value={active.lot} disabled={locked} onChange={e => updateActiveMeta('lot', e.target.value)} placeholder="Lot / batch"
-                  className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand w-36" />
-                {multi && !locked && productions.length > 1 && (
-                  <button onClick={() => { setProductions(ps => ps.filter((_, i) => i !== activeIdx)); setActiveIdx(0) }}
-                    className="text-[11px] text-stone-400 hover:text-err">Remove</button>
-                )}
+                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand w-40" />
               </div>
 
               <SievingCapture
