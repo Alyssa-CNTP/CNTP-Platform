@@ -15,11 +15,16 @@ import {
   type SievingData,
 } from '@/components/production/capture/SievingCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
-import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort } from '@/lib/production/capture-config'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 
 type Tab = 'production' | 'cleaning' | 'signoff'
 const n = (v: string) => parseFloat(v) || 0
+
+// A shift can contain several productions, each its own variant/lot.
+interface Production { id: string; variant: string; lot: string; data: SievingData }
+const emptyProduction = (variant?: string | null, lot?: string | null): Production =>
+  ({ id: crypto.randomUUID(), variant: variant || 'Conventional', lot: lot || '', data: emptySievingData() })
 
 function CaptureScreen() {
   const params = useParams()
@@ -40,7 +45,8 @@ function CaptureScreen() {
 
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [status, setStatus]       = useState<'new' | 'draft' | 'submitted' | 'approved'>('new')
-  const [data, setData]           = useState<SievingData>(emptySievingData())
+  const [productions, setProductions] = useState<Production[]>([])
+  const [activeIdx, setActiveIdx]     = useState(0)
   const [tab, setTab]             = useState<Tab>('production')
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
@@ -49,8 +55,12 @@ function CaptureScreen() {
 
   // Serial counter, seeded from existing tags for this section+date
   const seqRef = useRef(0)
-  const dataRef = useRef<SievingData>(data); dataRef.current = data
+  const productionsRef = useRef<Production[]>(productions); productionsRef.current = productions
   const sessionRef = useRef<string | null>(null); sessionRef.current = sessionId
+
+  const active = productions[activeIdx]
+  const updateActiveData = (d: SievingData) =>
+    setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
   useEffect(() => {
@@ -78,11 +88,20 @@ function CaptureScreen() {
 
       const { data: sess } = await db.schema('production').from('prod_sessions')
         .select('id,status,draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift).maybeSingle()
+      const aVariant = (assign as any)?.variant ?? 'Conventional'
+      const aLot     = (assign as any)?.lot_number ?? ''
+      const d = (sess as any)?.draft_data
+      if (d?.productions?.length) {
+        setProductions(d.productions as Production[])
+      } else if (d?.outputs) {
+        // legacy single-production draft → wrap as one production
+        setProductions([{ id: crypto.randomUUID(), variant: aVariant, lot: aLot, data: d as SievingData }])
+      } else {
+        setProductions([emptyProduction(aVariant, aLot)])
+      }
       if (sess) {
         setSessionId((sess as any).id)
         setStatus((sess as any).status)
-        const d = (sess as any).draft_data
-        if (d && typeof d === 'object' && d.outputs) setData(d as SievingData)
       }
 
       // Seed serial counter from the highest existing NNN for section+date
@@ -107,7 +126,7 @@ function CaptureScreen() {
       const sid = sessionRef.current
       if (!sid) return
       getDb().schema('production').from('prod_sessions')
-        .update({ draft_data: dataRef.current as any, updated_at: new Date().toISOString() } as any)
+        .update({ draft_data: { productions: productionsRef.current } as any, updated_at: new Date().toISOString() } as any)
         .eq('id', sid).catch(() => {})
     }, 30_000)
     return () => clearInterval(t)
@@ -124,8 +143,8 @@ function CaptureScreen() {
       section_id: sectionId, date: dateParam, shift, status: 'draft',
       operator_names:    opNames.length ? opNames : null,
       supervisor_name:   verifiedOp?.role === 'production_supervisor' ? (verifiedOp.display_name || verifiedOp.name) : null,
-      lot_number:        assignment?.lot_number ?? null,
-      variant:           assignment?.variant ?? null,
+      lot_number:        productions[0]?.lot || assignment?.lot_number || null,
+      variant:           productions[0]?.variant || assignment?.variant || null,
       production_orders: assignment?.production_orders ?? null,
       created_by:        user?.id ?? null,
     } as any).select('id').single()
@@ -139,18 +158,20 @@ function CaptureScreen() {
   function buildDebag(sid: string) {
     const rows: any[] = []
     let bagNo = 1
-    data.spillage.forEach(r => {
-      if (n(r.kg) === 0) return
-      rows.push({ session_id: sid, bag_no: bagNo++, product_type: 'Bucket Elevator', kg_nett: n(r.kg), is_spillage: true })
-    })
-    data.debag.forEach(r => {
-      if (n(r.nett) === 0) return
-      rows.push({
-        session_id: sid, bag_no: bagNo++, bag_serial_no: r.bag_no || null, lot_number: r.lot || null,
-        product_type: '500kg Farm Bag', variant: assignment?.variant ?? null,
-        kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-        delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
-        is_spillage: false,
+    productions.forEach(prod => {
+      prod.data.spillage.forEach(r => {
+        if (n(r.kg) === 0) return
+        rows.push({ session_id: sid, bag_no: bagNo++, product_type: 'Bucket Elevator', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
+      })
+      prod.data.debag.forEach(r => {
+        if (n(r.nett) === 0) return
+        rows.push({
+          session_id: sid, bag_no: bagNo++, bag_serial_no: r.bag_no || null, lot_number: r.lot || prod.lot || null,
+          product_type: '500kg Farm Bag', variant: prod.variant,
+          kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
+          delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
+          is_spillage: false,
+        })
       })
     })
     return rows
@@ -158,26 +179,35 @@ function CaptureScreen() {
   function buildBag(sid: string) {
     const rows: any[] = []
     let bagNo = 1
-    data.outputs.forEach(b => {
-      if (n(b.weight) === 0) return
-      rows.push({
-        session_id: sid, bag_no: bagNo++, output_group: 'B',
-        bag_serial_no: b.serial, lot_number: b.batch || null, product_type: b.productType,
-        acumatica_id: b.code || null, variant: assignment?.variant ?? null,
-        kg: n(b.weight),
+    productions.forEach(prod => {
+      prod.data.outputs.forEach(b => {
+        if (n(b.weight) === 0) return
+        rows.push({
+          session_id: sid, bag_no: bagNo++, output_group: 'B',
+          bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
+          acumatica_id: b.code || null, variant: prod.variant,
+          kg: n(b.weight),
+        })
       })
     })
     return rows
+  }
+  // Session totals — summed across all productions.
+  function sessionTotals() {
+    return productions.reduce((acc, p) => {
+      const t = sievingTotals(p.data)
+      return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut }
+    }, { totalIn: 0, totalOut: 0 })
   }
 
   async function saveDraft() {
     setSaving(true); setError(null)
     try {
       const sid = await ensureSession()
-      const { totalIn, totalOut } = sievingTotals(data)
+      const { totalIn, totalOut } = sessionTotals()
 
       await getDb().schema('production').from('prod_sessions').update({
-        status: 'draft', draft_data: data as any, updated_at: new Date().toISOString(),
+        status: 'draft', draft_data: { productions } as any, updated_at: new Date().toISOString(),
       } as any).eq('id', sid)
 
       const debag = buildDebag(sid)
@@ -270,9 +300,23 @@ function CaptureScreen() {
   }
 
   const locked = status === 'approved'
-  const { totalIn, totalOut } = sievingTotals(data)
+  const at = active ? sievingTotals(active.data) : { totalIn: 0, totalOut: 0 }
+  const totalIn = at.totalIn, totalOut = at.totalOut
   const variance  = totalIn - totalOut
   const withinTol = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
+  const st = sessionTotals()
+  const stVariance = st.totalIn - st.totalOut
+  const stWithinTol = Math.abs(stVariance) <= MASS_BALANCE_TOLERANCE_KG
+  const multi = productions.length > 1
+
+  function updateActiveMeta(key: 'variant' | 'lot', val: string) {
+    setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
+  }
+  function addProduction() {
+    setProductions(ps => [...ps, emptyProduction(assignment?.variant, assignment?.lot_number)])
+    setActiveIdx(productions.length)
+    setTab('production')
+  }
 
   const statusLabel = status === 'approved' ? 'Signed off' : status === 'submitted' ? 'Awaiting sign-off' : status === 'draft' ? 'Draft' : 'New'
   const statusColor = status === 'approved' ? 'bg-ok/10 text-ok' : status === 'submitted' ? 'bg-info/10 text-info' : status === 'draft' ? 'bg-warn/10 text-warn' : 'bg-stone-100 text-stone-500'
@@ -305,6 +349,7 @@ function CaptureScreen() {
       {totalIn > 0 && (
         <div className={`mx-4 mb-2 px-4 py-2.5 rounded-xl border text-[12px] font-mono flex items-center gap-3 flex-shrink-0 ${withinTol ? 'bg-ok/5 border-ok/20 text-ok' : 'bg-warn/10 border-warn/30 text-warn font-bold'}`}>
           {!withinTol && <AlertTriangle size={13} />}
+          {multi && <span className="px-1.5 rounded bg-black/10">P{activeIdx + 1}</span>}
           <span>In {totalIn.toFixed(1)}</span><span className="opacity-40">·</span>
           <span>Out {totalOut.toFixed(1)}</span><span className="opacity-40">·</span>
           <span>Var {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg</span>
@@ -324,14 +369,45 @@ function CaptureScreen() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
         <div className="px-4 py-5 max-w-[800px] space-y-5">
-          {tab === 'production' && (
+          {tab === 'production' && active && (
             <>
+              {/* Production switcher — a shift can run several productions / variants */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {productions.map((p, i) => (
+                  <button key={p.id} onClick={() => setActiveIdx(i)}
+                    className={`px-3 py-1.5 rounded-xl border text-[12px] font-medium transition-colors ${i === activeIdx ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
+                    P{i + 1} · {variantToShort(p.variant as any)}
+                  </button>
+                ))}
+                {!locked && (
+                  <button onClick={addProduction} className="px-3 py-1.5 rounded-xl border border-dashed border-stone-300 text-stone-500 text-[12px] font-medium hover:border-brand hover:text-brand">
+                    + Production
+                  </button>
+                )}
+              </div>
+
+              {/* Active production's variant + lot (editable — each production can differ) */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-text-muted">Production {activeIdx + 1}:</span>
+                <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
+                  className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
+                  {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                </select>
+                <input value={active.lot} disabled={locked} onChange={e => updateActiveMeta('lot', e.target.value)} placeholder="Lot / batch"
+                  className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand w-36" />
+                {multi && !locked && productions.length > 1 && (
+                  <button onClick={() => { setProductions(ps => ps.filter((_, i) => i !== activeIdx)); setActiveIdx(0) }}
+                    className="text-[11px] text-stone-400 hover:text-err">Remove</button>
+                )}
+              </div>
+
               <SievingCapture
+                key={active.id}
                 assignment={assignment}
-                variantWord={assignment.variant ?? 'Conventional'}
+                variantWord={active.variant}
                 locked={locked}
-                value={data}
-                onChange={setData}
+                value={active.data}
+                onChange={updateActiveData}
                 genSerial={genSerial}
               />
               {!locked && (
@@ -355,7 +431,7 @@ function CaptureScreen() {
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-              variance={variance} withinTol={withinTol} totalIn={totalIn} totalOut={totalOut}
+              variance={stVariance} withinTol={stWithinTol} totalIn={st.totalIn} totalOut={st.totalOut}
               onSign={storeSignature} onSubmit={handleSubmit} onApprove={handleApprove} submitting={submitting}
             />
           )}
