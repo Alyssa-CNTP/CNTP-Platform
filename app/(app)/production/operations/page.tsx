@@ -5,8 +5,14 @@ import { useAuth } from '@/lib/auth/context'
 import { format, subMonths } from 'date-fns'
 import ProductionOrderMaintenance from '@/components/management/ProductionOrderMaintenance'
 import OperationalTrends          from '@/components/management/OperationalTrends'
+import { LiveCaptureKPIs }        from '@/components/production/LiveCaptureKPIs'
 
 const TABS = [
+  {
+    key:   'live',
+    label: 'Live Capture',
+    desc:  'Today’s capture pulse · per-section status, kg & bags from live data',
+  },
   {
     key:   'orders',
     label: 'Production Order Maintenance',
@@ -21,7 +27,7 @@ const TABS = [
 
 export default function ProductionOperationsPage() {
   const { canAccessManagement, isIT } = useAuth()
-  const [tab, setTab] = useState<'orders' | 'trends'>('orders')
+  const [tab, setTab] = useState<'live' | 'orders' | 'trends'>('live')
 
   const dateFrom = format(subMonths(new Date(), 6), 'yyyy-MM-dd')
   const dateTo   = format(new Date(), 'yyyy-MM-dd')
@@ -71,6 +77,7 @@ export default function ProductionOperationsPage() {
           </p>
         </div>
 
+        {tab === 'live'   && <LiveCaptureKPIs />}
         {tab === 'orders' && <ProductionOrderMaintenance />}
         {tab === 'trends' && <OperationalTrends dateFrom={dateFrom} dateTo={dateTo} />}
       </div>
