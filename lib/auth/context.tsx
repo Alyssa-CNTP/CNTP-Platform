@@ -45,6 +45,7 @@ interface AuthContextValue {
   isFullAdmin:   boolean   // senior_developer role — bypasses ALL permission checks
   isQuality:     boolean   // Quality department
   isProduction:  boolean   // Production department
+  isMaintenance: boolean   // Maintenance department
   isSales:       boolean   // Sales department
   isMarketing:   boolean   // Marketing department
   isManagement:  boolean   // Management department
@@ -57,6 +58,7 @@ interface AuthContextValue {
   canAccessSales:      boolean
   canAccessMarketing:  boolean
   canAccessManagement: boolean
+  canAccessMaintenance:boolean
   canAccessAdmin:      boolean
 
   userId: string | null
@@ -247,6 +249,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isFullAdmin  = role === 'senior_developer'
   const isQuality    = department === 'Quality'
   const isProduction = department === 'Production'
+  const isMaintenance= department === 'Maintenance'
   const isSales      = department === 'Sales'
   const isMarketing  = department === 'Marketing'
   const isManagement = department === 'Management'
@@ -261,6 +264,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const canAccessSales      = isFullAdmin || isIT || isSales      || p('can_access_sales')
   const canAccessMarketing  = isFullAdmin || isIT || isMarketing  || p('can_access_marketing')
   const canAccessManagement = isFullAdmin || isIT || isManagement || p('can_view_management')
+  // Maintenance is open to its own dept + Management view + Production (they raise breakdowns)
+  const canAccessMaintenance= isFullAdmin || isIT || isMaintenance || isManagement || isProduction
   const canAccessAdmin      = p('can_manage_users') || p('can_reset_passwords') || p('can_view_audit_log')
 
   const value: AuthContextValue = {
@@ -268,10 +273,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     displayName, initials, loading,
     p, signIn, signOut, changePassword,
     permissionsReady: resolved !== null,
-    isIT, isFullAdmin, isQuality, isProduction, isSales, isMarketing, isManagement,
+    isIT, isFullAdmin, isQuality, isProduction, isMaintenance, isSales, isMarketing, isManagement,
     isSupervisor, isFloor,
     canAccessQuality, canAccessProduction, canAccessSales,
-    canAccessMarketing, canAccessManagement, canAccessAdmin,
+    canAccessMarketing, canAccessManagement, canAccessMaintenance, canAccessAdmin,
     userId: user?.id ?? null,
   }
 

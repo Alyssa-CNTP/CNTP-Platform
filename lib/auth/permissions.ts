@@ -82,6 +82,12 @@ export type PermissionKey =
   // Ticketing & Workspace
   | 'can_assign_tickets'
   | 'can_access_workspace'
+  // Maintenance
+  | 'can_raise_breakdown'
+  | 'can_raise_planned'
+  | 'can_allocate_jobs'
+  | 'can_qc_jobs'
+  | 'can_verify_jobs'
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>
 
@@ -102,6 +108,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
+  'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
 ]
 
 // ─── Departments ──────────────────────────────────────────────────────────────
@@ -110,18 +117,20 @@ export type Department =
   | 'IT'
   | 'Quality'
   | 'Production'
+  | 'Maintenance'
   | 'Management'
   | 'Sales'
   | 'Marketing'
 
 export const ALL_DEPARTMENTS: Department[] = [
-  'IT', 'Quality', 'Production', 'Management', 'Sales', 'Marketing',
+  'IT', 'Quality', 'Production', 'Maintenance', 'Management', 'Sales', 'Marketing',
 ]
 
 export const DEPARTMENT_META: Record<Department, { label: string; desc: string; color: string }> = {
   IT:         { label: 'IT',         desc: 'Technology, infrastructure & development', color: 'bg-purple-100 text-purple-700 border-purple-200' },
   Quality:    { label: 'Quality',    desc: 'QMS, lab results, sieving, pasteuriser, granule', color: 'bg-ok/10 text-ok border-ok/20' },
   Production: { label: 'Production', desc: 'Operations, morning count, floor production', color: 'bg-warn/10 text-warn border-warn/20' },
+  Maintenance:{ label: 'Maintenance',desc: 'Job cards, breakdowns, scheduled maintenance & spares', color: 'bg-azure/10 text-azure border-azure/20' },
   Management: { label: 'Management', desc: 'Directors, analysts — read-only across platform', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   Sales:      { label: 'Sales',      desc: 'Sales module & research engine', color: 'bg-brand/10 text-brand border-brand/20' },
   Marketing:  { label: 'Marketing',  desc: 'Marketing module', color: 'bg-pink-50 text-pink-700 border-pink-200' },
@@ -154,6 +163,12 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'floor_operator',        label: 'Floor Operator',           desc: 'PIN-based tablet access only — no system login' },
     { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs' },
     { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Morning count and live capture history view only' },
+  ],
+  Maintenance: [
+    { role: 'maintenance_default',    label: 'Maintenance (Default)',    desc: 'All permissions off — toggle on what they need' },
+    { role: 'maintenance_manager',    label: 'Maintenance Manager',      desc: 'Allocates job cards, verifies completed work, raises planned & breakdown cards' },
+    { role: 'maintenance_technician', label: 'Maintenance Technician',   desc: 'Receives & executes assigned job cards' },
+    { role: 'maintenance_qc',         label: 'Maintenance QC',           desc: 'Performs post-maintenance QC checks' },
   ],
   Management: [
     { role: 'management_default', label: 'Management (Default)', desc: 'All permissions off — toggle on what they need' },
@@ -208,6 +223,19 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   warehouse_supervisor: {
     can_submit_count: true, can_view_ops_dashboard: true,
     can_view_live_history: true,
+  },
+
+  // ── Maintenance roles ──────────────────────────────────────────────────────
+  maintenance_manager: {
+    can_allocate_jobs: true, can_verify_jobs: true,
+    can_raise_planned: true, can_raise_breakdown: true,
+    can_assign_tickets: true,
+  },
+  maintenance_technician: {
+    can_raise_planned: true,
+  },
+  maintenance_qc: {
+    can_qc_jobs: true,
   },
 
   // ── IT — Co-Developer: everything except destructive system ops ────────────
@@ -394,6 +422,17 @@ export const PERMISSION_GROUPS: {
     permissions: [
       { key: 'can_assign_tickets',   label: 'Assign tickets to users (manager role)' },
       { key: 'can_access_workspace', label: 'Access personal workspace board' },
+    ],
+  },
+  {
+    group: 'Maintenance',
+    department: 'Maintenance',
+    permissions: [
+      { key: 'can_raise_breakdown', label: 'Raise urgent breakdown job cards' },
+      { key: 'can_raise_planned',   label: 'Raise planned / scheduled job cards' },
+      { key: 'can_allocate_jobs',   label: 'Allocate job cards to technicians' },
+      { key: 'can_qc_jobs',         label: 'Perform post-maintenance QC checks' },
+      { key: 'can_verify_jobs',     label: 'Verify completed work / bounce back' },
     ],
   },
 ]

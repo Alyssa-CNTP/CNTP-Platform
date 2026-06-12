@@ -40,6 +40,10 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/live',      departments: ['IT','Production'] },
   { prefix: '/production',           departments: ['IT','Production'] },
 
+  // Maintenance — own module. Production needs access to raise breakdowns.
+  // One rule covers all sub-routes via the longest-prefix matcher.
+  { prefix: '/maintenance',      departments: ['IT','Maintenance','Production','Management'] },
+
   // Logistics (barcode-driven receiving, warehouse, dispatch)
   { prefix: '/logistics',        departments: ['IT','Production','Quality','Management'] },
 
