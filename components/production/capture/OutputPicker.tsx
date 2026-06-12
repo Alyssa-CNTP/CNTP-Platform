@@ -84,7 +84,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             <span className="text-[12px] text-text-muted">{results.length} match{results.length === 1 ? '' : 'es'}</span>
             {results.map(it => (
               <PickRow key={it.inventory_id} active={picked?.code === it.inventory_id}
-                title={it.description ?? it.inventory_id} code={it.inventory_id}
+                title={it.description ?? it.inventory_id} code={it.inventory_id} highlight={query}
                 onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', batchTracked: /leaf/i.test(it.description ?? '') })} />
             ))}
           </>
@@ -119,15 +119,23 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   )
 }
 
-function PickRow({ active, title, code, match, onClick }: {
-  active: boolean; title: string; code: string | null; match?: number; onClick: () => void
+function hl(text: string, q?: string) {
+  if (!q || !q.trim()) return text
+  const i = text.toLowerCase().indexOf(q.trim().toLowerCase())
+  if (i < 0) return text
+  const end = i + q.trim().length
+  return <>{text.slice(0, i)}<mark className="bg-brand/15 text-brand rounded px-0.5">{text.slice(i, end)}</mark>{text.slice(end)}</>
+}
+
+function PickRow({ active, title, code, match, highlight, onClick }: {
+  active: boolean; title: string; code: string | null; match?: number; highlight?: string; onClick: () => void
 }) {
   return (
     <button onClick={onClick}
       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${active ? 'border-brand bg-brand/5' : 'border-stone-200 hover:border-brand/40'}`}>
       <div className="flex-1 min-w-0">
-        <div className="text-[13px] text-text truncate">{title}</div>
-        {code && <div className="font-mono text-[11px] text-text-muted">{code}</div>}
+        <div className="text-[13px] text-text truncate">{hl(title, highlight)}</div>
+        {code && <div className="font-mono text-[11px] text-text-muted">{hl(code, highlight)}</div>}
       </div>
       {match != null && <span className="text-[11px] px-2 py-0.5 rounded-full bg-ok/10 text-ok shrink-0">{match}%</span>}
     </button>
