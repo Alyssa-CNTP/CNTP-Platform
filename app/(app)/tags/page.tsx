@@ -464,8 +464,17 @@ function SerialLookup({ allTags, onSelect }: { allTags: BagTag[]; onSelect: (tag
       .select('*')
       .eq('serial_number', s)
       .limit(1)
-      .single()
-    setResult(data ? (data as BagTag) : 'not_found')
+      .maybeSingle()
+    const mapped = data ? ({
+      ...(data as any),
+      id: (data as any).serial_number,
+      section_name: SECTION_DISPLAY[(data as any).section_id] ?? (data as any).section_id,
+      tag_date: ((data as any).created_at ?? '').slice(0, 10),
+      captured_at: (data as any).created_at,
+      prod_session_id: (data as any).session_id ?? '',
+      qr_payload: (data as any).serial_number,
+    } as BagTag) : null
+    setResult(mapped ?? 'not_found')
     setLoading(false)
   }, [allTags])
 
@@ -966,20 +975,29 @@ export default function TagsPage() {
       .schema('production')
       .from('bag_tags')
       .select('*')
-      .order('captured_at', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(500)
 
     // Operators see their section only
     if (isOperator && sectionId) q = q.eq('section_id', sectionId)
     if (!isOperator && filters.section !== 'all') q = q.eq('section_id', filters.section)
-    if (filters.date) q = q.gte('tag_date', filters.date)
+    if (filters.date) q = q.gte('created_at', filters.date)
     if (filters.status === 'on_floor')  q = q.is('consumed_at_section', null)
     if (filters.status === 'consumed')  q = q.not('consumed_at_section', 'is', null)
 
     const { data, error } = await q
     if (error) { console.error('bag_tags load error:', error); setLoading(false); return }
 
-    let rows = (data as BagTag[]) || []
+    // Map the current bag_tags schema onto the fields the UI expects.
+    let rows: BagTag[] = ((data as any[]) || []).map(r => ({
+      ...r,
+      id:              r.serial_number,
+      section_name:    SECTION_DISPLAY[r.section_id] ?? r.section_id,
+      tag_date:        (r.created_at ?? '').slice(0, 10),
+      captured_at:     r.created_at,
+      prod_session_id: r.session_id ?? '',
+      qr_payload:      r.serial_number,
+    }))
 
     // Client-side search
     if (filters.search) {
