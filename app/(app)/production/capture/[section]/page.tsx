@@ -57,6 +57,7 @@ function CaptureScreen() {
   const seqRef = useRef(0)
   const productionsRef = useRef<Production[]>(productions); productionsRef.current = productions
   const sessionRef = useRef<string | null>(null); sessionRef.current = sessionId
+  const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
 
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData) =>
@@ -102,6 +103,23 @@ function CaptureScreen() {
       if (sess) {
         setSessionId((sess as any).id)
         setStatus((sess as any).status)
+      } else if (assign) {
+        // Create the draft session immediately so autosave always has a target —
+        // nothing is lost if the inactivity timeout signs the operator out.
+        const ids = (assign as any).operator_ids ?? []
+        let opNm: string[] = []
+        if (ids.length) {
+          const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name').in('id', ids)
+          opNm = (ops as Operator[] ?? []).map(o => o.display_name || o.name)
+        }
+        const { data: row } = await db.schema('production').from('prod_sessions').insert({
+          section_id: sectionId, date: dateParam, shift, status: 'draft',
+          operator_names: opNm.length ? opNm : null,
+          lot_number: aLot || null, variant: aVariant || null,
+          production_orders: (assign as any).production_orders ?? null,
+          created_by: user?.id ?? null,
+        } as any).select('id').maybeSingle()
+        if (row) { setSessionId((row as any).id); setStatus('draft') }
       }
 
       // Seed serial counter from the highest existing NNN for section+date
@@ -120,15 +138,13 @@ function CaptureScreen() {
     load()
   }, [sectionId, dateParam, shift])
 
-  // ── Auto-save draft_data ─────────────────────────────────────────────────
+  // ── Auto-save every 20s — full persist (draft + structured rows) ─────────
   useEffect(() => {
     const t = setInterval(() => {
       const sid = sessionRef.current
-      if (!sid) return
-      getDb().schema('production').from('prod_sessions')
-        .update({ draft_data: { productions: productionsRef.current } as any, updated_at: new Date().toISOString() } as any)
-        .eq('id', sid).catch(() => {})
-    }, 30_000)
+      if (!sid || !persistRef.current) return
+      persistRef.current(productionsRef.current, sid).catch(() => {})
+    }, 20_000)
     return () => clearInterval(t)
   }, [])
 
@@ -155,10 +171,10 @@ function CaptureScreen() {
   }
 
   // ── Build structured rows from SievingData ───────────────────────────────
-  function buildDebag(sid: string) {
+  function buildDebag(prods: Production[], sid: string) {
     const rows: any[] = []
     let bagNo = 1
-    productions.forEach(prod => {
+    prods.forEach(prod => {
       prod.data.spillage.forEach(r => {
         if (n(r.kg) === 0) return
         rows.push({ session_id: sid, bag_no: bagNo++, product_type: 'Bucket Elevator', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
@@ -176,10 +192,10 @@ function CaptureScreen() {
     })
     return rows
   }
-  function buildBag(sid: string) {
+  function buildBag(prods: Production[], sid: string) {
     const rows: any[] = []
     let bagNo = 1
-    productions.forEach(prod => {
+    prods.forEach(prod => {
       prod.data.outputs.forEach(b => {
         if (n(b.weight) === 0) return
         rows.push({
@@ -193,44 +209,51 @@ function CaptureScreen() {
     return rows
   }
   // Session totals — summed across all productions.
-  function sessionTotals() {
-    return productions.reduce((acc, p) => {
+  function sessionTotals(prods: Production[]) {
+    return prods.reduce((acc, p) => {
       const t = sievingTotals(p.data)
       return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut }
     }, { totalIn: 0, totalOut: 0 })
   }
 
+  // Core persistence — writes draft_data + structured rows + mass balance.
+  // Used by the explicit Save, the 30s autosave, and submit, so prod_debagging /
+  // prod_bagging are always current and nothing is lost on the inactivity sign-out.
+  async function persist(prods: Production[], sid: string) {
+    const { totalIn, totalOut } = sessionTotals(prods)
+    const db = getDb()
+
+    await db.schema('production').from('prod_sessions').update({
+      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(),
+    } as any).eq('id', sid)
+
+    const debag = buildDebag(prods, sid)
+    await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
+    if (debag.length) await db.schema('production').from('prod_debagging').insert(debag as any)
+
+    const bag = buildBag(prods, sid)
+    await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
+    if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
+
+    await db.schema('production').from('prod_mass_balance').upsert({
+      session_id: sid, total_input_kg: totalIn, total_output_b_kg: totalOut,
+      total_output_c_kg: 0, total_output_d_kg: 0, calculated_at: new Date().toISOString(),
+    } as any, { onConflict: 'session_id' })
+
+    const serials = bag.map(b => b.bag_serial_no).filter(Boolean)
+    if (serials.length) {
+      await db.schema('production').from('bag_tags').update({ session_id: sid } as any).in('serial_number', serials)
+    }
+  }
+  persistRef.current = persist
+
   async function saveDraft() {
     setSaving(true); setError(null)
     try {
       const sid = await ensureSession()
-      const { totalIn, totalOut } = sessionTotals()
-
-      await getDb().schema('production').from('prod_sessions').update({
-        status: 'draft', draft_data: { productions } as any, updated_at: new Date().toISOString(),
-      } as any).eq('id', sid)
-
-      const debag = buildDebag(sid)
-      await getDb().schema('production').from('prod_debagging').delete().eq('session_id', sid)
-      if (debag.length) await getDb().schema('production').from('prod_debagging').insert(debag as any)
-
-      const bag = buildBag(sid)
-      await getDb().schema('production').from('prod_bagging').delete().eq('session_id', sid)
-      if (bag.length) await getDb().schema('production').from('prod_bagging').insert(bag as any)
-
-      await getDb().schema('production').from('prod_mass_balance').upsert({
-        session_id: sid, total_input_kg: totalIn, total_output_b_kg: totalOut,
-        total_output_c_kg: 0, total_output_d_kg: 0, calculated_at: new Date().toISOString(),
-      } as any, { onConflict: 'session_id' })
-
-      // Link tags created during capture to this session
-      const serials = bag.map(b => b.bag_serial_no).filter(Boolean)
-      if (serials.length) {
-        await getDb().schema('production').from('bag_tags')
-          .update({ session_id: sid } as any).in('serial_number', serials)
-      }
-
-      setStatus('draft'); setSaved(true); setTimeout(() => setSaved(false), 2500)
+      await persist(productions, sid)
+      setStatus(s => s === 'new' ? 'draft' : s)
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
     } catch (e: any) { setError(e.message) }
     setSaving(false)
   }
@@ -304,7 +327,7 @@ function CaptureScreen() {
   const totalIn = at.totalIn, totalOut = at.totalOut
   const variance  = totalIn - totalOut
   const withinTol = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
-  const st = sessionTotals()
+  const st = sessionTotals(productions)
   const stVariance = st.totalIn - st.totalOut
   const stWithinTol = Math.abs(stVariance) <= MASS_BALANCE_TOLERANCE_KG
   const multi = productions.length > 1
