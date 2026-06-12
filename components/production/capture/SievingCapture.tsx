@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Scale, AlertTriangle, Sparkles } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort } from '@/lib/production/capture-config'
-import { nextStepNudge } from '@/lib/production/inventory'
+import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
@@ -57,7 +57,16 @@ export function SievingCapture({
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
+  const [dbBatches, setDbBatches] = useState<string[]>([])
+  useEffect(() => { recentBatches('sieving').then(setDbBatches) }, [])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
+
+  const batchOptions = Array.from(new Set([
+    assignment.lot_number ?? '',
+    ...value.outputs.map(b => b.batch),
+    ...value.debag.map(r => r.lot),
+    ...dbBatches,
+  ].filter(Boolean) as string[]))
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
@@ -117,6 +126,7 @@ export function SievingCapture({
 
   return (
     <div className="space-y-4">
+      <datalist id="sv-batches">{batchOptions.map(b => <option key={b} value={b} />)}</datalist>
       <div className="flex gap-1 p-1 bg-stone-100 rounded-xl">
         {([['debag', 'Debagging (in)', Package], ['bag', 'Bagging (out)', PackageCheck]] as const).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)}
@@ -158,7 +168,7 @@ export function SievingCapture({
                     <div className="space-y-1"><label className={LBL}>Bag no.</label>
                       <input value={r.bag_no} disabled={locked} onChange={e => updateDebag(r.id, 'bag_no', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
-                      <input value={r.lot} disabled={locked} onChange={e => updateDebag(r.id, 'lot', e.target.value)} className={INP} /></div>
+                      <input list="sv-batches" value={r.lot} disabled={locked} onChange={e => updateDebag(r.id, 'lot', e.target.value)} className={INP} placeholder="Type or pick" /></div>
                     <div className="space-y-1"><label className={LBL}>Gross (kg)</label>
                       <input type="number" inputMode="decimal" value={r.gross} disabled={locked} onChange={e => updateDebag(r.id, 'gross', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
