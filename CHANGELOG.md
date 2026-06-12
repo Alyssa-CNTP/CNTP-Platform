@@ -5,6 +5,26 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Gustav (scheduled maintenance dashboard: readings capture, Excel data import, shift summaries)
+
+**Files changed:**
+- app/(app)/maintenance/page.tsx
+- Supabase staging migration: maintenance_readings_and_calibration (+ full Excel data import)
+
+**Changes:**
+- **Excel import (Maintenance_Database.xlsx → staging DB):** 124 IP readings, 122 diesel readings, 846 loadshedding log entries, 33 water meter readings, 241 boiler start log entries, 85 compressor/forklift run-hour readings, 187 calibration/verification assets — all historic values preserved for trends
+- New tables: `ip_readings`, `diesel_readings`, `loadshedding_log`, `water_readings`, `boiler_start_log`, `equipment_hours`, `equipment_config`, `calibration_assets`
+- **Scheduled Maintenance is now a dashboard** with five subtabs: Overview, Weekly, Monthly, Annual/Calibration, Readings & Trends
+- **Overview / Actions Needed:** one panel showing calibrations overdue or due ≤30 days (with DONE TODAY button), run-hour services due (compressor + 9 forklifts, with SERVICED TODAY and RAISE JOB CARD buttons), and all checklists outstanding for the current week/month with when they were last completed and by whom
+- **Checklist audit trail:** every task tick now stamps the person and timestamp; checklist cards show who completed them and when; all past periods are kept and queryable
+- **Fault → Job Card:** any checklist task flagged as a fault (or with a note) gets a "→ JOB CARD" button that raises a pre-filled planned job card into the normal workflow
+- **Readings & Trends:** friendly numeric capture (numeric keypad, previous value shown, usage auto-calculated like the Excel) for water meters, IP/paraffin, generator diesel (auto fuel estimate at 40.7 L/hr), loadshedding/power outages, compressor + forklift run-hours, boiler starts — each with inline trend charts
+- **Excel due-date formulas built in:** service due = `WORKDAY(reading_date, CEILING((interval − hours_since_service) / hours_per_workday))` exactly as the spreadsheet calculates it (interval and rate editable per equipment in `equipment_config`, default 350h/16h); calibration next-due = last done + interval days
+- **Shift summaries** in the maintenance manager board: pick a date and shift (Day 07:00–16:00 / Evening 16:00–01:00, defaults to the last ended shift) and see breakdowns raised, job cards raised/accepted/finished, and checklists worked during that shift — computed live from the recorded timestamps
+- Full calibration register (187 assets) with search, colour-coded days-left and one-tap "done today"
+
+---
+
 ## 2026-06-11 — Gustav (maintenance workflow v2: breakdown vs planned split, role views, planner, QC loop)
 
 **Files changed:**

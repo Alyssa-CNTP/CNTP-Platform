@@ -68,6 +68,14 @@ interface Completion { id:number; template_id:number; period_key:string; task_st
 interface AnnualItem { id:number; category:string; asset:string; serial_no:string; supplier:string; next_due:string|null; notes:string }
 interface SparePart { id:number; part_no:string; class:string; description:string; qty_new:number; qty_used:number }
 interface Offsite { id:number; item:string; sent_to:string; date_sent:string|null; status:string }
+interface IpReading { id:number; reading_date:string; flow_meter_l:number|null; tank_dip_l:number|null; fuel_received_l:number|null; cost_r:number|null; recorded_by:string }
+interface DieselReading { id:number; reading_date:string; run_hours:number|null; fuel_l:number|null; recorded_by:string }
+interface LsLog { id:number; log_date:string; stage:string; time_slot:string; run_hours:number|null; recorded_by:string }
+interface WaterReading { id:number; reading_date:string; main_meter:number|null; unit2_w1:number|null; unit2_w2:number|null; unit1:number|null; boiler:number|null; recorded_by:string }
+interface BoilerStart { id:number; log_date:string; switched_on_by:string; morning_shift:string; afternoon_shift:string }
+interface EqConfig { id:number; equipment:string; service_interval_hours:number; hours_per_workday:number; active:boolean }
+interface EqHours { id:number; equipment:string; reading_date:string; total_hours:number|null; hours_since_service:number|null; serviced:boolean; notes:string; recorded_by:string }
+interface CalAsset { id:number; serial_no:string; department:string; asset_name:string; last_done:string|null; interval_days:number; weekly_check:boolean; comment:string; active:boolean }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +103,16 @@ const fmtDT = (d: string|null) => (d ? fmtD(d)+' '+fmtT(d) : '—')
 const diffM = (a: string|null, b: string|null) => (a && b ? Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60000) : 0)
 const diffDays = (a: string|null, b: string|null) => (a && b ? Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000) : 0)
 const daysUntil = (d: string|null) => (d ? Math.ceil((new Date(d).getTime() - Date.now()) / 86400000) : 0)
+
+// Excel WORKDAY(): add N working days to a date, skipping Sat/Sun.
+// Service due = WORKDAY(reading_date, CEILING((interval − hours_since_service) / hours_per_workday))
+function workdayAdd(from: Date, days: number) {
+  const d = new Date(from)
+  let left = Math.max(0, Math.ceil(days))
+  while (left > 0) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) left-- }
+  return d
+}
+const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 
 function isoWeekKey(d = new Date()) {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
@@ -171,6 +189,21 @@ function Timer({ start }: { start: string|null }) {
   )
 }
 
+// Tiny SVG line chart for trends — no chart library needed
+function Spark({ pts, color = '#3b82f6', h = 46, labels }: { pts:number[]; color?:string; h?:number; labels?:[string,string] }) {
+  if (pts.length < 2) return <div style={{ fontSize:9, color:'#64748b', padding:'8px 0' }}>Not enough data yet</div>
+  const min = Math.min(...pts), max = Math.max(...pts), w = 200
+  const xy = pts.map((v, i) => `${(i / (pts.length - 1)) * w},${max === min ? h / 2 : h - ((v - min) / (max - min)) * (h - 8) - 4}`).join(' ')
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width:'100%', height:h, display:'block' }} preserveAspectRatio="none">
+        <polyline points={xy} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      </svg>
+      {labels && <div style={{ display:'flex', justifyContent:'space-between', fontSize:8, color:'#64748b' }}><span>{labels[0]}</span><span>{labels[1]}</span></div>}
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function MaintenancePage() {
@@ -196,6 +229,22 @@ export default function MaintenancePage() {
   const [annual, setAnnual] = useState<AnnualItem[]>([])
   const [stock, setStock] = useState<SparePart[]>([])
   const [offsite, setOffsite] = useState<Offsite[]>([])
+  const [ipReadings, setIpReadings] = useState<IpReading[]>([])
+  const [dieselReadings, setDieselReadings] = useState<DieselReading[]>([])
+  const [lsLogs, setLsLogs] = useState<LsLog[]>([])
+  const [waterReadings, setWaterReadings] = useState<WaterReading[]>([])
+  const [boilerStarts, setBoilerStarts] = useState<BoilerStart[]>([])
+  const [eqConfig, setEqConfig] = useState<EqConfig[]>([])
+  const [eqHours, setEqHours] = useState<EqHours[]>([])
+  const [calAssets, setCalAssets] = useState<CalAsset[]>([])
+  // readings entry forms + shift summary picker
+  const [rdForm, setRdForm] = useState<Record<string,string>>({})
+  const [calSearch, setCalSearch] = useState('')
+  const [shiftDate, setShiftDate] = useState(() => {
+    const d = new Date(); if (d.getHours() < 16) d.setDate(d.getDate() - 1)
+    return d.toISOString().slice(0, 10)
+  })
+  const [shiftSel, setShiftSel] = useState<'day'|'evening'>(() => (new Date().getHours() >= 16 || new Date().getHours() < 7 ? 'day' : 'evening'))
 
   const [nj, setNj] = useState({ workflow:'planned' as 'breakdown'|'planned', area:'', machine:'', type:[] as string[], desc:'', longDesc:'', raisedBy:'', photo:null as string|null, aiSug:'' })
   const [filt, setFilt] = useState('all')
@@ -227,7 +276,7 @@ export default function MaintenancePage() {
   const loadAll = useCallback(async () => {
     try {
       const m = db.schema('maintenance')
-      const [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off] = await Promise.all([
+      const [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal] = await Promise.all([
         m.from('job_cards').select('*').order('raised_at', { ascending:false }),
         m.from('job_card_logs').select('*').order('created_at'),
         m.from('job_card_spares').select('*').order('created_at', { ascending:false }),
@@ -235,17 +284,28 @@ export default function MaintenancePage() {
         m.from('area_qc').select('*'),
         m.from('tech_schedule').select('*').order('start_at'),
         m.from('checklist_templates').select('*').eq('active', true).order('sort_order'),
-        m.from('checklist_completions').select('*').in('period_key', [weekKey, moKey]),
+        m.from('checklist_completions').select('*').order('updated_at', { ascending:false }), // all periods — history of past checks
         m.from('annual_items').select('*').eq('active', true).order('next_due'),
         m.from('spare_parts').select('*').order('part_no'),
         m.from('offsite_equipment').select('*').is('returned_at', null).order('date_sent'),
+        m.from('ip_readings').select('*').order('reading_date'),
+        m.from('diesel_readings').select('*').order('reading_date'),
+        m.from('loadshedding_log').select('*').order('log_date', { ascending:false }).limit(60),
+        m.from('water_readings').select('*').order('reading_date'),
+        m.from('boiler_start_log').select('*').order('log_date', { ascending:false }).limit(14),
+        m.from('equipment_config').select('*').eq('active', true),
+        m.from('equipment_hours').select('*').order('reading_date'),
+        m.from('calibration_assets').select('*').eq('active', true),
       ])
-      const firstErr = [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off].find(r => r.error)
+      const firstErr = [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal].find(r => r.error)
       if (firstErr?.error) throw firstErr.error
       setJcs(jc.data ?? []); setLogs(lg.data ?? []); setSparesUsed(sp.data ?? [])
       setRoster(ro.data ?? []); setAreaQc(aq.data ?? []); setSlots(sl.data ?? [])
       setTemplates(tpl.data ?? []); setCompletions(comp.data ?? [])
       setAnnual(ann.data ?? []); setStock(stk.data ?? []); setOffsite(off.data ?? [])
+      setIpReadings(ipr.data ?? []); setDieselReadings(dsr.data ?? []); setLsLogs(lsl.data ?? [])
+      setWaterReadings(wtr.data ?? []); setBoilerStarts(bst.data ?? [])
+      setEqConfig(ecf.data ?? []); setEqHours(eqh.data ?? []); setCalAssets(cal.data ?? [])
       setError('')
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load maintenance data')
@@ -426,8 +486,10 @@ export default function MaintenancePage() {
 
   const toggleTask = (tpl: Template, ti: number) => {
     const period = tpl.frequency === 'weekly' ? weekKey : moKey
-    const states = { ...(getComp(tpl.id, period)?.task_states ?? {}) }
-    states[ti] = { ...(states[ti] ?? {}), done: !states[ti]?.done }
+    const states: Record<string, any> = { ...(getComp(tpl.id, period)?.task_states ?? {}) }
+    const nowDone = !states[ti]?.done
+    // stamp who ticked it and when — kept as the permanent record of the check
+    states[ti] = { ...(states[ti] ?? {}), done: nowDone, by: nowDone ? (actor || displayName || '') : states[ti]?.by, at: nowDone ? new Date().toISOString() : states[ti]?.at }
     saveComp(tpl, { task_states: states })
   }
   const setTaskField = (tpl: Template, ti: number, field: 'notes'|'fault', value: string|boolean) => {
@@ -441,6 +503,48 @@ export default function MaintenancePage() {
     setAnnual(p => p.map(a => (a.id === id ? { ...a, notes } : a)))
     const { error:err } = await db.schema('maintenance').from('annual_items').update({ notes }).eq('id', id)
     if (err) setPopup('Save failed: ' + err.message)
+  }
+
+  // ── Checklist fault → job card ──
+  const raiseFromChecklist = async (tpl: Template, task: string, notes: string) => {
+    const { data, error:err } = await db.schema('maintenance').from('job_cards').insert({
+      workflow:'planned', area: tpl.area, maint_types:['Repair'],
+      description: `${tpl.frequency === 'weekly' ? 'Weekly' : 'Monthly'} checklist fault: ${task}`,
+      long_desc: notes ? `Checklist note: ${notes}` : '',
+      raised_by: actor || displayName || 'Checklist', ai_suggestion: aiSuggest(task + ' ' + notes),
+    }).select().single()
+    if (err) { setPopup('Could not raise job card: ' + err.message); return }
+    setJcs(p => [data, ...p])
+    await addLog(data.id, 'event', 'raised', actor || displayName || 'Checklist',
+      `Raised automatically from ${tpl.area} ${tpl.frequency} checklist (${tpl.doc_ref}).`)
+    setPopup(`Job card ${data.card_no} raised for "${task}" (${tpl.area}).\nIt is now with the maintenance manager for allocation.`)
+  }
+
+  // ── Readings capture (usage/deltas computed from previous reading, like the Excel) ──
+  const saveReading = async (table: string, body: Record<string, any>, setter: (fn: (p: any[]) => any[]) => void, sortKey: string) => {
+    const { data, error:err } = await db.schema('maintenance').from(table)
+      .insert({ ...body, recorded_by: actor || displayName || '' }).select().single()
+    if (err) { setPopup('Could not save reading: ' + err.message); return false }
+    setter(p => [...p, data].sort((a, b) => String(a[sortKey]).localeCompare(String(b[sortKey]))))
+    return true
+  }
+
+  // ── Calibration: mark done today (next due auto-recomputed from interval) ──
+  const calDone = async (a: CalAsset) => {
+    const today = new Date().toISOString().slice(0, 10)
+    const comment = (a.comment ? a.comment + ' • ' : '') + `Done ${today} by ${actor || displayName || ''}`
+    setCalAssets(p => p.map(x => x.id === a.id ? { ...x, last_done: today, comment } : x))
+    const { error:err } = await db.schema('maintenance').from('calibration_assets')
+      .update({ last_done: today, comment }).eq('id', a.id)
+    if (err) setPopup('Save failed: ' + err.message)
+  }
+  // Equipment serviced today — resets the hours-since-service counter
+  const eqServiced = async (equipment: string, total: number|null) => {
+    const today = new Date().toISOString().slice(0, 10)
+    const body = { equipment, reading_date: today, total_hours: total, hours_since_service: 0, serviced: true, notes: 'Serviced', recorded_by: actor || displayName || '' }
+    const { data, error:err } = await db.schema('maintenance').from('equipment_hours').insert(body).select().single()
+    if (err) { setPopup('Save failed: ' + err.message); return }
+    setEqHours(p => [...p, data])
   }
 
   // ── Roster / area-QC / planner mutations ──
@@ -514,6 +618,70 @@ export default function MaintenancePage() {
   const techCounts = TECHS.map(t => ({ t, n: jcs.filter(j => j.assigned_to === t).length })).sort((a,b) => b.n - a.n)
   const areaCounts = Object.entries(jcs.reduce((m:Record<string,number>, j) => { m[j.area] = (m[j.area] ?? 0) + 1; return m }, {})).sort((a,b) => b[1] - a[1]).slice(0, 8)
   const reopens = jcs.reduce((s,j) => s + (j.reopen_count ?? 0), 0)
+
+  // ── Scheduled maintenance derived data ──
+  // Last completion of a checklist in any period (who did it, when)
+  const lastComp = (tplId: number) => completions
+    .filter(c => c.template_id === tplId && Object.values(c.task_states ?? {}).some((s: any) => s?.done))
+    .sort((a, b) => (b as any).updated_at?.localeCompare((a as any).updated_at) ?? 0)[0]
+
+  // Equipment run-hours: latest reading per machine + projected service due (Excel WORKDAY formula)
+  const eqLatest = eqConfig.map(cfg => {
+    const readings = eqHours.filter(h => h.equipment === cfg.equipment)
+    const latest = readings[readings.length - 1]
+    if (!latest || latest.hours_since_service == null) return { cfg, latest, due: null as Date|null, days: 9999 }
+    const due = workdayAdd(new Date(latest.reading_date), (cfg.service_interval_hours - latest.hours_since_service) / cfg.hours_per_workday)
+    return { cfg, latest, due, days: Math.ceil((due.getTime() - Date.now()) / 86400000) }
+  }).sort((a, b) => a.days - b.days)
+
+  // Calibration register with computed next-due
+  const calRows = calAssets.filter(a => !a.weekly_check).map(a => {
+    const next = a.last_done ? addDays(a.last_done, a.interval_days) : null
+    return { ...a, next, days: next ? Math.ceil((next.getTime() - Date.now()) / 86400000) : 9999 }
+  }).sort((a, b) => a.days - b.days)
+
+  // Water usage deltas (per meter, like the Excel) for trends
+  const usageSeries = (vals: (number|null)[]) => {
+    const out: number[] = []
+    for (let i = 1; i < vals.length; i++) {
+      const a = vals[i-1], b = vals[i]
+      if (a != null && b != null && b >= a) out.push(b - a)
+    }
+    return out
+  }
+  const waterUsage = {
+    main:   usageSeries(waterReadings.map(w => w.main_meter)),
+    unit1:  usageSeries(waterReadings.map(w => w.unit1)),
+    w1:     usageSeries(waterReadings.map(w => w.unit2_w1)),
+    w2:     usageSeries(waterReadings.map(w => w.unit2_w2)),
+    boiler: usageSeries(waterReadings.map(w => w.boiler)),
+  }
+  const ipUsage = usageSeries(ipReadings.map(r => r.flow_meter_l))
+  const lastOf = <T,>(arr: T[]) => arr[arr.length - 1]
+
+  // Checklists outstanding this period (for the Overview actions panel)
+  const outstandingChecklists = templates.map(t => {
+    const period = t.frequency === 'weekly' ? weekKey : moKey
+    const st = getComp(t.id, period)?.task_states ?? {}
+    const doneN = t.tasks.filter((_, i) => (st as any)[i]?.done).length
+    const last = lastComp(t.id)
+    return { t, doneN, total: t.tasks.length, last }
+  }).filter(x => x.doneN < x.total)
+
+  // ── Shift summary (07:00–16:00 day, 16:00–01:00 evening) ──
+  const shiftWindow = (() => {
+    const d = new Date(shiftDate + 'T00:00:00')
+    const s = new Date(d), e = new Date(d)
+    if (shiftSel === 'day') { s.setHours(7, 0, 0, 0); e.setHours(16, 0, 0, 0) }
+    else { s.setHours(16, 0, 0, 0); e.setDate(e.getDate() + 1); e.setHours(1, 0, 0, 0) }
+    return { s, e }
+  })()
+  const inShift = (ts: string|null) => ts != null && new Date(ts) >= shiftWindow.s && new Date(ts) < shiftWindow.e
+  const shiftRaised = jcs.filter(j => inShift(j.raised_at))
+  const shiftBreakdowns = shiftRaised.filter(j => j.workflow === 'breakdown')
+  const shiftCompleted = jcs.filter(j => inShift(j.completed_at) || inShift(j.verified_at))
+  const shiftAccepted = jcs.filter(j => inShift(j.accepted_at))
+  const shiftChecklists = completions.filter(c => inShift((c as any).updated_at))
 
   const TABS = ['🔧 Job Cards', '📅 Scheduled Maintenance', '📦 Stock & Spares', '📊 Analytics']
 
@@ -819,6 +987,39 @@ export default function MaintenancePage() {
             {/* ── MANAGER: BOARD ── */}
             {view === 'manager' && jcSub === 0 && (
               <div>
+                {/* Shift summary — what happened during each shift */}
+                <div style={{ ...card, borderColor:'#06b6d466' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:6 }}>
+                    <div style={{ ...ttl, marginBottom:0, color:'#06b6d4' }}>Shift Summary</div>
+                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                      <input style={{ ...inp, width:130 }} type="date" value={shiftDate} onChange={e => setShiftDate(e.target.value)} />
+                      <button style={sbtn(shiftSel === 'day' ? '#06b6d4' : brd)} onClick={() => setShiftSel('day')}>DAY 07:00–16:00</button>
+                      <button style={sbtn(shiftSel === 'evening' ? '#06b6d4' : brd)} onClick={() => setShiftSel('evening')}>EVENING 16:00–01:00</button>
+                    </div>
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))', gap:8, margin:'10px 0' }}>
+                    {[
+                      ['Breakdowns Raised', shiftBreakdowns.length, '#ef4444'],
+                      ['Job Cards Raised', shiftRaised.length, '#eab308'],
+                      ['Accepted / Started', shiftAccepted.length, '#3b82f6'],
+                      ['Finished', shiftCompleted.length, '#22c55e'],
+                      ['Checklists Worked', shiftChecklists.length, '#8b5cf6'],
+                    ].map(([l, n, c], i) => (
+                      <div key={i} style={{ background:pnl, borderRadius:6, padding:8, textAlign:'center' }}>
+                        <div style={{ fontSize:20, fontWeight:800, color:c as string }}>{n}</div>
+                        <div style={{ fontSize:7, color:muted, letterSpacing:1, textTransform:'uppercase' }}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {(shiftRaised.length > 0 || shiftCompleted.length > 0) ? (
+                    <div style={{ fontSize:10 }}>
+                      {shiftBreakdowns.map(j => <div key={'b'+j.id} style={{ marginBottom:2 }}><Badge color="#ef4444">BREAKDOWN</Badge> <strong style={{ color:acc }}>{j.card_no}</strong> {j.area} — {j.description} <span style={{ color:dim }}>({fmtT(j.raised_at)}, by {j.raised_by}{j.assigned_to ? ', → '+j.assigned_to : ''})</span></div>)}
+                      {shiftRaised.filter(j => j.workflow !== 'breakdown').map(j => <div key={'r'+j.id} style={{ marginBottom:2 }}><Badge color="#eab308">RAISED</Badge> <strong style={{ color:acc }}>{j.card_no}</strong> {j.area} — {j.description} <span style={{ color:dim }}>({fmtT(j.raised_at)}, by {j.raised_by})</span></div>)}
+                      {shiftCompleted.map(j => <div key={'c'+j.id} style={{ marginBottom:2 }}><Badge color="#22c55e">FINISHED</Badge> <strong style={{ color:acc }}>{j.card_no}</strong> {j.area} — {j.description} <span style={{ color:dim }}>({j.assigned_to ?? '—'}, {diffM(j.workflow === 'breakdown' ? j.raised_at : j.accepted_at, j.completed_at)} min)</span></div>)}
+                    </div>
+                  ) : <div style={{ fontSize:9, color:dim }}>Nothing recorded in this shift window.</div>}
+                </div>
+
                 {/* New job cards needing allocation — pops to the top */}
                 {newCards.length > 0 && (
                   <div style={{ ...card, borderColor:'#eab308', background:'#eab30808' }}>
@@ -1008,12 +1209,76 @@ export default function MaintenancePage() {
         {/* ══ TAB 1: SCHEDULED MAINTENANCE ══ */}
         {tab === 1 && (
           <div>
-            <div style={{ display:'flex', gap:3, marginBottom:14 }}>
-              {['Weekly','Monthly','Annual / Calibration'].map((t, i) => <button key={i} style={tabBtn(sub === i)} onClick={() => setSub(i)}>{t}</button>)}
+            <div style={{ display:'flex', gap:3, marginBottom:14, flexWrap:'wrap' }}>
+              {['📋 Overview','Weekly','Monthly','Annual / Calibration','📈 Readings & Trends'].map((t, i) => <button key={i} style={tabBtn(sub === i)} onClick={() => setSub(i)}>{t}</button>)}
             </div>
 
-            {(sub === 0 || sub === 1) && (() => {
-              const freq = sub === 0 ? 'weekly' : 'monthly'
+            {/* ── OVERVIEW: everything needing action, in one place ── */}
+            {sub === 0 && (
+              <div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:10, marginBottom:14 }}>
+                  {[
+                    [String(outstandingChecklists.filter(x => x.t.frequency === 'weekly').length), 'WEEKLY OUTSTANDING — ' + weekKey, '#ef4444'],
+                    [String(outstandingChecklists.filter(x => x.t.frequency === 'monthly').length), 'MONTHLY OUTSTANDING — ' + moKey, '#eab308'],
+                    [String(calRows.filter(c => c.days <= 0).length), 'CALIBRATIONS OVERDUE', '#ef4444'],
+                    [String(calRows.filter(c => c.days > 0 && c.days <= 30).length), 'CALIBRATIONS DUE ≤30D', '#f97316'],
+                    [String(eqLatest.filter(e => e.days <= 14).length), 'SERVICES DUE ≤14D (RUN-HRS)', '#3b82f6'],
+                  ].map(([v, l, c], i) => (
+                    <div key={i} style={{ ...card, textAlign:'center', marginBottom:0, padding:12 }}>
+                      <div style={{ fontSize:24, fontWeight:800, color:c as string }}>{v}</div>
+                      <div style={{ fontSize:7, color:muted, letterSpacing:1 }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Actions needed */}
+                <div style={{ ...card, borderColor:'#ef444466' }}>
+                  <div style={{ ...ttl, color:'#ef4444' }}>⚠ Actions Needed</div>
+                  {calRows.filter(c => c.days <= 30).map(c => (
+                    <div key={'cal'+c.id} style={{ background:calCol(c.days)+'12', border:'1px solid '+calCol(c.days)+'44', borderRadius:6, padding:'7px 10px', marginBottom:5, display:'flex', alignItems:'center', gap:8, fontSize:10, flexWrap:'wrap' }}>
+                      <Badge color={calCol(c.days)}>{calBadge(c.days)}</Badge>
+                      <div style={{ flex:1, minWidth:200 }}><strong>{c.asset_name}</strong> <span style={{ color:dim }}>({c.serial_no}{c.department ? ' • '+c.department : ''})</span> — {c.days <= 0 ? 'OVERDUE by '+Math.abs(c.days)+' days' : 'due in '+c.days+' days'} <span style={{ color:dim }}>• last done {fmtD(c.last_done)}</span></div>
+                      <button style={sbtn('#22c55e')} onClick={() => calDone(c)}>DONE TODAY</button>
+                      <button style={sbtn(brd)} onClick={() => setSub(3)}>REGISTER</button>
+                    </div>
+                  ))}
+                  {eqLatest.filter(e => e.days <= 14 && e.latest).map(e => (
+                    <div key={'eq'+e.cfg.id} style={{ background:calCol(e.days)+'12', border:'1px solid '+calCol(e.days)+'44', borderRadius:6, padding:'7px 10px', marginBottom:5, display:'flex', alignItems:'center', gap:8, fontSize:10, flexWrap:'wrap' }}>
+                      <Badge color={calCol(e.days)}>{e.days <= 0 ? 'SERVICE OVERDUE' : 'SERVICE DUE'}</Badge>
+                      <div style={{ flex:1, minWidth:200 }}><strong>{e.cfg.equipment}</strong> — {Math.round(e.latest!.hours_since_service!)} / {e.cfg.service_interval_hours} run-hrs since last service • projected due {fmtD(e.due!.toISOString())} <span style={{ color:dim }}>(reading {fmtD(e.latest!.reading_date)})</span></div>
+                      <button style={sbtn('#22c55e')} onClick={() => eqServiced(e.cfg.equipment, e.latest!.total_hours)}>SERVICED TODAY</button>
+                      <button style={sbtn('#3b82f6')} onClick={() => raiseFromChecklist({ id:0, frequency:'weekly', area: e.cfg.equipment, doc_ref:'Run-hours service', tasks:[], sort_order:0 }, `Service due — ${Math.round(e.latest!.hours_since_service!)} run-hours since last service`, '')}>RAISE JOB CARD</button>
+                    </div>
+                  ))}
+                  {calRows.filter(c => c.days <= 30).length === 0 && eqLatest.filter(e => e.days <= 14 && e.latest).length === 0 &&
+                    <div style={{ fontSize:10, color:'#22c55e' }}>✓ Nothing overdue — all calibrations and run-hour services are inside their windows.</div>}
+                </div>
+
+                {/* Outstanding checklists with last-done info */}
+                <div style={card}>
+                  <div style={ttl}>Checklists Outstanding This Period</div>
+                  <div style={{ overflowX:'auto' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:10 }}>
+                      <thead><tr>{['Checklist','Frequency','Progress','Last Completed','By','Open'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                      <tbody>{outstandingChecklists.map(({ t, doneN, total, last }) => (
+                        <tr key={t.id}>
+                          <td style={{ ...td, fontWeight:600 }}>{t.area} <span style={{ color:dim, fontSize:8 }}>{t.doc_ref}</span></td>
+                          <td style={td}><Badge color={t.frequency === 'weekly' ? '#3b82f6' : '#8b5cf6'}>{t.frequency.toUpperCase()}</Badge></td>
+                          <td style={{ ...td, fontWeight:700, color: doneN > 0 ? '#eab308' : '#ef4444' }}>{doneN}/{total}</td>
+                          <td style={td}>{last ? last.period_key : 'never'}</td>
+                          <td style={td}>{last?.completed_by || '—'}</td>
+                          <td style={td}><button style={sbtn()} onClick={() => { setSub(t.frequency === 'weekly' ? 1 : 2); setOpenCL(t.id) }}>OPEN</button></td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                    {outstandingChecklists.length === 0 && <div style={{ fontSize:10, color:'#22c55e', padding:8 }}>✓ All checklists completed for the current week and month.</div>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {(sub === 1 || sub === 2) && (() => {
+              const freq = sub === 1 ? 'weekly' : 'monthly'
               const period = freq === 'weekly' ? weekKey : moKey
               const list = templates.filter(t => t.frequency === freq)
               return (
@@ -1026,19 +1291,29 @@ export default function MaintenancePage() {
                   </div>
                   <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:10 }}>
                     {list.map(cl => {
-                      const st = getComp(cl.id, period)?.task_states ?? {}
-                      const doneN = cl.tasks.filter((_, i) => st[i]?.done).length
+                      const comp = getComp(cl.id, period)
+                      const st = comp?.task_states ?? {}
+                      const doneN = cl.tasks.filter((_, i) => (st as any)[i]?.done).length
                       const done = doneN === cl.tasks.length
                       const isOpen = openCL === cl.id
+                      const prev = lastComp(cl.id)
                       return (
                         <div key={cl.id} style={{ ...card, marginBottom:0, cursor:'pointer', borderColor: done ? '#22c55e66' : doneN > 0 ? '#eab30866' : '#ef444444' }} onClick={() => setOpenCL(isOpen ? null : cl.id)}>
                           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                            <div><div style={{ fontSize:12, fontWeight:700 }}>{cl.area}</div><div style={{ fontSize:8, color:dim }}>{cl.doc_ref} • {cl.tasks.length} tasks</div></div>
+                            <div>
+                              <div style={{ fontSize:12, fontWeight:700 }}>{cl.area}</div>
+                              <div style={{ fontSize:8, color:dim }}>{cl.doc_ref} • {cl.tasks.length} tasks</div>
+                              <div style={{ fontSize:8, color: prev ? muted : '#ef4444', marginTop:2 }}>
+                                {done && comp ? <>✓ Completed by <strong style={{ color:'#22c55e' }}>{comp.completed_by || '—'}</strong> ({fmtD((comp as any).updated_at)})</>
+                                 : prev ? <>Last: {prev.period_key} by <strong style={{ color:txt }}>{prev.completed_by || '—'}</strong></>
+                                 : 'Never completed in the system'}
+                              </div>
+                            </div>
                             <Badge color={done ? '#22c55e' : doneN > 0 ? '#eab308' : '#ef4444'}>{done ? 'DONE' : doneN > 0 ? doneN+'/'+cl.tasks.length : 'NOT STARTED'}</Badge>
                           </div>
                           {isOpen && <div style={{ marginTop:10, borderTop:'1px solid '+brd, paddingTop:8, maxHeight:400, overflowY:'auto' }} onClick={e => e.stopPropagation()}>
                             {cl.tasks.map((task, ti) => {
-                              const s = st[ti] ?? {}
+                              const s: any = (st as any)[ti] ?? {}
                               return (
                                 <div key={ti} style={{ marginBottom:6 }}>
                                   <div style={{ display:'flex', alignItems:'center', gap:6 }}>
@@ -1046,7 +1321,8 @@ export default function MaintenancePage() {
                                       onClick={() => toggleTask(cl, ti)}>
                                       {s.done && '✓'}
                                     </div>
-                                    <span style={{ fontSize:10, color: s.done ? '#22c55e' : txt }}>{task}</span>
+                                    <span style={{ fontSize:10, color: s.done ? '#22c55e' : txt, flex:1 }}>{task}</span>
+                                    {s.done && s.by && <span style={{ fontSize:7, color:dim, whiteSpace:'nowrap' }}>{s.by} {fmtT(s.at)}</span>}
                                   </div>
                                   <div style={{ display:'flex', gap:4, marginTop:2, marginLeft:22 }}>
                                     {freq === 'monthly' && (
@@ -1058,6 +1334,10 @@ export default function MaintenancePage() {
                                       value={drafts['t'+cl.id+'-'+ti] ?? s.notes ?? ''}
                                       onChange={e => setDrafts(p => ({ ...p, ['t'+cl.id+'-'+ti]: e.target.value }))}
                                       onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
+                                    {(s.fault || (drafts['t'+cl.id+'-'+ti] ?? s.notes)) && (
+                                      <button style={{ ...sbtn('#ef4444'), fontSize:7, whiteSpace:'nowrap' }} title="Raise a job card for this fault"
+                                        onClick={() => raiseFromChecklist(cl, task, drafts['t'+cl.id+'-'+ti] ?? s.notes ?? '')}>→ JOB CARD</button>
+                                    )}
                                   </div>
                                 </div>
                               )
@@ -1079,7 +1359,7 @@ export default function MaintenancePage() {
               )
             })()}
 
-            {sub === 2 && <div style={card}>
+            {sub === 3 && <div style={card}>
               <div style={ttl}>Annual / Calibration / Verification</div>
               <div style={{ fontSize:10, color:muted, marginBottom:12 }}>Boiler: 180 days warning. Others: 60, 30, 7, 1 day alerts. Email supplier directly.</div>
               {annualRows.filter(a => a.days <= 60).map(a => (
@@ -1110,7 +1390,239 @@ export default function MaintenancePage() {
                   ))}</tbody>
                 </table>
               </div>
+
+              {/* Full calibration register from the Excel — next due = last done + interval */}
+              <div style={{ ...ttl, marginTop:18 }}>Full Calibration &amp; Verification Register ({calRows.length} assets)</div>
+              <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+                <input style={{ ...inp, maxWidth:280 }} placeholder="Search asset / serial / department..." value={calSearch} onChange={e => setCalSearch(e.target.value)} />
+              </div>
+              <div style={{ overflowX:'auto', maxHeight:500, overflowY:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:10 }}>
+                  <thead><tr>{['Status','Asset','Serial','Department','Last Done','Interval','Next Due','Days','Action','Comment'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>{calRows
+                    .filter(c => !calSearch || (c.asset_name + ' ' + c.serial_no + ' ' + c.department).toLowerCase().includes(calSearch.toLowerCase()))
+                    .map(c => (
+                    <tr key={c.id} style={{ background: c.days <= 0 ? '#ef444410' : c.days <= 30 ? '#eab30808' : 'transparent' }}>
+                      <td style={td}><Badge color={calCol(c.days)}>{calBadge(c.days)}</Badge></td>
+                      <td style={{ ...td, fontWeight:600 }}>{c.asset_name}</td>
+                      <td style={{ ...td, fontFamily:'monospace', fontSize:8 }}>{c.serial_no || '—'}</td>
+                      <td style={td}>{c.department || '—'}</td>
+                      <td style={td}>{fmtD(c.last_done)}</td>
+                      <td style={td}>{c.interval_days}d</td>
+                      <td style={td}>{c.next ? fmtD(c.next.toISOString()) : '—'}</td>
+                      <td style={{ ...td, fontWeight:700, color:calCol(c.days) }}>{c.days === 9999 ? '—' : c.days}</td>
+                      <td style={td}><button style={sbtn('#22c55e')} onClick={() => calDone(c)}>DONE TODAY</button></td>
+                      <td style={{ ...td, fontSize:8, color:dim, maxWidth:160 }}>{c.comment || '—'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
             </div>}
+
+            {/* ── READINGS & TRENDS: friendly numeric capture + history ── */}
+            {sub === 4 && (
+              <div>
+                <div style={{ ...card, padding:10, fontSize:9, color:muted }}>
+                  Enter readings below — the previous value is shown next to each field and usage is calculated automatically (same formulas as the Excel database). All values are stored and trended. Recording as <strong style={{ color:txt }}>{actor || displayName}</strong>.
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(330px,1fr))', gap:14 }}>
+
+                  {/* Water meters */}
+                  <div style={card}>
+                    <div style={ttl}>💧 Water Meters (weekly)</div>
+                    {(() => { const last = lastOf(waterReadings); return (
+                      <div>
+                        <div style={{ fontSize:8, color:dim, marginBottom:6 }}>Last reading: {last ? fmtD(last.reading_date) : '—'}</div>
+                        {([['main_meter','Main Meter', last?.main_meter],['unit1','Unit 1', last?.unit1],['unit2_w1','Unit 2 W1', last?.unit2_w1],['unit2_w2','Unit 2 W2', last?.unit2_w2],['boiler','Boiler', last?.boiler]] as [string,string,number|null|undefined][]).map(([k, l, prev]) => (
+                          <div key={k} style={{ display:'flex', gap:6, alignItems:'center', marginBottom:4 }}>
+                            <span style={{ fontSize:9, width:74, color:muted }}>{l}</span>
+                            <input style={{ ...inp, flex:1 }} type="number" inputMode="decimal" placeholder={prev != null ? 'prev: '+prev : 'reading...'}
+                              value={rdForm['w'+k] ?? ''} onChange={e => setRdForm(p => ({ ...p, ['w'+k]: e.target.value }))} />
+                            <span style={{ fontSize:9, width:80, color: rdForm['w'+k] && prev != null ? (parseFloat(rdForm['w'+k]) >= prev ? '#22c55e' : '#ef4444') : dim }}>
+                              {rdForm['w'+k] && prev != null ? (parseFloat(rdForm['w'+k]) - prev).toFixed(1)+' used' : ''}
+                            </span>
+                          </div>
+                        ))}
+                        <button style={{ ...btn('#22c55e'), marginTop:4 }} onClick={async () => {
+                          const ok = await saveReading('water_readings', {
+                            reading_date: new Date().toISOString().slice(0,10),
+                            main_meter: rdForm['wmain_meter'] ? parseFloat(rdForm['wmain_meter']) : null,
+                            unit1: rdForm['wunit1'] ? parseFloat(rdForm['wunit1']) : null,
+                            unit2_w1: rdForm['wunit2_w1'] ? parseFloat(rdForm['wunit2_w1']) : null,
+                            unit2_w2: rdForm['wunit2_w2'] ? parseFloat(rdForm['wunit2_w2']) : null,
+                            boiler: rdForm['wboiler'] ? parseFloat(rdForm['wboiler']) : null,
+                          }, setWaterReadings, 'reading_date')
+                          if (ok) setRdForm(p => ({ ...p, wmain_meter:'', wunit1:'', wunit2_w1:'', wunit2_w2:'', wboiler:'' }))
+                        }}>SAVE WATER READINGS</button>
+                        <div style={{ marginTop:10 }}>
+                          <div style={{ fontSize:8, color:muted, letterSpacing:1 }}>MAIN METER WEEKLY USAGE (kL)</div>
+                          <Spark pts={waterUsage.main.slice(-26)} color="#3b82f6" labels={[fmtD(waterReadings[Math.max(0, waterReadings.length-26)]?.reading_date ?? null), fmtD(lastOf(waterReadings)?.reading_date ?? null)]} />
+                          <div style={{ fontSize:8, color:muted, letterSpacing:1, marginTop:4 }}>BOILER USAGE</div>
+                          <Spark pts={waterUsage.boiler.slice(-26)} color="#06b6d4" />
+                        </div>
+                      </div>
+                    )})()}
+                  </div>
+
+                  {/* IP usage */}
+                  <div style={card}>
+                    <div style={ttl}>🔥 IP (Paraffin) Usage</div>
+                    {(() => { const last = lastOf(ipReadings); return (
+                      <div>
+                        <div style={{ fontSize:8, color:dim, marginBottom:6 }}>Last: {last ? `${fmtD(last.reading_date)} — flow ${last.flow_meter_l} L, dip ${last.tank_dip_l ?? '—'} L` : '—'}</div>
+                        {([['flow','Flow Meter (L)', last?.flow_meter_l],['dip','Tank Dip (L)', last?.tank_dip_l],['recv','Fuel Received (L)', null],['cost','Cost (R)', null]] as [string,string,number|null|undefined][]).map(([k, l, prev]) => (
+                          <div key={k} style={{ display:'flex', gap:6, alignItems:'center', marginBottom:4 }}>
+                            <span style={{ fontSize:9, width:104, color:muted }}>{l}</span>
+                            <input style={{ ...inp, flex:1 }} type="number" inputMode="decimal" placeholder={prev != null ? 'prev: '+prev : '...'}
+                              value={rdForm['ip'+k] ?? ''} onChange={e => setRdForm(p => ({ ...p, ['ip'+k]: e.target.value }))} />
+                            {k === 'flow' && rdForm.ipflow && last?.flow_meter_l != null && <span style={{ fontSize:9, width:80, color:'#22c55e' }}>{(parseFloat(rdForm.ipflow) - last.flow_meter_l).toFixed(0)} L used</span>}
+                          </div>
+                        ))}
+                        <button style={{ ...btn('#22c55e'), marginTop:4 }} onClick={async () => {
+                          if (!rdForm.ipflow) { setPopup('Enter the flow meter reading.'); return }
+                          const ok = await saveReading('ip_readings', {
+                            reading_date: new Date().toISOString().slice(0,10),
+                            flow_meter_l: parseFloat(rdForm.ipflow),
+                            tank_dip_l: rdForm.ipdip ? parseFloat(rdForm.ipdip) : null,
+                            fuel_received_l: rdForm.iprecv ? parseFloat(rdForm.iprecv) : null,
+                            cost_r: rdForm.ipcost ? parseFloat(rdForm.ipcost) : null,
+                          }, setIpReadings, 'reading_date')
+                          if (ok) setRdForm(p => ({ ...p, ipflow:'', ipdip:'', iprecv:'', ipcost:'' }))
+                        }}>SAVE IP READING</button>
+                        <div style={{ marginTop:10 }}>
+                          <div style={{ fontSize:8, color:muted, letterSpacing:1 }}>WEEKLY IP USAGE (L)</div>
+                          <Spark pts={ipUsage.slice(-26)} color="#f59e0b" />
+                        </div>
+                      </div>
+                    )})()}
+                  </div>
+
+                  {/* Generator / diesel */}
+                  <div style={card}>
+                    <div style={ttl}>⚡ Generator / Diesel</div>
+                    {(() => { const last = lastOf(dieselReadings); return (
+                      <div>
+                        <div style={{ fontSize:8, color:dim, marginBottom:6 }}>Last: {last ? `${fmtD(last.reading_date)} — ${last.run_hours ?? 0} hrs, ${last.fuel_l ?? 0} L` : '—'}</div>
+                        <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:4 }}>
+                          <span style={{ fontSize:9, width:104, color:muted }}>Run Hours (week)</span>
+                          <input style={{ ...inp, flex:1 }} type="number" inputMode="decimal" value={rdForm.dhrs ?? ''} onChange={e => setRdForm(p => ({ ...p, dhrs: e.target.value }))} placeholder="0" />
+                          {rdForm.dhrs && <span style={{ fontSize:9, width:80, color:muted }}>≈ {(parseFloat(rdForm.dhrs) * 40.7).toFixed(0)} L</span>}
+                        </div>
+                        <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:4 }}>
+                          <span style={{ fontSize:9, width:104, color:muted }}>Fuel Used (L)</span>
+                          <input style={{ ...inp, flex:1 }} type="number" inputMode="decimal" value={rdForm.dfuel ?? ''} onChange={e => setRdForm(p => ({ ...p, dfuel: e.target.value }))} placeholder="auto from hours if blank" />
+                        </div>
+                        <button style={{ ...btn('#22c55e'), marginTop:4 }} onClick={async () => {
+                          const hrs = parseFloat(rdForm.dhrs || '0') || 0
+                          const ok = await saveReading('diesel_readings', {
+                            reading_date: new Date().toISOString().slice(0,10),
+                            run_hours: hrs, fuel_l: rdForm.dfuel ? parseFloat(rdForm.dfuel) : Math.round(hrs * 40.7 * 10) / 10,
+                          }, setDieselReadings, 'reading_date')
+                          if (ok) setRdForm(p => ({ ...p, dhrs:'', dfuel:'' }))
+                        }}>SAVE DIESEL READING</button>
+                        <div style={{ marginTop:10 }}>
+                          <div style={{ fontSize:8, color:muted, letterSpacing:1 }}>GENERATOR RUN HOURS / WEEK</div>
+                          <Spark pts={dieselReadings.slice(-26).map(r => r.run_hours ?? 0)} color="#ef4444" />
+                        </div>
+                      </div>
+                    )})()}
+                  </div>
+
+                  {/* Loadshedding / power outage log */}
+                  <div style={card}>
+                    <div style={ttl}>🔌 Loadshedding / Power Outage Log</div>
+                    <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'flex-end', marginBottom:8 }}>
+                      <div><label style={lb}>Date</label><input style={{ ...inp, width:120 }} type="date" value={rdForm.lsdate ?? new Date().toISOString().slice(0,10)} onChange={e => setRdForm(p => ({ ...p, lsdate: e.target.value }))} /></div>
+                      <div><label style={lb}>Stage</label><select style={{ ...inp, width:64 }} value={rdForm.lsstage ?? 'X'} onChange={e => setRdForm(p => ({ ...p, lsstage: e.target.value }))}>{['X','1','2','3','4','5','6'].map(s => <option key={s}>{s}</option>)}</select></div>
+                      <div><label style={lb}>Time Slot / Type</label><input style={{ ...inp, width:130 }} value={rdForm.lsslot ?? ''} onChange={e => setRdForm(p => ({ ...p, lsslot: e.target.value }))} placeholder="e.g. 18:00 - 20:30" /></div>
+                      <div><label style={lb}>Gen Hours</label><input style={{ ...inp, width:64 }} type="number" inputMode="decimal" value={rdForm.lshrs ?? ''} onChange={e => setRdForm(p => ({ ...p, lshrs: e.target.value }))} /></div>
+                      <button style={sbtn('#22c55e')} onClick={async () => {
+                        const ok = await saveReading('loadshedding_log', {
+                          log_date: rdForm.lsdate ?? new Date().toISOString().slice(0,10),
+                          stage: rdForm.lsstage ?? 'X', time_slot: rdForm.lsslot || 'No loadshedding',
+                          run_hours: rdForm.lshrs ? parseFloat(rdForm.lshrs) : null,
+                        }, setLsLogs as any, 'log_date')
+                        if (ok) setRdForm(p => ({ ...p, lsslot:'', lshrs:'' }))
+                      }}>+ LOG</button>
+                    </div>
+                    <div style={{ maxHeight:170, overflowY:'auto' }}>
+                      {lsLogs.slice(0, 14).map(l => (
+                        <div key={l.id} style={{ fontSize:9, display:'flex', gap:8, padding:'3px 8px', background:pnl, borderRadius:4, marginBottom:2 }}>
+                          <span style={{ width:78 }}>{fmtD(l.log_date)}</span>
+                          <Badge color={l.time_slot.toLowerCase().includes('outage') ? '#ef4444' : l.stage !== 'X' && l.stage !== 'x' ? '#eab308' : '#22c55e'}>{l.time_slot.toLowerCase().includes('outage') ? 'OUTAGE' : (l.stage !== 'X' && l.stage !== 'x' ? 'STAGE '+l.stage : 'OK')}</Badge>
+                          <span style={{ color:muted, flex:1 }}>{l.time_slot}</span>
+                          {l.run_hours != null && <span style={{ color:dim }}>{l.run_hours}h gen</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Compressor + forklift run-hours */}
+                  <div style={card}>
+                    <div style={ttl}>🛠 Run-Hours &amp; Service Due (Excel WORKDAY formula)</div>
+                    <div style={{ fontSize:8, color:dim, marginBottom:8 }}>Due = reading date + workdays to reach the service interval at the configured usage rate. Update hours weekly.</div>
+                    {eqLatest.map(({ cfg, latest, due, days }) => (
+                      <div key={cfg.id} style={{ background:pnl, borderRadius:6, padding:8, marginBottom:6 }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:4 }}>
+                          <strong style={{ fontSize:10 }}>{cfg.equipment}</strong>
+                          {latest && due ? <Badge color={calCol(days)}>{days <= 0 ? 'OVERDUE' : 'due '+fmtD(due.toISOString())}</Badge> : <Badge color="#64748b">NO DATA</Badge>}
+                        </div>
+                        {latest && latest.hours_since_service != null && (
+                          <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:4 }}>
+                            <div style={{ flex:1, height:5, background:brd, borderRadius:3, overflow:'hidden' }}>
+                              <div style={{ height:'100%', width:Math.min(100, (latest.hours_since_service / cfg.service_interval_hours) * 100)+'%', background:calCol(days) }} />
+                            </div>
+                            <span style={{ fontSize:8, color:muted }}>{Math.round(latest.hours_since_service)}/{cfg.service_interval_hours}h</span>
+                          </div>
+                        )}
+                        <div style={{ display:'flex', gap:4, marginTop:6, alignItems:'center', flexWrap:'wrap' }}>
+                          <input style={{ ...inp, width:96 }} type="number" inputMode="decimal" placeholder={latest?.total_hours != null ? 'total: '+latest.total_hours : 'total hrs'}
+                            value={rdForm['eqt'+cfg.id] ?? ''} onChange={e => setRdForm(p => ({ ...p, ['eqt'+cfg.id]: e.target.value }))} />
+                          <input style={{ ...inp, width:96 }} type="number" inputMode="decimal" placeholder={latest?.hours_since_service != null ? 'since: '+Math.round(latest.hours_since_service) : 'since service'}
+                            value={rdForm['eqs'+cfg.id] ?? ''} onChange={e => setRdForm(p => ({ ...p, ['eqs'+cfg.id]: e.target.value }))} />
+                          <button style={sbtn('#22c55e')} onClick={async () => {
+                            const total = rdForm['eqt'+cfg.id] ? parseFloat(rdForm['eqt'+cfg.id]) : null
+                            let since = rdForm['eqs'+cfg.id] ? parseFloat(rdForm['eqs'+cfg.id]) : null
+                            // like the Excel: new since = previous since + (new total − previous total)
+                            if (since == null && total != null && latest?.total_hours != null && latest?.hours_since_service != null) since = latest.hours_since_service + (total - latest.total_hours)
+                            if (total == null && since == null) { setPopup('Enter total hours or hours since service.'); return }
+                            const ok = await saveReading('equipment_hours', { equipment: cfg.equipment, reading_date: new Date().toISOString().slice(0,10), total_hours: total, hours_since_service: since, serviced:false, notes:'' }, setEqHours as any, 'reading_date')
+                            if (ok) setRdForm(p => ({ ...p, ['eqt'+cfg.id]:'', ['eqs'+cfg.id]:'' }))
+                          }}>+ READING</button>
+                          <button style={sbtn('#3b82f6')} onClick={() => eqServiced(cfg.equipment, latest?.total_hours ?? null)}>SERVICED</button>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ marginTop:8 }}>
+                      <div style={{ fontSize:8, color:muted, letterSpacing:1 }}>COMPRESSOR HOURS SINCE SERVICE</div>
+                      <Spark pts={eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-30).map(h => h.hours_since_service!)} color="#8b5cf6" />
+                    </div>
+                  </div>
+
+                  {/* Boiler start log */}
+                  <div style={card}>
+                    <div style={ttl}>♨ Boiler Start Log</div>
+                    <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'flex-end', marginBottom:8 }}>
+                      <div><label style={lb}>Date</label><input style={{ ...inp, width:120 }} type="date" value={rdForm.bsdate ?? new Date().toISOString().slice(0,10)} onChange={e => setRdForm(p => ({ ...p, bsdate: e.target.value }))} /></div>
+                      <div><label style={lb}>Switched On By</label><select style={{ ...inp, width:104 }} value={rdForm.bsby ?? TECHS[0]} onChange={e => setRdForm(p => ({ ...p, bsby: e.target.value }))}>{TECHS.map(t => <option key={t}>{t}</option>)}</select></div>
+                      <button style={sbtn('#22c55e')} onClick={async () => {
+                        const ok = await saveReading('boiler_start_log', { log_date: rdForm.bsdate ?? new Date().toISOString().slice(0,10), switched_on_by: rdForm.bsby ?? TECHS[0], morning_shift:'', afternoon_shift:'' }, setBoilerStarts as any, 'log_date')
+                        if (ok) setRdForm(p => ({ ...p, bsdate:'' }))
+                      }}>+ LOG START</button>
+                    </div>
+                    <div style={{ maxHeight:170, overflowY:'auto' }}>
+                      {boilerStarts.map(b => (
+                        <div key={b.id} style={{ fontSize:9, display:'flex', gap:8, padding:'3px 8px', background:pnl, borderRadius:4, marginBottom:2 }}>
+                          <span style={{ width:78 }}>{fmtD(b.log_date)}</span>
+                          <strong style={{ width:70 }}>{b.switched_on_by}</strong>
+                          {b.morning_shift && <span style={{ color:muted }}>AM: {b.morning_shift} • PM: {b.afternoon_shift}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
