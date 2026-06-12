@@ -25,13 +25,15 @@ export default function AiAnalystPanel({ agg }: { agg: unknown }) {
   const [q, setQ] = useState('')
   const [asking, setAsking] = useState(false)
 
-  // Load today's cached insight on mount.
+  // On mount: show today's cached insight if we have one, otherwise analyse
+  // automatically — no button press needed.
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(todayKey())
-      if (raw) { const p = JSON.parse(raw); setInsights(p.insights); setModel(p.model) }
+      if (raw) { const p = JSON.parse(raw); setInsights(p.insights); setModel(p.model); return }
     } catch {}
-  }, [])
+    run()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function run() {
     setLoading(true); setError('')

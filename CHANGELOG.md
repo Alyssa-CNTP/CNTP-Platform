@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 7: auto AI analyst, prominent breakdown, lighter UI everywhere)
+
+Quality pass on user feedback: AI should analyse on its own, the breakdown action was hard to find, and the UI felt heavy. Logic unchanged; visual/UX rework.
+
+**Files changed:**
+- `components/maintenance/AiAnalystPanel.tsx` — the AI analyst now **runs automatically** on load (cached per day in sessionStorage); the "Get analysis" button is gone (a quiet refresh remains).
+- `app/(app)/maintenance/job-cards/page.tsx` — a distinct, urgent **Report Breakdown** action + an unmissable banner (Production-gated), separate from **New Job Card**; lighter board (calm section headers + pill filter chips, no boxed status tiles / redundant filter row).
+- `components/maintenance/RaiseJobCardForm.tsx` — accepts `initialWorkflow` so the form opens straight into breakdown or planned mode.
+- `components/maintenance/JobCardItem.tsx` — reworked to the lighter language: hairline card (no glass / coloured left-border), header + concise meta + collapsible detail and activity log; all workflow action panels restyled to a calm shared container with subtle two-state toggles and one primary button each. Logic untouched.
+- `app/(app)/maintenance/scheduled/page.tsx` — redesigned to the lighter language: segmented Weekly/Monthly/Annual, calm checklist rows with larger toggles, hairline annual table; logic untouched.
+- `app/(app)/maintenance/job-cards/[cardId]/page.tsx` — clean detail header + back link, lighter spacing, hairline chat container.
+- `components/maintenance/MaintenanceDashboard.tsx`, `app/(app)/maintenance/stock/page.tsx` — consistency light-touch: glass `.card` wrappers → hairline surface cards; functionality (charts, drill-downs, AI, interactive grid) untouched.
+
+**Design language:** less boxing (whitespace + light section headers over nested cards), hairline borders, calmer colour (strong red reserved for urgent), clearer type hierarchy, one primary button per context.
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 6: dashboard declutter + interactive Stock grid)
 
 UI quality pass — the dashboard was overloaded and Stock was a read-only table. Logic unchanged; layout/UX reworked to the app standard.
