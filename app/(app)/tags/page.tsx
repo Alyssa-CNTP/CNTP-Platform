@@ -296,7 +296,7 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
           <div className="flex items-center gap-2 shrink-0 ml-2">
             <button
               onClick={() => printTagLabel(tag)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-stone-900 text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
             >
               <Printer size={13} /> Print
             </button>
@@ -531,7 +531,7 @@ function SerialLookup({ allTags, onSelect }: { allTags: BagTag[]; onSelect: (tag
         {result && result !== 'not_found' && (
           <button
             onClick={handleOpen}
-            className="flex items-center gap-1.5 px-4 py-3 rounded-xl bg-stone-900 text-white text-[13px] font-semibold hover:opacity-90 transition-opacity shrink-0"
+            className="flex items-center gap-1.5 px-4 py-3 rounded-xl bg-brand text-white text-[13px] font-semibold hover:opacity-90 transition-opacity shrink-0"
           >
             <Eye size={14} /> View
           </button>
@@ -1037,7 +1037,7 @@ export default function TagsPage() {
       {/* ── Page header ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-stone-900 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-brand flex items-center justify-center shrink-0">
             <Package size={18} className="text-white" />
           </div>
           <div>
