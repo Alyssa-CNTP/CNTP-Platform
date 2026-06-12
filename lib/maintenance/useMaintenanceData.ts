@@ -316,6 +316,48 @@ export function useMaintenanceData() {
     if (err) setPopup('Save failed: ' + err.message)
   }
 
+  // ── Spare-parts register CRUD (interactive Stock & Spares grid) ──
+  const addPart = async (p: { part_no: string; class: string; description: string; qty_new: number; qty_used: number }) => {
+    const { data, error: err } = await db.schema('maintenance').from('spare_parts').insert(p).select().single()
+    if (err) { setPopup('Could not add part: ' + err.message); return null }
+    setStock(s => [...s, data].sort((a, b) => (a.part_no || '').localeCompare(b.part_no || '')))
+    return data as SparePart
+  }
+  const updatePart = async (id: number, patch: Partial<SparePart>) => {
+    setStock(s => s.map(r => (r.id === id ? { ...r, ...patch } : r)))
+    const { error: err } = await db.schema('maintenance').from('spare_parts')
+      .update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id)
+    if (err) setPopup('Save failed: ' + err.message)
+  }
+  const adjustPartQty = async (id: number, col: 'qty_new' | 'qty_used', delta: number) => {
+    const part = stock.find(s => s.id === id); if (!part) return
+    const next = Math.max(0, ((part as any)[col] ?? 0) + delta)
+    await updatePart(id, { [col]: next } as Partial<SparePart>)
+  }
+  const deletePart = async (id: number) => {
+    setStock(s => s.filter(r => r.id !== id))
+    const { error: err } = await db.schema('maintenance').from('spare_parts').delete().eq('id', id)
+    if (err) { setPopup('Delete failed: ' + err.message); loadAll() }
+  }
+
+  // ── Offsite equipment CRUD ──
+  const addOffsite = async (o: { item: string; sent_to: string; date_sent: string; status: string }) => {
+    const { data, error: err } = await db.schema('maintenance').from('offsite_equipment').insert(o).select().single()
+    if (err) { setPopup('Could not add offsite item: ' + err.message); return }
+    setOffsite(p => [data, ...p])
+  }
+  const updateOffsite = async (id: number, patch: Partial<Offsite>) => {
+    setOffsite(p => p.map(o => (o.id === id ? { ...o, ...patch } : o)))
+    const { error: err } = await db.schema('maintenance').from('offsite_equipment').update(patch).eq('id', id)
+    if (err) setPopup('Save failed: ' + err.message)
+  }
+  const returnOffsite = async (id: number) => {
+    setOffsite(p => p.filter(o => o.id !== id))
+    const { error: err } = await db.schema('maintenance').from('offsite_equipment')
+      .update({ returned_at: new Date().toISOString(), status: 'Returned' }).eq('id', id)
+    if (err) { setPopup('Save failed: ' + err.message); loadAll() }
+  }
+
   // ── Roster / area-QC / planner mutations ──
   const addRoster = async () => {
     if (!rosterForm.start || !rosterForm.end) { setPopup('Pick a start and end time for the duty slot.'); return }
@@ -417,6 +459,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, qcSubmit, verifyCard, postComment,
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
+      addPart, updatePart, adjustPartQty, deletePart, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
     },
 
