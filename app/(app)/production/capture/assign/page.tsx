@@ -200,7 +200,9 @@ export default function AssignPage() {
                       No operators are set up for this section. Add them in the operators table first.
                     </p>
                   ) : (
-                    <div className="flex flex-wrap gap-2">
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-stone-400">Tap a name to roster them onto this section, then Save.</p>
+                      <div className="flex flex-wrap gap-2">
                       {ops.map(op => {
                         const on = draft.operatorIds.includes(op.id)
                         return (
@@ -214,6 +216,7 @@ export default function AssignPage() {
                           </button>
                         )
                       })}
+                      </div>
                     </div>
                   )}
 
@@ -270,13 +273,18 @@ export default function AssignPage() {
                     </div>
                   )}
 
-                  <button
-                    onClick={() => saveSection(sectionId)} disabled={saving || ops.length === 0}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-stone-900 text-white font-medium text-[13px] disabled:opacity-40 hover:bg-stone-800 transition-colors"
-                  >
-                    {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <CheckCircle2 size={14} className="text-ok" /> : <Save size={14} />}
-                    {saving ? 'Saving…' : saved ? 'Saved' : draft.operatorIds.length === 0 ? 'Clear assignment' : 'Save assignment'}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => saveSection(sectionId)} disabled={saving || ops.length === 0 || draft.operatorIds.length === 0}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand text-white font-medium text-[13px] disabled:opacity-40 disabled:bg-stone-300 hover:bg-brand-mid transition-colors"
+                    >
+                      {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <CheckCircle2 size={14} className="text-white" /> : <Save size={14} />}
+                      {saving ? 'Saving…' : saved ? 'Saved ✓' : draft.operatorIds.length === 0 ? 'Select an operator first' : 'Save assignment'}
+                    </button>
+                    {draft.operatorIds.length === 0 && (
+                      <button onClick={() => saveSection(sectionId)} className="text-[12px] text-stone-400 hover:text-err px-2 whitespace-nowrap">Clear</button>
+                    )}
+                  </div>
                 </div>
               </div>
             )
