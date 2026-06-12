@@ -11,8 +11,8 @@ import { useAuth } from '@/lib/auth/context'
 import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
-import { suggestOutputs } from '@/lib/production/inventory'
-import type { Operator, Variant } from '@/lib/supabase/database.types'
+import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
+import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
 
@@ -36,6 +36,7 @@ export default function AssignPage() {
   })
 
   const [operators, setOperators] = useState<Operator[]>([])
+  const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [drafts, setDrafts]       = useState<Record<string, SectionDraft>>({})
   const [loading, setLoading]     = useState(true)
   const [savingSection, setSavingSection] = useState<string | null>(null)
@@ -47,6 +48,7 @@ export default function AssignPage() {
     getDb().schema('production').from('operators')
       .select('*').eq('active', true).order('name')
       .then(({ data }: any) => setOperators((data as Operator[]) ?? []))
+    loadAllInventory().then(setInventory)
   }, [])
 
   // Load existing assignments whenever date/shift changes
@@ -241,26 +243,29 @@ export default function AssignPage() {
                         </div>
                       )}
                       <div className="space-y-1.5 sm:col-span-2">
-                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Planned production (select outputs)</label>
+                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Production orders</label>
                         {!draft.variant ? (
-                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see planned outputs.</p>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            {suggestOutputs(sectionId, draft.variant).map(s => {
-                              const code = s.code ?? s.productType
-                              const on = draft.prodOrders.includes(code)
-                              return (
-                                <button key={code} type="button" onClick={() => toggleProdOrder(sectionId, code)}
-                                  className={`px-3 py-2 rounded-xl border text-left transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}>
-                                  {on && <CheckCircle2 size={12} className="inline mr-1.5 -mt-0.5" />}
-                                  <span className="text-[13px]">{s.productType}</span>
-                                  {s.code && <span className={`ml-1.5 font-mono text-[11px] ${on ? 'opacity-80' : 'text-text-muted'}`}>{s.code}</span>}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
-                        <p className="text-[10px] text-stone-400 px-1">The system assigns an order id per selected output. Real Acumatica PO numbers appear here once that sync is connected.</p>
+                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see production-order items.</p>
+                        ) : (() => {
+                          const items = productionOrderItems(inventory, sectionId, draft.variant)
+                          if (items.length === 0) return <p className="text-[12px] text-stone-400 px-1">No production-order items configured for this section yet.</p>
+                          return (
+                            <div className="flex flex-col gap-2">
+                              {items.map(it => {
+                                const on = draft.prodOrders.includes(it.inventory_id)
+                                return (
+                                  <button key={it.inventory_id} type="button" onClick={() => toggleProdOrder(sectionId, it.inventory_id)}
+                                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}>
+                                    {on ? <CheckCircle2 size={14} className="shrink-0" /> : <span className="w-3.5 shrink-0" />}
+                                    <span className="flex-1 text-[13px]">{it.description || it.inventory_id}</span>
+                                    <span className={`font-mono text-[11px] ${on ? 'opacity-80' : 'text-text-muted'}`}>{it.inventory_id}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
+                        <p className="text-[10px] text-stone-400 px-1">Orders are created against the phantom / final items above. Real Acumatica PO numbers slot in here once that sync is connected.</p>
                       </div>
                     </div>
                   )}

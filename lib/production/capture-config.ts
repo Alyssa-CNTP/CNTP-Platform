@@ -87,3 +87,19 @@ export function makeSerial(sectionCode: string, dateStr: string, seq: number): s
 }
 
 export const MASS_BALANCE_TOLERANCE_KG = 15
+
+// Production orders are created against specific Acumatica items per section —
+// the phantom/production-order target items, NOT the generic outputs. These are
+// inventory_id prefixes; the assign screen lists the matching items by variant.
+//   Sieving     → S10LG* phantom leaf items (Export / Blend / Domestic)
+//   Refining 1  → indent + white dust
+//   Refining 2  → cut heavy stick (coarse/fine) + white/powder dust
+//   Granule     → final granule items (SG/Fine/Export -001)
+export const PRODUCTION_ORDER_PREFIXES: Record<string, string[]> = {
+  sieving:     ['S10LG'],
+  refining1:   ['15IGDIS', '15IGDW'],
+  refining2:   ['20BGCHS-C-', '20BGCHS-F-', '15IGDW', '15IGDPOWDR'],
+  granule:     ['20BGGSG-001', '20BGGF-001', '20BGGE-001'],
+  blender:     [],
+  pasteuriser: [],
+}

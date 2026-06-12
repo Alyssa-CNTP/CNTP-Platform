@@ -31,7 +31,7 @@ const NAV: NavItem[] = [
   { href: '/dashboard',                 label: 'Dashboard',                  icon: LayoutDashboard, group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['IT','Production'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
-  { href: '/production/live',           label: 'Live Capture',               icon: Factory,         group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
+  // Live Capture (barcode scanning) is the Phase-2 entry — hidden from nav until scanning goes live.
   { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['IT','Management'] },
   { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
 
