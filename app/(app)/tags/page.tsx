@@ -571,8 +571,14 @@ function SerialLookup({ allTags, onSelect }: { allTags: BagTag[]; onSelect: (tag
   )
 }
 
-// ── Stats bar ─────────────────────────────────────────────────────────────────
-function StatsBar({ tags }: { tags: BagTag[] }) {
+// ── Stats bar (interactive — tiles filter the list) ───────────────────────────
+function StatsBar({ tags, activeTab, activeVariant, onTab, onVariant }: {
+  tags: BagTag[]
+  activeTab: 'all' | 'on_floor' | 'consumed'
+  activeVariant: string
+  onTab: (t: 'all' | 'on_floor' | 'consumed') => void
+  onVariant: (v: string) => void
+}) {
   const total    = tags.length
   const onFloor  = tags.filter(t => !t.consumed_at_section).length
   const consumed = tags.filter(t =>  t.consumed_at_section).length
@@ -583,55 +589,47 @@ function StatsBar({ tags }: { tags: BagTag[] }) {
     byCert[v] = (byCert[v] || 0) + 1
   })
   const certOrder = ['CON', 'ORG', 'RA-CON', 'RA-ORG', 'FT']
+  const variantByLabel = (label: string) =>
+    Object.entries(VARIANT_PILL).find(([, v]) => v.label === label)?.[0] ?? ''
+
+  const tile = (active: boolean, accent: string) =>
+    `text-left rounded-2xl p-4 border transition-all ${active ? `${accent} ring-2 ring-brand/30` : 'bg-white border-stone-200 hover:border-stone-300 hover:shadow-sm'}`
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      {/* Total */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4 shadow-sm">
-        <div className="flex items-center gap-2 mb-2">
-          <Database size={13} className="text-stone-400" />
-          <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Total bags</span>
-        </div>
+      <button onClick={() => onTab('all')} className={tile(activeTab === 'all', 'bg-brand/5 border-brand/30')}>
+        <div className="flex items-center gap-2 mb-2"><Database size={13} className="text-stone-400" /><span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Total bags</span></div>
         <div className="font-mono font-bold text-[26px] text-stone-900 leading-none">{total}</div>
-        <div className="text-[10px] text-stone-400 mt-1">in current view</div>
-      </div>
+        <div className="text-[10px] text-stone-400 mt-1">show all</div>
+      </button>
 
-      {/* On floor */}
-      <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm">
-        <div className="flex items-center gap-2 mb-2">
-          <MapPin size={13} className="text-amber-500" />
-          <span className="text-[10px] font-semibold text-amber-500 uppercase tracking-wide">On floor</span>
-        </div>
+      <button onClick={() => onTab('on_floor')} className={tile(activeTab === 'on_floor', 'bg-amber-50 border-amber-300')}>
+        <div className="flex items-center gap-2 mb-2"><MapPin size={13} className="text-amber-500" /><span className="text-[10px] font-semibold text-amber-500 uppercase tracking-wide">On floor</span></div>
         <div className="font-mono font-bold text-[26px] text-stone-900 leading-none">{onFloor}</div>
         <div className="text-[10px] text-stone-400 mt-1">not yet consumed</div>
-      </div>
+      </button>
 
-      {/* Consumed */}
-      <div className="bg-white border border-emerald-200 rounded-2xl p-4 shadow-sm">
-        <div className="flex items-center gap-2 mb-2">
-          <CheckCircle2 size={13} className="text-emerald-500" />
-          <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide">Consumed</span>
-        </div>
+      <button onClick={() => onTab('consumed')} className={tile(activeTab === 'consumed', 'bg-emerald-50 border-emerald-300')}>
+        <div className="flex items-center gap-2 mb-2"><CheckCircle2 size={13} className="text-emerald-500" /><span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide">Consumed</span></div>
         <div className="font-mono font-bold text-[26px] text-stone-900 leading-none">{consumed}</div>
         <div className="text-[10px] text-stone-400 mt-1">moved downstream</div>
-      </div>
+      </button>
 
-      {/* By variant */}
       <div className="bg-white border border-stone-200 rounded-2xl p-4 shadow-sm">
-        <div className="flex items-center gap-2 mb-2">
-          <Layers size={13} className="text-stone-400" />
-          <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">By variant</span>
-        </div>
+        <div className="flex items-center gap-2 mb-2"><Layers size={13} className="text-stone-400" /><span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">By variant · tap to filter</span></div>
         <div className="flex flex-wrap gap-1.5">
           {certOrder.map(label => {
             const count = byCert[label]
             if (!count) return null
-            const entry = Object.entries(VARIANT_PILL).find(([, v]) => v.label === label)
+            const v = variantByLabel(label)
+            const entry = Object.entries(VARIANT_PILL).find(([, x]) => x.label === label)
             const cls = entry ? entry[1].cls : 'bg-stone-100 text-stone-500 border-stone-200'
+            const on = activeVariant === v
             return (
-              <span key={label} className={`inline-flex items-center gap-1 font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border ${cls}`}>
+              <button key={label} onClick={() => onVariant(on ? 'all' : v)}
+                className={`inline-flex items-center gap-1 font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border transition-all ${cls} ${on ? 'ring-2 ring-brand/40' : 'hover:opacity-80'}`}>
                 {label} <span className="opacity-70">{count}</span>
-              </span>
+              </button>
             )
           })}
           {Object.keys(byCert).length === 0 && <span className="text-[11px] text-stone-300">—</span>}
@@ -1059,7 +1057,15 @@ export default function TagsPage() {
       </div>
 
       {/* ── Stats bar ── */}
-      {!loading && <StatsBar tags={tags} />}
+      {!loading && (
+        <StatsBar
+          tags={tags}
+          activeTab={tab}
+          activeVariant={filters.variant}
+          onTab={setTab}
+          onVariant={v => patchFilters({ variant: v })}
+        />
+      )}
       {loading && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[...Array(4)].map((_, i) => (
