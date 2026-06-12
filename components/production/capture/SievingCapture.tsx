@@ -46,10 +46,11 @@ const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 
 export function SievingCapture({
-  assignment, variantWord, locked, value, onChange, genSerial,
+  assignment, variantWord, gradeLetter = 'A', locked, value, onChange, genSerial,
 }: {
   assignment: ShiftAssignment
   variantWord: string
+  gradeLetter?: string
   locked: boolean
   value: SievingData
   onChange: (d: SievingData) => void
@@ -84,7 +85,7 @@ export function SievingCapture({
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
     const serial = genSerial()
-    const grade  = p.isLeaf ? (p.destination || 'A') : 'A'
+    const grade  = gradeLetter || 'A'
     const now    = new Date().toISOString()
     const bag: OutputBag = {
       id: crypto.randomUUID(), serial_number: serial, product_type: p.productType,
@@ -104,7 +105,7 @@ export function SievingCapture({
 
     patch({ outputs: [...value.outputs, {
       id: bag.id, serial, productType: p.productType, code: p.code,
-      weight: p.weight, batch: bag.lot_number, destination: p.destination, printed: true,
+      weight: p.weight, batch: bag.lot_number, destination: grade, printed: true,
     }] })
     setPicking(false)
     printLabel(bag)
@@ -227,7 +228,7 @@ export function SievingCapture({
           )}
 
           {!locked && (picking
-            ? <OutputPicker sectionId="sieving" variantWord={variantWord} defaultBatch={assignment.lot_number ?? ''}
+            ? <OutputPicker sectionId="sieving" variantWord={variantWord} gradeLetter={gradeLetter} defaultBatch={assignment.lot_number ?? ''}
                 batchHints={[assignment.lot_number ?? '', ...value.outputs.map(b => b.batch), ...value.debag.map(r => r.lot)].filter(Boolean) as string[]}
                 onAdd={addOutput} onClose={() => setPicking(false)} />
             : <button onClick={() => setPicking(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">

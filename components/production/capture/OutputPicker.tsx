@@ -3,16 +3,13 @@
 import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
-import { DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface PickedOutput {
   productType: string
   code: string | null
   description: string
-  isLeaf: boolean
   weight: string
-  destination: string
   batch: string
 }
 
@@ -22,34 +19,38 @@ const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text
  * Easy output picker: the few items that fit the section + variant up top
  * (AI-suggested), full 630-item master search only when the operator looks.
  */
-export function OutputPicker({ sectionId, variantWord, defaultBatch, batchHints = [], onAdd, onClose }: {
+export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaultBatch, batchHints = [], onAdd, onClose }: {
   sectionId: string
   variantWord: string
+  gradeLetter?: string
   defaultBatch: string
   batchHints?: string[]
   onAdd: (p: PickedOutput) => void
   onClose: () => void
 }) {
-  const suggestions = suggestOutputs(sectionId, variantWord)
   const [dbBatches, setDbBatches] = useState<string[]>([])
   useEffect(() => { recentBatches(sectionId).then(setDbBatches) }, [sectionId])
   const batchOptions = Array.from(new Set([...batchHints, ...dbBatches].filter(Boolean)))
   const [query, setQuery]     = useState('')
   const [all, setAll]         = useState<InventoryItem[]>([])
-  const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; isLeaf: boolean } | null>(null)
+  const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string } | null>(null)
   const [weight, setWeight]   = useState('')
   const [batch, setBatch]     = useState(defaultBatch)
-  const [destination, setDestination] = useState('A')
 
   // Load the master list once; filtering is then instant on every keystroke.
   useEffect(() => { loadAllInventory().then(setAll) }, [])
+
+  // Authoritative description per code, straight from the master list.
+  const descOf = (code: string | null, fallback: string) =>
+    (code && all.find(it => it.inventory_id === code)?.description) || fallback
+  const suggestions = suggestOutputs(sectionId, variantWord, gradeLetter)
 
   const results = filterInventory(all, query, variantWord)
   function onSearch(q: string) { setQuery(q) }
 
   function confirm() {
     if (!picked || !weight) return
-    onAdd({ ...picked, weight, batch: batch || defaultBatch, destination })
+    onAdd({ ...picked, weight, batch: batch || defaultBatch })
   }
 
   return (
@@ -74,8 +75,8 @@ export function OutputPicker({ sectionId, variantWord, defaultBatch, batchHints 
             </div>
             {suggestions.map(s => (
               <PickRow key={s.productType} active={picked?.productType === s.productType}
-                title={s.productType} code={s.code} match={s.match}
-                onClick={() => setPicked({ productType: s.productType, code: s.code, description: s.description, isLeaf: s.isLeaf })} />
+                title={descOf(s.code, s.productType)} code={s.code} match={s.match}
+                onClick={() => setPicked({ productType: s.productType, code: s.code, description: descOf(s.code, s.description) })} />
             ))}
           </>
         ) : (
@@ -84,7 +85,7 @@ export function OutputPicker({ sectionId, variantWord, defaultBatch, batchHints 
             {results.map(it => (
               <PickRow key={it.inventory_id} active={picked?.code === it.inventory_id}
                 title={it.description ?? it.inventory_id} code={it.inventory_id}
-                onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', isLeaf: false })} />
+                onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '' })} />
             ))}
           </>
         )}
@@ -103,15 +104,8 @@ export function OutputPicker({ sectionId, variantWord, defaultBatch, batchHints 
                   {batchOptions.map(b => <option key={b} value={b} />)}
                 </datalist>
               </div>
-              {picked.isLeaf && (
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Destination</label>
-                  <select value={destination} onChange={e => setDestination(e.target.value)} className={INP + ' cursor-pointer'}>
-                    {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                </div>
-              )}
             </div>
+            {picked.code && <p className="text-[11px] text-text-muted font-mono">{picked.code} · {picked.description}</p>}
             <button onClick={confirm} disabled={!weight}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
               <Printer size={16} /> Add &amp; print label

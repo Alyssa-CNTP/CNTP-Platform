@@ -27,12 +27,12 @@ const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
  * picker shows. Derived from the section's known output types (no DB needed,
  * instant). Ranked so the most common outputs sit first.
  */
-export function suggestOutputs(sectionId: string, variantWord: string): SuggestedItem[] {
+export function suggestOutputs(sectionId: string, variantWord: string, grade: string = 'A'): SuggestedItem[] {
   const cfg = SECTION_CONFIG[sectionId]
   if (!cfg) return []
   const vShort = variantToShort(variantWord as any)
   return cfg.outputTypes.map((type, i) => {
-    const acu = getAcumaticaCode(type, vShort, 'A')
+    const acu = getAcumaticaCode(type, vShort, grade)
     return {
       productType: type,
       code: acu?.inventoryId ?? null,

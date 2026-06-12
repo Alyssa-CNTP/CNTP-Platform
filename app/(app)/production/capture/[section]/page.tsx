@@ -15,16 +15,16 @@ import {
   type SievingData,
 } from '@/components/production/capture/SievingCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
-import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 
 type Tab = 'production' | 'cleaning' | 'signoff'
 const n = (v: string) => parseFloat(v) || 0
 
-// A shift can contain several productions, each its own variant/lot.
-interface Production { id: string; variant: string; lot: string; data: SievingData }
-const emptyProduction = (variant?: string | null, lot?: string | null): Production =>
-  ({ id: crypto.randomUUID(), variant: variant || 'Conventional', lot: lot || '', data: emptySievingData() })
+// A shift can contain several productions, each its own variant/destination/lot.
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData }
+const emptyProduction = (variant?: string | null, lot?: string | null, grade: string = 'A'): Production =>
+  ({ id: crypto.randomUUID(), variant: variant || 'Conventional', grade, lot: lot || '', data: emptySievingData() })
 
 function CaptureScreen() {
   const params = useParams()
@@ -97,7 +97,7 @@ function CaptureScreen() {
         setProductions(d.productions as Production[])
       } else if (d?.outputs) {
         // legacy single-production draft → wrap as one production
-        setProductions([{ id: crypto.randomUUID(), variant: aVariant, lot: aLot, data: d as SievingData }])
+        setProductions([{ id: crypto.randomUUID(), variant: aVariant, grade: 'A', lot: aLot, data: d as SievingData }])
       } else {
         setProductions([emptyProduction(aVariant, aLot)])
       }
@@ -333,7 +333,7 @@ function CaptureScreen() {
   const stWithinTol = Math.abs(stVariance) <= MASS_BALANCE_TOLERANCE_KG
   const multi = productions.length > 1
 
-  function updateActiveMeta(key: 'variant' | 'lot', val: string) {
+  function updateActiveMeta(key: 'variant' | 'lot' | 'grade', val: string) {
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
   }
   function addProduction() {
@@ -461,6 +461,10 @@ function CaptureScreen() {
                   className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
                   {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                 </select>
+                <select value={active.grade ?? 'A'} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
+                  className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
+                  {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
                 <input value={active.lot} disabled={locked} onChange={e => updateActiveMeta('lot', e.target.value)} placeholder="Lot / batch"
                   className="px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-[12px] outline-none focus:border-brand w-36" />
                 {multi && !locked && productions.length > 1 && (
@@ -473,6 +477,7 @@ function CaptureScreen() {
                 key={active.id}
                 assignment={assignment}
                 variantWord={active.variant}
+                gradeLetter={active.grade ?? 'A'}
                 locked={locked}
                 value={active.data}
                 onChange={updateActiveData}
