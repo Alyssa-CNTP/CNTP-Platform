@@ -51,7 +51,7 @@ export default function StockPage() {
       </div>
 
       {/* ── Spare parts register ── */}
-      <div className="card p-4 mb-5">
+      <div className="rounded-xl border border-surface-rule bg-surface-card p-4 mb-5">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
           <h2 className="text-sm font-semibold text-text">Spare Parts Register</h2>
           <div className="flex items-center gap-2">
@@ -92,7 +92,7 @@ export default function StockPage() {
       </div>
 
       {/* ── Usage log ── */}
-      <div className="card p-4 mb-5">
+      <div className="rounded-xl border border-surface-rule bg-surface-card p-4 mb-5">
         <h2 className="text-sm font-semibold text-text">Usage Log <span className="font-normal text-text-muted">— logged on job cards, auto-decrements stock</span></h2>
         <div className="overflow-x-auto mt-3">
           <table className="data-table">
@@ -117,7 +117,7 @@ export default function StockPage() {
       </div>
 
       {/* ── Offsite ── */}
-      <div className="card p-4">
+      <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
         <div className="flex items-center justify-between gap-3 mb-3">
           <h2 className="text-sm font-semibold text-text">Offsite Equipment</h2>
           <button onClick={() => setAddingOffsite(a => !a)}
