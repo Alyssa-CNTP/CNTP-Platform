@@ -8,7 +8,7 @@
  */
 import { getDb } from '@/lib/supabase/db'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
-import { variantToShort } from '@/lib/production/capture-config'
+import { variantToShort, PRODUCTION_ORDER_PREFIXES } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -68,6 +68,19 @@ export function filterInventory(all: InventoryItem[], query: string, variantWord
   // Same-variant items first.
   matched.sort((a, b) => (b.variant === variantWord ? 1 : 0) - (a.variant === variantWord ? 1 : 0))
   return matched.slice(0, 30)
+}
+
+/**
+ * The production-order target items for a section + variant — the phantom /
+ * final items a PO is created against (e.g. Sieving → S10LG* leaf phantoms).
+ * Filtered from the already-loaded master list.
+ */
+export function productionOrderItems(all: InventoryItem[], sectionId: string, variantWord: string): InventoryItem[] {
+  const prefixes = PRODUCTION_ORDER_PREFIXES[sectionId] ?? []
+  if (!prefixes.length || !variantWord) return []
+  return all
+    .filter(it => it.variant === variantWord && prefixes.some(p => it.inventory_id.startsWith(p)))
+    .sort((a, b) => a.inventory_id.localeCompare(b.inventory_id))
 }
 
 /**
