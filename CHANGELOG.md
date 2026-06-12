@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Gustav (quality: harden Microchem PA extraction against garbled PDF text layer)
+
+**Files changed:**
+- app/api/upload/route.ts
+
+**Changes:**
+- Follow-up to the Microchem COA fix: fresh uploads extracted the totals correctly but missed Sample List, PO and the lab name, because the COA's two-column layout comes out scrambled in the PDF text layer (labels separated/transposed from their values)
+- The `pa_ta_analysis` prompt's Microchem section now identifies header fields by **character patterns** rather than adjacent labels only: batch `MAT-####`, lab reference `YYYY-MM-DD-NNN_NN`, sample ID `BF#####`, PO `BH-PO#######`; sample date = the earlier of the two received/validated dates; the four header fields are marked required
+- Clarified that the screening list with LOQ values (0.01 etc.) is not a detections table, and pinned `lab` to Microchem for this format
+- Data fix (staging): backfilled lab/sample list/PO/sample date on the three records uploaded before this hardening (MAT-0377/0378/0379)
+
+---
+
 ## 2026-06-12 — Gustav (quality: PA/TA extraction now reads Microchem COAs)
 
 **Files changed:**

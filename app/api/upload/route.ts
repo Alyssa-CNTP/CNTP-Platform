@@ -217,21 +217,31 @@ TWO REPORT FORMATS EXIST — first identify which one you are reading, then foll
 
 ### FORMAT B — Microchem / AGQ Labs "Certificate Of Analysis" (ONE sample per report, values in mg/kg)
 Recognise it by the title "Certificate Of Analysis", "Microchem" or "AGQ Labs", and a "Sample Details" block.
-1. batch_no = the "Variety" field in Sample Details (e.g. "MAT-0379"). NOT the Laboratory Sample ID.
-2. report_name = the "Our Lab Reference Number" value (e.g. "2026-06-02-180_05").
-3. sample_list = the "Laboratory Sample ID" value (e.g. "BF29712").
-4. purchase_order = the "PO Number" value (e.g. "BH-PO0001634").
-5. sample_date = the "Date Received" value, converted to YYYY-MM-DD.
-6. The "Compound(s) Detected" table reports results in mg/kg. The total PA is the row named like
+
+WARNING — GARBLED TEXT LAYER: the PDF text extraction scrambles this report's two-column layout.
+Labels and their values are often separated, transposed or attached to the wrong neighbouring label
+(e.g. "Date Received: 2026/06/10  2026/06/02 Date Validated:" actually means Received 2026/06/02,
+Validated 2026/06/10; the batch like "MAT-0379" may appear next to "Commodity:" even though it is the
+Variety; the lab reference may appear on its own line far from its label). Therefore identify values
+by their CHARACTER PATTERNS, not only by the adjacent label:
+- batch_no: the code matching MAT-#### / GS-#### / VS-#### style near the Sample/Client Details (e.g. "MAT-0379"). NOT the Laboratory Sample ID.
+- report_name: the lab reference matching YYYY-MM-DD-NNN_NN (e.g. "2026-06-02-180_05").
+- sample_list: the Laboratory Sample ID matching BF##### (e.g. "BF29712").
+- purchase_order: the code matching BH-PO####### (e.g. "BH-PO0001634").
+- sample_date: the EARLIER of the two dates near Date Received / Date Validated, as YYYY-MM-DD.
+These four header fields are REQUIRED — never leave them empty if a matching pattern exists anywhere in the text.
+
+1. The "Compound(s) Detected" table reports results in mg/kg. The total PA is the row named like
    "Sum of Pyrrolizidine alkaloids CR (EU) 2023/915" (or similar "Sum of Pyrrolizidine" wording).
-7. CRITICAL UNIT CONVERSION: convert mg/kg to µg/kg by multiplying by 1000.
+2. CRITICAL UNIT CONVERSION: convert mg/kg to µg/kg by multiplying by 1000.
    - Example: Result 0.019 mg/kg → final_summed_total_pa = 19 (µg/kg).
    - Set "unit": "µg/kg" after converting. Never output the raw mg/kg number as the total.
-8. If no "Sum of Pyrrolizidine" row exists, sum the individual PA compound rows (mg/kg) and convert to µg/kg.
-9. If the report states no residues detected / everything ND → final_summed_total_pa = 0.
-10. total_ta: only if a tropane alkaloid row exists (atropine/scopolamine), converted to µg/kg; otherwise null.
-11. lab = "Microchem Lab Services (Pty) Ltd".
-12. There is exactly ONE sample in this format — the samples array has ONE object.
+3. If no "Sum of Pyrrolizidine" row exists, sum the individual PA compound rows (mg/kg) and convert to µg/kg.
+4. If the report states "No residue(s) detected" → final_summed_total_pa = 0. (A list of compounds with
+   only LOQ values like 0.01 is NOT detections — it is the screening list; ignore it.)
+5. total_ta: only if a tropane alkaloid row exists (atropine/scopolamine) in the DETECTED table, converted to µg/kg; otherwise null.
+6. lab = "Microchem Lab Services (Pty) Ltd" — never output another lab name for this format.
+7. There is exactly ONE sample in this format — the samples array has ONE object.
 
 ### P-LEVEL RULES (final_summed_total_pa in µg/kg):
 - P0: 0  P1: 1–50  P2: 51–200  P3: 201–400  FAIL: >400
