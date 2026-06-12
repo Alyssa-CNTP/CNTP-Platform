@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/auth/context'
 import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
+import { suggestOutputs } from '@/lib/production/inventory'
 import type { Operator, Variant } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
@@ -19,10 +20,10 @@ interface SectionDraft {
   operatorIds: string[]
   lotNumber:   string
   variant:     Variant | ''
-  prodOrders:  string
+  prodOrders:  string[]   // planned output codes (or real PO numbers once synced)
 }
 
-const emptyDraft = (): SectionDraft => ({ operatorIds: [], lotNumber: '', variant: '', prodOrders: '' })
+const emptyDraft = (): SectionDraft => ({ operatorIds: [], lotNumber: '', variant: '', prodOrders: [] })
 
 export default function AssignPage() {
   const router = useRouter()
@@ -61,7 +62,7 @@ export default function AssignPage() {
             operatorIds: a.operator_ids ?? [],
             lotNumber:   a.lot_number ?? '',
             variant:     a.variant ?? '',
-            prodOrders:  (a.production_orders ?? []).join(', '),
+            prodOrders:  a.production_orders ?? [],
           }
         })
         setDrafts(next)
@@ -71,6 +72,14 @@ export default function AssignPage() {
 
   function operatorsForSection(sectionId: string) {
     return operators.filter(op => (op.section_ids ?? []).includes(sectionId))
+  }
+
+  function toggleProdOrder(sectionId: string, code: string) {
+    setDrafts(d => {
+      const cur = d[sectionId] ?? emptyDraft()
+      const has = cur.prodOrders.includes(code)
+      return { ...d, [sectionId]: { ...cur, prodOrders: has ? cur.prodOrders.filter(c => c !== code) : [...cur.prodOrders, code] } }
+    })
   }
 
   function toggleOperator(sectionId: string, opId: string) {
@@ -106,7 +115,7 @@ export default function AssignPage() {
           operator_ids:      draft.operatorIds,
           lot_number:        draft.lotNumber || null,
           variant:           draft.variant || null,
-          production_orders: draft.prodOrders ? draft.prodOrders.split(',').map(s => s.trim()).filter(Boolean) : null,
+          production_orders: draft.prodOrders.length ? draft.prodOrders : null,
           assigned_by:       user?.id ?? null,
         } as any, { onConflict: 'date,shift,section_id' })
       }
@@ -232,12 +241,26 @@ export default function AssignPage() {
                         </div>
                       )}
                       <div className="space-y-1.5 sm:col-span-2">
-                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Production orders (optional, comma-separated)</label>
-                        <input
-                          value={draft.prodOrders} onChange={e => setField(sectionId, 'prodOrders', e.target.value)}
-                          placeholder="e.g. PO-001, PO-002"
-                          className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand"
-                        />
+                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Planned production (select outputs)</label>
+                        {!draft.variant ? (
+                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see planned outputs.</p>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {suggestOutputs(sectionId, draft.variant).map(s => {
+                              const code = s.code ?? s.productType
+                              const on = draft.prodOrders.includes(code)
+                              return (
+                                <button key={code} type="button" onClick={() => toggleProdOrder(sectionId, code)}
+                                  className={`px-3 py-2 rounded-xl border text-left transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}>
+                                  {on && <CheckCircle2 size={12} className="inline mr-1.5 -mt-0.5" />}
+                                  <span className="text-[13px]">{s.productType}</span>
+                                  {s.code && <span className={`ml-1.5 font-mono text-[11px] ${on ? 'opacity-80' : 'text-text-muted'}`}>{s.code}</span>}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                        <p className="text-[10px] text-stone-400 px-1">The system assigns an order id per selected output. Real Acumatica PO numbers appear here once that sync is connected.</p>
                       </div>
                     </div>
                   )}
