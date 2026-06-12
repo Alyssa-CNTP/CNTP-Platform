@@ -97,6 +97,9 @@ const ROUTE_META: Record<string, {
 
   // Maintenance section — own module, separate from Quality
   '/maintenance':            { title: 'Maintenance',            variant: 'default',    chips: [{ label: 'FSSC 22000', color: 'green' }] },
+  '/maintenance/job-cards':  { title: 'Job Cards',              variant: 'default' },
+  '/maintenance/scheduled':  { title: 'Scheduled Maintenance',  variant: 'default' },
+  '/maintenance/stock':      { title: 'Stock & Spares',         variant: 'default' },
 
   // Management section
   '/management':                   { title: 'Management',           variant: 'management' },

@@ -5,6 +5,35 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 2: frontend restructure & reskin)
+
+Reskinned the whole maintenance module to the app's design system and split the four in-page tabs into real sidebar routes; the workflow logic was moved verbatim (no behaviour change).
+
+**Files changed:**
+- `lib/maintenance/{types,constants,helpers,useMaintenanceData,roles}.ts` — NEW. Extracted the monolith: interfaces + `ChatMessage`; constants with a token-based `STATUS_STYLE` (replaces hex `STATUS_COLOR`); pure helpers (`calClass` replaces hex `calCol`); a `useMaintenanceData()` hook owning the single 11-table load + all ~20 mutations + derived selectors; `deriveMaintRole(useAuth())` (replaces the mock view-switcher).
+- `app/(app)/maintenance/layout.tsx` — NEW. `MaintenanceDataProvider` mounts the data hook once so all sub-routes share one load (preserves cross-tab optimistic updates).
+- `app/(app)/maintenance/{page,job-cards/page,job-cards/[cardId]/page,scheduled/page,stock/page}.tsx` — NEW. The four tabs split into routes; `page.tsx` is the dashboard landing.
+- `components/maintenance/{StatusBadge,Timer,RaiseJobCardForm,JobCardItem,JobCardChat}.tsx` — NEW. Extracted + reskinned `renderCard`/raise-form/badges/timer; `JobCardChat` is a WhatsApp-style fork of `axis/CommentThread` (bubbles, @mention autocomplete against `/api/maintenance/staff`, camera/gallery photo attach).
+- `components/layout/Sidebar.tsx` — single Maintenance row → four (Dashboard / Job Cards / Scheduled / Stock & Spares); active-state fixed so `/maintenance` only matches exactly.
+- `app/(app)/layout.tsx` — ROUTE_META titles for the three sub-routes.
+- IA: the Raise Job Card form moved out of the always-open top into a primary button + `BottomSheet`; board rows link to a `[cardId]` detail route; inline dark theme removed in favour of `.card`/tokens/`INP`/`.data-table`.
+
+---
+
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 4: analytics dashboard & AI analyst)
+
+A custom maintenance dashboard with the existing KPIs plus smart reliability analytics, recharts visuals, clickable drill-downs, and a Gemini AI analyst.
+
+**Files changed:**
+- `components/maintenance/MaintenanceDashboard.tsx` — NEW. Smart KPI strip (MTTR, reactive ratio, top downtime asset, chronic assets, critical spares, weekly compliance) + recharts visuals: MTTR trend, breakdown-vs-planned with % reactive line, downtime-by-machine Pareto, repeat-offender machines, technician workload, status pie, top spares, weekly/monthly compliance gauges. Clickable cards/bars open a drill-down modal listing the underlying job cards. Builds the compact aggregate blob for the AI analyst.
+- `components/maintenance/AiAnalystPanel.tsx` — NEW. Posts the aggregates to the analyst API, renders summary/highlights/recommendations/watchlist, caches the daily insight in `sessionStorage`, and offers a follow-up chat over the data.
+- `app/api/maintenance/insights/route.ts` + `ask/route.ts` — NEW. Reuse `queryGeminiDetailed` (no new key) with a CMMS-reliability system prompt; send aggregates only (not raw rows) to keep tokens low.
+- `app/(app)/maintenance/page.tsx` — replaced the Phase 4 placeholder with the dashboard + AI panel.
+
+**Deploy note:** reuses the existing `GEMINI_API_KEY`; the panel reports gracefully if it's unset.
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 3: assignment, notifications & job-card chat)
 
 Backend for roster-based assignment, multi-channel notifications, the manager bounce-back loop, and the WhatsApp-style in-card chat. (Frontend wiring of these endpoints lands with the Phase 2 UI.)
