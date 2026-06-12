@@ -90,7 +90,7 @@ export function SievingCapture({
     const bag: OutputBag = {
       id: crypto.randomUUID(), serial_number: serial, product_type: p.productType,
       variant: variantShort, grade: grade as any, weight_kg: n(p.weight),
-      lot_number: p.batch || assignment.lot_number || '', section_id: 'sieving',
+      lot_number: p.batch || '', section_id: 'sieving',
       section_name: 'Sieving Tower', created_at: now, printed: false,
       acumaticaId: p.code ?? undefined, acumaticaDesc: p.description,
     }
