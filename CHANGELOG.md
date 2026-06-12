@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Gustav (scheduled maintenance dashboard: readings capture, Excel data import, shift summaries)
+
+Ported onto the restructured module (lib/maintenance hook + routed pages).
+
+**Files changed:**
+- lib/maintenance/{types,helpers,useMaintenanceData}.ts
+- app/(app)/maintenance/scheduled/page.tsx
+- app/(app)/maintenance/job-cards/page.tsx
+- Supabase staging migration: maintenance_readings_and_calibration (+ full Excel data import)
+
+**Changes:**
+- **Excel import (Maintenance_Database.xlsx → staging DB):** 124 IP readings, 122 diesel readings, 846 loadshedding log entries, 33 water meter readings, 241 boiler start log entries, 85 compressor/forklift run-hour readings, 187 calibration/verification assets — all historic values preserved for trends. New tables: `ip_readings`, `diesel_readings`, `loadshedding_log`, `water_readings`, `boiler_start_log`, `equipment_hours`, `equipment_config`, `calibration_assets`
+- **Scheduled Maintenance is now a dashboard** with five segments: Overview, Weekly, Monthly, Annual/Calibration, Readings & Trends
+- **Overview / Actions Needed:** calibrations overdue or due ≤30 days (one-tap "done today"), run-hour services due for the compressor + 9 forklifts (serviced-today + raise-job-card buttons), and all checklists outstanding this week/month with when each was last completed and by whom
+- **Checklist audit trail:** every task tick stamps the person + timestamp (shown inline); checklist cards show who completed them and when; all past periods kept in the DB
+- **Fault → Job Card:** any checklist task flagged as a fault (or with a note) gets a "→ Job card" button that raises a pre-filled planned card into the normal allocation workflow
+- **Readings & Trends:** friendly numeric capture (numeric keypad, previous value alongside, usage auto-calculated like the Excel) for water meters, IP/paraffin, generator diesel (auto fuel estimate at 40.7 L/hr), loadshedding/power outages, compressor + forklift run-hours, boiler starts — each with inline trend charts
+- **Excel due-date formulas built in:** service due = `WORKDAY(reading_date, CEILING((interval − hours_since_service) / hours_per_workday))` exactly as the spreadsheet (interval/rate editable per equipment in `equipment_config`, default 350h/16h); calibration next-due = last done + interval days
+- **Shift summaries** on the manager board: date + shift picker (Day 07:00–16:00 / Evening 16:00–01:00, defaults to the last ended shift) showing breakdowns raised, cards raised/accepted/finished and checklists worked — computed live from recorded timestamps
+- Full calibration register (187 assets) with search, colour-coded days-left and one-tap "done today"
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 7: auto AI analyst, prominent breakdown, lighter UI everywhere)
 
 Quality pass on user feedback: AI should analyse on its own, the breakdown action was hard to find, and the UI felt heavy. Logic unchanged; visual/UX rework.

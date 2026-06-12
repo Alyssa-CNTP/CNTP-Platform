@@ -67,3 +67,13 @@ export function downscalePhoto(file: File): Promise<string> {
 // Token-based calendar urgency: returns a .badge variant class. calBadge text kept.
 export const calClass = (d: number) => (d <= 0 ? 'badge-err' : d <= 7 ? 'badge-warn' : d <= 30 ? 'badge-warn' : d <= 60 ? 'badge-info' : 'badge-ok')
 export const calBadge = (d: number) => (d <= 0 ? 'OVERDUE' : d <= 7 ? 'URGENT' : d <= 30 ? 'SOON' : d <= 60 ? 'PLAN' : 'OK')
+
+// Excel WORKDAY(): add N working days to a date, skipping Sat/Sun.
+// Service due = WORKDAY(reading_date, CEILING((interval − hours_since_service) / hours_per_workday))
+export function workdayAdd(from: Date, days: number) {
+  const d = new Date(from)
+  let left = Math.max(0, Math.ceil(days))
+  while (left > 0) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) left-- }
+  return d
+}
+export const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }

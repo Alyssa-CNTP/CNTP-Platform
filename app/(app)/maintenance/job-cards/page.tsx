@@ -16,7 +16,7 @@ import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { JobCardItem } from '@/components/maintenance/JobCardItem'
 import { RaiseJobCardForm } from '@/components/maintenance/RaiseJobCardForm'
 import { AREAS, STATUSES } from '@/lib/maintenance/constants'
-import { fmtD, fmtDT, fmtT, diffDays } from '@/lib/maintenance/helpers'
+import { fmtD, fmtDT, fmtT, diffDays, diffM } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
 import type { JobCard } from '@/lib/maintenance/types'
 
@@ -106,6 +106,8 @@ export default function JobCardsPage() {
       {/* ── MANAGER: BOARD ── */}
       {role.canManage && seg === 0 && (
         <div>
+          <ShiftSummary jcs={jcs} completions={data.completions} cardHref={cardHref} />
+
           {newCards.length > 0 && (
             <div className="mb-6">
               <div className="flex items-center gap-2 mb-2">
@@ -327,6 +329,62 @@ export default function JobCardsPage() {
           <RaiseJobCardForm onDone={() => setRaiseOpen(false)} initialWorkflow={raiseMode} />
         </div>
       </BottomSheet>
+    </div>
+  )
+}
+
+// What happened during a shift (07:00–16:00 day / 16:00–01:00 evening) — computed
+// live from the recorded timestamps, so the summary is ready the moment a shift ends.
+function ShiftSummary({ jcs, completions, cardHref }: { jcs: JobCard[]; completions: { updated_at?: string }[]; cardHref: (j: JobCard) => string }) {
+  const [date, setDate] = useState(() => {
+    const d = new Date(); if (d.getHours() < 16) d.setDate(d.getDate() - 1)
+    return d.toISOString().slice(0, 10)
+  })
+  const [shift, setShift] = useState<'day' | 'evening'>(() => (new Date().getHours() >= 16 || new Date().getHours() < 7 ? 'day' : 'evening'))
+
+  const d0 = new Date(date + 'T00:00:00')
+  const s = new Date(d0), e = new Date(d0)
+  if (shift === 'day') { s.setHours(7, 0, 0, 0); e.setHours(16, 0, 0, 0) }
+  else { s.setHours(16, 0, 0, 0); e.setDate(e.getDate() + 1); e.setHours(1, 0, 0, 0) }
+  const inShift = (ts: string | null | undefined) => ts != null && new Date(ts) >= s && new Date(ts) < e
+
+  const raised = jcs.filter(j => inShift(j.raised_at))
+  const breakdowns = raised.filter(j => j.workflow === 'breakdown')
+  const finished = jcs.filter(j => inShift(j.completed_at) || inShift(j.verified_at))
+  const accepted = jcs.filter(j => inShift(j.accepted_at))
+  const checklists = completions.filter(c => inShift(c.updated_at)).length
+
+  return (
+    <div className="card p-4 mb-6">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <h2 className="text-sm font-semibold text-text">Shift summary</h2>
+        <div className="flex gap-1.5 items-center">
+          <input className={`${INP} w-36 min-h-0 py-1.5`} type="date" value={date} onChange={ev => setDate(ev.target.value)} />
+          <button className={SEG(shift === 'day')} onClick={() => setShift('day')}>Day 07:00–16:00</button>
+          <button className={SEG(shift === 'evening')} onClick={() => setShift('evening')}>Evening 16:00–01:00</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
+        {[
+          { l: 'Breakdowns raised', v: breakdowns.length, hot: breakdowns.length > 0 },
+          { l: 'Job cards raised', v: raised.length },
+          { l: 'Accepted / started', v: accepted.length },
+          { l: 'Finished', v: finished.length },
+          { l: 'Checklists worked', v: checklists },
+        ].map(t => (
+          <div key={t.l} className="bg-surface-raised rounded-lg p-2.5 text-center">
+            <div className={`text-xl font-semibold tabular-nums ${t.hot ? 'text-err' : 'text-text'}`}>{t.v}</div>
+            <div className="text-[10px] text-text-muted uppercase tracking-wide mt-0.5">{t.l}</div>
+          </div>
+        ))}
+      </div>
+      {(raised.length > 0 || finished.length > 0) ? (
+        <div className="space-y-1 text-[12px]">
+          {breakdowns.map(j => <div key={'b' + j.id}><span className="badge badge-err mr-1.5">BREAKDOWN</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({fmtT(j.raised_at)}, by {j.raised_by}{j.assigned_to ? ', → ' + j.assigned_to : ''})</span></div>)}
+          {raised.filter(j => j.workflow !== 'breakdown').map(j => <div key={'r' + j.id}><span className="badge badge-warn mr-1.5">RAISED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({fmtT(j.raised_at)}, by {j.raised_by})</span></div>)}
+          {finished.map(j => <div key={'c' + j.id}><span className="badge badge-ok mr-1.5">FINISHED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({j.assigned_to ?? '—'}, {diffM(j.workflow === 'breakdown' ? j.raised_at : j.accepted_at, j.completed_at)} min)</span></div>)}
+        </div>
+      ) : <div className="text-[12px] text-text-faint">Nothing recorded in this shift window.</div>}
     </div>
   )
 }
