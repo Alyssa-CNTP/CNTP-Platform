@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Gustav (maintenance: single breakdown/planned selection)
+
+**Files changed:**
+- components/maintenance/RaiseJobCardForm.tsx
+
+**Changes:**
+- Removed the duplicate breakdown-vs-planned toggle inside the Raise Job Card form — the choice is made first via the **Report Breakdown** / **New Job Card** buttons (and the urgent banner), and the form now shows the chosen mode as a fixed badge instead of a second selector
+- Non-Production users who somehow open the breakdown mode still get downgraded to planned with an explanatory note (unchanged server-side gate)
+
+---
+
 ## 2026-06-12 — Gustav (quality: harden Microchem PA extraction against garbled PDF text layer)
 
 **Files changed:**
