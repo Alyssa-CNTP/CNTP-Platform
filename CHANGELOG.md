@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 6: dashboard declutter + interactive Stock grid)
+
+UI quality pass — the dashboard was overloaded and Stock was a read-only table. Logic unchanged; layout/UX reworked to the app standard.
+
+**Files changed:**
+- `app/(app)/maintenance/page.tsx` — decluttered: removed the duplicate basic-KPI tiles and mini-stat strip; now a clean header + three module quick-links + the focused analytics (KPIs/charts live in the dashboard component).
+- `components/maintenance/MaintenanceDashboard.tsx` — one curated KPI row (open cards, MTTR, reactive %, top downtime asset, chronic assets, weekly compliance) + charts organised behind a **segmented control** (Reliability / People / Spares & compliance) so only two show at once; drill-downs and the AI analyst retained. Removed the previous wall of six charts + gauges.
+- `app/(app)/maintenance/stock/page.tsx` — rebuilt as an **interactive grid**: inline-editable part #, type, description; +/- quantity steppers (new/used); add-part row; search; low/out-of-stock row highlighting; summary tiles. Offsite equipment is now add-able + "mark returned". Usage log stays read-only.
+- `lib/maintenance/useMaintenanceData.ts` — added spare-parts CRUD (`addPart`, `updatePart`, `adjustPartQty`, `deletePart`) and offsite CRUD (`addOffsite`, `updateOffsite`, `returnOffsite`).
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 5: UI ↔ server wiring + interactive grids)
 
 Connected the Phase 2 UI to the Phase 3 server routes so gating, roster routing, notifications and chat photos fire end-to-end, surfaced the real staff directory, and made the roster/planner/QC grids interactive.
