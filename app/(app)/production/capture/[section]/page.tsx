@@ -470,36 +470,48 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
         )}
       </div>
 
-      <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
-        <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Operator sign-off</span>
-        <input value={opName} onChange={e => setOpName(e.target.value)} placeholder="Operator name" disabled={locked}
-          className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand" />
-        <SignaturePad label="Operator signature" signed={opSig} disabled={locked || !opName.trim()}
-          onSign={async sig => { await onSign('operator', opName.trim(), sig); setOpSig(true) }} />
-      </div>
+      {/* Operator sign-off — only while still being captured (draft/new) */}
+      {(status === 'new' || status === 'draft') && (
+        <>
+          <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Operator sign-off</span>
+            <input value={opName} onChange={e => setOpName(e.target.value)} placeholder="Operator name" disabled={locked}
+              className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand" />
+            <SignaturePad label="Operator signature" signed={opSig} disabled={locked || !opName.trim()}
+              onSign={async sig => { await onSign('operator', opName.trim(), sig); setOpSig(true) }} />
+          </div>
+          {opSig && (
+            <button onClick={onSubmit} disabled={submitting}
+              className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-brand text-white font-semibold text-[15px] disabled:opacity-40">
+              {submitting ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />} Submit for supervisor sign-off
+            </button>
+          )}
+        </>
+      )}
 
-      {opSig && (
-        <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
-          <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Supervisor sign-off</span>
-          <input value={supName} onChange={e => setSupName(e.target.value)} placeholder="Supervisor name" disabled={locked}
-            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand" />
-          <SignaturePad label="Supervisor signature" signed={supSig} disabled={locked || !supName.trim()}
-            onSign={async sig => { await onSign('supervisor', supName.trim(), sig); setSupSig(true) }} />
+      {/* Submitted — operator's view */}
+      {status === 'submitted' && !canApprove && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-info/5 border border-info/20 rounded-2xl text-[13px] text-info">
+          <CheckCircle2 size={16} className="flex-shrink-0" />
+          <span>Submitted — waiting for the supervisor to approve and lock from their dashboard.</span>
         </div>
       )}
 
-      {!locked && opSig && supSig && status !== 'submitted' && status !== 'approved' && (
-        <button onClick={onSubmit} disabled={submitting}
-          className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-brand text-white font-semibold text-[15px] disabled:opacity-40">
-          {submitting ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />} Submit shift record
-        </button>
-      )}
-
-      {canApprove && status === 'submitted' && (
-        <button onClick={onApprove} disabled={submitting}
-          className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-ok text-white font-semibold text-[15px] disabled:opacity-40">
-          {submitting ? <Loader2 size={18} className="animate-spin" /> : <Lock size={18} />} Approve &amp; lock
-        </button>
+      {/* Submitted — supervisor approval (signature + lock) */}
+      {status === 'submitted' && canApprove && (
+        <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
+          <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Supervisor approval</span>
+          <input value={supName} onChange={e => setSupName(e.target.value)} placeholder="Supervisor name"
+            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand" />
+          <SignaturePad label="Supervisor signature" signed={supSig} disabled={!supName.trim()}
+            onSign={async sig => { await onSign('supervisor', supName.trim(), sig); setSupSig(true) }} />
+          {supSig && (
+            <button onClick={onApprove} disabled={submitting}
+              className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-ok text-white font-semibold text-[15px] disabled:opacity-40">
+              {submitting ? <Loader2 size={18} className="animate-spin" /> : <Lock size={18} />} Approve &amp; lock
+            </button>
+          )}
+        </div>
       )}
 
       {locked && (

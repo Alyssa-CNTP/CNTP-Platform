@@ -93,6 +93,30 @@ export default function CaptureLandingPage() {
         )}
       </div>
 
+      {/* Supervisor approvals queue */}
+      {!loading && canAssign && (() => {
+        const pending = assignedSections.filter(id => statusMap[id] === 'submitted')
+        if (!pending.length) return null
+        return (
+          <div className="bg-info/5 border border-info/30 rounded-2xl p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[13px] font-medium text-info"><Pen size={14} /> Needs your sign-off ({pending.length})</div>
+            {pending.map(id => {
+              const m = sectionMeta(id)
+              return (
+                <Link key={id} href={`/production/capture/${id}?date=${date}&shift=${shift}`}
+                  className="flex items-center gap-3 px-3 py-2.5 bg-white border border-stone-200 rounded-xl hover:border-info/40 transition-colors">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
+                    <span className="font-mono font-bold text-[10px] text-white">{m.code}</span>
+                  </div>
+                  <span className="flex-1 text-[13px] font-medium text-text">{m.name}</span>
+                  <span className="text-[11px] text-info flex items-center gap-1">Review &amp; approve <ChevronRight size={13} /></span>
+                </Link>
+              )
+            })}
+          </div>
+        )
+      })()}
+
       {loading ? (
         <div className="flex items-center justify-center h-48"><Loader2 size={22} className="animate-spin text-text-muted" /></div>
       ) : assignedSections.length === 0 ? (
