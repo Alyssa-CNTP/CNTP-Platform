@@ -165,7 +165,7 @@ export default function CaptureLandingPage() {
 
             const href = `/production/capture/${sectionId}?date=${date}&shift=${shift}`
             const card = (
-              <div className={`relative flex flex-col gap-3 p-4 rounded-2xl border bg-white shadow-sm transition-all ${meta.built && !locked ? 'hover:shadow-md hover:border-stone-300 active:scale-[0.99]' : ''} ${!meta.built ? 'opacity-60' : ''}`}>
+              <div className={`relative flex flex-col gap-3 p-4 rounded-2xl border bg-white shadow-sm transition-all ${meta.built ? 'hover:shadow-md hover:border-stone-300 active:scale-[0.99]' : 'opacity-60'}`}>
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: meta.colorHex }}>
                     <span className="font-mono font-bold text-[12px] text-white">{meta.code}</span>
@@ -177,21 +177,21 @@ export default function CaptureLandingPage() {
                       {names.join(', ') || 'No operators'}
                     </div>
                   </div>
-                  {meta.built && !locked && <ChevronRight size={18} className="text-stone-300 shrink-0" />}
-                  {locked && <Lock size={15} className="text-ok shrink-0" />}
+                  {locked ? <Lock size={15} className="text-ok shrink-0" /> : meta.built ? <ChevronRight size={18} className="text-stone-300 shrink-0" /> : null}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-lg ${sm.cls}`}>
                     <Icon size={11} /> {sm.label}
                   </span>
                   {assign.variant && <span className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{assign.variant}</span>}
                   {assign.lot_number && <span className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{assign.lot_number}</span>}
                   {!meta.built && <span className="text-[10px] font-medium text-amber-700 ml-auto">Coming soon</span>}
+                  {locked && <span className="text-[10px] font-medium text-ok ml-auto">Tap to add another batch</span>}
                 </div>
               </div>
             )
 
-            return meta.built && !locked
+            return meta.built
               ? <Link key={sectionId} href={href}>{card}</Link>
               : <div key={sectionId}>{card}</div>
           })}
