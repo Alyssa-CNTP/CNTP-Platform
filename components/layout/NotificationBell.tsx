@@ -15,16 +15,38 @@ interface Announcement {
   created_at:         string
 }
 
+interface MaintNote {
+  id:         number
+  kind:       string
+  title:      string
+  body:       string | null
+  url:        string | null
+  urgent:     boolean
+  read_at:    string | null
+  created_at: string
+}
+
 export default function NotificationBell() {
   const db = getDb()
   const { userId, department, isManagement, isIT } = useAuth()
 
   const [anns,      setAnns]      = useState<Announcement[]>([])
   const [readIds,   setReadIds]   = useState<Set<string>>(new Set())
+  const [notes,     setNotes]     = useState<MaintNote[]>([])
   const [open,      setOpen]      = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => { if (userId) load() }, [userId])
+
+  // Mark personal notifications read when the panel opens.
+  useEffect(() => {
+    if (!open || !userId) return
+    const unreadIds = notes.filter(n => !n.read_at).map(n => n.id)
+    if (unreadIds.length === 0) return
+    const now = new Date().toISOString()
+    setNotes(p => p.map(n => (n.read_at ? n : { ...n, read_at: now })))
+    db.schema('maintenance').from('notifications').update({ read_at: now }).in('id', unreadIds).then(() => {})
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -35,12 +57,17 @@ export default function NotificationBell() {
   }, [])
 
   async function load() {
-    const [{ data: annData }, { data: readData }] = await Promise.all([
+    const [{ data: annData }, { data: readData }, { data: noteData }] = await Promise.all([
       db.from('management_announcements')
         .select('id,title,from_name,target_departments,created_at')
         .order('created_at', { ascending: false })
         .limit(20),
       db.from('announcement_reads').select('announcement_id').eq('user_id', userId),
+      db.schema('maintenance').from('notifications')
+        .select('id,kind,title,body,url,urgent,read_at,created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20),
     ])
 
     const all = (annData ?? []) as Announcement[]
@@ -49,9 +76,13 @@ export default function NotificationBell() {
     )
     setAnns(visible)
     setReadIds(new Set((readData ?? []).map((r: any) => r.announcement_id)))
+    setNotes((noteData ?? []) as MaintNote[])
   }
 
-  const unread = anns.filter(a => !readIds.has(a.id))
+  const unread = [
+    ...anns.filter(a => !readIds.has(a.id)),
+    ...notes.filter(n => !n.read_at),
+  ]
 
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
@@ -116,9 +147,32 @@ export default function NotificationBell() {
 
           {/* List */}
           <div style={{ overflowY: 'auto', flex: 1 }}>
-            {anns.length === 0 ? (
+            {/* Personal maintenance notifications */}
+            {notes.map(n => {
+              const item = (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '10px 16px', borderBottom: '1px solid #F3F4F6',
+                  background: n.read_at ? 'transparent' : (n.urgent ? 'rgba(184,28,28,0.05)' : 'rgba(26,58,14,0.025)'),
+                }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: n.read_at ? '#E4E7EC' : (n.urgent ? '#B81C1C' : '#1A3A0E'), flexShrink: 0, marginTop: 6 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontFamily: 'var(--font-body)', fontWeight: n.read_at ? 400 : 600, fontSize: 12, color: n.urgent ? '#B81C1C' : '#1A2415', margin: 0 }}>{n.title}</p>
+                    {n.body && <p style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#637056', margin: '2px 0 0' }}>{n.body}</p>}
+                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+                      {formatDistanceToNow(parseISO(n.created_at), { addSuffix: true })}
+                    </p>
+                  </div>
+                </div>
+              )
+              return n.url
+                ? <Link key={`n${n.id}`} href={n.url} onClick={() => setOpen(false)} style={{ textDecoration: 'none', display: 'block' }}>{item}</Link>
+                : <div key={`n${n.id}`}>{item}</div>
+            })}
+
+            {anns.length === 0 && notes.length === 0 ? (
               <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#9CA3AF' }}>
-                No announcements
+                Nothing new
               </div>
             ) : anns.map(a => {
               const read = readIds.has(a.id)
