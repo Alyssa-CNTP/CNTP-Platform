@@ -8,7 +8,7 @@
  */
 import { getDb } from '@/lib/supabase/db'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
-import { variantToShort, PRODUCTION_ORDER_PREFIXES } from '@/lib/production/capture-config'
+import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -42,6 +42,29 @@ export function suggestOutputs(sectionId: string, variantWord: string, grade: st
       match: Math.max(60, 95 - i * 6),
     }
   })
+}
+
+/**
+ * The section's bagged outputs, straight from the master inventory — filtered to
+ * the production's variant and (for Leaf) the chosen destination. Guarantees the
+ * code + name match Acumatica exactly. Leaf items are batch-tracked; the rest are
+ * tracked by barcode only.
+ */
+export interface OutputItem { code: string; description: string; group: string; batchTracked: boolean }
+export function sectionOutputItems(all: InventoryItem[], sectionId: string, variantWord: string, gradeLetter: string): OutputItem[] {
+  const groups = SECTION_OUTPUT_GROUPS[sectionId] ?? []
+  if (!groups.length || !variantWord) return []
+  const leafRe = new RegExp(`^10LG${leafFamily(gradeLetter)}[FC]`)
+  return all
+    .filter(it => {
+      if (it.variant !== variantWord) return false
+      const g = it.product_group ?? ''
+      if (!groups.includes(g)) return false
+      if (g === 'Leaf') return leafRe.test(it.inventory_id)
+      return true
+    })
+    .map(it => ({ code: it.inventory_id, description: it.description ?? it.inventory_id, group: it.product_group ?? '', batchTracked: (it.product_group ?? '') === 'Leaf' }))
+    .sort((a, b) => a.group.localeCompare(b.group) || a.code.localeCompare(b.code))
 }
 
 /**
