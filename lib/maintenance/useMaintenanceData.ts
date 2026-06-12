@@ -10,10 +10,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { TECHS, QC_CHECKS, STATUSES } from './constants'
-import { isoWeekKey, monthKey, normQc, diffM, diffDays, daysUntil, fmtDT, fmtT } from './helpers'
+import { isoWeekKey, monthKey, normQc, diffM, diffDays, daysUntil, fmtDT, fmtT, workdayAdd, addDays, aiSuggest } from './helpers'
 import type {
   JobCard, CardLog, SpareUsed, Roster, AreaQc, Slot,
   Template, Completion, AnnualItem, SparePart, Offsite, Status, QcAnswer, Staff,
+  IpReading, DieselReading, LsLog, WaterReading, BoilerStart, EqConfig, EqHours, CalAsset,
 } from './types'
 
 // Fallback staff directory built from the hardcoded TECHS (id: null) until the
@@ -45,6 +46,15 @@ export function useMaintenanceData() {
   const [stock, setStock] = useState<SparePart[]>([])
   const [offsite, setOffsite] = useState<Offsite[]>([])
   const [staff, setStaff] = useState<Staff[]>(fallbackStaff())
+  // Readings & registers (Maintenance_Database.xlsx data, captured weekly)
+  const [ipReadings, setIpReadings] = useState<IpReading[]>([])
+  const [dieselReadings, setDieselReadings] = useState<DieselReading[]>([])
+  const [lsLogs, setLsLogs] = useState<LsLog[]>([])
+  const [waterReadings, setWaterReadings] = useState<WaterReading[]>([])
+  const [boilerStarts, setBoilerStarts] = useState<BoilerStart[]>([])
+  const [eqConfig, setEqConfig] = useState<EqConfig[]>([])
+  const [eqHours, setEqHours] = useState<EqHours[]>([])
+  const [calAssets, setCalAssets] = useState<CalAsset[]>([])
 
   // Acting-as name — defaults to the signed-in user; preserved from the original.
   const [actor, setActor] = useState('')
@@ -68,7 +78,7 @@ export function useMaintenanceData() {
   const loadAll = useCallback(async () => {
     try {
       const m = db.schema('maintenance')
-      const [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off] = await Promise.all([
+      const [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal] = await Promise.all([
         m.from('job_cards').select('*').order('raised_at', { ascending: false }),
         m.from('job_card_logs').select('*').order('created_at'),
         m.from('job_card_spares').select('*').order('created_at', { ascending: false }),
@@ -76,17 +86,28 @@ export function useMaintenanceData() {
         m.from('area_qc').select('*'),
         m.from('tech_schedule').select('*').order('start_at'),
         m.from('checklist_templates').select('*').eq('active', true).order('sort_order'),
-        m.from('checklist_completions').select('*').in('period_key', [weekKey, moKey]),
+        m.from('checklist_completions').select('*').order('updated_at', { ascending: false }), // all periods — history of who checked what, when
         m.from('annual_items').select('*').eq('active', true).order('next_due'),
         m.from('spare_parts').select('*').order('part_no'),
         m.from('offsite_equipment').select('*').is('returned_at', null).order('date_sent'),
+        m.from('ip_readings').select('*').order('reading_date'),
+        m.from('diesel_readings').select('*').order('reading_date'),
+        m.from('loadshedding_log').select('*').order('log_date', { ascending: false }).limit(60),
+        m.from('water_readings').select('*').order('reading_date'),
+        m.from('boiler_start_log').select('*').order('log_date', { ascending: false }).limit(14),
+        m.from('equipment_config').select('*').eq('active', true),
+        m.from('equipment_hours').select('*').order('reading_date'),
+        m.from('calibration_assets').select('*').eq('active', true),
       ])
-      const firstErr = [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off].find((r: any) => r.error)
+      const firstErr = [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal].find((r: any) => r.error)
       if (firstErr?.error) throw firstErr.error
       setJcs(jc.data ?? []); setLogs(lg.data ?? []); setSparesUsed(sp.data ?? [])
       setRoster(ro.data ?? []); setAreaQc(aq.data ?? []); setSlots(sl.data ?? [])
       setTemplates(tpl.data ?? []); setCompletions(comp.data ?? [])
       setAnnual(ann.data ?? []); setStock(stk.data ?? []); setOffsite(off.data ?? [])
+      setIpReadings(ipr.data ?? []); setDieselReadings(dsr.data ?? []); setLsLogs(lsl.data ?? [])
+      setWaterReadings(wtr.data ?? []); setBoilerStarts(bst.data ?? [])
+      setEqConfig(ecf.data ?? []); setEqHours(eqh.data ?? []); setCalAssets(cal.data ?? [])
       setError('')
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load maintenance data')
@@ -300,7 +321,9 @@ export function useMaintenanceData() {
   const toggleTask = (tpl: Template, ti: number) => {
     const period = tpl.frequency === 'weekly' ? weekKey : moKey
     const states = { ...(getComp(tpl.id, period)?.task_states ?? {}) }
-    states[ti] = { ...(states[ti] ?? {}), done: !states[ti]?.done }
+    const nowDone = !states[ti]?.done
+    // stamp who ticked it and when — the permanent record of the check
+    states[ti] = { ...(states[ti] ?? {}), done: nowDone, by: nowDone ? (actor || displayName || '') : states[ti]?.by, at: nowDone ? new Date().toISOString() : states[ti]?.at }
     saveComp(tpl, { task_states: states })
   }
   const setTaskField = (tpl: Template, ti: number, field: 'notes' | 'fault', value: string | boolean) => {
@@ -314,6 +337,51 @@ export function useMaintenanceData() {
     setAnnual(p => p.map(a => (a.id === id ? { ...a, notes } : a)))
     const { error: err } = await db.schema('maintenance').from('annual_items').update({ notes }).eq('id', id)
     if (err) setPopup('Save failed: ' + err.message)
+  }
+
+  // ── Checklist fault → job card (goes into the normal allocation workflow) ──
+  const raiseFromChecklist = async (area: string, docRef: string, task: string, notes: string) => {
+    const { data, error: err } = await db.schema('maintenance').from('job_cards').insert({
+      workflow: 'planned', area, maint_types: ['Repair'],
+      description: `Checklist fault: ${task}`,
+      long_desc: notes ? `Checklist note: ${notes}` : '',
+      raised_by: actor || displayName || 'Checklist', ai_suggestion: aiSuggest(task + ' ' + notes),
+    }).select().single()
+    if (err) { setPopup('Could not raise job card: ' + err.message); return }
+    setJcs(p => [data, ...p])
+    await addLog(data.id, 'event', 'raised', actor || displayName || 'Checklist', `Raised automatically from ${area} checklist (${docRef}).`)
+    setPopup(`Job card ${data.card_no} raised for "${task}" (${area}).\nIt is now with the maintenance manager for allocation.`)
+  }
+
+  // ── Readings capture (usage/deltas computed from previous reading, like the Excel) ──
+  const setterFor: Record<string, (fn: (p: any[]) => any[]) => void> = {
+    ip_readings: setIpReadings as any, diesel_readings: setDieselReadings as any,
+    loadshedding_log: setLsLogs as any, water_readings: setWaterReadings as any,
+    boiler_start_log: setBoilerStarts as any, equipment_hours: setEqHours as any,
+  }
+  const saveReading = async (table: string, body: Record<string, any>, sortKey = 'reading_date') => {
+    const { data, error: err } = await db.schema('maintenance').from(table)
+      .insert({ ...body, recorded_by: actor || displayName || '' }).select().single()
+    if (err) { setPopup('Could not save reading: ' + err.message); return false }
+    setterFor[table]?.(p => [...p, data].sort((a, b) => String(a[sortKey]).localeCompare(String(b[sortKey]))))
+    return true
+  }
+
+  // ── Calibration: mark done today (next due recomputed from interval) ──
+  const calDone = async (a: CalAsset) => {
+    const today = new Date().toISOString().slice(0, 10)
+    const comment = (a.comment ? a.comment + ' • ' : '') + `Done ${today} by ${actor || displayName || ''}`
+    setCalAssets(p => p.map(x => x.id === a.id ? { ...x, last_done: today, comment } : x))
+    const { error: err } = await db.schema('maintenance').from('calibration_assets')
+      .update({ last_done: today, comment }).eq('id', a.id)
+    if (err) setPopup('Save failed: ' + err.message)
+  }
+  // Equipment serviced today — resets the hours-since-service counter
+  const eqServiced = async (equipment: string, total: number | null) => {
+    await saveReading('equipment_hours', {
+      equipment, reading_date: new Date().toISOString().slice(0, 10),
+      total_hours: total, hours_since_service: 0, serviced: true, notes: 'Serviced',
+    })
   }
 
   // ── Spare-parts register CRUD (interactive Stock & Spares grid) ──
@@ -438,6 +506,53 @@ export function useMaintenanceData() {
   const breakdowns = jcs.filter(j => j.workflow === 'breakdown').length
   const completionRate = jcs.length ? Math.round(completed.length / jcs.length * 100) : 0
 
+  // ── Scheduled-maintenance derived selectors ──
+  // Last completion of a checklist in any period (who did it, when)
+  const lastComp = (tplId: number) => completions
+    .filter(c => c.template_id === tplId && Object.values(c.task_states ?? {}).some((s: any) => s?.done))
+    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))[0]
+
+  // Latest run-hours reading per machine + projected service due (Excel WORKDAY formula)
+  const eqLatest = eqConfig.map(cfg => {
+    const readings = eqHours.filter(h => h.equipment === cfg.equipment)
+    const latest = readings[readings.length - 1]
+    if (!latest || latest.hours_since_service == null) return { cfg, latest, due: null as Date | null, days: 9999 }
+    const due = workdayAdd(new Date(latest.reading_date), (cfg.service_interval_hours - latest.hours_since_service) / cfg.hours_per_workday)
+    return { cfg, latest, due, days: Math.ceil((due.getTime() - Date.now()) / 86400000) }
+  }).sort((a, b) => a.days - b.days)
+
+  // Calibration register with computed next-due (last done + interval days)
+  const calRows = calAssets.filter(a => !a.weekly_check).map(a => {
+    const next = a.last_done ? addDays(a.last_done, a.interval_days) : null
+    return { ...a, next, days: next ? Math.ceil((next.getTime() - Date.now()) / 86400000) : 9999 }
+  }).sort((a, b) => a.days - b.days)
+
+  // Meter usage deltas (per meter, like the Excel) for trend charts
+  const usageSeries = (vals: (number | null)[]) => {
+    const out: number[] = []
+    for (let i = 1; i < vals.length; i++) {
+      const a = vals[i - 1], b = vals[i]
+      if (a != null && b != null && b >= a) out.push(b - a)
+    }
+    return out
+  }
+  const waterUsage = {
+    main: usageSeries(waterReadings.map(w => w.main_meter)),
+    unit1: usageSeries(waterReadings.map(w => w.unit1)),
+    w1: usageSeries(waterReadings.map(w => w.unit2_w1)),
+    w2: usageSeries(waterReadings.map(w => w.unit2_w2)),
+    boiler: usageSeries(waterReadings.map(w => w.boiler)),
+  }
+  const ipUsage = usageSeries(ipReadings.map(r => r.flow_meter_l))
+
+  // Checklists outstanding this period (for the Overview actions panel)
+  const outstandingChecklists = templates.map(t => {
+    const period = t.frequency === 'weekly' ? weekKey : moKey
+    const st = getComp(t.id, period)?.task_states ?? {}
+    const doneN = t.tasks.filter((_, i) => (st as any)[i]?.done).length
+    return { t, doneN, total: t.tasks.length, last: lastComp(t.id) }
+  }).filter(x => x.doneN < x.total)
+
   return {
     loading,
     error,
@@ -446,7 +561,10 @@ export function useMaintenanceData() {
     actor,
     setActor,
 
-    data: { jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite, staff },
+    data: {
+      jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite, staff,
+      ipReadings, dieselReadings, lsLogs, waterReadings, boilerStarts, eqConfig, eqHours, calAssets,
+    },
 
     // Shared form/UI state + setters that the route components drive.
     ui: {
@@ -461,12 +579,14 @@ export function useMaintenanceData() {
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
       addPart, updatePart, adjustPartQty, deletePart, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
+      raiseFromChecklist, saveReading, calDone, eqServiced,
     },
 
     derived: {
       cnt, cardLogs, cardSpares, duty, newCards, hist, annualRows, openPlannedCards,
       completed, totalMins, avgCloseDays, techCounts, areaCounts, reopens,
       breakdowns, completionRate, statuses: STATUSES,
+      lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists,
     },
 
     reload: loadAll,

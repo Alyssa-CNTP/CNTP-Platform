@@ -31,10 +31,21 @@ export interface Slot { id: number; card_id: number | null; technician: string; 
 // Live staff directory entry (GET /api/maintenance/staff). Falls back to TECHS.
 export interface Staff { id: string | null; name: string; initials: string; email?: string | null; phone?: string | null; role?: string }
 export interface Template { id: number; frequency: 'weekly' | 'monthly'; area: string; doc_ref: string; tasks: string[]; sort_order: number }
-export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string }>; comments: string; completed_by: string }
+// task_states values carry who ticked the task and when (audit trail)
+export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string; by?: string; at?: string }>; comments: string; completed_by: string; updated_at?: string }
 export interface AnnualItem { id: number; category: string; asset: string; serial_no: string; supplier: string; next_due: string | null; notes: string }
 export interface SparePart { id: number; part_no: string; class: string; description: string; qty_new: number; qty_used: number }
 export interface Offsite { id: number; item: string; sent_to: string; date_sent: string | null; status: string }
+
+// ── Readings & registers (imported from Maintenance_Database.xlsx) ──
+export interface IpReading { id: number; reading_date: string; flow_meter_l: number | null; tank_dip_l: number | null; fuel_received_l: number | null; cost_r: number | null; recorded_by: string }
+export interface DieselReading { id: number; reading_date: string; run_hours: number | null; fuel_l: number | null; recorded_by: string }
+export interface LsLog { id: number; log_date: string; stage: string; time_slot: string; run_hours: number | null; recorded_by: string }
+export interface WaterReading { id: number; reading_date: string; main_meter: number | null; unit2_w1: number | null; unit2_w2: number | null; unit1: number | null; boiler: number | null; recorded_by: string }
+export interface BoilerStart { id: number; log_date: string; switched_on_by: string; morning_shift: string; afternoon_shift: string }
+export interface EqConfig { id: number; equipment: string; service_interval_hours: number; hours_per_workday: number; active: boolean }
+export interface EqHours { id: number; equipment: string; reading_date: string; total_hours: number | null; hours_since_service: number | null; serviced: boolean; notes: string; recorded_by: string }
+export interface CalAsset { id: number; serial_no: string; department: string; asset_name: string; last_done: string | null; interval_days: number; weekly_check: boolean; comment: string; active: boolean }
 
 // Chat (WhatsApp-style job-card thread). Backend is another workstream; this is
 // the shape the JobCardChat component consumes.
