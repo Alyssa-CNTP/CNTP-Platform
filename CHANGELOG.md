@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 5: UI ↔ server wiring + interactive grids)
+
+Connected the Phase 2 UI to the Phase 3 server routes so gating, roster routing, notifications and chat photos fire end-to-end, surfaced the real staff directory, and made the roster/planner/QC grids interactive.
+
+**Files changed:**
+- `lib/maintenance/useMaintenanceData.ts` — added `staff` (fetched from `/api/maintenance/staff`, TECHS fallback); repointed `createJC`→`POST /api/maintenance/job-cards` (Production-only breakdown gate + roster auto-route + notifications now fire; 403 surfaced), `allocate`→`POST …/[id]/assign` (carries `assigned_user_id`+name, pre-fills on-duty suggestion), `verifyCard`→`POST …/[id]/verify` (bounce-back notification fires); `addRoster`/`addSlot` persist `technician_user_id`, `saveAreaQc` persists `qc_user_id`; `addSlotFor` for click-to-add planner cells.
+- `lib/maintenance/types.ts` — `Staff` type; `technician_user_id` on `Roster`/`Slot`, `qc_user_id` on `AreaQc`, `size`/`mime` on chat attachments.
+- `components/maintenance/RaiseJobCardForm.tsx` — breakdown toggle gated on `isProduction || can_raise_breakdown` (UX layer over the API gate).
+- `components/maintenance/JobCardItem.tsx` — allocation picker uses real staff (name + user id) + on-duty pre-fill.
+- `components/maintenance/JobCardChat.tsx` — wired to the real chat backend: send/upload via the card-messages routes, photo thumbnails + upload spinner + tap-to-enlarge lightbox, @mentions resolve to real staff user-ids.
+- `app/(app)/maintenance/job-cards/[cardId]/page.tsx` — loads/sends chat via the card-messages API + photo upload; passes the staff directory in.
+- `app/(app)/maintenance/job-cards/page.tsx` — clickable status filter tiles; **interactive roster** (weekly view, "on duty now" highlight, staff-driven, drives breakdown routing), **click-to-add/remove planner cells**, inline staff-driven **QC area map**.
+- `supabase/migrations/20260612_001_maintenance_user_links.sql` — also adds `maintenance.tech_schedule.technician_user_id` (planner slots now reference a real user).
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 2: frontend restructure & reskin)
 
 Reskinned the whole maintenance module to the app's design system and split the four in-page tabs into real sidebar routes; the workflow logic was moved verbatim (no behaviour change).

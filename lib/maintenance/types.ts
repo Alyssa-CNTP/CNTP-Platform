@@ -24,9 +24,12 @@ export interface JobCard {
 }
 export interface CardLog { id: number; card_id: number; kind: 'comment' | 'event'; stage: string; author: string; body: string; created_at: string }
 export interface SpareUsed { id: number; card_id: number; part_id: number | null; description: string; qty: number; from_stock: string; is_critical: boolean; logged_by: string; created_at: string }
-export interface Roster { id: number; technician: string; start_at: string; end_at: string }
-export interface AreaQc { id: number; area: string; qc_name: string }
-export interface Slot { id: number; card_id: number | null; technician: string; start_at: string; end_at: string; note: string }
+export interface Roster { id: number; technician: string; technician_user_id?: string | null; start_at: string; end_at: string }
+export interface AreaQc { id: number; area: string; qc_name: string; qc_user_id?: string | null }
+export interface Slot { id: number; card_id: number | null; technician: string; technician_user_id?: string | null; start_at: string; end_at: string; note: string }
+
+// Live staff directory entry (GET /api/maintenance/staff). Falls back to TECHS.
+export interface Staff { id: string | null; name: string; initials: string; email?: string | null; phone?: string | null; role?: string }
 export interface Template { id: number; frequency: 'weekly' | 'monthly'; area: string; doc_ref: string; tasks: string[]; sort_order: number }
 export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string }>; comments: string; completed_by: string }
 export interface AnnualItem { id: number; category: string; asset: string; serial_no: string; supplier: string; next_due: string | null; notes: string }
@@ -42,6 +45,6 @@ export interface ChatMessage {
   author_name: string
   body: string
   mentions: string[]
-  attachments: { path: string; name: string; url?: string }[]
+  attachments: { path: string; name: string; size?: number; mime?: string; url?: string }[]
   created_at: string
 }

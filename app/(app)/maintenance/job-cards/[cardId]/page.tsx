@@ -2,10 +2,11 @@
 
 // app/(app)/maintenance/job-cards/[cardId]/page.tsx
 // Full job-card detail: the role-appropriate JobCardItem plus a WhatsApp-style
-// JobCardChat. The chat backend is another workstream — for Phase 2 posting is
-// wired to the existing job_card_logs comment flow (via addLog), and messages
-// are derived from the card's comment log. Photo attachments are stubbed.
+// JobCardChat wired to the real chat backend (card-messages API). Messages,
+// @mentions and photo attachments all go through the server routes; the
+// comment-log Activity panel inside JobCardItem stays separate.
 
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
@@ -13,37 +14,58 @@ import { useAuth } from '@/lib/auth/context'
 import { useMaintenanceContext } from '../../layout'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { JobCardItem } from '@/components/maintenance/JobCardItem'
-import { JobCardChat } from '@/components/maintenance/JobCardChat'
+import { JobCardChat, type ChatAttachment } from '@/components/maintenance/JobCardChat'
 import type { ChatMessage } from '@/lib/maintenance/types'
 
 export default function JobCardDetailPage() {
   const params = useParams()
   const auth = useAuth()
   const role = deriveMaintRole(auth)
-  const { loading, data, derived, actions, actor } = useMaintenanceContext()
+  const { loading, data, actor } = useMaintenanceContext()
 
   const cardId = Number(Array.isArray(params.cardId) ? params.cardId[0] : params.cardId)
   const card = data.jcs.find(j => j.id === cardId)
+  const me = actor || auth.displayName
 
   const cardRoles = { canManage: role.canManage, isTech: role.isTech, isQc: role.isQc, isRaiser: role.isRaiser }
 
-  // Derive chat messages from the card's comment log (placeholder backend).
-  const messages: ChatMessage[] = derived.cardLogs(cardId)
-    .filter(l => l.kind === 'comment')
-    .map(l => ({
-      id: l.id,
-      card_id: l.card_id,
-      author_id: null,
-      author_name: l.author,
-      body: l.body,
-      mentions: [],
-      attachments: [],
-      created_at: l.created_at,
-    }))
+  // ── Real chat backend ──
+  const [messages, setMessages] = useState<ChatMessage[]>([])
 
-  async function onSend(text: string) {
-    if (!card) return
-    await actions.addLog(card.id, 'comment', card.status, actor || 'Unknown', text)
+  const loadMessages = useCallback(async () => {
+    if (!cardId) return
+    try {
+      const r = await fetch(`/api/maintenance/card-messages?card_id=${cardId}`)
+      if (!r.ok) return
+      const j = await r.json()
+      setMessages(Array.isArray(j.messages) ? j.messages : [])
+    } catch { /* leave as-is */ }
+  }, [cardId])
+
+  useEffect(() => { loadMessages() }, [loadMessages])
+
+  async function onSend(text: string, mentions: string[], attachments: ChatAttachment[]) {
+    if (!cardId) return
+    const r = await fetch('/api/maintenance/card-messages', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        card_id: cardId, body: text, mentions,
+        attachments: attachments.map(a => ({ path: a.path, name: a.name, size: a.size, mime: a.mime })),
+        author_name: me,
+      }),
+    })
+    if (r.ok) await loadMessages()
+  }
+
+  async function onAttach(file: File): Promise<ChatAttachment | null> {
+    if (!cardId) return null
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('card_id', String(cardId))
+    const r = await fetch('/api/maintenance/card-messages/upload', { method: 'POST', body: fd })
+    if (!r.ok) return null
+    const j = await r.json()
+    return { path: j.path, name: j.name, size: j.size, mime: j.mime, url: j.url }
   }
 
   if (loading) {
@@ -69,9 +91,10 @@ export default function JobCardDetailPage() {
         <JobCardChat
           cardId={card.id}
           messages={messages}
-          staff={[]}
-          me={actor}
+          staff={data.staff.map(s => ({ id: s.id, name: s.name, initials: s.initials }))}
+          me={me}
           onSend={onSend}
+          onAttach={onAttach}
         />
       </div>
     </div>

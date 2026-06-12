@@ -15,7 +15,7 @@ import { useMaintenanceContext } from '../layout'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { JobCardItem } from '@/components/maintenance/JobCardItem'
 import { RaiseJobCardForm } from '@/components/maintenance/RaiseJobCardForm'
-import { AREAS, TECHS, STATUSES } from '@/lib/maintenance/constants'
+import { AREAS, STATUSES } from '@/lib/maintenance/constants'
 import { fmtD, fmtDT, fmtT, diffDays } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
 import type { JobCard } from '@/lib/maintenance/types'
@@ -29,9 +29,13 @@ export default function JobCardsPage() {
   const role = deriveMaintRole(auth)
   const ctx = useMaintenanceContext()
   const { loading, data, derived, actions, ui, actor } = ctx
-  const { jcs } = data
+  const { jcs, staff } = data
   const { cnt, newCards, hist, openPlannedCards } = derived
-  const { drafts, setDrafts, slotForm, setSlotForm, rosterForm, setRosterForm } = ui
+  const { slotForm, setSlotForm, rosterForm, setRosterForm } = ui
+
+  // Technician names from the live staff directory (drives planner rows + pickers).
+  const techNames = staff.map(s => s.name)
+  const staffByName = (name: string) => staff.find(s => s.name === name)
 
   const [seg, setSeg] = useState(0) // 0 board, 1 planner, 2 roster & qc
   const [filt, setFilt] = useState('all')
@@ -83,10 +87,13 @@ export default function JobCardsPage() {
 
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 mb-4">
             {STATUSES.map(s => (
-              <div key={s} className="card p-2.5 text-center">
+              <button
+                key={s}
+                onClick={() => setFilt(f => (f === s ? 'all' : s))}
+                className={`card p-2.5 text-center min-h-[60px] transition-colors ${filt === s ? 'ring-2 ring-brand' : 'hover:bg-surface-dim'}`}>
                 <div className="text-xl font-semibold text-text tabular-nums">{cnt(s)}</div>
                 <div className="text-[10px] text-text-muted uppercase tracking-wide">{s.replace(/_/g, ' ')}</div>
-              </div>
+              </button>
             ))}
           </div>
 
@@ -143,7 +150,7 @@ export default function JobCardsPage() {
                 {openPlannedCards.map(c => <option key={c.id} value={c.id}>{c.card_no} — {c.area}: {c.description.slice(0, 40)}</option>)}
               </select>
             </div>
-            <div><label className={LB}>Technician</label><select className={`${INP} w-28`} value={slotForm.tech} onChange={e => setSlotForm(p => ({ ...p, tech: e.target.value }))}>{TECHS.map(t => <option key={t}>{t}</option>)}</select></div>
+            <div><label className={LB}>Technician</label><select className={`${INP} w-28`} value={slotForm.tech} onChange={e => { const s = staffByName(e.target.value); setSlotForm(p => ({ ...p, tech: e.target.value, techId: s?.id ?? null })) }}>{techNames.map(t => <option key={t}>{t}</option>)}</select></div>
             <div><label className={LB}>Date</label><input className={`${INP} w-36`} type="date" value={slotForm.date} onChange={e => setSlotForm(p => ({ ...p, date: e.target.value }))} /></div>
             <div><label className={LB}>Start</label><input className={`${INP} w-24`} type="time" value={slotForm.time} onChange={e => setSlotForm(p => ({ ...p, time: e.target.value }))} /></div>
             <div><label className={LB}>Est. Hours</label><input className={`${INP} w-20`} type="number" min={0.5} step={0.5} value={slotForm.hours} onChange={e => setSlotForm(p => ({ ...p, hours: e.target.value }))} /></div>
@@ -158,29 +165,39 @@ export default function JobCardsPage() {
           <div className="overflow-x-auto">
             <table className="data-table">
               <thead><tr><th>Technician</th>{weekDays.map(d => <th key={d.toISOString()}>{d.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' })}</th>)}</tr></thead>
-              <tbody>{TECHS.map(t => (
+              <tbody>{techNames.map(t => (
                 <tr key={t}>
                   <td className="font-semibold">{t}</td>
-                  {weekDays.map(d => (
-                    <td key={d.toISOString()} className="align-top min-w-[110px]">
-                      {slotsFor(t, d).map(s => {
-                        const c = jcs.find(x => x.id === s.card_id)
-                        return (
-                          <div key={s.id} className="bg-info/10 border border-info/20 rounded p-1.5 mb-1">
-                            <div className="font-semibold text-info text-[11px]">{fmtT(s.start_at)}–{fmtT(s.end_at)}</div>
-                            {c && <div className="text-accent text-[11px]">{c.card_no}</div>}
-                            {(s.note || c) && <div className="text-text-muted text-[11px]">{s.note || c?.description.slice(0, 30)}</div>}
-                            <button className="mt-1 text-[10px] px-1.5 py-0.5 rounded bg-err text-white" onClick={() => actions.delSlot(s.id)}>✕</button>
-                          </div>
-                        )
-                      })}
-                    </td>
-                  ))}
+                  {weekDays.map(d => {
+                    const cellSlots = slotsFor(t, d)
+                    return (
+                      <td
+                        key={d.toISOString()}
+                        onClick={() => { if (cellSlots.length === 0) actions.addSlotFor(t, staffByName(t)?.id ?? null, d) }}
+                        className={`align-top min-w-[110px] min-h-[44px] ${cellSlots.length === 0 ? 'cursor-pointer hover:bg-surface-dim' : ''}`}
+                        title={cellSlots.length === 0 ? `Add a slot for ${t}` : undefined}>
+                        {cellSlots.length === 0 && <span className="text-[16px] text-text-faint leading-none">+</span>}
+                        {cellSlots.map(s => {
+                          const c = jcs.find(x => x.id === s.card_id)
+                          return (
+                            <div key={s.id} className="bg-info/10 border border-info/20 rounded p-1.5 mb-1 cursor-pointer hover:border-err/40"
+                              onClick={ev => { ev.stopPropagation(); actions.delSlot(s.id) }}
+                              title="Tap to remove this slot">
+                              <div className="font-semibold text-info text-[11px]">{fmtT(s.start_at)}–{fmtT(s.end_at)}</div>
+                              {c && <div className="text-accent text-[11px]">{c.card_no}</div>}
+                              {(s.note || c) && <div className="text-text-muted text-[11px]">{s.note || c?.description.slice(0, 30)}</div>}
+                              <button className="mt-1 text-[10px] px-1.5 py-0.5 rounded bg-err text-white" onClick={ev => { ev.stopPropagation(); actions.delSlot(s.id) }}>✕</button>
+                            </div>
+                          )
+                        })}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}</tbody>
             </table>
           </div>
-          <div className="text-[11px] text-text-faint mt-2">Slots are estimates for planning — actual durations come from the job card timer.</div>
+          <div className="text-[11px] text-text-faint mt-2">Tap an empty cell to add a quick 2-hour slot, or tap a slot to remove it. Use the form above for card-linked slots with notes. Slots are estimates — actual durations come from the job card timer.</div>
         </div>
       )}
 
@@ -189,35 +206,68 @@ export default function JobCardsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="card p-4">
             <div className="text-sm font-semibold text-text mb-2">Duty Roster — Breakdown Auto-Assign</div>
-            <div className="text-[12px] text-text-muted mb-2">A breakdown raised during a duty slot goes straight to that technician. Currently on duty: <strong className={derived.duty ? 'text-ok' : 'text-err'}>{derived.duty ?? 'NOBODY'}</strong></div>
+            <div className="rounded-lg bg-info/10 border border-info/20 p-2 mb-2 text-[12px] text-text">
+              This roster is what <strong>auto-routes breakdowns</strong>: a breakdown raised during a duty slot goes straight to that technician.
+              Currently on duty: <strong className={derived.duty ? 'text-ok' : 'text-err'}>{derived.duty ?? 'NOBODY'}</strong>
+            </div>
             <div className="flex gap-2 flex-wrap items-end mb-2.5">
-              <div><label className={LB}>Technician</label><select className={`${INP} w-28`} value={rosterForm.tech} onChange={e => setRosterForm(p => ({ ...p, tech: e.target.value }))}>{TECHS.map(t => <option key={t}>{t}</option>)}</select></div>
+              <div><label className={LB}>Technician</label><select className={`${INP} w-28`} value={rosterForm.tech} onChange={e => { const s = staffByName(e.target.value); setRosterForm(p => ({ ...p, tech: e.target.value, techId: s?.id ?? null })) }}>{techNames.map(t => <option key={t}>{t}</option>)}</select></div>
               <div><label className={LB}>From</label><input className={`${INP} w-44`} type="datetime-local" value={rosterForm.start} onChange={e => setRosterForm(p => ({ ...p, start: e.target.value }))} /></div>
               <div><label className={LB}>To</label><input className={`${INP} w-44`} type="datetime-local" value={rosterForm.end} onChange={e => setRosterForm(p => ({ ...p, end: e.target.value }))} /></div>
-              <button className="bg-ok text-white rounded-lg px-4 py-2.5 text-sm font-semibold" onClick={actions.addRoster}>+ Add</button>
+              <button className="bg-ok text-white rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px]" onClick={actions.addRoster}>+ Add</button>
             </div>
-            {data.roster.filter(r => new Date(r.end_at).getTime() > Date.now() - 7 * 86400000).map(r => (
-              <div key={r.id} className="flex gap-2 items-center text-[12px] px-2 py-1.5 bg-surface-raised rounded mb-1">
-                <strong className="w-20">{r.technician}</strong>
-                <span className="text-text-muted flex-1">{fmtDT(r.start_at)} → {fmtDT(r.end_at)}</span>
-                <button className="text-[10px] px-1.5 py-0.5 rounded bg-err text-white" onClick={() => actions.delRoster(r.id)}>✕</button>
-              </div>
-            ))}
-            {data.roster.length === 0 && <div className="text-[12px] text-text-faint">No duty slots yet — breakdowns will wait for manager allocation until a roster exists.</div>}
+
+            {/* Weekly view grouped by day */}
+            {(() => {
+              const now = Date.now()
+              const upcoming = data.roster.filter(r => new Date(r.end_at).getTime() > now - 7 * 86400000)
+                .sort((a, b) => a.start_at.localeCompare(b.start_at))
+              if (upcoming.length === 0) return <div className="text-[12px] text-text-faint">No duty slots yet — breakdowns will wait for manager allocation until a roster exists.</div>
+              const byDay = upcoming.reduce((m: Record<string, typeof upcoming>, r) => {
+                const key = fmtD(r.start_at); (m[key] ??= []).push(r); return m
+              }, {})
+              return Object.entries(byDay).map(([day, rows]) => (
+                <div key={day} className="mb-2">
+                  <div className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">{day}</div>
+                  {rows.map(r => {
+                    const onNow = new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime()
+                    return (
+                      <div key={r.id} className={`flex gap-2 items-center text-[12px] px-2 py-2 rounded mb-1 ${onNow ? 'bg-ok/15 border border-ok/40' : 'bg-surface-raised'}`}>
+                        <strong className="w-20">{r.technician}</strong>
+                        {onNow && <span className="badge badge-ok">ON DUTY NOW</span>}
+                        <span className="text-text-muted flex-1">{fmtT(r.start_at)} → {fmtDT(r.end_at)}</span>
+                        <button className="min-h-[28px] text-[10px] px-2 py-1 rounded bg-err text-white" onClick={() => actions.delRoster(r.id)}>✕</button>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))
+            })()}
           </div>
           <div className="card p-4">
             <div className="text-sm font-semibold text-text mb-2">Station / Area → QC Officer Map</div>
-            <div className="text-[12px] text-text-muted mb-2">Completed jobs route to the QC mapped to their area for the post-maintenance check.</div>
+            <div className="text-[12px] text-text-muted mb-2">Completed jobs route to the QC mapped to their area for the post-maintenance check. Pick a name from your staff directory.</div>
             <div className="max-h-[420px] overflow-y-auto">
-              {AREAS.map(a => (
-                <div key={a} className="flex gap-1.5 items-center mb-1">
-                  <span className="text-[12px] w-44 text-text-muted">{a}</span>
-                  <input className={`${INP} flex-1`} placeholder="QC officer name…"
-                    value={drafts['aq' + a] ?? actions.qcFor(a)}
-                    onChange={e => setDrafts(p => ({ ...p, ['aq' + a]: e.target.value }))}
-                    onBlur={e => { if ((drafts['aq' + a] ?? actions.qcFor(a)) !== actions.qcFor(a) || e.target.value !== actions.qcFor(a)) actions.saveAreaQc(a, e.target.value) }} />
-                </div>
-              ))}
+              {AREAS.map(a => {
+                const current = actions.qcFor(a)
+                const known = staff.some(s => s.name === current)
+                return (
+                  <div key={a} className="flex gap-1.5 items-center mb-1">
+                    <span className="text-[12px] w-44 text-text-muted">{a}</span>
+                    <select className={`${INP} flex-1 min-h-[40px]`} value={known ? current : (current ? '__free__' : '')}
+                      onChange={e => {
+                        const v = e.target.value
+                        if (v === '__free__') return
+                        const s = staff.find(x => x.name === v)
+                        actions.saveAreaQc(a, v, s?.id ?? null)
+                      }}>
+                      <option value="">— unassigned —</option>
+                      {!known && current && <option value="__free__">{current} (manual)</option>}
+                      {staff.map(s => <option key={s.id ?? s.name} value={s.name}>{s.name}</option>)}
+                    </select>
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>

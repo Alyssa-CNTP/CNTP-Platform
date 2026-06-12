@@ -31,6 +31,10 @@ ALTER TABLE maintenance.duty_roster
 CREATE INDEX IF NOT EXISTS duty_roster_technician_user_idx
   ON maintenance.duty_roster(technician_user_id) WHERE technician_user_id IS NOT NULL;
 
+-- ── Technician planner slots: which user the slot is for ────────────────────
+ALTER TABLE maintenance.tech_schedule
+  ADD COLUMN IF NOT EXISTS technician_user_id uuid;
+
 -- ── Area → QC officer mapping ───────────────────────────────────────────────
 ALTER TABLE maintenance.area_qc
   ADD COLUMN IF NOT EXISTS qc_user_id uuid;

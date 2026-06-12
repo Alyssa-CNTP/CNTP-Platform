@@ -13,8 +13,18 @@ import { TECHS, QC_CHECKS, STATUSES } from './constants'
 import { isoWeekKey, monthKey, normQc, diffM, diffDays, daysUntil, fmtDT, fmtT } from './helpers'
 import type {
   JobCard, CardLog, SpareUsed, Roster, AreaQc, Slot,
-  Template, Completion, AnnualItem, SparePart, Offsite, Status, QcAnswer,
+  Template, Completion, AnnualItem, SparePart, Offsite, Status, QcAnswer, Staff,
 } from './types'
+
+// Fallback staff directory built from the hardcoded TECHS (id: null) until the
+// live /api/maintenance/staff directory loads.
+function fallbackStaff(): Staff[] {
+  return TECHS.map(name => ({
+    id: null,
+    name,
+    initials: name.split(/[\s_-]/).map(n => n[0] ?? '').join('').toUpperCase().slice(0, 2) || '?',
+  }))
+}
 
 export function useMaintenanceData() {
   const { displayName } = useAuth()
@@ -34,6 +44,7 @@ export function useMaintenanceData() {
   const [annual, setAnnual] = useState<AnnualItem[]>([])
   const [stock, setStock] = useState<SparePart[]>([])
   const [offsite, setOffsite] = useState<Offsite[]>([])
+  const [staff, setStaff] = useState<Staff[]>(fallbackStaff())
 
   // Acting-as name — defaults to the signed-in user; preserved from the original.
   const [actor, setActor] = useState('')
@@ -43,10 +54,10 @@ export function useMaintenanceData() {
   const [saving, setSaving] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [nj, setNj] = useState({ workflow: 'planned' as 'breakdown' | 'planned', area: '', machine: '', type: [] as string[], desc: '', longDesc: '', raisedBy: '', photo: null as string | null, aiSug: '' })
-  const [alloc, setAlloc] = useState<Record<number, { tech?: string; external?: boolean; company?: string; qc?: boolean }>>({})
+  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; external?: boolean; company?: string; qc?: boolean }>>({})
   const [spForm, setSpForm] = useState<Record<number, { partId?: string; desc?: string; qty?: string; from?: string; critical?: boolean }>>({})
-  const [slotForm, setSlotForm] = useState({ cardId: '', tech: TECHS[0], date: '', time: '08:00', hours: '2', note: '' })
-  const [rosterForm, setRosterForm] = useState({ tech: TECHS[0], start: '', end: '' })
+  const [slotForm, setSlotForm] = useState({ cardId: '', tech: TECHS[0], techId: null as string | null, date: '', time: '08:00', hours: '2', note: '' })
+  const [rosterForm, setRosterForm] = useState({ tech: TECHS[0], techId: null as string | null, start: '', end: '' })
 
   const weekKey = isoWeekKey()
   const moKey = monthKey()
@@ -86,6 +97,24 @@ export function useMaintenanceData() {
 
   useEffect(() => { loadAll() }, [loadAll])
 
+  // ── Live staff directory (drives every technician/QC picker + @mentions) ──
+  // Separate from loadAll: it's an API route (server-gated), not a supabase read.
+  const loadStaff = useCallback(async () => {
+    try {
+      const r = await fetch('/api/maintenance/staff')
+      if (!r.ok) return // keep fallback (e.g. raiser without directory permission)
+      const rows = await r.json()
+      if (Array.isArray(rows) && rows.length) {
+        setStaff(rows.map((s: any) => ({
+          id: s.id ?? null, name: s.name, initials: s.initials,
+          email: s.email ?? null, phone: s.phone ?? null, role: s.role,
+        })))
+      }
+    } catch { /* keep fallback */ }
+  }, [])
+
+  useEffect(() => { loadStaff() }, [loadStaff])
+
   // ── Log helper: every comment + transition recorded for analysis ──
   const addLog = async (cardId: number, kind: 'comment' | 'event', stage: string, author: string, body: string) => {
     const { data, error: err } = await db.schema('maintenance').from('job_card_logs')
@@ -110,41 +139,53 @@ export function useMaintenanceData() {
     if (!nj.area || !nj.desc || !nj.raisedBy) { setPopup('Please fill in your name, the area and a short description.'); return }
     setSaving(true)
     const isBd = nj.workflow === 'breakdown'
-    const duty = isBd ? onDutyTech() : null
-    const body: any = {
+    const body = {
       workflow: nj.workflow, area: nj.area, machine: nj.machine || null,
       maint_types: isBd ? ['Breakdown'] : nj.type,
       description: nj.desc, long_desc: nj.longDesc,
       raised_by: nj.raisedBy, photo_url: nj.photo, ai_suggestion: nj.aiSug,
     }
-    if (isBd && duty) { body.status = 'assigned'; body.assigned_to = duty; body.assigned_at = new Date().toISOString() }
-    const { data, error: err } = await db.schema('maintenance').from('job_cards').insert(body).select().single()
+    let res: Response
+    try {
+      res = await fetch('/api/maintenance/job-cards', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+    } catch (e: any) { setSaving(false); setPopup('Could not raise job card: ' + (e?.message ?? 'network error')); return }
+    const json = await res.json().catch(() => ({}))
     setSaving(false)
-    if (err) { setPopup('Could not raise job card: ' + err.message); return }
-    setJcs(p => [data, ...p])
-    await addLog(data.id, 'event', 'raised', nj.raisedBy, isBd
-      ? (duty ? `BREAKDOWN raised — auto-assigned to on-duty technician ${duty}. Maintenance manager informed. Timer running from raise.` : 'BREAKDOWN raised — NO TECHNICIAN ON DUTY in roster. Awaiting manager allocation. Maintenance manager informed.')
-      : 'Planned/scheduled job card raised — awaiting maintenance manager allocation.')
+    if (!res.ok) { setPopup(json?.error ?? 'Could not raise job card.'); return }
+    const card = json.card as JobCard
+    const wasAutoAssigned = !!card.assigned_to
+    // Optimistic prepend; reload() resyncs the server-written log + notifications.
+    setJcs(p => [card, ...p])
     setPopup(isBd
-      ? (duty ? `Breakdown ${data.card_no} sent directly to on-duty technician ${duty}.\nThe maintenance manager has been informed.\nThe job timer is already running.` : `Breakdown ${data.card_no} raised, but no technician is on duty in the roster.\nThe maintenance manager has been informed and will allocate it urgently.`)
-      : `Job card ${data.card_no} raised.\nIt is now with the maintenance manager for allocation.`)
+      ? (wasAutoAssigned
+          ? `Breakdown ${card.card_no} sent directly to on-duty technician ${card.assigned_to}.\nThe maintenance manager has been informed.\nThe job timer is already running.`
+          : `Breakdown ${card.card_no} raised, but no technician is on duty in the roster.\nThe maintenance manager has been informed and will allocate it urgently.`)
+      : `Job card ${card.card_no} raised.\nIt is now with the maintenance manager for allocation.`)
     setNj({ workflow: 'planned', area: '', machine: '', type: [], desc: '', longDesc: '', raisedBy: nj.raisedBy, photo: null, aiSug: '' })
+    loadAll()
   }
 
-  // Manager allocates a planned card
+  // Manager allocates a planned card — goes through the server route (gating +
+  // notifications + log). techId carries the real staff user-id when chosen.
   const allocate = async (j: JobCard) => {
     const a = alloc[j.id] ?? {}
     if (a.external && !a.company) { setPopup('Enter the external company name.'); return }
     if (!a.external && !a.tech) { setPopup('Select a technician, or switch to external.'); return }
-    const who = a.external ? a.company! : a.tech!
-    await upJC(j.id, {
-      status: 'assigned', assigned_to: who, assigned_at: new Date().toISOString(),
-      external: !!a.external, external_company: a.external ? a.company! : '',
-      qc_required: a.qc !== false,
-    })
-    await addLog(j.id, 'event', 'assigned', actor || 'Maintenance Manager',
-      (a.external ? `Allocated to EXTERNAL company ${who}` : `Allocated to technician ${who}`) +
-      ` • QC check ${a.qc !== false ? 'REQUIRED' : 'NOT required'}`)
+    const res = await fetch(`/api/maintenance/job-cards/${j.id}/assign`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assigned_to: a.external ? '' : a.tech!,
+        assigned_user_id: a.external ? null : (a.techId ?? null),
+        external: !!a.external, external_company: a.external ? a.company! : '',
+        qc_required: a.qc !== false, actor: actor || 'Maintenance Manager',
+      }),
+    }).catch(() => null)
+    if (!res) { setPopup('Could not allocate — network error.'); return }
+    if (!res.ok) { const j2 = await res.json().catch(() => ({})); setPopup(j2?.error ?? 'Could not allocate job card.'); return }
+    setAlloc(p => { const n = { ...p }; delete n[j.id]; return n })
+    loadAll()
   }
 
   const sendForClarify = async (j: JobCard) => {
@@ -213,14 +254,16 @@ export function useMaintenanceData() {
     }
   }
 
+  // Verification goes through the server route so the "not satisfied" bounce
+  // fires its notification to the assigned technician + cleanup on close.
   const verifyCard = async (j: JobCard, ok: boolean) => {
-    if (ok) {
-      await upJC(j.id, { status: 'complete', verified_at: new Date().toISOString(), verified_ok: true })
-      await addLog(j.id, 'event', 'complete', j.raised_by, 'Originator verified the work as SATISFACTORY. Job card closed.')
-    } else {
-      await upJC(j.id, { status: 'in_progress', verified_ok: false, reopen_count: (j.reopen_count ?? 0) + 1, completed_at: null })
-      await addLog(j.id, 'event', 'in_progress', j.raised_by, `Originator marked the work NOT SATISFACTORY — card returned to ${j.assigned_to}. Reopen #${(j.reopen_count ?? 0) + 1}.`)
-    }
+    const res = await fetch(`/api/maintenance/job-cards/${j.id}/verify`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ok, actor: actor || displayName || j.raised_by }),
+    }).catch(() => null)
+    if (!res) { setPopup('Could not record verification — network error.'); return }
+    if (!res.ok) { const j2 = await res.json().catch(() => ({})); setPopup(j2?.error ?? 'Could not record verification.'); return }
+    loadAll()
   }
 
   const postComment = async (j: JobCard) => {
@@ -277,7 +320,7 @@ export function useMaintenanceData() {
   const addRoster = async () => {
     if (!rosterForm.start || !rosterForm.end) { setPopup('Pick a start and end time for the duty slot.'); return }
     const { data, error: err } = await db.schema('maintenance').from('duty_roster')
-      .insert({ technician: rosterForm.tech, start_at: rosterForm.start, end_at: rosterForm.end }).select().single()
+      .insert({ technician: rosterForm.tech, technician_user_id: rosterForm.techId ?? null, start_at: rosterForm.start, end_at: rosterForm.end }).select().single()
     if (err) { setPopup('Could not save roster slot: ' + err.message); return }
     setRoster(p => [...p, data].sort((a, b) => a.start_at.localeCompare(b.start_at)))
   }
@@ -287,14 +330,14 @@ export function useMaintenanceData() {
   }
 
   const qcFor = (area: string) => areaQc.find(a => a.area === area)?.qc_name || ''
-  const saveAreaQc = async (area: string, qc_name: string) => {
+  const saveAreaQc = async (area: string, qc_name: string, qc_user_id: string | null = null) => {
     setAreaQc(p => {
       const i = p.findIndex(a => a.area === area)
-      if (i >= 0) { const n = [...p]; n[i] = { ...n[i], qc_name }; return n }
-      return [...p, { id: 0, area, qc_name }]
+      if (i >= 0) { const n = [...p]; n[i] = { ...n[i], qc_name, qc_user_id }; return n }
+      return [...p, { id: 0, area, qc_name, qc_user_id }]
     })
     const { data, error: err } = await db.schema('maintenance').from('area_qc')
-      .upsert({ area, qc_name }, { onConflict: 'area' }).select().single()
+      .upsert({ area, qc_name, qc_user_id }, { onConflict: 'area' }).select().single()
     if (err) { setPopup('Save failed: ' + err.message); return }
     setAreaQc(p => p.map(a => (a.area === area ? data : a)))
   }
@@ -305,7 +348,8 @@ export function useMaintenanceData() {
     const end = new Date(start.getTime() + (parseFloat(slotForm.hours) || 1) * 3600000)
     const { data, error: err } = await db.schema('maintenance').from('tech_schedule').insert({
       card_id: slotForm.cardId ? Number(slotForm.cardId) : null,
-      technician: slotForm.tech, start_at: start.toISOString(), end_at: end.toISOString(), note: slotForm.note,
+      technician: slotForm.tech, technician_user_id: slotForm.techId ?? null,
+      start_at: start.toISOString(), end_at: end.toISOString(), note: slotForm.note,
     }).select().single()
     if (err) { setPopup('Could not save slot: ' + err.message); return }
     setSlots(p => [...p, data].sort((a, b) => a.start_at.localeCompare(b.start_at)))
@@ -317,6 +361,19 @@ export function useMaintenanceData() {
   const delSlot = async (id: number) => {
     setSlots(p => p.filter(s => s.id !== id))
     await db.schema('maintenance').from('tech_schedule').delete().eq('id', id)
+  }
+
+  // Click-to-add a planner slot directly on an empty week-grid cell.
+  const addSlotFor = async (tech: string, techId: string | null, day: Date, hours = 2, time = '08:00') => {
+    const [hh, mm] = time.split(':').map(Number)
+    const start = new Date(day); start.setHours(hh || 8, mm || 0, 0, 0)
+    const end = new Date(start.getTime() + hours * 3600000)
+    const { data, error: err } = await db.schema('maintenance').from('tech_schedule').insert({
+      card_id: null, technician: tech, technician_user_id: techId ?? null,
+      start_at: start.toISOString(), end_at: end.toISOString(), note: '',
+    }).select().single()
+    if (err) { setPopup('Could not add slot: ' + err.message); return }
+    setSlots(p => [...p, data].sort((a, b) => a.start_at.localeCompare(b.start_at)))
   }
 
   // ── Derived ──
@@ -347,7 +404,7 @@ export function useMaintenanceData() {
     actor,
     setActor,
 
-    data: { jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite },
+    data: { jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite, staff },
 
     // Shared form/UI state + setters that the route components drive.
     ui: {
@@ -360,7 +417,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, qcSubmit, verifyCard, postComment,
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
-      addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot,
+      addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
     },
 
     derived: {

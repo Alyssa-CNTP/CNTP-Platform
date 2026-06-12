@@ -8,21 +8,21 @@
 // to the existing comment log by the caller.
 
 import { useEffect, useRef, useState } from 'react'
-import { Send, AtSign, Camera, Image as ImageIcon, Loader2 } from 'lucide-react'
+import { Send, AtSign, Camera, Image as ImageIcon, Loader2, X } from 'lucide-react'
 import { Avatar } from '@/components/axis/Avatar'
 import { TECHS } from '@/lib/maintenance/constants'
-import { downscalePhoto } from '@/lib/maintenance/helpers'
 import type { ChatMessage } from '@/lib/maintenance/types'
 
-interface Staff { id: string; name: string; initials: string }
+interface Staff { id: string | null; name: string; initials: string }
+export type ChatAttachment = { path: string; name: string; size: number; mime: string; url?: string | null }
 
 interface Props {
   cardId: number
   messages: ChatMessage[]
   staff: Staff[]
   me: string
-  onSend: (text: string, mentions: string[]) => Promise<void>
-  onAttach?: (file: File) => Promise<{ path: string; url: string }>
+  onSend: (text: string, mentions: string[], attachments: ChatAttachment[]) => Promise<void>
+  onAttach?: (file: File) => Promise<ChatAttachment | null>
 }
 
 function timeAgo(s: string) {
@@ -36,17 +36,19 @@ function timeAgo(s: string) {
 // Fallback staff list from the hardcoded TECHS if the directory call fails.
 function fallbackStaff(): Staff[] {
   return TECHS.map(name => ({
-    id: name,
+    id: null,
     name,
     initials: name.split(/[\s_-]/).map(n => n[0] ?? '').join('').toUpperCase().slice(0, 2) || '?',
   }))
 }
 
 export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, onAttach }: Props) {
-  const [staff, setStaff] = useState<Staff[]>(staffProp.length ? staffProp : fallbackStaff())
+  const staff = staffProp.length ? staffProp : fallbackStaff()
   const [draft, setDraft] = useState('')
   const [posting, setPosting] = useState(false)
-  const [preview, setPreview] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [pending, setPending] = useState<ChatAttachment[]>([])
+  const [lightbox, setLightbox] = useState<string | null>(null)
 
   // Mention autocomplete
   const [acOpen, setAcOpen] = useState(false)
@@ -57,23 +59,6 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  // Pull the live staff directory; fall back to TECHS names on failure.
-  useEffect(() => {
-    if (staffProp.length) return
-    let cancelled = false
-    fetch('/api/maintenance/staff')
-      .then(r => (r.ok ? r.json() : []))
-      .then((rows: any[]) => {
-        if (cancelled) return
-        const mapped = Array.isArray(rows)
-          ? rows.map(r => ({ id: r.id, name: r.name, initials: r.initials }))
-          : []
-        if (mapped.length) setStaff(mapped)
-      })
-      .catch(() => { /* keep fallback */ })
-    return () => { cancelled = true }
-  }, [staffProp.length])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -119,19 +104,19 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() }
   }
 
-  // Extract @mentions that match a known staff name.
+  // Extract @mentions that resolve to a real staff user-id.
   function extractMentions(text: string): string[] {
-    return staff.filter(s => text.includes('@' + s.name)).map(s => s.id)
+    return staff.filter(s => s.id && text.includes('@' + s.name)).map(s => s.id as string)
   }
 
   async function submit() {
     const body = draft.trim()
-    if (!body || posting) return
+    if ((!body && pending.length === 0) || posting) return
     setPosting(true)
     try {
-      await onSend(body, extractMentions(body))
+      await onSend(body, extractMentions(body), pending)
       setDraft('')
-      setPreview(null)
+      setPending([])
     } finally {
       setPosting(false)
     }
@@ -139,13 +124,14 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
 
   async function pickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
-    if (!f) return
-    try {
-      const url = await downscalePhoto(f)
-      setPreview(url)
-    } catch { /* ignore */ }
-    if (onAttach) { try { await onAttach(f) } catch { /* stubbed for Phase 2 */ } }
     e.target.value = ''
+    if (!f || !onAttach) return
+    setUploading(true)
+    try {
+      const att = await onAttach(f)
+      if (att) setPending(p => [...p, att])
+    } catch { /* upload failed — ignore, user can retry */ }
+    finally { setUploading(false) }
   }
 
   function renderBody(body: string) {
@@ -187,7 +173,7 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
                 {!mine && <div className="text-[11px] font-semibold text-accent mb-0.5">{m.author_name}</div>}
                 <div className="text-[13px] whitespace-pre-wrap break-words leading-relaxed">{renderBody(m.body)}</div>
                 {m.attachments?.map((a, i) => (
-                  a.url ? <img key={i} src={a.url} className="mt-1.5 rounded-lg max-h-40" alt={a.name} /> : null
+                  a.url ? <img key={i} src={a.url} onClick={() => setLightbox(a.url ?? null)} className="mt-1.5 rounded-lg max-h-40 cursor-zoom-in" alt={a.name} /> : null
                 ))}
                 <div className={`text-[10px] mt-1 ${mine ? 'text-white/60' : 'text-text-faint'}`}>{timeAgo(m.created_at)}</div>
               </div>
@@ -198,10 +184,15 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
 
       {/* Composer — pinned bottom, large tap targets */}
       <div className="relative mt-2 pt-2 border-t border-surface-rule safe-bottom">
-        {preview && (
-          <div className="mb-2 relative inline-block">
-            <img src={preview} className="rounded-lg max-h-28" alt="preview" />
-            <button onClick={() => setPreview(null)} className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-err text-white text-xs font-bold">✕</button>
+        {(pending.length > 0 || uploading) && (
+          <div className="mb-2 flex gap-2 flex-wrap items-center">
+            {pending.map((a, i) => (
+              <div key={a.path} className="relative inline-block">
+                {a.url ? <img src={a.url} className="rounded-lg max-h-24" alt={a.name} /> : <div className="rounded-lg bg-surface-dim px-3 py-2 text-[11px] text-text-muted">{a.name}</div>}
+                <button onClick={() => setPending(p => p.filter((_, k) => k !== i))} className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-err text-white text-xs font-bold flex items-center justify-center"><X size={12} /></button>
+              </div>
+            ))}
+            {uploading && <div className="flex items-center gap-1.5 text-[12px] text-text-muted"><Loader2 size={14} className="animate-spin" /> Uploading…</div>}
           </div>
         )}
 
@@ -209,9 +200,9 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
           <div className="absolute bottom-full mb-1 w-64 rounded-xl shadow-lg overflow-hidden bg-surface-card border border-surface-rule z-10">
             <p className="px-3 py-1.5 font-mono text-[9px] uppercase tracking-wider text-text-muted border-b border-surface-rule">Mention</p>
             {matched.map((s, i) => (
-              <button key={s.id} type="button" onClick={() => applyMention(s)} onMouseEnter={() => setAcIndex(i)}
+              <button key={s.id ?? s.name} type="button" onClick={() => applyMention(s)} onMouseEnter={() => setAcIndex(i)}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-left ${i === acIndex ? 'bg-surface-raised' : ''}`}>
-                <Avatar initials={s.initials} userId={s.id} size={22} />
+                <Avatar initials={s.initials} userId={s.id ?? s.name} size={22} />
                 <span className="text-[13px] text-text truncate">{s.name}</span>
               </button>
             ))}
@@ -236,12 +227,20 @@ export function JobCardChat({ cardId, messages, staff: staffProp, me, onSend, on
             placeholder="Message… type @ to mention"
             className="flex-1 min-h-[44px] px-3 py-2.5 rounded-xl text-[13px] bg-surface border border-surface-rule text-text outline-none focus:border-brand resize-none"
           />
-          <button onClick={submit} disabled={!draft.trim() || posting}
+          <button onClick={submit} disabled={(!draft.trim() && pending.length === 0) || posting || uploading}
             className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-brand text-white disabled:opacity-40">
             {posting ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
           </button>
         </div>
       </div>
+
+      {/* Tap-to-enlarge lightbox */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-4" onClick={() => setLightbox(null)}>
+          <img src={lightbox} className="max-w-full max-h-full rounded-lg" alt="attachment" />
+          <button onClick={() => setLightbox(null)} className="absolute top-4 right-4 w-11 h-11 rounded-full bg-white/15 text-white flex items-center justify-center"><X size={22} /></button>
+        </div>
+      )}
     </div>
   )
 }

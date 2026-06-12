@@ -6,10 +6,11 @@
 // role gating now comes from the real deriveMaintRole flags rather than the mock
 // view switcher.
 
+import { useEffect } from 'react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
-import { QC_CHECKS, TECHS } from '@/lib/maintenance/constants'
+import { QC_CHECKS } from '@/lib/maintenance/constants'
 import { fmtDT, fmtT, diffM, normQc } from '@/lib/maintenance/helpers'
 import type { JobCard, QcAnswer } from '@/lib/maintenance/types'
 import { INP } from '@/components/production/shared/ui'
@@ -29,6 +30,23 @@ export function JobCardItem({ j, roles }: { j: JobCard; roles: JobCardRoles }) {
   const { drafts, setDrafts, alloc, setAlloc, spForm, setSpForm } = ui
   const { cardLogs, cardSpares } = derived
   const { qcFor } = actions
+  const staff = data.staff
+
+  // Pre-fill the allocation picker with the on-duty technician suggestion when a
+  // manager opens a freshly-raised card (server route returns the roster pick).
+  useEffect(() => {
+    if (!roles.canManage || j.status !== 'raised') return
+    if (alloc[j.id]?.tech !== undefined || alloc[j.id]?.external) return
+    let cancelled = false
+    fetch(`/api/maintenance/job-cards/${j.id}/assign`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(res => {
+        if (cancelled || !res?.suggested?.name) return
+        setAlloc(p => (p[j.id]?.tech !== undefined ? p : { ...p, [j.id]: { ...p[j.id], tech: res.suggested.name, techId: res.suggested.userId ?? null } }))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [j.id, j.status, roles.canManage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isBd = j.workflow === 'breakdown'
   const timerStart = isBd ? j.raised_at : j.accepted_at
@@ -84,7 +102,7 @@ export function JobCardItem({ j, roles }: { j: JobCard; roles: JobCardRoles }) {
             <button className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold ${alloc[j.id]?.external ? 'bg-warn text-white' : 'bg-surface-dim text-text-muted'}`} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: true } }))}>EXTERNAL</button>
             {alloc[j.id]?.external
               ? <input className={`${INP} w-44`} placeholder="External company…" value={alloc[j.id]?.company ?? ''} onChange={e => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], company: e.target.value } }))} />
-              : <select className={`${INP} w-auto`} value={alloc[j.id]?.tech ?? ''} onChange={e => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], tech: e.target.value } }))}><option value="">Technician…</option>{TECHS.map(t => <option key={t}>{t}</option>)}</select>}
+              : <select className={`${INP} w-auto`} value={alloc[j.id]?.tech ?? ''} onChange={e => { const s = staff.find(x => x.name === e.target.value); setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], tech: e.target.value, techId: s?.id ?? null } })) }}><option value="">Technician…</option>{staff.map(s => <option key={s.id ?? s.name} value={s.name}>{s.name}</option>)}</select>}
             <button className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold ${(alloc[j.id]?.qc ?? true) ? 'bg-info text-white' : 'bg-surface-dim text-text-muted'}`} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], qc: !(p[j.id]?.qc ?? true) } }))}>QC CHECK: {(alloc[j.id]?.qc ?? true) ? 'REQUIRED' : 'NOT REQUIRED'}</button>
             <button className="bg-info text-white rounded-lg px-4 py-2 text-sm font-semibold" onClick={() => actions.allocate(j)}>FORWARD</button>
           </div>

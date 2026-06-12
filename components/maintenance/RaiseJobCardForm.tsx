@@ -5,8 +5,9 @@
 // preserved — it drives the shared `nj` form state + createJC() from the
 // maintenance data context.
 
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
+import { useAuth } from '@/lib/auth/context'
 import { AREAS, PLANNED_TYPES } from '@/lib/maintenance/constants'
 import { aiSuggest, downscalePhoto } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
@@ -15,10 +16,17 @@ const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em
 
 export function RaiseJobCardForm({ onDone }: { onDone?: () => void }) {
   const { ui, actions, derived } = useMaintenanceContext()
+  const { isProduction, p } = useAuth()
   const { nj, setNj, saving, setPopup } = ui
   const { duty } = derived
   const fRef = useRef<HTMLInputElement>(null)
+  const canRaiseBreakdown = isProduction || p('can_raise_breakdown')
   const isBd = nj.workflow === 'breakdown'
+
+  // If the user can't raise breakdowns, never leave the form on the breakdown tab.
+  useEffect(() => {
+    if (!canRaiseBreakdown && nj.workflow === 'breakdown') setNj(prev => ({ ...prev, workflow: 'planned', type: [] }))
+  }, [canRaiseBreakdown, nj.workflow, setNj])
 
   async function submit() {
     await actions.createJC()
@@ -29,18 +37,24 @@ export function RaiseJobCardForm({ onDone }: { onDone?: () => void }) {
     <div className={`card p-4 ${isBd ? 'border-err/40' : ''}`}>
       <div className="text-sm font-semibold text-text mb-3">Raise Job Card</div>
 
-      <div className="flex gap-2 mb-3">
-        <button
-          className={`flex-1 py-2.5 rounded-lg text-sm font-semibold ${isBd ? 'bg-err text-white' : 'bg-surface-dim text-text-muted hover:bg-surface-rule'}`}
-          onClick={() => setNj(p => ({ ...p, workflow: 'breakdown', type: [] }))}>
-          Breakdown — Urgent
-        </button>
-        <button
-          className={`flex-1 py-2.5 rounded-lg text-sm font-semibold ${!isBd ? 'bg-info text-white' : 'bg-surface-dim text-text-muted hover:bg-surface-rule'}`}
-          onClick={() => setNj(p => ({ ...p, workflow: 'planned' }))}>
-          Scheduled / Planned
-        </button>
-      </div>
+      {canRaiseBreakdown ? (
+        <div className="flex gap-2 mb-3">
+          <button
+            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold ${isBd ? 'bg-err text-white' : 'bg-surface-dim text-text-muted hover:bg-surface-rule'}`}
+            onClick={() => setNj(p => ({ ...p, workflow: 'breakdown', type: [] }))}>
+            Breakdown — Urgent
+          </button>
+          <button
+            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold ${!isBd ? 'bg-info text-white' : 'bg-surface-dim text-text-muted hover:bg-surface-rule'}`}
+            onClick={() => setNj(p => ({ ...p, workflow: 'planned' }))}>
+            Scheduled / Planned
+          </button>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-surface-dim border border-surface-rule p-2.5 mb-3 text-[12px] text-text-muted">
+          Breakdowns can only be raised by Production — contact the maintenance manager. This will be raised as a scheduled / planned job card.
+        </div>
+      )}
 
       {isBd && (
         <div className="rounded-lg bg-err/10 border border-err/20 p-2.5 mb-3 text-[12px] text-err">
