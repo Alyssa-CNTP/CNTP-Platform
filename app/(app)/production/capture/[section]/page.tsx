@@ -347,17 +347,18 @@ function CaptureScreen() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 pt-5 pb-3 flex-shrink-0">
-        <button onClick={() => router.push('/production/capture')} className="p-2 rounded-lg hover:bg-stone-100 text-stone-400"><ChevronLeft size={18} /></button>
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: meta.colorHex }}>
-          <span className="font-mono font-bold text-[11px] text-white">{meta.code}</span>
+      {/* Header — section-tinted band */}
+      <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
+        style={{ background: `linear-gradient(180deg, ${meta.colorHex}12, transparent)` }}>
+        <button onClick={() => router.push('/production/capture')} className="p-2 -ml-1 rounded-lg hover:bg-black/5 text-stone-500"><ChevronLeft size={18} /></button>
+        <div className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-sm" style={{ background: meta.colorHex }}>
+          <span className="font-mono font-bold text-[12px] text-white">{meta.code}</span>
         </div>
         <div className="flex-1 min-w-0">
           <h1 className="font-semibold text-[20px] text-text leading-tight">{meta.name}</h1>
-          <p className="text-[11px] text-text-muted capitalize">{shift} shift · {format(parseISO(dateParam + 'T12:00:00'), 'd MMM yyyy')}</p>
+          <p className="text-[11px] text-text-muted capitalize mt-0.5">{shift} shift · {format(parseISO(dateParam + 'T12:00:00'), 'd MMM yyyy')}</p>
         </div>
-        <span className={`text-[10px] font-medium px-2.5 py-1.5 rounded-lg shrink-0 ${statusColor}`}>{statusLabel}</span>
+        <span className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 ${statusColor}`}>{statusLabel}</span>
       </div>
 
       {/* Autofilled header card */}
@@ -368,14 +369,27 @@ function CaptureScreen() {
         {verifiedOp && <span className="ml-auto flex items-center gap-1 text-[11px] text-ok"><CheckCircle2 size={12} />{verifiedOp.display_name || verifiedOp.name}</span>}
       </div>
 
-      {/* Mass balance strip */}
+      {/* Mass balance meter */}
       {totalIn > 0 && (
-        <div className={`mx-4 mb-2 px-4 py-2.5 rounded-xl border text-[12px] font-mono flex items-center gap-3 flex-shrink-0 ${withinTol ? 'bg-ok/5 border-ok/20 text-ok' : 'bg-warn/10 border-warn/30 text-warn font-bold'}`}>
-          {!withinTol && <AlertTriangle size={13} />}
-          {multi && <span className="px-1.5 rounded bg-black/10">P{activeIdx + 1}</span>}
-          <span>In {totalIn.toFixed(1)}</span><span className="opacity-40">·</span>
-          <span>Out {totalOut.toFixed(1)}</span><span className="opacity-40">·</span>
-          <span>Var {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg</span>
+        <div className="mx-4 mt-3 mb-1 bg-white border border-stone-200 rounded-2xl p-3.5 flex-shrink-0 shadow-sm">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
+              Mass balance{multi ? ` · P${activeIdx + 1}` : ''}
+            </span>
+            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+              {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+              {withinTol ? 'Within tolerance' : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
+            </span>
+          </div>
+          <div className="flex items-end gap-3 mb-2.5">
+            <div className="flex-1"><div className="font-mono font-bold text-[20px] text-text leading-none">{totalIn.toFixed(1)}</div><div className="text-[10px] text-text-muted mt-1">kg in</div></div>
+            <div className="flex-1"><div className="font-mono font-bold text-[20px] text-text leading-none">{totalOut.toFixed(1)}</div><div className="text-[10px] text-text-muted mt-1">kg out</div></div>
+            <div className="flex-1"><div className={`font-mono font-bold text-[20px] leading-none ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div><div className="text-[10px] text-text-muted mt-1">variance</div></div>
+          </div>
+          <div className="h-2 rounded-full bg-stone-100 overflow-hidden">
+            <div className={`h-full rounded-full transition-all ${withinTol ? 'bg-ok' : 'bg-warn'}`}
+              style={{ width: `${totalIn > 0 ? Math.min(100, Math.max(4, (totalOut / totalIn) * 100)) : 0}%` }} />
+          </div>
         </div>
       )}
 
