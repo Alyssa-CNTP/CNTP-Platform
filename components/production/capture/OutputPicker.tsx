@@ -33,7 +33,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   const batchOptions = Array.from(new Set([...batchHints, ...dbBatches].filter(Boolean)))
   const [query, setQuery]     = useState('')
   const [all, setAll]         = useState<InventoryItem[]>([])
-  const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string } | null>(null)
+  const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; batchTracked: boolean } | null>(null)
   const [weight, setWeight]   = useState('')
   const [batch, setBatch]     = useState(defaultBatch)
 
@@ -50,7 +50,9 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
 
   function confirm() {
     if (!picked || !weight) return
-    onAdd({ ...picked, weight, batch: batch || defaultBatch })
+    if (picked.batchTracked && !batch.trim()) return
+    // Internally-tracked items carry no operator batch — the barcode is the record.
+    onAdd({ productType: picked.productType, code: picked.code, description: picked.description, weight, batch: picked.batchTracked ? (batch || defaultBatch) : '' })
   }
 
   return (
@@ -76,7 +78,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             {suggestions.map(s => (
               <PickRow key={s.productType} active={picked?.productType === s.productType}
                 title={descOf(s.code, s.productType)} code={s.code} match={s.match}
-                onClick={() => setPicked({ productType: s.productType, code: s.code, description: descOf(s.code, s.description) })} />
+                onClick={() => setPicked({ productType: s.productType, code: s.code, description: descOf(s.code, s.description), batchTracked: s.isLeaf })} />
             ))}
           </>
         ) : (
@@ -85,26 +87,31 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             {results.map(it => (
               <PickRow key={it.inventory_id} active={picked?.code === it.inventory_id}
                 title={it.description ?? it.inventory_id} code={it.inventory_id}
-                onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '' })} />
+                onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', batchTracked: /leaf/i.test(it.description ?? '') })} />
             ))}
           </>
         )}
 
         {picked && (
           <div className="pt-2 border-t border-stone-100 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid gap-3 ${picked.batchTracked ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-1">
                 <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Weight (kg) *</label>
                 <input autoFocus type="number" inputMode="decimal" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch</label>
-                <input list="batch-options" value={batch} onChange={e => setBatch(e.target.value)} className={INP} placeholder="Type or pick a batch" />
-                <datalist id="batch-options">
-                  {batchOptions.map(b => <option key={b} value={b} />)}
-                </datalist>
-              </div>
+              {picked.batchTracked && (
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch *</label>
+                  <input list="batch-options" value={batch} onChange={e => setBatch(e.target.value)} className={INP} placeholder="Type or pick a batch" />
+                  <datalist id="batch-options">
+                    {batchOptions.map(b => <option key={b} value={b} />)}
+                  </datalist>
+                </div>
+              )}
             </div>
+            {!picked.batchTracked && (
+              <p className="text-[11px] text-text-muted flex items-center gap-1.5"><Printer size={12} /> Tracked automatically by barcode — no batch number needed.</p>
+            )}
             {picked.code && <p className="text-[11px] text-text-muted font-mono">{picked.code} · {picked.description}</p>}
             <button onClick={confirm} disabled={!weight}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
