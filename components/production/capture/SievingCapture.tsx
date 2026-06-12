@@ -36,6 +36,10 @@ export function emptySievingData(): SievingData {
 
 const n = (v: string) => parseFloat(v) || 0
 
+// Destination letter → raw-material local/export label, kept consistent with the
+// production's destination chosen at the top.
+const DEST_LABEL: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
+
 export function sievingTotals(d: SievingData) {
   const totalIn  = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
   const totalOut = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
@@ -75,7 +79,7 @@ export function SievingCapture({
   // ── Debagging ────────────────────────────────────────────────────────────
   const addDebag = () => patch({ debag: [...value.debag, {
     id: crypto.randomUUID(), bag_no: '', lot: assignment.lot_number ?? '',
-    gross: '', nett: '', delivery_date: '', local_export: 'Export',
+    gross: '', nett: '', delivery_date: '', local_export: DEST_LABEL[gradeLetter] ?? 'Export',
   }] })
   const updateDebag = (id: string, k: keyof DebagRow, v: string) =>
     patch({ debag: value.debag.map(r => r.id === id ? { ...r, [k]: v } : r) })
