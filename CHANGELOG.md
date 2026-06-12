@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-12 — Gustav (quality: PA/TA extraction now reads Microchem COAs)
+
+**Files changed:**
+- app/api/upload/route.ts
+
+**Changes:**
+- The Raw Material PA/TA Gemini prompt (`pa_ta_analysis` in the `PROMPTS` object) only knew the Stellenbosch University CAF multi-batch format — Microchem/AGQ "Certificate Of Analysis" uploads (e.g. MAT-0377/0378/0379) extracted as ND/blank
+- Prompt rewritten to detect and handle **both formats**. For Microchem COAs it now maps: Variety → batch number, Our Lab Reference Number → report, Laboratory Sample ID → sample list, PO Number → purchase order, Date Received → sample date, and reads the "Sum of Pyrrolizidine alkaloids CR (EU) 2023/915" row with **mg/kg → µg/kg conversion** (0.019 mg/kg → 19 µg/kg → P1)
+- Added a server-side safety net in `computePaGrade`: if the model returns a total flagged as mg/kg it is converted to µg/kg before grading, so P-levels can't be computed off the wrong unit
+- Re-upload the three failed MAT PDFs after deploy; delete the bad ND rows first
+
+---
+
 ## 2026-06-12 — Gustav (scheduled maintenance dashboard: readings capture, Excel data import, shift summaries)
 
 Ported onto the restructured module (lib/maintenance hook + routed pages).
