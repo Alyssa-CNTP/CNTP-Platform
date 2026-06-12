@@ -88,6 +88,23 @@ export function makeSerial(sectionCode: string, dateStr: string, seq: number): s
 
 export const MASS_BALANCE_TOLERANCE_KG = 15
 
+// Which master-inventory product groups a section bags as outputs. The picker
+// shows only items in these groups, matching the production's variant (and, for
+// Leaf, the chosen destination) — so codes/names come straight from the master.
+export const SECTION_OUTPUT_GROUPS: Record<string, string[]> = {
+  sieving:     ['Leaf', 'Dust', 'Sticks'],
+  refining1:   ['Dust', 'Sticks'],
+  refining2:   ['Dust', 'Sticks'],
+  granule:     ['Granules', 'Dust'],
+  blender:     [],
+  pasteuriser: [],
+}
+
+// Destination letter → leaf code family (Export / Export Blend / Domestic).
+export function leafFamily(grade: string): string {
+  return grade === 'B' ? 'BL' : grade === 'C' ? 'D' : 'E'
+}
+
 // Production orders are created against specific Acumatica items per section —
 // the phantom/production-order target items, NOT the generic outputs. These are
 // inventory_id prefixes; the assign screen lists the matching items by variant.

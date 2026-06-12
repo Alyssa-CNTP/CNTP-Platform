@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer } from 'lucide-react'
-import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
+import { sectionOutputItems, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
 import { BatchInput } from '@/components/production/capture/BatchInput'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -41,11 +41,8 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   // Load the master list once; filtering is then instant on every keystroke.
   useEffect(() => { loadAllInventory().then(setAll) }, [])
 
-  // Authoritative description per code, straight from the master list.
-  const descOf = (code: string | null, fallback: string) =>
-    (code && all.find(it => it.inventory_id === code)?.description) || fallback
-  const suggestions = suggestOutputs(sectionId, variantWord, gradeLetter)
-
+  // The section's outputs for this variant + destination — straight from master.
+  const outputs = sectionOutputItems(all, sectionId, variantWord, gradeLetter)
   const results = filterInventory(all, query, variantWord)
   function onSearch(q: string) { setQuery(q) }
 
@@ -74,12 +71,12 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
           <>
             <div className="flex items-center gap-1.5">
               <Sparkles size={14} className="text-ok" />
-              <span className="text-[12px] text-ok">Suggested for this section · {variantWord}</span>
+              <span className="text-[12px] text-ok">Outputs for {variantWord}{outputs.length ? '' : ' — loading…'}</span>
             </div>
-            {suggestions.map(s => (
-              <PickRow key={s.productType} active={picked?.productType === s.productType}
-                title={descOf(s.code, s.productType)} code={s.code} match={s.match}
-                onClick={() => setPicked({ productType: s.productType, code: s.code, description: descOf(s.code, s.description), batchTracked: s.isLeaf })} />
+            {outputs.map(o => (
+              <PickRow key={o.code} active={picked?.code === o.code}
+                title={o.description} code={o.code}
+                onClick={() => setPicked({ productType: o.description, code: o.code, description: o.description, batchTracked: o.batchTracked })} />
             ))}
           </>
         ) : (
