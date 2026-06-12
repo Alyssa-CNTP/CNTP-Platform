@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
+import { BatchInput } from '@/components/production/capture/BatchInput'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface PickedOutput {
@@ -102,10 +103,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               {picked.batchTracked && (
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch *</label>
-                  <input list="batch-options" value={batch} onChange={e => setBatch(e.target.value)} className={INP} placeholder="Type or pick a batch" />
-                  <datalist id="batch-options">
-                    {batchOptions.map(b => <option key={b} value={b} />)}
-                  </datalist>
+                  <BatchInput value={batch} onChange={setBatch} options={batchOptions} placeholder="Type or pick a batch" className={INP} />
                 </div>
               )}
             </div>
