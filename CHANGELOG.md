@@ -5,6 +5,25 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-13 — Alyssa (production: timesheet auto-derive from capture activity)
+
+**Files changed:**
+- supabase/migrations/20260613_001_timesheets.sql (new)
+- lib/production/timesheet.ts (new)
+- components/production/capture/TimesheetConfirm.tsx (new)
+- app/(app)/production/capture/[section]/page.tsx
+- lib/supabase/database.types.ts
+
+**Changes:**
+- Operators no longer log shift times on paper — timesheets are now auto-derived from production-capture activity. Rule: first action = shift start; a 5–30 min gap = tea break; a >30 min gap = lunch; last action = shift end
+- New append-only **`capture_activity`** heartbeat: the capture page writes a timestamp (throttled to once/60s, tagged with session + operator) on real edits via the existing 2.5s autosave debounce. There was no per-operator timestamp stream before this (scan_events omits operator/session; structured rows are rewritten each autosave), so the heartbeat is required for derivation
+- New **`prod_timesheets`** table stores the confirmed result (start/end, breaks jsonb, worked minutes, raw derived snapshot for audit), keyed on session + operator
+- `lib/production/timesheet.ts` — pure `deriveTimesheet()` (gap heuristic) plus `loadActivity` / `loadTimesheet` / `saveTimesheet` helpers
+- New **TimesheetConfirm** card in the Sign-off tab: shows the auto-derived shift start/end and gap-based tea/lunch breaks, allows light edits (nudge times, add/remove breaks), and the operator confirms — the **Submit** button is now gated on both a confirmed timesheet and the operator signature
+- Heartbeat-only (no retroactive backfill); supervisor reporting view is a follow-up
+
+---
+
 ## 2026-06-12 — Gustav (maintenance: single breakdown/planned selection)
 
 **Files changed:**
