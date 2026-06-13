@@ -10,6 +10,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SignaturePad } from '@/components/production/capture/SignaturePad'
+import { TimesheetConfirm } from '@/components/production/capture/TimesheetConfirm'
 import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData,
@@ -57,6 +58,7 @@ function CaptureScreen() {
   const seqRef = useRef(0)
   const productionsRef = useRef<Production[]>(productions); productionsRef.current = productions
   const sessionRef = useRef<string | null>(null); sessionRef.current = sessionId
+  const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
@@ -149,10 +151,28 @@ function CaptureScreen() {
   }
   const flushRef = useRef(flushSave); flushRef.current = flushSave
 
+  // Timesheet heartbeat — append an activity timestamp on real edits, throttled to
+  // once/60s per session, so timesheets can be auto-derived from capture activity.
+  // Fire-and-forget (matches the save resilience); never blocks the operator.
+  async function logActivity() {
+    const sid = sessionRef.current
+    if (!sid) return
+    const now = Date.now()
+    if (now - lastActivityRef.current < 60_000) return
+    lastActivityRef.current = now
+    try {
+      await getDb().schema('production').from('capture_activity').insert({
+        session_id: sid, section_id: sectionId,
+        operator_id: verifiedOp?.user_id ?? user?.id ?? null,
+      } as any)
+    } catch { /* heartbeat is best-effort */ }
+  }
+  const logActivityRef = useRef(logActivity); logActivityRef.current = logActivity
+
   // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
     if (loading) return
-    const t = setTimeout(() => { flushRef.current() }, 2500)
+    const t = setTimeout(() => { flushRef.current(); logActivityRef.current() }, 2500)
     return () => clearTimeout(t)
   }, [productions, loading])
 
@@ -507,6 +527,8 @@ function CaptureScreen() {
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
               variance={stVariance} withinTol={stWithinTol} totalIn={st.totalIn} totalOut={st.totalOut}
+              sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+              sectionId={sectionId} date={dateParam} shift={shift}
               onSign={storeSignature} onSubmit={handleSubmit} onApprove={handleApprove} submitting={submitting}
             />
           )}
@@ -519,9 +541,10 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, onSign, onSubmit, onApprove, submitting }: {
+function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, onSign, onSubmit, onApprove, submitting }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
   variance: number; withinTol: boolean; totalIn: number; totalOut: number
+  sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   onSign: (role: 'operator' | 'supervisor', name: string, sig: string) => Promise<void>
   onSubmit: () => void; onApprove: () => void; submitting: boolean
 }) {
@@ -529,6 +552,7 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
   const [supName, setSupName] = useState('')
   const [opSig, setOpSig]     = useState(false)
   const [supSig, setSupSig]   = useState(false)
+  const [tsConfirmed, setTsConfirmed] = useState(false)
 
   return (
     <div className="space-y-5">
@@ -551,6 +575,14 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
         )}
       </div>
 
+      {/* Auto-derived timesheet — operator confirms (with light edits) at sign-off */}
+      <TimesheetConfirm
+        sessionId={sessionId} operatorName={opName || operatorName} operatorId={operatorId}
+        sectionId={sectionId} date={date} shift={shift}
+        locked={locked || status === 'submitted' || status === 'approved'}
+        onConfirmedChange={setTsConfirmed}
+      />
+
       {/* Operator sign-off — only while still being captured (draft/new) */}
       {(status === 'new' || status === 'draft') && (
         <>
@@ -561,7 +593,10 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
             <SignaturePad label="Operator signature" signed={opSig} disabled={locked || !opName.trim()}
               onSign={async sig => { await onSign('operator', opName.trim(), sig); setOpSig(true) }} />
           </div>
-          {opSig && (
+          {opSig && !tsConfirmed && (
+            <p className="text-[12px] text-warn flex items-center gap-1.5 px-1"><AlertTriangle size={13} /> Confirm your timesheet above before submitting.</p>
+          )}
+          {opSig && tsConfirmed && (
             <button onClick={onSubmit} disabled={submitting}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-brand text-white font-semibold text-[15px] disabled:opacity-40">
               {submitting ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />} Submit for supervisor sign-off

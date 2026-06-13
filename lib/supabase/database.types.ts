@@ -185,6 +185,48 @@ export interface Database {
         Update: never  // scan events are immutable
       }
 
+      // ── capture_activity ────────────────────────────────────
+      // Append-only heartbeat used to auto-derive operator timesheets.
+      capture_activity: {
+        Row: {
+          id:           string
+          session_id:   string
+          operator_id:  string | null
+          section_id:   string | null
+          occurred_at:  string
+        }
+        Insert: Omit<Database['production']['Tables']['capture_activity']['Row'], 'id' | 'occurred_at'>
+        Update: never  // activity events are immutable
+      }
+
+      // ── prod_timesheets ─────────────────────────────────────
+      prod_timesheets: {
+        Row: {
+          id:             string
+          session_id:     string
+          operator_id:    string | null
+          operator_name:  string
+          section_id:     string | null
+          date:           string | null
+          shift:          string | null
+          shift_start:    string | null
+          shift_end:      string | null
+          breaks:         Json    // [{type:'tea'|'lunch',start,end}]
+          worked_minutes: number | null
+          derived_data:   Json
+          confirmed:      boolean
+          confirmed_by:   string | null
+          confirmed_at:   string | null
+          created_at:     string
+          updated_at:     string
+        }
+        Insert: Omit<
+          Database['production']['Tables']['prod_timesheets']['Row'],
+          'id' | 'created_at' | 'updated_at'
+        > & { id?: string }
+        Update: Partial<Database['production']['Tables']['prod_timesheets']['Insert']>
+      }
+
       // ── shift_assignments ───────────────────────────────────
       shift_assignments: {
         Row: {
