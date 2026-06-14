@@ -14,7 +14,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
-  CalendarCheck, Clock, CalendarRange,
+  CalendarCheck, CalendarRange, Activity,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -32,17 +32,12 @@ const NAV: NavItem[] = [
   { href: '/dashboard',                 label: 'Dashboard',                  icon: LayoutDashboard, group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['IT','Production'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
+  // Supervisor hub — a single entry; module nav (Timesheets, Productions, Calendar,
+  // Messages, Analytics) lives in the in-page tabs to keep the sidebar lean.
+  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Operations', departments: ['IT','Production','Management'] },
   // Live Capture (barcode scanning) is the Phase-2 entry — hidden from nav until scanning goes live.
   { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['IT','Management'] },
   { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
-
-  // Supervisor hub — operator hours, productions overview, today snapshot.
-  { href: '/supervisor',                label: 'Overview',                   icon: LayoutDashboard, group: 'Supervisor', departments: ['IT','Production','Management'] },
-  { href: '/supervisor/timesheets',     label: 'Timesheets',                 icon: Clock,           group: 'Supervisor', departments: ['IT','Production','Management'] },
-  { href: '/supervisor/productions',    label: 'Productions',                icon: Factory,         group: 'Supervisor', departments: ['IT','Production','Management'] },
-  { href: '/supervisor/calendar',       label: 'Shift Calendar',             icon: CalendarCheck,   group: 'Supervisor', departments: ['IT','Production','Management'] },
-  { href: '/supervisor/messages',       label: 'Messages',                   icon: MessageSquare,   group: 'Supervisor', departments: ['IT','Production','Management'] },
-  { href: '/supervisor/analytics',      label: 'Analytics',                  icon: TrendingUp,      group: 'Supervisor', departments: ['IT','Production','Management'] },
 
   { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
   { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },

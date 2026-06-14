@@ -17,7 +17,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 4b, analytics)
+## 2026-06-14 — Alyssa (supervisor: hub sidebar cleanup + supervisor landing)
+
+**Files changed:**
+- components/layout/Sidebar.tsx — collapse 6 Supervisor nav items into one
+- lib/auth/departments.ts — getDefaultRoute now role-aware
+- app/login/page.tsx, app/page.tsx — pass role to getDefaultRoute
+
+**Changes:**
+- **Sidebar declutter**: the six-item "Supervisor" nav group is replaced by a single **Supervisor Hub** entry inside the Operations group, right under Capture (it's a factory-supervisor area). Module navigation (Timesheets, Productions, Calendar, Messages, Analytics) already lives in the in-page hub tabs, so nothing is lost — the sidebar is just much leaner, especially for IT who sees every group
+- **Supervisor landing**: `getDefaultRoute()` is now role-aware — a Production user with the **supervisor** role lands on `/supervisor` on login (instead of the generic `/production`). Applied in the login redirect and the root `/` redirect. Other roles/departments unchanged
+- The single hub entry highlights across all `/supervisor/*` routes (existing active-state rule)
 
 **Files changed:**
 - app/(app)/supervisor/analytics/page.tsx (new) — trend charts (recharts)

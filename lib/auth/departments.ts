@@ -68,6 +68,8 @@ export const DEPARTMENT_META = {
 
 export type Department = keyof typeof DEPARTMENT_META
 
-export function getDefaultRoute(department: string): string {
+export function getDefaultRoute(department: string, role?: string | null): string {
+  // Production supervisors land in their hub rather than the generic /production.
+  if (department === 'Production' && role === 'supervisor') return '/supervisor'
   return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/dashboard'
 }

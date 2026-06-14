@@ -15,12 +15,12 @@ export default function LoginPage() {
   const [error,     setError]     = useState('')
   const [loading,   setLoading]   = useState(false)
   const [msLoading, setMsLoading] = useState(false)
-  const { signIn, user, department, permissionsReady } = useAuth()
+  const { signIn, user, department, role, permissionsReady } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    if (user && permissionsReady) router.replace(getDefaultRoute(department ?? ''))
-  }, [user, permissionsReady, department, router])
+    if (user && permissionsReady) router.replace(getDefaultRoute(department ?? '', role))
+  }, [user, permissionsReady, department, role, router])
 
   async function handleMicrosoft() {
     setMsLoading(true); setError('')
