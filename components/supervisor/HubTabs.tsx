@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare } from 'lucide-react'
+import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare, TrendingUp } from 'lucide-react'
 
 // Sub-nav for the Supervisor Hub. Calendar + Messages are shown as disabled
 // "soon" placeholders until phases 2/3 land — matching the tab styling used on
@@ -13,6 +13,7 @@ const TABS = [
   { href: '/supervisor/productions', label: 'Productions', icon: Factory },
   { href: '/supervisor/calendar',    label: 'Calendar',    icon: CalendarDays },
   { href: '/supervisor/messages',    label: 'Messages',    icon: MessageSquare },
+  { href: '/supervisor/analytics',   label: 'Analytics',   icon: TrendingUp },
 ] as const
 
 const SOON: { label: string; icon: typeof MessageSquare }[] = []

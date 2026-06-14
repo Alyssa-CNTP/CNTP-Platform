@@ -5,7 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 3b + 4a, floor comms + handover notes)
+## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 4b, analytics)
+
+**Files changed:**
+- app/(app)/supervisor/analytics/page.tsx (new) — trend charts (recharts)
+- components/supervisor/HubTabs.tsx — Analytics tab
+- components/layout/Sidebar.tsx — Analytics nav item
+- app/(app)/layout.tsx — /supervisor/analytics page title
+
+**Changes:**
+- New **Analytics** (`/supervisor/analytics`): trend view over a date range (7/14/30-day presets + custom) built with recharts
+- Summary tiles (total hours, kg out, productions, operators, balance flags) + four charts: hours worked per day, kg bagged out per day, hours by operator (top 8), and kg out by section (section-coloured) — from `prod_timesheets` + `prod_sessions` + `prod_mass_balance`
+- Completes the supervisor hub roadmap (Overview · Timesheets · Productions · Calendar · Messages · Analytics). Tag lookup stays the Bag Tracking quick-link; wiring line messages into the global NotificationBell remains optional future polish
 
 **Files changed:**
 - components/production/capture/LineChat.tsx (new) — single-channel chat component
