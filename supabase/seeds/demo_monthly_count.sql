@@ -100,7 +100,7 @@ DELETE FROM production.prod_sessions WHERE comments = 'DEMO-MONTHLY-SEED';  -- c
 -- A March production session for Sieving → 500 kg produced
 WITH ps AS (
   INSERT INTO production.prod_sessions (section_id, date, shift, status, variant, comments)
-  VALUES ('sieve','2026-03-15','morning','approved','Conventional','DEMO-MONTHLY-SEED')
+  VALUES ('sieving','2026-03-15','morning','approved','Conventional','DEMO-MONTHLY-SEED')
   RETURNING id
 )
 INSERT INTO production.prod_mass_balance (session_id, total_input_kg, total_output_b_kg, total_output_c_kg, total_output_d_kg)
@@ -111,15 +111,15 @@ INSERT INTO production.bag_tags
   (serial_number, product_type, weight_kg, section_id, lot_number, status, created_at, consumed, consumed_at_section, consumed_weight_kg)
 VALUES
   -- R2603-EF: physical bags ≈ counted (1239 kg) → Reconciled in Batch Ledger
-  ('DEMO-MC-001','Leaf', 420,'sieve','R2603-EF','in_stock', '2026-03-12T09:00:00Z', false, NULL,   NULL),
-  ('DEMO-MC-002','Leaf', 410,'sieve','R2603-EF','in_stock', '2026-03-13T09:00:00Z', false, NULL,   NULL),
-  ('DEMO-MC-003','Leaf', 408,'sieve','R2603-EF','in_stock', '2026-03-14T09:00:00Z', false, NULL,   NULL),
+  ('DEMO-MC-001','Leaf', 420,'sieving','R2603-EF','in_stock', '2026-03-12T09:00:00Z', false, NULL,   NULL),
+  ('DEMO-MC-002','Leaf', 410,'sieving','R2603-EF','in_stock', '2026-03-13T09:00:00Z', false, NULL,   NULL),
+  ('DEMO-MC-003','Leaf', 408,'sieving','R2603-EF','in_stock', '2026-03-14T09:00:00Z', false, NULL,   NULL),
   -- R2603-DB: physical bags below counted (892 kg) → Variance in Batch Ledger
-  ('DEMO-MC-004','Dust', 350,'sieve','R2603-DB','in_stock', '2026-03-12T09:00:00Z', false, NULL,   NULL),
-  ('DEMO-MC-005','Dust', 360,'sieve','R2603-DB','in_stock', '2026-03-13T09:00:00Z', false, NULL,   NULL),
+  ('DEMO-MC-004','Dust', 350,'sieving','R2603-DB','in_stock', '2026-03-12T09:00:00Z', false, NULL,   NULL),
+  ('DEMO-MC-005','Dust', 360,'sieving','R2603-DB','in_stock', '2026-03-13T09:00:00Z', false, NULL,   NULL),
   -- Consumed at Sieving → Reconciliation "Consumed / Dispatched" = 330 kg
-  ('DEMO-MC-006','Leaf', 180,'sieve','R2603-EC','consumed', '2026-03-16T09:00:00Z', true,  'sieve', 180),
-  ('DEMO-MC-007','Leaf', 150,'sieve','R2603-EC','consumed', '2026-03-17T09:00:00Z', true,  'sieve', 150);
+  ('DEMO-MC-006','Leaf', 180,'sieving','R2603-EC','consumed', '2026-03-16T09:00:00Z', true,  'sieving', 180),
+  ('DEMO-MC-007','Leaf', 150,'sieving','R2603-EC','consumed', '2026-03-17T09:00:00Z', true,  'sieving', 150);
 
 -- ── TO REMOVE THE DEMO (run this block) ─────────────────────
 -- DELETE FROM production.mc_entries WHERE session_id IN (

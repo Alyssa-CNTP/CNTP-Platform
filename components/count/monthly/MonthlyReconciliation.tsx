@@ -6,6 +6,15 @@ import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, XCircle, Minus } from 'lucide-react'
 import type { McSession } from './MonthlyCountForm'
 
+// Production-module section ids differ from the count module's. Map them so
+// produced (prod_sessions) and consumed (bag_tags) line up with the count's
+// sections (which key the reconciliation rows). Lenient: unknown ids pass through.
+const PROD_TO_COUNT: Record<string, string> = {
+  sieving: 'sieve', refining1: 'ref1', refining2: 'ref2',
+  granule: 'gran', blender: 'blend', pasteuriser: 'past',
+}
+const toCountSection = (id: string | null | undefined) => (id ? (PROD_TO_COUNT[id] ?? id) : id)
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface SectionRow {
   section_id:        string
@@ -250,7 +259,7 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
     // Production by section — sum of mass-balance outputs (B + C + D)
     const prodBySection = new Map<string, number>()
     prodMb.forEach((m: any) => {
-      const sid = prodSessSection.get(m.session_id)
+      const sid = toCountSection(prodSessSection.get(m.session_id))
       if (!sid) return
       const kg = (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
       prodBySection.set(sid, (prodBySection.get(sid) ?? 0) + kg)
@@ -259,7 +268,8 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
     // Consumed by section
     const consumedBySection = new Map<string, number>()
     ;(consumedData ?? []).forEach((b: any) => {
-      const sid = b.consumed_at_section
+      const sid = toCountSection(b.consumed_at_section)
+      if (!sid) return
       consumedBySection.set(sid, (consumedBySection.get(sid) ?? 0) + (b.consumed_weight_kg ?? 0))
     })
 

@@ -17,6 +17,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-14 — Alyssa (monthly count: section-id mapping fix + seed correction)
+
+**Files changed:**
+- components/count/monthly/MonthlyReconciliation.tsx — production↔count section-id map
+- supabase/seeds/demo_monthly_count.sql — use valid production section ids
+
+**Changes:**
+- Fixed a latent mismatch: the production module uses section ids `sieving`/`refining1`/… while the count module uses `sieve`/`ref1`/…. Reconciliation joined produced (`prod_sessions`) and consumed (`bag_tags.consumed_at_section`) to count sections by raw id, so they'd never match. Added a `PROD_TO_COUNT` map (lenient — unknown ids pass through) applied to both, so Produced/Consumed now line up with the count's sections — for the demo and for real data
+- Seed corrected: the demo production session + bag tags now use the valid production section id `sieving` (the earlier `sieve` violated `prod_sessions_section_id_check`)
+
+---
+
 ## 2026-06-14 — Alyssa (monthly count: fix reconciliation/ledger queries + extend demo)
 
 **Files changed:**
