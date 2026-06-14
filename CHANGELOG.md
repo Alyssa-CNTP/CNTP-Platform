@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-14 — Alyssa (maintenance: Planner colour identities + depth)
+
+- `app/(app)/maintenance/planner/page.tsx` — each technician now has a stable **pastel identity colour** (by name hash) applied to their planner slots, duty windows, roster rows and the "next" strip, with a colour **legend** under the calendar; plus depth (soft shadows, on-duty glow, "today" tag). Purely visual — no logic change.
+
+---
+
 ## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 4b, analytics)
 
 **Files changed:**
