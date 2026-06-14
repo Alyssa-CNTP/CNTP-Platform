@@ -139,20 +139,21 @@ export default function MonthlyComparison({ session }: { session: McSession }) {
 
       {/* Controls */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex border border-surface-rule rounded-xl overflow-hidden">
+        <div className="flex gap-1 p-1 bg-stone-100 rounded-lg">
           {([
             { key: 'variances', label: `Variances (${flagCount})` },
-            { key: 'all',       label: 'All Items' },
-          ] as const).map((f, i) => (
+            { key: 'all',       label: 'All items' },
+          ] as const).map(f => (
             <button key={f.key} onClick={() => setFilter(f.key)}
-              className={`px-4 py-2 font-body text-[13px] font-medium transition-colors ${i > 0 ? 'border-l border-surface-rule' : ''} ${filter === f.key ? 'bg-brand text-white' : 'bg-surface-card text-text-muted hover:text-text'}`}>
+              className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${filter === f.key ? 'bg-white text-brand shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>
               {f.label}
             </button>
           ))}
         </div>
         <div className="flex-1" />
-        <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs text-ok font-semibold hover:underline">
-          <Download size={12} /> Export CSV
+        <button onClick={exportCSV}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-surface-rule text-[12px] text-text-muted hover:border-brand hover:text-brand transition-colors">
+          <Download size={13} /> Export CSV
         </button>
       </div>
 
