@@ -158,6 +158,12 @@ Ported onto the restructured module (lib/maintenance hook + routed pages).
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance · Planner colour identities + depth)
+
+- `app/(app)/maintenance/planner/page.tsx` — each technician now has a stable **pastel identity colour** (by name hash) applied to their planner slots, duty windows, roster rows, and the "next" strip, with a colour **legend** under the calendar. Added depth (soft shadows, on-duty glow, "today" tag). Purely visual — no logic change.
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 8: Planner & Roster tab + priority board)
 
 Split the confusing Planner/Roster out of the Job Cards segmented control into its own calendar tab, and structured the board by priority. Core scheduling/workflow logic unchanged.
