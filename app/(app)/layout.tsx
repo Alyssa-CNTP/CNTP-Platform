@@ -33,6 +33,9 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/quality/customer-specs', departments: ['IT','Quality','Sales'], permission: 'can_edit_customer_specs' },
   { prefix: '/quality',                departments: ['IT','Quality'] },
 
+  // Supervisor hub — production supervisors + management + IT
+  { prefix: '/supervisor',           departments: ['IT','Production','Management'] },
+
   // Production
   { prefix: '/count',                departments: ['IT','Production'], permission: 'can_submit_count'       },
   { prefix: '/info',                 departments: ['IT','Production'], permission: 'can_view_ops_dashboard' },
@@ -86,6 +89,11 @@ const ROUTE_META: Record<string, {
   '/users':                  { title: 'Users & Roles',          variant: 'default' },
   '/settings':               { title: 'Account Settings',       variant: 'default' },
   '/tags':                   { title: 'Bag Tracking',           variant: 'default' },
+
+  // Supervisor hub
+  '/supervisor':             { title: 'Supervisor Hub',         variant: 'default', chips: [{ label: 'Production', color: 'green' }] },
+  '/supervisor/timesheets':  { title: 'Timesheets',             variant: 'default' },
+  '/supervisor/productions': { title: 'Productions',            variant: 'default' },
 
   // Quality section
   '/quality/raw-material':   { title: 'Raw Material',           variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },

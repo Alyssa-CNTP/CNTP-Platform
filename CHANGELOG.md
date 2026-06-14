@@ -5,6 +5,28 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 1)
+
+**Files changed:**
+- app/(app)/supervisor/page.tsx (new) — hub Overview (today snapshot)
+- app/(app)/supervisor/timesheets/page.tsx (new) — operator hours dashboard
+- app/(app)/supervisor/productions/page.tsx (new) — productions overview
+- components/supervisor/HubTabs.tsx (new) — hub sub-nav
+- lib/utils/csv-export.ts (new) — client-side CSV download helper
+- lib/production/shifts.ts (new) — shift hour constants + currentShift()
+- components/layout/Sidebar.tsx — new "Supervisor" nav group
+- app/(app)/layout.tsx — /supervisor route guard + page titles
+
+**Changes:**
+- New `/supervisor` hub section (gated to Production / Management / IT) — Phase 1 of a phased supervisor platform. No DB migration: reads existing tables
+- **Overview** (`/supervisor`): today-at-a-glance KPI tiles — shifts rostered, operators on shift, hours logged, productions, open breakdowns, and technician on duty (reuses `resolveOnDutyTechnician` from maintenance) — plus quick links into each module
+- **Timesheets** (`/supervisor/timesheets`): operator hours from `prod_timesheets` over a date range (Today / This week presets + custom), section/operator/shift filters, interactive KPI tiles, two views (By operator with per-operator totals, and All shifts), expandable break detail, CSV export (gated on `can_export_csv`), rows deep-link into capture
+- **Productions** (`/supervisor/productions`): filterable table from `prod_sessions` + `prod_mass_balance` — operator(s), section, shift, variant/lot, kg in/out, status, and expandable handover notes (`comments`); CSV export
+- Extracted shift-time logic into `lib/production/shifts.ts`; added a reusable `downloadCsv` helper
+- Roadmap (next phases): master shift calendar (shifts + maintenance tech-on-duty), supervisor↔operator messaging/notes, handover-note capture at sign-off + trend analytics
+
+---
+
 ## 2026-06-13 — Alyssa (production: timesheet auto-derive from capture activity)
 
 **Files changed:**
