@@ -93,7 +93,7 @@ export default function MonthlyComparison({ session }: { session: McSession }) {
   }
 
   function exportCSV() {
-    const header = 'Section,Item,Batch,Supervisor kg,Admin kg,Variance kg,Variance %'
+    const header = 'Section,Item,Batch,Warehouse kg,Stock kg,Variance kg,Variance %'
     const lines  = rows.map(r =>
       [
         r.section_name, `"${r.item_name}"`, r.batch ?? '—',
@@ -170,7 +170,7 @@ export default function MonthlyComparison({ session }: { session: McSession }) {
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-surface border-b border-surface-rule">
-                  {['Section','Item','Batch','Supervisor','Admin','Variance',''].map(h => (
+                  {['Section','Item','Batch','Warehouse','Stock','Variance',''].map(h => (
                     <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
                   ))}
                 </tr>

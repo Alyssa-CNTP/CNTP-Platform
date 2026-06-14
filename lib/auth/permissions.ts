@@ -162,7 +162,8 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
     { role: 'floor_operator',        label: 'Floor Operator',           desc: 'PIN-based tablet access only — no system login' },
     { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs' },
-    { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Morning count and live capture history view only' },
+    { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Stock counts (warehouse side) + live capture history' },
+    { role: 'stock_controller',      label: 'Stock Controller',         desc: 'Stock counts (stock side) — second independent counter' },
   ],
   Maintenance: [
     { role: 'maintenance_default',    label: 'Maintenance (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -213,7 +214,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   floor_operator: {},   // no system permissions — PIN only
 
   production_supervisor: {
-    can_submit_count: true, can_edit_count: true,
+    // Factory floor — runs production capture & sign-off. Does NOT do stock counts.
     can_view_all_sections: true, can_view_ops_dashboard: true,
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
@@ -221,6 +222,13 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   },
 
   warehouse_supervisor: {
+    // One of the two stock counters (the "Warehouse Supervisor" count side).
+    can_submit_count: true, can_view_ops_dashboard: true,
+    can_view_live_history: true,
+  },
+
+  stock_controller: {
+    // The second stock counter (the "Stock" count side).
     can_submit_count: true, can_view_ops_dashboard: true,
     can_view_live_history: true,
   },

@@ -577,8 +577,8 @@ export default function MonthlyCountForm({
           <span className="font-mono text-[11px] text-text-muted flex-shrink-0">Entering as:</span>
           <div className="flex border border-surface-rule rounded-lg overflow-hidden">
             {([
-              { key: 'admin',      label: 'Admin Count' },
-              { key: 'supervisor', label: 'Supervisor Count' },
+              { key: 'supervisor', label: 'Warehouse Supervisor' },
+              { key: 'admin',      label: 'Stock' },
             ] as const).map((r, i) => (
               <button
                 key={r.key}
@@ -599,7 +599,7 @@ export default function MonthlyCountForm({
             ? 'bg-info/10 text-info'
             : 'bg-ok/10 text-ok'
         }`}>
-          {countRole === 'admin' ? 'Admin Count' : 'Supervisor Count'}
+          {countRole === 'admin' ? 'Stock' : 'Warehouse Supervisor'} count
         </span>
         <span className="font-mono text-[11px] text-text-muted">{displayName}</span>
         <span className="font-mono text-[11px] text-text-faint ml-auto">

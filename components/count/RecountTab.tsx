@@ -132,7 +132,7 @@ function VarianceItem({
         <div className="text-right shrink-0">
           <div className="font-display font-bold text-[15px] text-warn">{entry.variance_kg.toFixed(1)} kg off</div>
           <div className="font-mono text-[10px] text-text-muted">
-            Sup {entry.sup_kg.toFixed(1)} · Adm {entry.adm_kg.toFixed(1)} · {pct}% variance
+            Warehouse {entry.sup_kg.toFixed(1)} · Stock {entry.adm_kg.toFixed(1)} · {pct}% variance
           </div>
         </div>
         {open ? <ChevronUp size={15} className="text-text-muted shrink-0" /> : <ChevronDown size={15} className="text-text-muted shrink-0" />}
@@ -151,7 +151,7 @@ function VarianceItem({
               className="w-full px-4 py-3 rounded-xl border border-surface-rule bg-surface font-mono text-[14px] text-text outline-none focus:border-brand"
             />
             <p className="font-mono text-[10px] text-text-muted">
-              Supervisor counted: {entry.sup_kg.toFixed(3)} kg · Admin counted: {entry.adm_kg.toFixed(3)} kg
+              Warehouse Supervisor counted: {entry.sup_kg.toFixed(3)} kg · Stock counted: {entry.adm_kg.toFixed(3)} kg
             </p>
           </div>
 
@@ -235,8 +235,8 @@ function RecountCard({ req }: { req: RecountRequest }) {
         {req.section_name} · Submitted {format(new Date(req.submitted_at), 'd MMM HH:mm')}
       </div>
       <div className="flex items-center gap-4 font-mono text-[11px] text-text-muted">
-        <span>Sup: {req.sup_kg.toFixed(1)} kg</span>
-        <span>Adm: {req.adm_kg.toFixed(1)} kg</span>
+        <span>Warehouse: {req.sup_kg.toFixed(1)} kg</span>
+        <span>Stock: {req.adm_kg.toFixed(1)} kg</span>
         <span className="font-bold text-text">Recount: {req.recount_kg.toFixed(1)} kg</span>
       </div>
       {req.notes && <p className="font-body text-[12px] text-text-muted italic">"{req.notes}"</p>}
