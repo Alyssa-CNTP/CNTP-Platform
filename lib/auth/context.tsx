@@ -254,8 +254,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isMarketing  = department === 'Marketing'
   const isManagement = department === 'Management'
 
-  // Role flags
-  const isSupervisor = role === 'supervisor'
+  // Role flags. isSupervisor = production/factory supervisor (count + capture
+  // sign-off powers). Warehouse supervisors are NOT production supervisors.
+  // 'supervisor' is the legacy value for 'production_supervisor'.
+  const isSupervisor = role === 'production_supervisor' || role === 'supervisor'
   const isFloor      = role === 'operator' || role === 'section_operator'
 
   // Access flags — IT can access everything, others only their dept + what's toggled
