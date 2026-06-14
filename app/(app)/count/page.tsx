@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { getDb } from '@/lib/supabase/db'
-import { useCountStore, itemKey, bagTotal, palletTotal, itemTotal, groupByBatch, defaultItemState } from '@/lib/store/countStore'
+import { useCountStore, itemKey, bagTotal, palletTotal, itemTotal, groupByBatch, defaultItemState, countRoleLabel } from '@/lib/store/countStore'
 import { ROOIBOS_SECTIONS, ROSEHIP_SECTIONS, inventoryCode, palletKg, PALLET_PACKAGES } from '@/lib/data/sections'
 import type { Section, InventoryItem } from '@/lib/data/sections'
 import { t, type Lang } from '@/lib/data/translations'
@@ -78,12 +78,13 @@ function CountPage() {
       setDraftWarning(store.date)
     }
     if (!store.date) store.setDate(today)
-    // Pin role for defined roles; IT/management users keep whichever role is in the store.
-    // Production/factory supervisors (incl. legacy 'supervisor') map to the count's own
-    // 'supervisor' role; the count domain value stays 'supervisor' regardless of the app role.
-    if (role === 'admin') store.setRole('admin')
-    else if (role === 'production_supervisor' || role === 'supervisor') store.setRole('supervisor')
-    else if (!store.role) store.setRole('admin') // sensible default for IT
+    // Pin the count side for the two counter roles; IT/management keep their toggle choice.
+    // The count's own domain value stays 'supervisor' (Warehouse Supervisor side) / 'admin'
+    // (Stock side) regardless of the app role. Factory staff don't reach this page.
+    // 'supervisor' is the legacy app-role alias for the warehouse side.
+    if (role === 'warehouse_supervisor' || role === 'supervisor') store.setRole('supervisor')
+    else if (role === 'stock_controller' || role === 'admin') store.setRole('admin')
+    else if (!store.role) store.setRole('admin') // sensible default for IT/management
     checkSubmission()
   }, [today, role])
 
@@ -331,7 +332,7 @@ function CountPage() {
         </div>
         <h2 className="font-display font-extrabold text-3xl text-white mb-2">Count submitted</h2>
         <p className="text-white/50 text-sm mb-8">
-          {isAdm ? 'Admin' : 'Supervisor'} count · {format(new Date(store.date+'T12:00:00'), 'd MMMM yyyy')} · {doneStats.time}
+          {countRoleLabel(store.role as any)} count · {format(new Date(store.date+'T12:00:00'), 'd MMMM yyyy')} · {doneStats.time}
         </p>
         <div className="flex gap-10 mb-10">
           <div>
@@ -398,59 +399,69 @@ function CountPage() {
           </div>
         )}
 
-        {/* Count header */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          {/* Role — interactive picker for IT/management, static badge for pinned roles */}
-          {(isIT || (role !== 'admin' && role !== 'supervisor')) ? (
-            <div className="flex border border-surface-rule rounded-lg overflow-hidden">
-              {(['admin','supervisor'] as const).map((r, i) => (
-                <button
-                  key={r}
-                  onClick={() => store.setRole(r)}
-                  className={clsx(
-                    'font-display font-bold text-xs px-3 py-1.5 uppercase tracking-wide transition-colors',
-                    i > 0 && 'border-l border-surface-rule',
-                    store.role === r
-                      ? r === 'admin' ? 'bg-status-infoBg text-status-info' : 'bg-status-okBg text-status-ok'
-                      : 'text-text-muted hover:text-text'
-                  )}
-                >
-                  {r === 'admin' ? 'Admin Count' : 'Supervisor Count'}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <span className={clsx(
-              'font-display font-bold text-sm px-3 py-1.5 rounded-lg uppercase tracking-wide',
-              store.role === 'admin' ? 'bg-status-infoBg text-status-info' : 'bg-status-okBg text-status-ok'
-            )}>
-              {store.role === 'admin' ? 'Admin Count' : 'Supervisor Count'}
-            </span>
-          )}
+        {/* Page header */}
+        <div className="mb-4">
+          <h1 className="font-display font-bold text-[22px] text-text">Stock Count</h1>
+          <p className="text-[12px] text-text-muted mt-0.5">
+            Two-person reconciliation · {format(new Date(store.date + 'T12:00:00'), 'EEEE d MMM yyyy')}
+          </p>
+        </div>
 
-          <input
-            type="date"
-            value={store.date}
-            onChange={e => handleDateChange(e.target.value)}
-            className="px-3 py-1.5 border border-surface-rule rounded-lg font-mono text-xs text-text bg-surface-card outline-none focus:border-accent"
-          />
+        {/* Controls */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {/* Count side — segmented control for oversight (IT/management), pinned badge otherwise */}
+          {(() => {
+            const pinned = role === 'warehouse_supervisor' || role === 'stock_controller' || role === 'admin' || role === 'supervisor'
+            const sideCls = (r: 'admin' | 'supervisor') =>
+              r === 'supervisor' ? 'bg-ok/10 text-ok' : 'bg-info/10 text-info'
+            return (isIT || !pinned) ? (
+              <div className="flex p-1 bg-stone-100 rounded-xl">
+                {(['supervisor', 'admin'] as const).map(r => (
+                  <button key={r} onClick={() => store.setRole(r)}
+                    className={clsx(
+                      'px-3 py-1.5 rounded-lg font-medium text-[12px] transition-colors',
+                      store.role === r ? `bg-white shadow-sm ${r === 'supervisor' ? 'text-ok' : 'text-info'}` : 'text-stone-500 hover:text-stone-700',
+                    )}>
+                    {countRoleLabel(r)}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className={clsx('inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-full', sideCls(store.role as any))}>
+                {countRoleLabel(store.role as any)} count
+              </span>
+            )
+          })()}
 
-          <span className="font-mono text-xs text-text-muted px-3 py-1.5 bg-surface rounded-lg border border-surface-rule">
-            {displayName}
-          </span>
+          <input type="date" value={store.date} onChange={e => handleDateChange(e.target.value)}
+            className="px-3 py-2 border border-surface-rule rounded-lg font-mono text-[12px] text-text bg-surface-card outline-none focus:border-brand" />
+
+          <span className="font-mono text-[12px] text-text-muted px-3 py-2 bg-surface rounded-lg border border-surface-rule">{displayName}</span>
 
           <div className="flex-1" />
 
-          <select
-            value={store.lang}
-            onChange={e => store.setLang(e.target.value as Lang)}
-            className="px-3 py-1.5 border border-surface-rule rounded-lg font-mono text-xs text-text bg-surface-card outline-none"
-          >
+          <select value={store.lang} onChange={e => store.setLang(e.target.value as Lang)}
+            className="px-3 py-2 border border-surface-rule rounded-lg font-mono text-[12px] text-text bg-surface-card outline-none focus:border-brand cursor-pointer">
             <option value="en">English</option>
             <option value="af">Afrikaans</option>
             <option value="zu">isiZulu</option>
             <option value="xh">isiXhosa</option>
           </select>
+        </div>
+
+        {/* KPI tiles */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          {[
+            { label: 'Items counted', value: `${gDone}/${gTotal}` },
+            { label: 'Total kg',      value: gKg > 0 ? Math.round(gKg).toLocaleString() : '—' },
+            { label: 'Complete',      value: `${gTotal ? Math.round((gDone / gTotal) * 100) : 0}%` },
+            { label: 'Counting as',   value: countRoleLabel(store.role as any), small: true },
+          ].map(tile => (
+            <div key={tile.label} className="bg-surface-card border border-surface-rule rounded-xl p-3.5">
+              <div className={clsx('font-display font-bold leading-none text-text', (tile as any).small ? 'text-[14px]' : 'text-[22px]')}>{tile.value}</div>
+              <div className="font-mono text-[10px] text-text-muted uppercase tracking-wide mt-1.5">{tile.label}</div>
+            </div>
+          ))}
         </div>
 
         {/* Product switcher */}
@@ -594,7 +605,7 @@ function CountPage() {
       {/* ── SUBMIT CONFIRM SHEET ── */}
       <ConfirmSheet
         open={showConfirm}
-        title={`Submit ${store.role === 'admin' ? 'admin' : 'supervisor'} count?`}
+        title={`Submit ${countRoleLabel(store.role as any)} count?`}
         message={`${format(new Date(store.date+'T12:00:00'), 'd MMMM yyyy')} · Once submitted you cannot edit entries for this date.`}
         confirmLabel="Yes, submit count"
         onConfirm={() => { setShowConfirm(false); doSubmit() }}

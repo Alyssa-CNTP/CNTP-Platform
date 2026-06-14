@@ -107,8 +107,8 @@ function VarianceCard({
           {/* Count breakdown */}
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Supervisor', value: `${item.sup_kg.toFixed(3)} kg`, color: 'text-text' },
-              { label: 'Admin',      value: `${item.adm_kg.toFixed(3)} kg`, color: 'text-text' },
+              { label: 'Warehouse', value: `${item.sup_kg.toFixed(3)} kg`, color: 'text-text' },
+              { label: 'Stock',     value: `${item.adm_kg.toFixed(3)} kg`, color: 'text-text' },
               { label: 'Variance',   value: `${item.variance_kg.toFixed(3)} kg`, color: severity === 'high' ? 'text-err' : 'text-warn' },
             ].map(col => (
               <div key={col.label} className="bg-surface rounded-xl p-3 text-center">

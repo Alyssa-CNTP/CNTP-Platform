@@ -135,8 +135,8 @@ export default function MonthlyCountTab() {
             <AlertTriangle size={13} className="text-info flex-shrink-0" />
             <p className="font-mono text-[11px] text-info">
               {session.sup_confirmed_at
-                ? 'Supervisor count submitted — awaiting admin count to unlock comparison and reconciliation.'
-                : 'Admin count submitted — awaiting supervisor count to unlock comparison and reconciliation.'
+                ? 'Warehouse Supervisor count submitted — awaiting Stock count to unlock comparison and reconciliation.'
+                : 'Stock count submitted — awaiting Warehouse Supervisor count to unlock comparison and reconciliation.'
               }
             </p>
           </div>

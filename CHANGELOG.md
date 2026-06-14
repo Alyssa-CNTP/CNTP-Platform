@@ -17,7 +17,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (roles: split production vs warehouse supervisor)
+## 2026-06-14 — Alyssa (stock count: fix counter roles + redesign)
+
+**Files changed:**
+- app/(app)/count/page.tsx — role mapping, page header + KPI tiles, relabelled count-side control
+- lib/store/countStore.ts — countRoleLabel/countRoleShort helpers
+- lib/auth/departments.ts — add stock_controller role + landing
+- lib/auth/permissions.ts — stock_controller defaults; production_supervisor no longer counts
+- components/count/CountCompareView.tsx, RecountTab.tsx, monthly/* — relabel counter sides
+
+**Changes:**
+- **Counter roles fixed.** The two stock counters are now correctly the **Warehouse Supervisor** and **Stock** (the old "Admin" label was a misnomer). Factory staff no longer count — `production_supervisor` lost `can_submit_count`. New **`stock_controller`** role added (Production dept) for the Stock-side counter; `warehouse_supervisor` is the Warehouse-side counter. The count's underlying DB values stay `'supervisor'`/`'admin'` (no data migration) — only labels, the app-role→side mapping, and who-can-count changed
+- IT/management keep an oversight toggle to count as either side; the two counter roles are pinned to their side
+- **Interim landing**: `warehouse_supervisor` and `stock_controller` land on `/count`; `production_supervisor` still lands on `/supervisor`
+- **Daily count redesign** to the app's clean standard: proper page header, a KPI tile row (items counted · total kg · % complete · counting-as), and the count-side picker as a tidy segmented control. Recount, comparison and monthly views relabelled to Warehouse/Stock
+- No DB migration. New role surfaces in Users & Roles automatically
 
 **Files changed:**
 - lib/auth/departments.ts — Production roles + getDefaultRoute/isProductionSupervisor

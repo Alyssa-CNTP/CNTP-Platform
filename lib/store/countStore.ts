@@ -34,6 +34,15 @@ export function itemKey(sectionId: string, itemUid: string): string {
   return `${sectionId}__${itemUid}`
 }
 
+// The count's two reconciliation sides. DB values stay 'supervisor'/'admin';
+// these are the human labels shown across the count UI.
+export function countRoleLabel(role: UserRole): string {
+  return role === 'supervisor' ? 'Warehouse Supervisor' : 'Stock'
+}
+export function countRoleShort(role: UserRole): string {
+  return role === 'supervisor' ? 'Warehouse' : 'Stock'
+}
+
 export function defaultItemState(firstVariant?: string): ItemState {
   return {
     variant: firstVariant ?? '',
