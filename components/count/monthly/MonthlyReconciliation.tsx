@@ -80,8 +80,8 @@ function VarianceDrillDown({ sectionId, sessionId, month }: { sectionId: string;
       .from('bag_tags')
       .select('lot_number,weight_kg')
       .eq('section_id', sectionId)
-      .gte('captured_at', dateFrom + 'T00:00:00Z')
-      .lte('captured_at', dateTo   + 'T23:59:59Z')
+      .gte('created_at', dateFrom + 'T00:00:00Z')
+      .lte('created_at', dateTo   + 'T23:59:59Z')
       .not('weight_kg', 'is', null)
 
     // Aggregate monthly count by batch (avg sup+adm)
@@ -197,14 +197,25 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
       prevData = data ?? []
     }
 
-    // ── 3. Produced — production sessions this month ─────────────────────────
-    const { data: prodData } = await db
+    // ── 3. Produced — mass-balance output of this month's production sessions ─
+    const { data: prodSessions } = await db
       .schema('production')
       .from('prod_sessions')
-      .select('section_id,section_name,notes')
+      .select('id,section_id')
       .gte('date', dateFrom)
       .lte('date', dateTo)
       .in('status', ['submitted','approved'])
+    const prodSessIds = (prodSessions ?? []).map((p: any) => p.id)
+    let prodMb: any[] = []
+    if (prodSessIds.length) {
+      const { data } = await db
+        .schema('production')
+        .from('prod_mass_balance')
+        .select('session_id,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+        .in('session_id', prodSessIds)
+      prodMb = data ?? []
+    }
+    const prodSessSection = new Map<string, string>((prodSessions ?? []).map((p: any) => [p.id as string, p.section_id as string]))
 
     // ── 4. Consumed / dispatched — bags consumed this month ──────────────────
     const { data: consumedData } = await db
@@ -213,8 +224,8 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
       .select('consumed_at_section,consumed_weight_kg')
       .not('consumed_at_section', 'is', null)
       .not('consumed_weight_kg', 'is', null)
-      .gte('captured_at', dateFrom + 'T00:00:00Z')
-      .lte('captured_at', dateTo   + 'T23:59:59Z')
+      .gte('created_at', dateFrom + 'T00:00:00Z')
+      .lte('created_at', dateTo   + 'T23:59:59Z')
 
     // ── Aggregate ─────────────────────────────────────────────────────────────
 
@@ -236,12 +247,13 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
       prevBySection.set(e.section_id, existing + (e.kg ?? 0) / 2)
     })
 
-    // Production by section
+    // Production by section — sum of mass-balance outputs (B + C + D)
     const prodBySection = new Map<string, number>()
-    ;(prodData ?? []).forEach((p: any) => {
-      let kg = 0
-      try { const n = typeof p.notes === 'string' ? JSON.parse(p.notes) : p.notes; kg = n?.total_kg ?? n?.totalKg ?? 0 } catch {}
-      prodBySection.set(p.section_id, (prodBySection.get(p.section_id) ?? 0) + kg)
+    prodMb.forEach((m: any) => {
+      const sid = prodSessSection.get(m.session_id)
+      if (!sid) return
+      const kg = (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
+      prodBySection.set(sid, (prodBySection.get(sid) ?? 0) + kg)
     })
 
     // Consumed by section

@@ -98,8 +98,8 @@ export default function MonthlyBatchLedger({ session }: { session: McSession }) 
       .schema('production')
       .from('bag_tags')
       .select('lot_number,section_id,weight_kg')
-      .gte('captured_at', dateFrom + 'T00:00:00Z')
-      .lte('captured_at', dateTo   + 'T23:59:59Z')
+      .gte('created_at', dateFrom + 'T00:00:00Z')
+      .lte('created_at', dateTo   + 'T23:59:59Z')
       .not('lot_number', 'is', null)
 
     // 4. Quality check — just check for existence by lot number patterns
