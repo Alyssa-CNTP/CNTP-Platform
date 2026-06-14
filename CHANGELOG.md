@@ -5,7 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 2, shift calendar)
+## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 3, line messaging)
+
+**Files changed:**
+- supabase/migrations/20260614_001_line_messages.sql (new) — line_messages table
+- lib/production/messages.ts (new) — load/send/delete + localStorage last-seen
+- app/(app)/supervisor/messages/page.tsx (new) — channels + thread + composer
+- components/supervisor/HubTabs.tsx — promote Messages tab (no more "soon")
+- components/layout/Sidebar.tsx — add Messages nav item
+- app/(app)/layout.tsx — /supervisor/messages page title
+- lib/supabase/database.types.ts — line_messages types
+
+**Changes:**
+- New **Messages** (`/supervisor/messages`): per-line communication for the hub. Channels = an "All lines" general channel + one per production section; two-pane layout (channel list with last-message preview + unread dots · thread with WhatsApp-style bubbles · composer)
+- New **`production.line_messages`** table (text-only v1; soft-delete via `deleted_at` for audit). Author = current user (name + role chip)
+- Polling refresh every 15s (no realtime-publication dependency); unread tracked per-channel via `localStorage` last-seen (no read-receipt schema); authors can delete their own messages
+- Defensive: if the table isn't present yet (migration pending) the page degrades to an empty state — never breaks the hub
+- **Requires migration** `20260614_001_line_messages.sql` (Supabase SQL editor, staging) before messages persist
+- Scope note: supervisor-hub side first; an operator-side entry point (from the floor capture view) is the next increment so operators can post back
 
 **Files changed:**
 - app/(app)/supervisor/calendar/page.tsx (new) — master shift calendar
