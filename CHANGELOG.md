@@ -17,7 +17,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (monthly count: create missing backing tables)
+## 2026-06-14 — Alyssa (monthly count: fix reconciliation/ledger queries + extend demo)
+
+**Files changed:**
+- components/count/monthly/MonthlyReconciliation.tsx — produced + bag-tag query fixes
+- components/count/monthly/MonthlyBatchLedger.tsx — bag-tag query fix
+- supabase/seeds/demo_monthly_count.sql — March bag tags + production session
+
+**Changes:**
+- **Two query bugs fixed** that meant the Reconciliation "Produced/Consumed" and Batch Ledger bag-tag columns could never populate:
+  - Bag-tag queries filtered on `bag_tags.captured_at`, which doesn't exist — corrected to `created_at` (3 places: Batch Ledger, Reconciliation consumed, variance drill-down)
+  - "Produced" read `prod_sessions.notes` (no such column) for a `total_kg` — rewritten to sum real output from `prod_mass_balance` (B+C+D) for the month's submitted/approved sessions
+- **Demo seed extended** so those columns light up: a March Sieving production session (500 kg via `prod_mass_balance`) and seven March `bag_tags` against the monthly-count batches — giving the Batch Ledger a Reconciled (R2603-EF), a Variance (R2603-DB) and Unlinked rows, and Reconciliation real Produced (500 kg) + Consumed (330 kg) figures for Sieving. All demo rows are clearly marked (`DEMO-MC-*` serials, `DEMO-MONTHLY-SEED` session) and included in the seed's DELETE block
+- Re-run `supabase/seeds/demo_monthly_count.sql` (after the table migration) to load the extended demo
 
 **Files changed:**
 - supabase/migrations/20260614_004_monthly_count_tables.sql (new)
