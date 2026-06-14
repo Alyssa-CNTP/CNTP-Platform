@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-14 — Alyssa (maintenance: Planner colours — distinct hues)
+
+- `app/(app)/maintenance/planner/page.tsx` — reworked the technician palette to maximally-distinct hues (violet · blue · emerald · amber · rose · cyan · orange · fuchsia) assigned **by position in the staff list** (not name-hash, which collided on similar pinks) with saturated borders/dots, so each technician is clearly distinguishable. Follow-up to the colour-identity change below.
+
+---
+
 ## 2026-06-14 — Alyssa (maintenance: Planner colour identities + depth)
 
 - `app/(app)/maintenance/planner/page.tsx` — each technician now has a stable **pastel identity colour** (by name hash) applied to their planner slots, duty windows, roster rows and the "next" strip, with a colour **legend** under the calendar; plus depth (soft shadows, on-duty glow, "today" tag). Purely visual — no logic change.

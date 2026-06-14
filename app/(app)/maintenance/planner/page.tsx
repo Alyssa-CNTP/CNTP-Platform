@@ -37,21 +37,24 @@ const sameDay = (a: Date, b: Date) =>
 // ── Per-technician pastel identity colours ──────────────────────────────────
 // Each technician gets a stable pastel (by name hash) so their duty windows and
 // planner slots are instantly recognisable across the calendar.
+// Maximally-distinct hues (violet → blue → green → amber → rose → cyan → orange →
+// fuchsia) so the first ~8 technicians are each clearly different. Borders/dots
+// are saturated for a "defining" edge; backgrounds stay soft.
 interface Pastel { bg: string; border: string; text: string; dot: string }
 const TECH_PALETTE: Pastel[] = [
-  { bg: '#EDE9FE', border: '#C4B5FD', text: '#6D28D9', dot: '#8B5CF6' }, // lavender
-  { bg: '#E0F2FE', border: '#7DD3FC', text: '#0369A1', dot: '#38BDF8' }, // sky
-  { bg: '#DCFCE7', border: '#86EFAC', text: '#15803D', dot: '#4ADE80' }, // mint
-  { bg: '#FFEDD5', border: '#FDBA74', text: '#C2410C', dot: '#FB923C' }, // peach
-  { bg: '#FFE4E6', border: '#FDA4AF', text: '#BE123C', dot: '#FB7185' }, // rose
-  { bg: '#CCFBF1', border: '#5EEAD4', text: '#0F766E', dot: '#2DD4BF' }, // teal
-  { bg: '#FEF9C3', border: '#FDE68A', text: '#A16207', dot: '#FACC15' }, // butter
-  { bg: '#FCE7F3', border: '#F9A8D4', text: '#BE185D', dot: '#F472B6' }, // blossom
+  { bg: '#EDE9FE', border: '#8B5CF6', text: '#5B21B6', dot: '#7C3AED' }, // violet
+  { bg: '#DBEAFE', border: '#3B82F6', text: '#1D4ED8', dot: '#2563EB' }, // blue
+  { bg: '#D1FAE5', border: '#10B981', text: '#047857', dot: '#059669' }, // emerald
+  { bg: '#FEF3C7', border: '#F59E0B', text: '#B45309', dot: '#D97706' }, // amber
+  { bg: '#FFE4E6', border: '#F43F5E', text: '#BE123C', dot: '#E11D48' }, // rose
+  { bg: '#CFFAFE', border: '#06B6D4', text: '#0E7490', dot: '#0891B2' }, // cyan
+  { bg: '#FFEDD5', border: '#F97316', text: '#C2410C', dot: '#EA580C' }, // orange
+  { bg: '#FAE8FF', border: '#D946EF', text: '#A21CAF', dot: '#C026D3' }, // fuchsia
 ]
-function techColor(name: string): Pastel {
+function hashName(name: string) {
   let h = 0
   for (let i = 0; i < (name || '').length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  return TECH_PALETTE[h % TECH_PALETTE.length]
+  return h
 }
 
 export default function PlannerPage() {
@@ -67,6 +70,10 @@ export default function PlannerPage() {
   // Technicians come from the live staff directory (falls back to TECHS).
   const techNames = staff.map(s => s.name)
   const staffByName = (name: string) => staff.find(s => s.name === name)
+  // Stable per-technician colour: assign by position in the staff list so the
+  // first technicians get the most-distinct hues; hash as a fallback.
+  const techIndex = new Map(techNames.map((t, i) => [t, i]))
+  const colorFor = (name: string) => TECH_PALETTE[(techIndex.has(name) ? techIndex.get(name)! : hashName(name)) % TECH_PALETTE.length]
 
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [openWeek, setOpenWeek] = useState(true)
@@ -124,7 +131,7 @@ export default function PlannerPage() {
             <UserCheck className={`w-4 h-4 ${duty ? 'text-ok' : 'text-err'}`} /> On duty now
           </div>
           {duty
-            ? <div className="mt-1.5 text-lg font-semibold text-ok flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: techColor(duty).dot }} />{duty}</div>
+            ? <div className="mt-1.5 text-lg font-semibold text-ok flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorFor(duty).dot }} />{duty}</div>
             : <div className="mt-1.5 text-sm font-semibold text-err">Nobody — breakdowns will wait</div>}
           <div className="text-[11px] text-text-faint mt-1">Breakdowns auto-route to the on-duty technician.</div>
         </div>
@@ -136,7 +143,7 @@ export default function PlannerPage() {
           </div>
           {upNextRoster
             ? <>
-                <div className="mt-1.5 text-lg font-semibold text-text flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: techColor(upNextRoster.technician).dot }} />{upNextRoster.technician}</div>
+                <div className="mt-1.5 text-lg font-semibold text-text flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorFor(upNextRoster.technician).dot }} />{upNextRoster.technician}</div>
                 <div className="text-[12px] text-text-muted mt-0.5">{fmtDT(upNextRoster.start_at)} → {fmtT(upNextRoster.end_at)}</div>
               </>
             : <div className="mt-1.5 text-sm text-text-faint">No upcoming duty slots.</div>}
@@ -215,7 +222,7 @@ export default function PlannerPage() {
                   {/* Roster duty windows — per-tech pastel, dashed border, on-duty glow */}
                   {dayRoster.map(r => {
                     const onNow = new Date(r.start_at).getTime() <= nowMs && nowMs <= new Date(r.end_at).getTime()
-                    const tc = techColor(r.technician)
+                    const tc = colorFor(r.technician)
                     return (
                       <div key={'r' + r.id}
                         style={{ background: tc.bg, borderColor: onNow ? '#1A7A3C' : tc.border, color: tc.text, boxShadow: onNow ? '0 0 0 2px rgba(26,122,60,0.25)' : undefined }}
@@ -228,7 +235,7 @@ export default function PlannerPage() {
                   {/* Planner slots — per-tech pastel, solid, removable (manager) */}
                   {daySlots.map(s => {
                     const c = jcs.find(x => x.id === s.card_id)
-                    const tc = techColor(s.technician)
+                    const tc = colorFor(s.technician)
                     return (
                       <div key={'s' + s.id}
                         style={{ background: tc.bg, borderColor: tc.border, color: tc.text }}
@@ -261,7 +268,7 @@ export default function PlannerPage() {
           <div className="flex flex-wrap items-center gap-1.5 mt-3">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint mr-0.5">Technicians</span>
             {techNames.map(t => {
-              const tc = techColor(t)
+              const tc = colorFor(t)
               return (
                 <span key={t} className="inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full border px-2 py-0.5"
                   style={{ background: tc.bg, borderColor: tc.border, color: tc.text }}>
@@ -303,7 +310,7 @@ export default function PlannerPage() {
               <div className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">{day}</div>
               {rows.map(r => {
                 const onNow = new Date(r.start_at).getTime() <= nowMs && nowMs <= new Date(r.end_at).getTime()
-                const tc = techColor(r.technician)
+                const tc = colorFor(r.technician)
                 return (
                   <div key={r.id} style={{ borderLeftColor: tc.dot }}
                     className={`flex gap-2 items-center text-[12px] px-2.5 py-2 rounded-md mb-1 border-l-4 shadow-sm ${onNow ? 'bg-ok/10 ring-1 ring-ok/40' : 'bg-surface-raised'}`}>
