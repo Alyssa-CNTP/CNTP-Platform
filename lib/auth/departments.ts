@@ -15,9 +15,10 @@ export const DEPARTMENT_META = {
     description: 'Operations, morning count, floor production',
     color: 'bg-orange-500',
     roles: [
-      { value: 'supervisor',       label: 'Supervisor',       isDefault: true },
-      { value: 'operator',         label: 'Operator' },
-      { value: 'section_operator', label: 'Section Operator', requiresSection: true },
+      { value: 'production_supervisor', label: 'Production Supervisor', isDefault: true },
+      { value: 'warehouse_supervisor',  label: 'Warehouse Supervisor' },
+      { value: 'operator',              label: 'Operator' },
+      { value: 'section_operator',      label: 'Section Operator', requiresSection: true },
     ],
     sections: ['sieving','refining1','refining2','granule','blender','pasteuriser'],
     defaultRoute: '/production',
@@ -68,8 +69,14 @@ export const DEPARTMENT_META = {
 
 export type Department = keyof typeof DEPARTMENT_META
 
+// Factory/production supervisors land in their hub. Warehouse supervisors (and
+// everyone else) follow the normal department default. 'supervisor' is accepted
+// as a legacy alias for 'production_supervisor' (pre-rename accounts).
+export function isProductionSupervisor(role?: string | null): boolean {
+  return role === 'production_supervisor' || role === 'supervisor'
+}
+
 export function getDefaultRoute(department: string, role?: string | null): string {
-  // Production supervisors land in their hub rather than the generic /production.
-  if (department === 'Production' && role === 'supervisor') return '/supervisor'
+  if (department === 'Production' && isProductionSupervisor(role)) return '/supervisor'
   return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/dashboard'
 }

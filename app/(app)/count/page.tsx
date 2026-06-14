@@ -78,8 +78,11 @@ function CountPage() {
       setDraftWarning(store.date)
     }
     if (!store.date) store.setDate(today)
-    // Pin role for defined roles; IT/management users keep whichever role is in the store
-    if (role === 'admin' || role === 'supervisor') store.setRole(role)
+    // Pin role for defined roles; IT/management users keep whichever role is in the store.
+    // Production/factory supervisors (incl. legacy 'supervisor') map to the count's own
+    // 'supervisor' role; the count domain value stays 'supervisor' regardless of the app role.
+    if (role === 'admin') store.setRole('admin')
+    else if (role === 'production_supervisor' || role === 'supervisor') store.setRole('supervisor')
     else if (!store.role) store.setRole('admin') // sensible default for IT
     checkSubmission()
   }, [today, role])

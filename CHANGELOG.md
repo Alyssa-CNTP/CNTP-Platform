@@ -17,7 +17,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (supervisor: hub sidebar cleanup + supervisor landing)
+## 2026-06-14 — Alyssa (roles: split production vs warehouse supervisor)
+
+**Files changed:**
+- lib/auth/departments.ts — Production roles + getDefaultRoute/isProductionSupervisor
+- lib/auth/context.tsx — isSupervisor recognises production_supervisor
+- app/(app)/count/page.tsx — map app role → count-domain role
+- app/(app)/production/section/page.tsx — sign-off gate accepts production_supervisor
+- supabase/migrations/20260614_002_supervisor_role_rename.sql (new)
+
+**Changes:**
+- The single Production **'supervisor'** role is split into **'production_supervisor'** (factory floor — lands in the Supervisor Hub, keeps count/capture sign-off powers) and a new **'warehouse_supervisor'** (assigned from Users & Roles; does NOT auto-land in the hub, though it can still open it). The hub and everything built for it is for factory/production supervisors
+- `isSupervisor` (count + capture sign-off) now means production supervisor specifically; warehouse supervisors are excluded. `'supervisor'` is accepted everywhere as a **legacy alias** for `'production_supervisor'`, so the change is non-breaking before/after the data migration
+- The count module's own `'supervisor'`/`'admin'` domain value (sup_*/adm_* counts) is untouched — a production supervisor is mapped to the count 'supervisor' role at the boundary
+- `permissions.ts` already defined both roles, so no permission defaults change
+- **Requires migration** `20260614_002_supervisor_role_rename.sql` (renames existing `shared.app_roles` 'supervisor' → 'production_supervisor'). After it, reassign any warehouse staff to 'warehouse_supervisor'
+- Note: OAuth (Microsoft) first logins still pass through `/auth/callback` → `/dashboard`; the role-aware landing applies on the login page and root redirect
 
 **Files changed:**
 - components/layout/Sidebar.tsx — collapse 6 Supervisor nav items into one

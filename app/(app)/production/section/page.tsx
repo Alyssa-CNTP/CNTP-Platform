@@ -330,7 +330,7 @@ function SignOffTab({ sessionId, locked, sessionStatus, onSubmit, onApprove, onR
         </button>
       )}
 
-      {(role === 'supervisor' || role === 'admin') && sessionStatus === 'submitted' && (
+      {(role === 'production_supervisor' || role === 'supervisor' || role === 'admin') && sessionStatus === 'submitted' && (
         <button
           onClick={onApprove} disabled={submitting}
           className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-ok text-white font-semibold text-[15px] disabled:opacity-40"
