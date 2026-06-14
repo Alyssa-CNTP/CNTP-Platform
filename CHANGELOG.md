@@ -5,7 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 1)
+## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 2, shift calendar)
+
+**Files changed:**
+- app/(app)/supervisor/calendar/page.tsx (new) — master shift calendar
+- components/supervisor/HubTabs.tsx — promote Calendar tab to active
+- components/layout/Sidebar.tsx — add Shift Calendar nav item
+- app/(app)/layout.tsx — /supervisor/calendar page title
+- app/(app)/production/capture/assign/page.tsx — accept ?date/?shift query params (Suspense wrapper) so calendar cells deep-link to the right roster
+
+**Changes:**
+- New **Shift Calendar** (`/supervisor/calendar`): master view of who's rostered, built from `shift_assignments` + `operators` (no calendar library — date-fns grid)
+- **Week view**: sections (rows) × 7 days (columns); each cell shows the shifts rostered (colour-coded morning/afternoon/night dots) with operator initials; day headers show the **maintenance technician on duty** (from `maintenance.duty_roster`, overlap-per-day); today is highlighted; empty cells offer a quick "+" to roster
+- **Day view**: sections × the 3 shifts with full operator names + variant/lot, and a technician-on-duty banner
+- Every cell deep-links into the existing roster editor (`/production/capture/assign?date=&shift=`) — which now reads those query params to pre-select
+- Read-only calendar (rostering still happens in the assign editor); Messages remains the next hub tab
 
 **Files changed:**
 - app/(app)/supervisor/page.tsx (new) — hub Overview (today snapshot)

@@ -8,13 +8,13 @@ import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare } from 'lu
 // "soon" placeholders until phases 2/3 land — matching the tab styling used on
 // the Management page (border-b-2 brand on active).
 const TABS = [
-  { href: '/supervisor',             label: 'Overview',   icon: LayoutDashboard },
-  { href: '/supervisor/timesheets',  label: 'Timesheets', icon: Clock },
+  { href: '/supervisor',             label: 'Overview',    icon: LayoutDashboard },
+  { href: '/supervisor/timesheets',  label: 'Timesheets',  icon: Clock },
   { href: '/supervisor/productions', label: 'Productions', icon: Factory },
+  { href: '/supervisor/calendar',    label: 'Calendar',    icon: CalendarDays },
 ] as const
 
 const SOON = [
-  { label: 'Calendar', icon: CalendarDays },
   { label: 'Messages', icon: MessageSquare },
 ] as const
 
