@@ -14,7 +14,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
-  CalendarCheck, Clock,
+  CalendarCheck, Clock, CalendarRange,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -61,6 +61,7 @@ const NAV: NavItem[] = [
   { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance' },
   { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance' },
   { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance' },
+  { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance' },
   { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance' },
 
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },

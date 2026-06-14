@@ -158,6 +158,20 @@ Ported onto the restructured module (lib/maintenance hook + routed pages).
 
 ---
 
+## 2026-06-12 — Alyssa (maintenance overhaul · Phase 8: Planner & Roster tab + priority board)
+
+Split the confusing Planner/Roster out of the Job Cards segmented control into its own calendar tab, and structured the board by priority. Core scheduling/workflow logic unchanged.
+
+**Files changed:**
+- `app/(app)/maintenance/planner/page.tsx` — NEW "Planner & Roster" route. Proper **week calendar** (7 day-columns, Prev/Today/Next) with planner slots + duty windows as time chips, click-empty-to-add / click-to-remove. A glanceable **"next" strip** (On duty now · Up next on roster · Next scheduled job). **Collapsible** sections: This week, Duty roster (grouped by day, on-duty-now highlight), QC area map. Editing manager-gated; read-only otherwise. Reuses all existing handlers (addSlot/delSlot/addSlotFor/addRoster/delRoster/saveAreaQc).
+- `app/(app)/maintenance/job-cards/page.tsx` — removed the Board/Planner/Roster segmented control (planner moved out); the manager board is now grouped into **collapsible High / Medium / Low priority sections** (High/Medium open, Low collapsed), with the status filter narrowing within. Breakdown banner + dual actions intact.
+- `lib/maintenance/helpers.ts` — `priorityOf()` (display-only derived priority: breakdown/reopened/aged → High, etc.) + `PRIORITY_META`.
+- `components/maintenance/JobCardItem.tsx` — coloured left-accent bar + priority pill so high-priority cards stand out (all views).
+- `components/layout/Sidebar.tsx` — "Planner & Roster" nav row (CalendarRange) after Scheduled.
+- `app/(app)/layout.tsx` — ROUTE_META for `/maintenance/planner`.
+
+---
+
 ## 2026-06-12 — Alyssa (maintenance overhaul · Phase 7: auto AI analyst, prominent breakdown, lighter UI everywhere)
 
 Quality pass on user feedback: AI should analyse on its own, the breakdown action was hard to find, and the UI felt heavy. Logic unchanged; visual/UX rework.

@@ -2,7 +2,7 @@
 // Pure maintenance helpers — extracted verbatim from the original page.
 // calCol (hex) is replaced with calClass (a .badge variant class); calBadge text kept.
 
-import type { QcAnswer } from './types'
+import type { QcAnswer, JobCard } from './types'
 
 export function aiSuggest(t: string) {
   const l = (t || '').toLowerCase()
@@ -77,3 +77,24 @@ export function workdayAdd(from: Date, days: number) {
   return d
 }
 export const addDays = (d: string, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
+
+// ── Derived job-card priority (DISPLAY-ONLY — never persisted) ──
+// Computed from workflow, reopen history, age, and live status so the board can
+// surface the cards that need attention first. Not stored on the record.
+export type Priority = 'high' | 'medium' | 'low'
+
+export function priorityOf(j: JobCard): Priority {
+  if (j.status === 'complete') return 'low'
+  if (j.workflow === 'breakdown') return 'high'
+  if ((j.reopen_count ?? 0) > 0) return 'high'
+  const age = diffDays(j.raised_at, new Date().toISOString())
+  if (age >= 7) return 'high'
+  if (age >= 3 || ['assigned', 'in_progress', 'qc_check', 'verify'].includes(j.status)) return 'medium'
+  return 'low'
+}
+
+export const PRIORITY_META: Record<Priority, { label: string; dot: string; accent: string; badge: string }> = {
+  high:   { label: 'High',   dot: 'bg-err',  accent: 'border-l-err',  badge: 'badge-err'  },
+  medium: { label: 'Medium', dot: 'bg-warn', accent: 'border-l-warn', badge: 'badge-warn' },
+  low:    { label: 'Low',    dot: 'bg-ok',   accent: 'border-l-ok',   badge: 'badge-gray' },
+}

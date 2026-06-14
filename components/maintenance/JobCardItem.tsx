@@ -12,7 +12,7 @@ import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
 import { QC_CHECKS } from '@/lib/maintenance/constants'
-import { fmtDT, fmtT, diffM, normQc } from '@/lib/maintenance/helpers'
+import { fmtDT, fmtT, diffM, normQc, priorityOf, PRIORITY_META } from '@/lib/maintenance/helpers'
 import type { JobCard, QcAnswer } from '@/lib/maintenance/types'
 import { INP } from '@/components/production/shared/ui'
 
@@ -58,6 +58,8 @@ export function JobCardItem({ j, roles }: { j: JobCard; roles: JobCardRoles }) {
   }, [j.id, j.status, roles.canManage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isBd = j.workflow === 'breakdown'
+  const prio = priorityOf(j)
+  const prioMeta = PRIORITY_META[prio]
   const timerStart = isBd ? j.raised_at : j.accepted_at
   const showTimer = (j.status === 'in_progress') || (isBd && j.status === 'assigned')
   const lgs = cardLogs(j.id)
@@ -71,11 +73,14 @@ export function JobCardItem({ j, roles }: { j: JobCard; roles: JobCardRoles }) {
   const isRaiser = roles.isRaiser || canManage
 
   return (
-    <div className="rounded-xl border border-surface-rule bg-surface-card shadow-sm p-4 mb-3.5">
-      {/* Header — card no · type · status, with raised time on the right */}
+    <div className={`rounded-xl border border-surface-rule border-l-4 ${prioMeta.accent} bg-surface-card shadow-sm p-4 mb-3.5`}>
+      {/* Header — card no · priority · type · status, with raised time on the right */}
       <div className="flex justify-between gap-2 flex-wrap items-start">
         <div className="flex flex-wrap items-center gap-1.5">
           <strong className="text-accent text-sm">{j.card_no}</strong>
+          <span className="inline-flex items-center gap-1 rounded-full border border-surface-rule px-2 py-0.5 text-[10px] font-semibold text-text-muted">
+            <span className={`w-1.5 h-1.5 rounded-full ${prioMeta.dot}`} />{prioMeta.label}
+          </span>
           <span className={`badge ${isBd ? 'badge-err' : 'badge-info'}`}>{isBd ? 'BREAKDOWN' : 'PLANNED'}</span>
           <StatusBadge status={j.status} />
           {j.external && <span className="badge badge-warn">EXTERNAL: {j.external_company}</span>}
