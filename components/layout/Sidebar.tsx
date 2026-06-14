@@ -42,6 +42,7 @@ const NAV: NavItem[] = [
   { href: '/supervisor/productions',    label: 'Productions',                icon: Factory,         group: 'Supervisor', departments: ['IT','Production','Management'] },
   { href: '/supervisor/calendar',       label: 'Shift Calendar',             icon: CalendarCheck,   group: 'Supervisor', departments: ['IT','Production','Management'] },
   { href: '/supervisor/messages',       label: 'Messages',                   icon: MessageSquare,   group: 'Supervisor', departments: ['IT','Production','Management'] },
+  { href: '/supervisor/analytics',      label: 'Analytics',                  icon: TrendingUp,      group: 'Supervisor', departments: ['IT','Production','Management'] },
 
   { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
   { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
