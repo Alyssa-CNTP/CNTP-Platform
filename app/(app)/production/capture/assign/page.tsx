@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { format } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar,
@@ -25,12 +25,17 @@ interface SectionDraft {
 
 const emptyDraft = (): SectionDraft => ({ operatorIds: [], lotNumber: '', variant: '', prodOrders: [] })
 
-export default function AssignPage() {
+function AssignScreen() {
   const router = useRouter()
+  const sp     = useSearchParams()
   const { user } = useAuth()
 
-  const [date, setDate]   = useState(format(new Date(), 'yyyy-MM-dd'))
+  // Date/shift can be deep-linked (e.g. from the supervisor calendar); otherwise
+  // default to today + the current shift.
+  const [date, setDate]   = useState(sp.get('date') ?? format(new Date(), 'yyyy-MM-dd'))
   const [shift, setShift] = useState<Shift>(() => {
+    const q = sp.get('shift')
+    if (q === 'morning' || q === 'afternoon' || q === 'night') return q
     const h = new Date().getHours()
     return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night'
   })
@@ -292,5 +297,13 @@ export default function AssignPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function AssignPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><Loader2 size={24} className="animate-spin text-text-muted" /></div>}>
+      <AssignScreen />
+    </Suspense>
   )
 }

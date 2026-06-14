@@ -94,6 +94,7 @@ const ROUTE_META: Record<string, {
   '/supervisor':             { title: 'Supervisor Hub',         variant: 'default', chips: [{ label: 'Production', color: 'green' }] },
   '/supervisor/timesheets':  { title: 'Timesheets',             variant: 'default' },
   '/supervisor/productions': { title: 'Productions',            variant: 'default' },
+  '/supervisor/calendar':    { title: 'Shift Calendar',         variant: 'default' },
 
   // Quality section
   '/quality/raw-material':   { title: 'Raw Material',           variant: 'default',    chips: [{ label: 'Quality', color: 'blue' }] },
