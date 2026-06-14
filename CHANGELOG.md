@@ -17,7 +17,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (stock count: fix counter roles + redesign)
+## 2026-06-14 — Alyssa (monthly count: demo seed + comparison polish)
+
+**Files changed:**
+- supabase/seeds/demo_monthly_count.sql (new) — demo monthly count data
+- components/count/monthly/MonthlyComparison.tsx — segmented filter + export button polish
+
+**Changes:**
+- Added a **demo monthly count seed** (Rooibos · BHW) so the Monthly Count sub-tabs (Comparison · Reconciliation · Batch Ledger · Variances) can be seen populated: Feb 2026 (opening stock) + March 2026 (both counts submitted, with a realistic mix of matches and variances incl. one >10% review). Run `supabase/seeds/demo_monthly_count.sql` in the SQL editor, then open Monthly Count → March 2026 → Rooibos. Idempotent and fully deletable (DELETE block included)
+- The monthly sub-tab components were already on the app's clean standard (KPI tiles, surface tokens, tidy tables, status chips); only a small consistency tweak applied — MonthlyComparison's filter is now the segmented-pill style and Export CSV a bordered button to match the rest
+- IT already sees all monthly sub-tabs without waiting for both counts, so the seed is what makes them visible
 
 **Files changed:**
 - app/(app)/count/page.tsx — role mapping, page header + KPI tiles, relabelled count-side control
