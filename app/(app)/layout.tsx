@@ -110,6 +110,7 @@ const ROUTE_META: Record<string, {
   '/maintenance':            { title: 'Maintenance',            variant: 'default',    chips: [{ label: 'FSSC 22000', color: 'green' }] },
   '/maintenance/job-cards':  { title: 'Job Cards',              variant: 'default' },
   '/maintenance/scheduled':  { title: 'Scheduled Maintenance',  variant: 'default' },
+  '/maintenance/planner':    { title: 'Planner & Roster',       variant: 'default' },
   '/maintenance/stock':      { title: 'Stock & Spares',         variant: 'default' },
 
   // Management section
