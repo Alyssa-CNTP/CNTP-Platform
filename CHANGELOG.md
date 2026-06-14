@@ -17,7 +17,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (monthly count: demo seed + comparison polish)
+## 2026-06-14 — Alyssa (monthly count: create missing backing tables)
+
+**Files changed:**
+- supabase/migrations/20260614_004_monthly_count_tables.sql (new)
+- supabase/seeds/demo_monthly_count.sql — note migration prerequisite
+
+**Changes:**
+- **Root cause found:** the Monthly Count UI queries `production.mc_sessions` / `mc_entries` / `mc_reviews`, but those tables were never created — so the whole monthly feature (Comparison · Reconciliation · Batch Ledger · Variances) has been silently non-functional in production, not just the demo. (`relation "production.mc_entries" does not exist`.)
+- New migration creates the three tables in the `production` schema to match exactly what the app reads/writes (mirrors the daily `sc_*` tables): `mc_sessions` (per month/warehouse/product, two counters → match rate, sign-off), `mc_entries` (per item/batch/role), `mc_reviews` (variance review notes) — with indexes, the shared `updated_at` trigger, RLS, and grants
+- **Run order:** migration `20260614_004` first, then the demo seed `supabase/seeds/demo_monthly_count.sql`. This both fixes the live feature and lets the demo load
 
 **Files changed:**
 - supabase/seeds/demo_monthly_count.sql (new) — demo monthly count data

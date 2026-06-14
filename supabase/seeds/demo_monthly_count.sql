@@ -14,6 +14,9 @@
 --
 -- 100% SAFE + DELETABLE. Re-running replaces the demo. To remove it,
 -- run the DELETE block at the bottom.
+--
+-- PREREQUISITE: run migration 20260614_004_monthly_count_tables.sql FIRST
+-- (it creates production.mc_sessions / mc_entries / mc_reviews).
 -- ============================================================
 
 -- ── Clean any prior demo (idempotent) ───────────────────────
