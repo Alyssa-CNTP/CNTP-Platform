@@ -12,11 +12,10 @@ const TABS = [
   { href: '/supervisor/timesheets',  label: 'Timesheets',  icon: Clock },
   { href: '/supervisor/productions', label: 'Productions', icon: Factory },
   { href: '/supervisor/calendar',    label: 'Calendar',    icon: CalendarDays },
+  { href: '/supervisor/messages',    label: 'Messages',    icon: MessageSquare },
 ] as const
 
-const SOON = [
-  { label: 'Messages', icon: MessageSquare },
-] as const
+const SOON: { label: string; icon: typeof MessageSquare }[] = []
 
 export function HubTabs() {
   const pathname = usePathname()

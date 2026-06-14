@@ -227,6 +227,24 @@ export interface Database {
         Update: Partial<Database['production']['Tables']['prod_timesheets']['Insert']>
       }
 
+      // ── line_messages ───────────────────────────────────────
+      // Supervisor-hub per-line comms. section_id NULL = general channel.
+      line_messages: {
+        Row: {
+          id:           string
+          section_id:   string | null
+          author_id:    string | null
+          author_name:  string
+          author_role:  string | null
+          body:         string
+          created_at:   string
+          edited_at:    string | null
+          deleted_at:   string | null
+        }
+        Insert: Omit<Database['production']['Tables']['line_messages']['Row'], 'id' | 'created_at'> & { id?: string }
+        Update: Partial<Database['production']['Tables']['line_messages']['Insert']>
+      }
+
       // ── shift_assignments ───────────────────────────────────
       shift_assignments: {
         Row: {
