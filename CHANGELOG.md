@@ -5,7 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 3, line messaging)
+## 2026-06-14 — Alyssa (supervisor: operations hub — Phase 3b + 4a, floor comms + handover notes)
+
+**Files changed:**
+- components/production/capture/LineChat.tsx (new) — single-channel chat component
+- app/(app)/production/capture/[section]/page.tsx — Messages tab, handover note at sign-off, previous-shift handover banner
+
+**Changes:**
+- **Operators can now message back** (closes the Phase 3 loop): a new **Messages** tab on the capture screen shows that line's channel (same `production.line_messages` backend as the supervisor hub) so the operator can read supervisor messages and post to their line. Reuses the new `LineChat` component
+- **Handover note at sign-off**: operators can leave a note for the next shift in the Sign-off tab — saved to `prod_sessions.comments` on submit (already surfaced in the supervisor Productions overview)
+- **Previous-shift handover banner**: the most recent handover note left on this line shows as an amber banner at the top of capture, so the incoming operator sees what the last shift flagged
+- No new migration (uses Phase 3's `line_messages` + the existing `prod_sessions.comments`); messages still need migration `20260614_001` applied to persist. Defensive — chat degrades to empty if the table isn't present
 
 **Files changed:**
 - supabase/migrations/20260614_001_line_messages.sql (new) — line_messages table

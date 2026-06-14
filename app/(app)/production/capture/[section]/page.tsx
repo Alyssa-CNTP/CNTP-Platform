@@ -17,9 +17,11 @@ import {
 } from '@/components/production/capture/SievingCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
+import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
+import { MessageSquare } from 'lucide-react'
 
-type Tab = 'production' | 'cleaning' | 'signoff'
+type Tab = 'production' | 'cleaning' | 'signoff' | 'messages'
 const n = (v: string) => parseFloat(v) || 0
 
 // A shift can contain several productions, each its own variant/destination/lot.
@@ -48,6 +50,8 @@ function CaptureScreen() {
   const [status, setStatus]       = useState<'new' | 'draft' | 'submitted' | 'approved'>('new')
   const [productions, setProductions] = useState<Production[]>([])
   const [activeIdx, setActiveIdx]     = useState(0)
+  const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
+  const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   const [tab, setTab]             = useState<Tab>('production')
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
@@ -91,8 +95,16 @@ function CaptureScreen() {
       }
 
       const { data: sess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .select('id,status,draft_data,comments').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
         .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if ((sess as any)?.comments) setComments((sess as any).comments)
+
+      // Surface the most recent handover note left on this line (previous shift).
+      const { data: prev } = await db.schema('production').from('prod_sessions')
+        .select('comments,shift,date').eq('section_id', sectionId).not('comments', 'is', null)
+        .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(5)
+      const prevRow = ((prev as any[]) ?? []).find(r => !(r.date === dateParam && r.shift === shift) && (r.comments ?? '').trim())
+      if (prevRow) setPrevNote({ note: prevRow.comments, shift: prevRow.shift, date: prevRow.date })
       const aVariant = (assign as any)?.variant ?? 'Conventional'
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data
@@ -321,6 +333,7 @@ function CaptureScreen() {
       const sid = await ensureSession()
       await getDb().schema('production').from('prod_sessions').update({
         status: 'submitted', submitted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        comments: comments.trim() || null,
       } as any).eq('id', sid)
       setStatus('submitted')
     } catch (e: any) { setError(e.message) }
@@ -452,7 +465,7 @@ function CaptureScreen() {
 
       {/* Tabs */}
       <div className="flex border-b border-stone-200 px-4 flex-shrink-0 bg-white">
-        {([['production', 'Production', ClipboardList], ['cleaning', 'Cleaning', Sparkles], ['signoff', 'Sign-off', PenLine]] as const).map(([id, label, Icon]) => (
+        {([['production', 'Production', ClipboardList], ['cleaning', 'Cleaning', Sparkles], ['signoff', 'Sign-off', PenLine], ['messages', 'Messages', MessageSquare]] as const).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors ${tab === id ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
             <Icon size={14} /> {label}
@@ -463,6 +476,15 @@ function CaptureScreen() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
         <div className="px-4 py-5 max-w-[800px] space-y-5">
+          {/* Handover note from the previous shift on this line */}
+          {prevNote && tab !== 'messages' && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
+              <MessageSquare size={14} className="shrink-0 mt-0.5" />
+              <span>
+                <strong>Handover note</strong> ({format(parseISO(prevNote.date + 'T12:00:00'), 'd MMM')} · <span className="capitalize">{prevNote.shift}</span> shift): {prevNote.note}
+              </span>
+            </div>
+          )}
           {tab === 'production' && active && (
             <>
               {locked ? (
@@ -529,7 +551,18 @@ function CaptureScreen() {
               variance={stVariance} withinTol={stWithinTol} totalIn={st.totalIn} totalOut={st.totalOut}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
+              comments={comments} onComments={setComments}
               onSign={storeSignature} onSubmit={handleSubmit} onApprove={handleApprove} submitting={submitting}
+            />
+          )}
+
+          {tab === 'messages' && (
+            <LineChat
+              channel={sectionId}
+              meName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? 'Operator')}
+              meId={verifiedOp?.user_id ?? user?.id ?? null}
+              meRole="Operator"
+              title={`${meta.name} · line messages`}
             />
           )}
 
@@ -541,10 +574,11 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, onSign, onSubmit, onApprove, submitting }: {
+function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, comments, onComments, onSign, onSubmit, onApprove, submitting }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
   variance: number; withinTol: boolean; totalIn: number; totalOut: number
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
+  comments: string; onComments: (v: string) => void
   onSign: (role: 'operator' | 'supervisor', name: string, sig: string) => Promise<void>
   onSubmit: () => void; onApprove: () => void; submitting: boolean
 }) {
@@ -586,6 +620,12 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
       {/* Operator sign-off — only while still being captured (draft/new) */}
       {(status === 'new' || status === 'draft') && (
         <>
+          <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Handover note for the next shift</span>
+            <textarea value={comments} onChange={e => onComments(e.target.value)} disabled={locked} rows={2}
+              placeholder="Anything the next operator or supervisor should know (optional)…"
+              className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand resize-none" />
+          </div>
           <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
             <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Operator sign-off</span>
             <input value={opName} onChange={e => setOpName(e.target.value)} placeholder="Operator name" disabled={locked}
