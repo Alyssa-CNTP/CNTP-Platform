@@ -34,6 +34,26 @@ function startOfWeek(d: Date) {
 const sameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 
+// ── Per-technician pastel identity colours ──────────────────────────────────
+// Each technician gets a stable pastel (by name hash) so their duty windows and
+// planner slots are instantly recognisable across the calendar.
+interface Pastel { bg: string; border: string; text: string; dot: string }
+const TECH_PALETTE: Pastel[] = [
+  { bg: '#EDE9FE', border: '#C4B5FD', text: '#6D28D9', dot: '#8B5CF6' }, // lavender
+  { bg: '#E0F2FE', border: '#7DD3FC', text: '#0369A1', dot: '#38BDF8' }, // sky
+  { bg: '#DCFCE7', border: '#86EFAC', text: '#15803D', dot: '#4ADE80' }, // mint
+  { bg: '#FFEDD5', border: '#FDBA74', text: '#C2410C', dot: '#FB923C' }, // peach
+  { bg: '#FFE4E6', border: '#FDA4AF', text: '#BE123C', dot: '#FB7185' }, // rose
+  { bg: '#CCFBF1', border: '#5EEAD4', text: '#0F766E', dot: '#2DD4BF' }, // teal
+  { bg: '#FEF9C3', border: '#FDE68A', text: '#A16207', dot: '#FACC15' }, // butter
+  { bg: '#FCE7F3', border: '#F9A8D4', text: '#BE185D', dot: '#F472B6' }, // blossom
+]
+function techColor(name: string): Pastel {
+  let h = 0
+  for (let i = 0; i < (name || '').length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return TECH_PALETTE[h % TECH_PALETTE.length]
+}
+
 export default function PlannerPage() {
   const auth = useAuth()
   const role = deriveMaintRole(auth)
@@ -104,7 +124,7 @@ export default function PlannerPage() {
             <UserCheck className={`w-4 h-4 ${duty ? 'text-ok' : 'text-err'}`} /> On duty now
           </div>
           {duty
-            ? <div className="mt-1.5 text-lg font-semibold text-ok">{duty}</div>
+            ? <div className="mt-1.5 text-lg font-semibold text-ok flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: techColor(duty).dot }} />{duty}</div>
             : <div className="mt-1.5 text-sm font-semibold text-err">Nobody — breakdowns will wait</div>}
           <div className="text-[11px] text-text-faint mt-1">Breakdowns auto-route to the on-duty technician.</div>
         </div>
@@ -116,7 +136,7 @@ export default function PlannerPage() {
           </div>
           {upNextRoster
             ? <>
-                <div className="mt-1.5 text-lg font-semibold text-text">{upNextRoster.technician}</div>
+                <div className="mt-1.5 text-lg font-semibold text-text flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: techColor(upNextRoster.technician).dot }} />{upNextRoster.technician}</div>
                 <div className="text-[12px] text-text-muted mt-0.5">{fmtDT(upNextRoster.start_at)} → {fmtT(upNextRoster.end_at)}</div>
               </>
             : <div className="mt-1.5 text-sm text-text-faint">No upcoming duty slots.</div>}
@@ -186,34 +206,39 @@ export default function PlannerPage() {
             const daySlots = slotsOn(day)
             const dayRoster = rosterOn(day)
             return (
-              <div key={day.toISOString()} className={`rounded-lg border ${isToday ? 'border-brand/40 bg-brand/[0.03]' : 'border-surface-rule bg-surface-card'} flex flex-col min-h-[120px]`}>
+              <div key={day.toISOString()} className={`rounded-lg border shadow-sm ${isToday ? 'border-brand/50 bg-brand/[0.04] ring-1 ring-brand/20' : 'border-surface-rule bg-surface-card'} flex flex-col min-h-[120px]`}>
                 <div className={`px-2 py-1.5 border-b ${isToday ? 'border-brand/30' : 'border-surface-rule'} flex items-baseline justify-between`}>
-                  <span className={`text-[11px] font-semibold ${isToday ? 'text-brand' : 'text-text'}`}>{day.toLocaleDateString('en-ZA', { weekday: 'short' })}</span>
+                  <span className={`text-[11px] font-semibold flex items-center gap-1 ${isToday ? 'text-brand' : 'text-text'}`}>{day.toLocaleDateString('en-ZA', { weekday: 'short' })}{isToday && <span className="text-[8px] font-bold uppercase bg-brand text-white rounded px-1 py-0.5">today</span>}</span>
                   <span className="text-[11px] text-text-muted tabular-nums">{day.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}</span>
                 </div>
                 <div className="p-1.5 flex-1 space-y-1">
-                  {/* Roster duty windows — visually distinct (tinted block, no card link) */}
+                  {/* Roster duty windows — per-tech pastel, dashed border, on-duty glow */}
                   {dayRoster.map(r => {
                     const onNow = new Date(r.start_at).getTime() <= nowMs && nowMs <= new Date(r.end_at).getTime()
+                    const tc = techColor(r.technician)
                     return (
-                      <div key={'r' + r.id} className={`rounded px-1.5 py-1 text-[10px] border-dashed border ${onNow ? 'bg-ok/15 border-ok/40' : 'bg-surface-raised border-surface-rule'}`} title={`Duty: ${r.technician}`}>
-                        <div className="font-semibold text-text">{r.technician} {onNow && <span className="text-ok">· on duty</span>}</div>
-                        <div className="text-text-muted">{fmtT(r.start_at)}–{fmtT(r.end_at)} duty</div>
+                      <div key={'r' + r.id}
+                        style={{ background: tc.bg, borderColor: onNow ? '#1A7A3C' : tc.border, color: tc.text, boxShadow: onNow ? '0 0 0 2px rgba(26,122,60,0.25)' : undefined }}
+                        className="rounded-md px-1.5 py-1 text-[10px] border border-dashed shadow-sm" title={`Duty: ${r.technician}`}>
+                        <div className="font-semibold flex items-center gap-1">{r.technician}{onNow && <span className="text-[9px] font-bold text-ok">● ON DUTY</span>}</div>
+                        <div className="opacity-70">{fmtT(r.start_at)}–{fmtT(r.end_at)} · duty</div>
                       </div>
                     )
                   })}
-                  {/* Planner slots — solid info-tinted chips, removable (manager) */}
+                  {/* Planner slots — per-tech pastel, solid, removable (manager) */}
                   {daySlots.map(s => {
                     const c = jcs.find(x => x.id === s.card_id)
+                    const tc = techColor(s.technician)
                     return (
                       <div key={'s' + s.id}
-                        className={`rounded px-1.5 py-1 text-[10px] bg-info/10 border border-info/20 ${canManage ? 'cursor-pointer hover:border-err/40' : ''}`}
+                        style={{ background: tc.bg, borderColor: tc.border, color: tc.text }}
+                        className={`rounded-md px-1.5 py-1 text-[10px] border shadow-sm ${canManage ? 'cursor-pointer hover:shadow transition' : ''}`}
                         onClick={canManage ? () => actions.delSlot(s.id) : undefined}
-                        title={canManage ? 'Tap to remove this slot' : undefined}>
-                        <div className="font-semibold text-info">{fmtT(s.start_at)}–{fmtT(s.end_at)}</div>
-                        <div className="text-text">{s.technician}</div>
-                        {c && <div className="text-accent">{c.card_no}</div>}
-                        {(s.note || c) && <div className="text-text-muted truncate">{s.note || c?.description.slice(0, 24)}</div>}
+                        title={canManage ? `${s.technician} — tap to remove` : s.technician}>
+                        <div className="font-semibold">{fmtT(s.start_at)}–{fmtT(s.end_at)}</div>
+                        <div className="flex items-center gap-1 font-medium"><span style={{ background: tc.dot }} className="w-1.5 h-1.5 rounded-full inline-block shrink-0" />{s.technician}</div>
+                        {c && <div className="font-semibold opacity-90">{c.card_no}</div>}
+                        {(s.note || c) && <div className="opacity-70 truncate">{s.note || c?.description.slice(0, 24)}</div>}
                       </div>
                     )
                   })}
@@ -231,8 +256,23 @@ export default function PlannerPage() {
             )
           })}
         </div>
+        {/* Technician colour legend */}
+        {techNames.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mt-3">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint mr-0.5">Technicians</span>
+            {techNames.map(t => {
+              const tc = techColor(t)
+              return (
+                <span key={t} className="inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full border px-2 py-0.5"
+                  style={{ background: tc.bg, borderColor: tc.border, color: tc.text }}>
+                  <span className="w-2 h-2 rounded-full" style={{ background: tc.dot }} /> {t}
+                </span>
+              )
+            })}
+          </div>
+        )}
         <div className="text-[11px] text-text-faint mt-2">
-          Dashed blocks are duty-roster windows; solid blue chips are planned slots.
+          Each technician has their own colour. Dashed chips are duty-roster windows; solid chips are planned slots.
           {canManage && ' Tap an empty day to add a quick 2-hour slot for the planner-form technician, or tap a slot chip to remove it.'}
         </div>
       </Section>
@@ -263,12 +303,15 @@ export default function PlannerPage() {
               <div className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">{day}</div>
               {rows.map(r => {
                 const onNow = new Date(r.start_at).getTime() <= nowMs && nowMs <= new Date(r.end_at).getTime()
+                const tc = techColor(r.technician)
                 return (
-                  <div key={r.id} className={`flex gap-2 items-center text-[12px] px-2 py-2 rounded mb-1 ${onNow ? 'bg-ok/15 border border-ok/40' : 'bg-surface-raised'}`}>
+                  <div key={r.id} style={{ borderLeftColor: tc.dot }}
+                    className={`flex gap-2 items-center text-[12px] px-2.5 py-2 rounded-md mb-1 border-l-4 shadow-sm ${onNow ? 'bg-ok/10 ring-1 ring-ok/40' : 'bg-surface-raised'}`}>
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: tc.dot }} />
                     <strong className="w-20">{r.technician}</strong>
                     {onNow && <span className="badge badge-ok">ON DUTY NOW</span>}
                     <span className="text-text-muted flex-1">{fmtT(r.start_at)} → {fmtDT(r.end_at)}</span>
-                    {canManage && <button className="min-h-[28px] text-[10px] px-2 py-1 rounded bg-err text-white" onClick={() => actions.delRoster(r.id)}>✕</button>}
+                    {canManage && <button className="min-h-[28px] text-[10px] px-2 py-1 rounded bg-err text-white hover:brightness-110" onClick={() => actions.delRoster(r.id)}>✕</button>}
                   </div>
                 )
               })}
