@@ -14,7 +14,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
-  CalendarCheck,
+  CalendarCheck, Clock,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -35,6 +35,11 @@ const NAV: NavItem[] = [
   // Live Capture (barcode scanning) is the Phase-2 entry — hidden from nav until scanning goes live.
   { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['IT','Management'] },
   { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
+
+  // Supervisor hub — operator hours, productions overview, today snapshot.
+  { href: '/supervisor',                label: 'Overview',                   icon: LayoutDashboard, group: 'Supervisor', departments: ['IT','Production','Management'] },
+  { href: '/supervisor/timesheets',     label: 'Timesheets',                 icon: Clock,           group: 'Supervisor', departments: ['IT','Production','Management'] },
+  { href: '/supervisor/productions',    label: 'Productions',                icon: Factory,         group: 'Supervisor', departments: ['IT','Production','Management'] },
 
   { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
   { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
