@@ -385,11 +385,22 @@ export function useMaintenanceData() {
   }
 
   // ── Spare-parts register CRUD (interactive Stock & Spares grid) ──
-  const addPart = async (p: { part_no: string; class: string; description: string; qty_new: number; qty_used: number }) => {
+  const addPart = async (p: { part_no: string; class: string; description: string; qty_new: number; qty_used: number; barcode?: string | null }) => {
     const { data, error: err } = await db.schema('maintenance').from('spare_parts').insert(p).select().single()
     if (err) { setPopup('Could not add part: ' + err.message); return null }
     setStock(s => [...s, data].sort((a, b) => (a.part_no || '').localeCompare(b.part_no || '')))
     return data as SparePart
+  }
+  // Resolve a scanned/typed code to a part — barcode first (trimmed, case-insensitive),
+  // then part_no as a fallback. Used by the scanner and the stock "Scan to find".
+  const findPartByBarcode = (code: string): SparePart | null => {
+    const c = (code ?? '').trim().toLowerCase()
+    if (!c) return null
+    return (
+      stock.find(s => (s.barcode ?? '').trim().toLowerCase() === c) ??
+      stock.find(s => (s.part_no ?? '').trim().toLowerCase() === c) ??
+      null
+    )
   }
   const updatePart = async (id: number, patch: Partial<SparePart>) => {
     setStock(s => s.map(r => (r.id === id ? { ...r, ...patch } : r)))
@@ -577,7 +588,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, qcSubmit, verifyCard, postComment,
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
-      addPart, updatePart, adjustPartQty, deletePart, addOffsite, updateOffsite, returnOffsite,
+      addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, eqServiced,
     },

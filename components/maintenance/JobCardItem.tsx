@@ -6,7 +6,7 @@
 // detail page it renders fully expanded. All workflow logic is unchanged.
 
 import { useEffect, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, ScanLine } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
@@ -14,6 +14,7 @@ import { QC_CHECKS } from '@/lib/maintenance/constants'
 import { fmtDT, fmtT, diffM, diffDays, normQc, priorityOf, PRIORITY_META } from '@/lib/maintenance/helpers'
 import type { JobCard, QcAnswer } from '@/lib/maintenance/types'
 import { INP } from '@/components/production/shared/ui'
+import PartScanner from './PartScanner'
 
 const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
 const PRIMARY = 'bg-brand text-white rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:brightness-110 transition'
@@ -38,6 +39,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const [expanded, setExpanded] = useState(!compact)
   const [showDetail, setShowDetail] = useState(false)
   const [showLog, setShowLog] = useState(false)
+  const [scanning, setScanning] = useState(false)
 
   useEffect(() => {
     if (!roles.canManage || j.status !== 'raised' || !expanded) return
@@ -227,12 +229,22 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                     <option value="">From stock register…</option>
                     {data.stock.map(s => <option key={s.id} value={s.id}>{s.part_no} — {s.description} (new:{s.qty_new}/used:{s.qty_used})</option>)}
                   </select>
+                  <button type="button" className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 min-h-[40px] text-[11px] font-semibold hover:border-text/25 transition" onClick={() => setScanning(true)}>
+                    <ScanLine size={13} /> Scan / identify
+                  </button>
                   <input className={`${INP} w-36`} placeholder="…or describe item" value={spForm[j.id]?.desc ?? ''} onChange={e => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], desc: e.target.value } }))} />
                   <input className={`${INP} w-16`} type="number" min={1} placeholder="Qty" value={spForm[j.id]?.qty ?? ''} onChange={e => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], qty: e.target.value } }))} />
                   <select className={`${INP} w-20`} value={spForm[j.id]?.from ?? 'new'} onChange={e => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], from: e.target.value } }))}><option value="new">New</option><option value="used">Used</option></select>
                   <button className={TOG(!!spForm[j.id]?.critical)} onClick={() => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], critical: !p[j.id]?.critical } }))}>CRITICAL</button>
                   <button className="border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 min-h-[40px] text-[11px] font-semibold hover:border-text/25 transition" onClick={() => actions.logSpare(j)}>+ Log</button>
                 </div>
+                {scanning && (
+                  <PartScanner
+                    parts={data.stock}
+                    onPick={p => setSpForm(prev => ({ ...prev, [j.id]: { ...prev[j.id], partId: String(p.id) } }))}
+                    onClose={() => setScanning(false)}
+                  />
+                )}
               </div>
 
               <button className={PRIMARY} onClick={() => actions.completeWork(j)}>

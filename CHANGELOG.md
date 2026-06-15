@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-15 — Alyssa (maintenance: barcode scanner + Gemini-vision part lookup)
+
+Book spares on a job card by scanning, with an AI photo-identify fallback. Booking still deducts from the register via the existing `logSpare` (unchanged).
+
+**Files changed:**
+- `supabase/migrations/20260615_050_spare_part_barcode.sql` — NEW. Adds `maintenance.spare_parts.barcode` + partial index. **Run in Supabase before deploy.**
+- `components/maintenance/PartScanner.tsx` — NEW. A picker modal with four ways to find a part: handheld/USB scan (autofocused field, code+Enter), camera scan (browser `BarcodeDetector`, gracefully hidden where unsupported), **Identify by photo** (snap → Gemini matches against the register; photo not stored), and manual search.
+- `app/api/maintenance/identify-part/route.ts` — NEW. Sends the image + parts register to `gemini-2.5-flash` (reuses `GEMINI_API_KEY`); returns top matches with confidence. Degrades gracefully if the key is unset.
+- `lib/maintenance/types.ts` — `barcode` on `SparePart`.
+- `lib/maintenance/useMaintenanceData.ts` — `addPart` accepts `barcode`; new `findPartByBarcode` action (barcode → part_no, trimmed/case-insensitive).
+- `app/(app)/maintenance/stock/page.tsx` — editable Barcode column + add-row field; search includes barcode; "Scan to find" toolbar button.
+- `components/maintenance/JobCardItem.tsx` — "Scan / identify" button on the in-progress spares panel opens the scanner; picking a part pre-selects it for the existing "+ Log" booking (deduct unchanged).
+
+**Deploy notes:** run `20260615_050_spare_part_barcode.sql` in Supabase (staging) before deploy. Camera scan uses the browser `BarcodeDetector` (Chromium/Android); handheld scan, photo-identify and manual search work everywhere. Photo-identify reuses the existing paid Gemini key — no new config.
+
+---
+
 ## 2026-06-15 — Alyssa (maintenance: compact, scannable job-card board)
 
 - `components/maintenance/JobCardItem.tsx` — board cards now render **compact** by default: a scannable summary (priority/type/status badges, card no, area·machine, raised-by, one-line title) + a one-line hint (assignee · age · update count) and a single **next-action button** (Allocate / Accept / Log work / QC check / Verify) that expands the working panel on demand — instead of every card showing its full form inline. Priority shown as a filled colour badge (High=red, Medium=amber, Low=grey) with a faint red tint on high-priority/breakdown cards so they stand out.

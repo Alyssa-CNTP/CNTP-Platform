@@ -6,10 +6,11 @@
 // equipment. Usage log (from job cards) stays read-only.
 
 import { useMemo, useState } from 'react'
-import { Plus, Search, Trash2, Minus, Check, X, PackageOpen } from 'lucide-react'
+import { Plus, Search, Trash2, Minus, Check, X, PackageOpen, ScanLine } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { fmtD } from '@/lib/maintenance/helpers'
 import type { SparePart } from '@/lib/maintenance/types'
+import PartScanner from '@/components/maintenance/PartScanner'
 
 const CLASSES = ['Mechanical', 'Electrical', 'Pneumatic', 'Hydraulic', 'Consumable', 'Fastener', 'Bearing', 'Belt', 'Seal', 'Other']
 
@@ -19,10 +20,11 @@ export default function StockPage() {
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
   const [addingOffsite, setAddingOffsite] = useState(false)
+  const [scanning, setScanning] = useState(false)
 
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
-    const rows = t ? stock.filter(s => `${s.part_no} ${s.class} ${s.description}`.toLowerCase().includes(t)) : stock
+    const rows = t ? stock.filter(s => `${s.part_no} ${s.barcode ?? ''} ${s.class} ${s.description}`.toLowerCase().includes(t)) : stock
     return [...rows]
   }, [stock, q])
 
@@ -60,12 +62,24 @@ export default function StockPage() {
               <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search parts…"
                 className="h-9 w-48 rounded-lg border border-surface-rule bg-surface-card pl-8 pr-3 text-[13px] text-text focus:outline-none focus:ring-2 focus:ring-brand/30" />
             </div>
+            <button onClick={() => setScanning(true)}
+              className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 h-9 text-[13px] font-semibold hover:border-text/25">
+              <ScanLine className="w-4 h-4" /> Scan to find
+            </button>
             <button onClick={() => setAdding(a => !a)}
               className="inline-flex items-center gap-1.5 bg-brand text-white rounded-lg px-3 h-9 text-[13px] font-semibold">
               <Plus className="w-4 h-4" /> Add part
             </button>
           </div>
         </div>
+
+        {scanning && (
+          <PartScanner
+            parts={stock}
+            onPick={p => setQ(p.part_no || p.description)}
+            onClose={() => setScanning(false)}
+          />
+        )}
 
         {adding && <AddPartRow onAdd={async p => { await actions.addPart(p); setAdding(false) }} onCancel={() => setAdding(false)} />}
 
@@ -74,6 +88,7 @@ export default function StockPage() {
             <thead>
               <tr className="text-[10px] uppercase tracking-wider text-text-muted border-b border-surface-rule">
                 <th className="text-left font-semibold py-2 px-2">Part #</th>
+                <th className="text-left font-semibold py-2 px-2">Barcode</th>
                 <th className="text-left font-semibold py-2 px-2">Type</th>
                 <th className="text-left font-semibold py-2 px-2">Description</th>
                 <th className="text-center font-semibold py-2 px-2 w-[130px]">New</th>
@@ -158,6 +173,7 @@ function PartRow({ r, actions }: { r: SparePart; actions: any }) {
   return (
     <tr className={`border-b border-surface-rule/60 hover:bg-surface-dim/40 ${total === 0 ? 'bg-err/5' : total <= 2 ? 'bg-warn/5' : ''}`}>
       <td className="py-1.5 px-2"><Cell value={r.part_no} mono onSave={v => actions.updatePart(r.id, { part_no: v })} placeholder="Part #" /></td>
+      <td className="py-1.5 px-2"><Cell value={r.barcode ?? ''} mono onSave={v => actions.updatePart(r.id, { barcode: v.trim() || null })} placeholder="Barcode" /></td>
       <td className="py-1.5 px-2">
         <select value={r.class || ''} onChange={e => actions.updatePart(r.id, { class: e.target.value })}
           className="bg-transparent border border-transparent hover:border-surface-rule focus:border-brand rounded px-1.5 py-1 text-[12px] text-text-muted focus:outline-none">
@@ -201,14 +217,15 @@ function Stepper({ value, tone, onStep }: { value: number; tone: 'ok' | 'warn'; 
 
 // Add-part inline form
 function AddPartRow({ onAdd, onCancel }: { onAdd: (p: any) => void; onCancel: () => void }) {
-  const [f, setF] = useState({ part_no: '', class: 'Mechanical', description: '', qty_new: '0', qty_used: '0' })
+  const [f, setF] = useState({ part_no: '', barcode: '', class: 'Mechanical', description: '', qty_new: '0', qty_used: '0' })
   const submit = () => {
     if (!f.description.trim()) return
-    onAdd({ part_no: f.part_no.trim(), class: f.class, description: f.description.trim(), qty_new: parseInt(f.qty_new) || 0, qty_used: parseInt(f.qty_used) || 0 })
+    onAdd({ part_no: f.part_no.trim(), barcode: f.barcode.trim() || null, class: f.class, description: f.description.trim(), qty_new: parseInt(f.qty_new) || 0, qty_used: parseInt(f.qty_used) || 0 })
   }
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[120px_140px_1fr_80px_80px_auto] gap-2 items-center p-3 mb-3 rounded-lg border border-brand/20 bg-accent-bg/40">
+    <div className="grid grid-cols-1 md:grid-cols-[120px_130px_140px_1fr_80px_80px_auto] gap-2 items-center p-3 mb-3 rounded-lg border border-brand/20 bg-accent-bg/40">
       <input autoFocus value={f.part_no} onChange={e => setF({ ...f, part_no: e.target.value })} placeholder="Part #" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px] font-mono" />
+      <input value={f.barcode} onChange={e => setF({ ...f, barcode: e.target.value })} placeholder="Barcode" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px] font-mono" />
       <select value={f.class} onChange={e => setF({ ...f, class: e.target.value })} className="h-9 rounded-lg border border-surface-rule px-2 text-[13px]">{CLASSES.map(c => <option key={c}>{c}</option>)}</select>
       <input value={f.description} onChange={e => setF({ ...f, description: e.target.value })} placeholder="Description *" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px]" />
       <input value={f.qty_new} onChange={e => setF({ ...f, qty_new: e.target.value })} type="number" placeholder="New" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px]" />

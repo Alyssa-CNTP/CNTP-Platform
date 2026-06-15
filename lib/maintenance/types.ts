@@ -34,7 +34,7 @@ export interface Template { id: number; frequency: 'weekly' | 'monthly'; area: s
 // task_states values carry who ticked the task and when (audit trail)
 export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string; by?: string; at?: string }>; comments: string; completed_by: string; updated_at?: string }
 export interface AnnualItem { id: number; category: string; asset: string; serial_no: string; supplier: string; next_due: string | null; notes: string }
-export interface SparePart { id: number; part_no: string; class: string; description: string; qty_new: number; qty_used: number }
+export interface SparePart { id: number; part_no: string; class: string; description: string; qty_new: number; qty_used: number; barcode?: string | null }
 export interface Offsite { id: number; item: string; sent_to: string; date_sent: string | null; status: string }
 
 // ── Readings & registers (imported from Maintenance_Database.xlsx) ──
