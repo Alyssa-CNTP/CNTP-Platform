@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-15 — Alyssa (acumatica: read-only OData integration + incremental sync)
+
+Live read-only link to Acumatica via its OData Generic Inquiry API, plus a high-water-mark incremental sync that lands GI data into a dedicated `acumatica` schema in Supabase. Reads from Acumatica only — there is no write path back to Acumatica.
+
+**Files changed:**
+- `lib/acumatica/odata.ts` — NEW. Server-side OData client. Hits the per-tenant GI endpoint (`/t/{tenant}/api/odata/gi/{inquiry}`) with HTTP Basic auth (the plain Acumatica **Login**, not the email), whitelists read-only `$`-options (`$top`/`$filter`/`$select`/`$orderby`/`$skip`), 30s timeout, normalises `{value:[]}` / bare-array responses.
+- `app/api/acumatica/odata/route.ts` — NEW. `GET /api/acumatica/odata?inquiry=…` — gated behind app login; proxies one read so credentials never reach the browser.
+- `lib/acumatica/sync.ts` — NEW. Incremental sync: read watermark → fetch only rows changed since (`$filter LastModifiedOn gt …`, oldest-first) → upsert → advance watermark. DB access goes through the public RPCs below.
+- `app/api/acumatica/sync/route.ts` — NEW. `GET /api/acumatica/sync?inquiry=…` triggers one sync run (spike uses GET for ease; production should be POST + a scheduler).
+- `supabase/migrations/20260615_001_acumatica_sync.sql` — NEW. Dedicated `acumatica` schema; `sync_rows` (JSONB landing, PK `inquiry,row_key`) + `sync_state` (watermark) + grants/RLS.
+- `supabase/migrations/20260615_002_acumatica_sync_rpc.sql` — NEW. `public.acumatica_get_watermark` / `public.acumatica_apply_sync` `SECURITY DEFINER` functions, so writes don't depend on the Data API exposing the `acumatica` schema. Execute locked to `authenticated`/`service_role`.
+- `supabase/migrations/20260615_003_set_timezone_sast.sql` — NEW. Sets the database default timezone to `Africa/Johannesburg` (SAST), so all timestamps render UTC+2.
+
+**Deploy notes:** run migrations `001`, `002`, `003` in the Supabase SQL editor (staging, then prod) before deploy. Requires `ACUMATICA_BASE_URL`, `ACUMATICA_COMPANY`, `ACUMATICA_ODATA_USER`, `ACUMATICA_ODATA_PASSWORD` set in the target environment (a read-only Acumatica Login). First sync of `SM-ExportScenarios` brought in 32 rows. Next steps: schedule via n8n, and swap the personal Acumatica login for the dedicated read-only `CNTPreadonly` user.
+
+---
+
 ## 2026-06-15 — Alyssa (maintenance: barcode scanner + Gemini-vision part lookup)
 
 Book spares on a job card by scanning, with an AI photo-identify fallback. Booking still deducts from the register via the existing `logSpare` (unchanged).
