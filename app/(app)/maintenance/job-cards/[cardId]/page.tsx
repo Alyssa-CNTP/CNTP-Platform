@@ -89,7 +89,7 @@ export default function JobCardDetailPage() {
         <p className="text-sm text-text-muted mt-0.5">{card.area}{card.machine ? ' · ' + card.machine : ''} — raised by {card.raised_by}</p>
       </div>
 
-      <JobCardItem j={card} roles={cardRoles} />
+      <JobCardItem j={card} roles={cardRoles} compact={false} />
 
       <div className="rounded-xl border border-surface-rule bg-surface-card shadow-sm p-4 h-[520px] flex flex-col">
         <JobCardChat

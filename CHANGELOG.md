@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-15 — Alyssa (maintenance: compact, scannable job-card board)
+
+- `components/maintenance/JobCardItem.tsx` — board cards now render **compact** by default: a scannable summary (priority/type/status badges, card no, area·machine, raised-by, one-line title) + a one-line hint (assignee · age · update count) and a single **next-action button** (Allocate / Accept / Log work / QC check / Verify) that expands the working panel on demand — instead of every card showing its full form inline. Priority shown as a filled colour badge (High=red, Medium=amber, Low=grey) with a faint red tint on high-priority/breakdown cards so they stand out.
+- `app/(app)/maintenance/job-cards/[cardId]/page.tsx` — detail view passes `compact={false}` so the full panel stays open there. Workflow logic unchanged.
+
+---
+
 ## 2026-06-14 — Alyssa (settings: complete redesign — sidebar layout + new sections)
 
 **Files changed:**
