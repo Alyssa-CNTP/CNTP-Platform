@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-14 — Alyssa (settings: complete redesign — sidebar layout + new sections)
+
+**Files changed:**
+- app/(app)/settings/page.tsx — full redesign
+- app/api/me/activity/route.ts — new self-scoped activity endpoint
+- lib/notifications/index.ts — honour per-user channel opt-outs
+- supabase/migrations/20260614_005_user_preferences_notifications.sql — new
+
+**Changes:**
+- **Redesigned the Settings page** from a single scroll into a left-sidebar shell with eight sections: Profile, Appearance, Language, Notifications, My Access, Activity, Security, About. Sidebar collapses to a horizontal pill row on mobile. Profile now also shows account-created date and the section badge.
+- **New "My Access" section** — shows the user their department, role, granted-permission count, the modules they can open (linked), and a grouped read-only list of every permission currently granted to them (derived from the existing `p()` resolver — no new data). Full admins see an "all access" note.
+- **New "Notifications" section** — toggles for the Email and Urgent WhatsApp/SMS channels. These are **real**: `notify()` now reads each recipient's `shared.user_preferences.notifications` (service_role, RLS-bypassed) and skips email/urgent for users who opted out. In-app feed is always delivered.
+- **New "Activity" section** — lists the caller's own last 30 audit-log events via the new `/api/me/activity` route. The route forces `actor_id = caller`, so a user can only ever see their own activity (no permission gate needed; distinct from the admin-only `/api/admin/audit`).
+- **Migration** — adds `notifications jsonb` to `shared.user_preferences`, (re)asserts the table + own-row RLS policies, and grants `service_role` SELECT so the notify pipeline can read recipient prefs. Idempotent. **Must be run in the Supabase SQL editor (staging, then prod) before the notification toggles take effect.**
+
+---
+
 ## 2026-06-14 — Alyssa (maintenance: Planner colours — distinct hues)
 
 - `app/(app)/maintenance/planner/page.tsx` — reworked the technician palette to maximally-distinct hues (violet · blue · emerald · amber · rose · cyan · orange · fuchsia) assigned **by position in the staff list** (not name-hash, which collided on similar pinks) with saturated borders/dots, so each technician is clearly distinguishable. Follow-up to the colour-identity change below.

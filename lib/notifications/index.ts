@@ -27,11 +27,39 @@ export interface NotifyInput {
   channels?:  NotificationChannel[]   // default ['inApp']
 }
 
+// Per-user channel opt-outs from shared.user_preferences.notifications.
+// A channel is delivered unless the user has explicitly set it to false.
+// In-app is never muted here — it is the canonical feed.
+async function getChannelOptOuts(userIds: string[]): Promise<Map<string, { email?: boolean; urgent?: boolean }>> {
+  const map = new Map<string, { email?: boolean; urgent?: boolean }>()
+  if (userIds.length === 0) return map
+  try {
+    const admin = getAdminClient()
+    const { data } = await (admin as any)
+      .schema('shared')
+      .from('user_preferences')
+      .select('user_id, notifications')
+      .in('user_id', userIds)
+    for (const row of (data ?? [])) {
+      map.set(row.user_id, (row.notifications ?? {}) as { email?: boolean; urgent?: boolean })
+    }
+  } catch (e: any) {
+    // Best-effort: if prefs can't be read, default to delivering (fail open).
+    console.error('[notifications] prefs read failed:', e?.message)
+  }
+  return map
+}
+
 export async function notify(input: NotifyInput): Promise<{ inApp: number; email: number; urgent: number }> {
   const channels = input.channels ?? ['inApp']
   const recipients = input.recipients.filter(r => r?.userId)
   const result = { inApp: 0, email: 0, urgent: 0 }
   if (recipients.length === 0) return result
+
+  // Resolve channel opt-outs once, only if a mutable channel is in play.
+  const needsPrefs = channels.includes('email') || channels.includes('urgent')
+  const optOuts = needsPrefs ? await getChannelOptOuts(recipients.map(r => r.userId)) : new Map()
+  const wants = (userId: string, channel: 'email' | 'urgent') => optOuts.get(userId)?.[channel] !== false
 
   // ── In-app feed (service_role bypasses RLS to write for other users) ──
   if (channels.includes('inApp')) {
@@ -64,7 +92,7 @@ export async function notify(input: NotifyInput): Promise<{ inApp: number; email
       footnote: 'Sign in to the CNTP Platform to view the details.',
     })
     await Promise.all(
-      recipients.filter(r => r.email).map(async r => {
+      recipients.filter(r => r.email && wants(r.userId, 'email')).map(async r => {
         const res = await sendEmail({ to: r.email!, subject: input.title, html })
         if (res.ok && !res.skipped) result.email++
       })
@@ -75,7 +103,7 @@ export async function notify(input: NotifyInput): Promise<{ inApp: number; email
   if (channels.includes('urgent')) {
     const text = `${input.title}\n${input.body}`
     await Promise.all(
-      recipients.filter(r => r.phone).map(async r => {
+      recipients.filter(r => r.phone && wants(r.userId, 'urgent')).map(async r => {
         const res = await sendUrgent({ to: r.phone!, body: text })
         if (res.ok && !res.skipped) result.urgent++
       })
