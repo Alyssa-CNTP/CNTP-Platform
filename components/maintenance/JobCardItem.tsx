@@ -158,6 +158,23 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
           {j.status === 'raised' && canManage && (
             <div className={PANEL}>
               <div className="text-[11px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-2">Allocate job card</div>
+              {/* Quick-pick: technicians on duty right now (one tap to select internally) */}
+              {derived.dutyNow.length > 0 && !alloc[j.id]?.external && (
+                <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                  <span className="text-[11px] text-text-muted">On duty now:</span>
+                  {derived.dutyNow.map((name: string) => {
+                    const picked = alloc[j.id]?.tech === name
+                    const s = staff.find(x => x.name === name)
+                    return (
+                      <button key={name}
+                        className={`px-2.5 py-1 rounded-full text-[12px] font-semibold transition ${picked ? 'bg-brand text-white' : 'bg-ok/10 text-ok border border-ok/25 hover:bg-ok/20'}`}
+                        onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: false, tech: name, techId: s?.id ?? null } }))}>
+                        {name}{picked ? ' ✓' : ''}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
               <div className="flex gap-1.5 items-center flex-wrap">
                 <button className={TOG(!(alloc[j.id]?.external))} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: false } }))}>INTERNAL</button>
                 <button className={TOG(!!alloc[j.id]?.external)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: true } }))}>EXTERNAL</button>

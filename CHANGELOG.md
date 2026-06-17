@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-13 — Gustav (maintenance: roster from both shift pairs + on-duty quick-pick allocation)
+
+**Files changed:**
+- lib/maintenance/useMaintenanceData.ts
+- components/maintenance/JobCardItem.tsx
+- Supabase staging migration: reseed duty_roster from boiler shift pairs
+
+**Changes:**
+- The duty roster now seeds from **both shift columns** of the boiler-start sheet, not just the single boiler-starter: Morning Shift = 07:00–16:00, Afternoon Shift = 16:00–01:00, each with its **two** technicians. The 4 technicians run in fixed pairs (Shane+Yamkela, John+Mohapi) alternating morning/afternoon weekly, so a breakdown routes to whichever pair is on duty at that time
+- **Easier allocation:** the allocate panel now shows "On duty now:" quick-pick chips for the technician(s) currently on shift — one tap selects them, then Forward. The full technician dropdown and external option remain
+- New `dutyNow` selector returns everyone on duty right now (a shift has two)
+
+---
+
 ## 2026-06-13 — Gustav (maintenance: IT full view, machine catalogue, roster from boiler schedule, QC→Quality notify)
 
 **Files changed:**
