@@ -158,6 +158,15 @@ export function useMaintenanceData() {
     const now = Date.now()
     return roster.find(r => new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime())?.technician ?? null
   }
+  // All technicians on duty right now (a shift has two) — drives quick-pick
+  // allocation buttons on the board.
+  const onDutyTechs = () => {
+    const now = Date.now()
+    return Array.from(new Set(
+      roster.filter(r => new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime())
+        .map(r => r.technician)
+    ))
+  }
 
   const createJC = async () => {
     if (!nj.area || !nj.desc || !nj.raisedBy) { setPopup('Please fill in your name, the area and a short description.'); return }
@@ -530,6 +539,7 @@ export function useMaintenanceData() {
   const cardLogs = (id: number) => logs.filter(l => l.card_id === id)
   const cardSpares = (id: number) => sparesUsed.filter(s => s.card_id === id)
   const duty = onDutyTech()
+  const dutyNow = onDutyTechs()
 
   const newCards = jcs.filter(j => j.status === 'raised')
   const hist = jcs.filter(j => j.status === 'complete').slice(0, 20)
@@ -622,7 +632,7 @@ export function useMaintenanceData() {
     },
 
     derived: {
-      cnt, cardLogs, cardSpares, duty, newCards, hist, annualRows, openPlannedCards,
+      cnt, cardLogs, cardSpares, duty, dutyNow, newCards, hist, annualRows, openPlannedCards,
       completed, totalMins, avgCloseDays, techCounts, areaCounts, reopens,
       breakdowns, completionRate, statuses: STATUSES,
       lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists,
