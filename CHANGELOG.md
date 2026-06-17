@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Gustav (sieving: all 12 IPS-SIEV PDF specs implemented)
+
+All four sieving tower products now have the correct specifications from all 12 official IPS-SIEV PDFs, with 18 variants each (Export / Export Blend / Domestic × CON / ORG / RA-CON / RA-ORG / FT-CON / FT-ORG). Specs persist in Supabase `qms.sieving_spec_overrides` and sync across all PCs on page load.
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx` — Updated `SIEVING_SPECS_DB` with correct values from all 12 PDFs:
+  - **Rooibos Blocks**: Restructured from wrong sieves (>16/>20/>60) to correct >6/>10/>12/>18/>40/Dust. CON/RA-CON/FT-CON: >12 >80%, >18 10–20%. ORG/RA-ORG/FT-ORG: >10 >70%, >18 5–15% (IPS-SIEV-003.1/003.2).
+  - **Coarse Leaf ORG**: Fixed values to IPS-SIEV-002.2: >10 25–100%, >18 65–85%, >40 10–20%.
+  - **Indent Sticks**: Added >10 mesh support for ORG variants (IPS-SIEV-005.2): >10 40–65%, >18 15–35%. Fixed CON >12 from 40–60% to 40–65%.
+  - **Fine Leaf**: Already correct from previous session.
+
+---
+
 ## 2026-06-15 — Alyssa (acumatica: read-only OData integration + incremental sync)
 
 Live read-only link to Acumatica via its OData Generic Inquiry API, plus a high-water-mark incremental sync that lands GI data into a dedicated `acumatica` schema in Supabase. Reads from Acumatica only — there is no write path back to Acumatica.
