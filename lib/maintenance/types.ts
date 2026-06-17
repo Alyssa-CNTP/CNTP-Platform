@@ -46,6 +46,7 @@ export interface BoilerStart { id: number; log_date: string; switched_on_by: str
 export interface EqConfig { id: number; equipment: string; service_interval_hours: number; hours_per_workday: number; active: boolean }
 export interface EqHours { id: number; equipment: string; reading_date: string; total_hours: number | null; hours_since_service: number | null; serviced: boolean; notes: string; recorded_by: string }
 export interface CalAsset { id: number; serial_no: string; department: string; asset_name: string; last_done: string | null; interval_days: number; weekly_check: boolean; comment: string; active: boolean }
+export interface Machine { id: number; name: string; area: string; active: boolean; created_by: string }
 
 // Chat (WhatsApp-style job-card thread). Backend is another workstream; this is
 // the shape the JobCardChat component consumes.
