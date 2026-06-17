@@ -28,11 +28,18 @@ const PRIO_ORDER: Priority[] = ['high', 'medium', 'low']
 
 export default function JobCardsPage() {
   const auth = useAuth()
-  const role = deriveMaintRole(auth)
+  const baseRole = deriveMaintRole(auth)
   const ctx = useMaintenanceContext()
   const { loading, data, derived, actions, ui, actor } = ctx
   const { jcs } = data
   const { cnt, newCards, hist } = derived
+
+  // IT / full admin get the full view of every profile via a "View as" switcher.
+  // Everyone else keeps their single derived role.
+  const [viewAs, setViewAs] = useState<'manager' | 'tech' | 'qc' | 'raiser'>('manager')
+  const role = baseRole.isAdminView
+    ? { ...baseRole, canManage: viewAs === 'manager', isTech: viewAs === 'tech', isQc: viewAs === 'qc', isRaiser: viewAs === 'raiser' }
+    : baseRole
 
   const [filt, setFilt] = useState('all')
   const [raiseOpen, setRaiseOpen] = useState(false)
@@ -90,6 +97,17 @@ export default function JobCardsPage() {
           </span>
           <span className="text-err text-sm font-semibold shrink-0">Report →</span>
         </button>
+      )}
+
+      {/* IT / full-admin: switch between every profile's view */}
+      {baseRole.isAdminView && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap rounded-lg border border-surface-rule bg-surface-dim p-1.5">
+          <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide px-1.5">IT — view as</span>
+          {([['manager', 'Maintenance Manager'], ['tech', 'Technician'], ['qc', 'QC'], ['raiser', 'Raiser']] as const).map(([v, label]) => (
+            <button key={v} onClick={() => setViewAs(v)}
+              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${viewAs === v ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
+          ))}
+        </div>
       )}
 
       {/* ── MANAGER: BOARD (priority-grouped) ── */}
