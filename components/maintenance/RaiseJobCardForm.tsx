@@ -12,6 +12,7 @@ import { useAuth } from '@/lib/auth/context'
 import { AREAS, PLANNED_TYPES } from '@/lib/maintenance/constants'
 import { aiSuggest, downscalePhoto } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
+import { VoiceCapture } from './VoiceCapture'
 
 const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
 
@@ -63,11 +64,15 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
   }, [canRaiseBreakdown, nj.workflow, setNj])
 
   async function submit() {
-    // Email-only accounts must give a full name so the card traces to a person.
+    // Smart job card — make sure everything needed is captured.
     if (!hasAccountName && !looksLikeFullName(nj.raisedBy)) {
       setPopup('Please enter your name and surname — your account has no name on file, so we need it to know who raised this job card.')
       return
     }
+    if (!nj.area) { setPopup('Please choose the area / location.'); return }
+    if (!nj.machine?.trim()) { setPopup('Please pick or type the machine / equipment.'); return }
+    if (!nj.desc?.trim()) { setPopup('Please give a short description of the problem (or record a voice note).'); return }
+    if (!isBd && nj.type.length === 0) { setPopup('Please select at least one maintenance type.'); return }
     // Save a newly-typed machine to the catalogue so it's in the dropdown next time.
     const m = nj.machine?.trim()
     if (m && !data.machines.some(x => x.name.toLowerCase() === m.toLowerCase())) {
@@ -149,8 +154,18 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
         </div>
       )}
 
-      <div className="mt-3"><label className={LB}>Short Description of the Problem</label>
-        <input className={INP} value={nj.desc} onChange={e => setNj(p => ({ ...p, desc: e.target.value, aiSug: aiSuggest(e.target.value + ' ' + p.longDesc) }))} placeholder="One line — what is wrong?" />
+      <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+        <label className={LB} style={{ marginBottom: 0 }}>Describe the problem</label>
+        <VoiceCapture mode="jobcard" onResult={r => setNj(p => ({
+          ...p,
+          desc: r.short_description?.trim() || p.desc,
+          longDesc: r.long_description?.trim() || p.longDesc,
+          type: (!isBd && r.maint_types && r.maint_types.length) ? Array.from(new Set([...p.type, ...r.maint_types])) : p.type,
+          aiSug: aiSuggest((r.short_description || '') + ' ' + (r.long_description || '')),
+        }))} />
+      </div>
+      <div className="mt-1"><label className={LB}>Short Description of the Problem</label>
+        <input className={INP} value={nj.desc} onChange={e => setNj(p => ({ ...p, desc: e.target.value, aiSug: aiSuggest(e.target.value + ' ' + p.longDesc) }))} placeholder="One line — what is wrong? (or use the voice note)" />
       </div>
       <div className="mt-3"><label className={LB}>Detailed Description (optional)</label>
         <textarea className={`${INP} min-h-[60px]`} value={nj.longDesc} onChange={e => setNj(p => ({ ...p, longDesc: e.target.value, aiSug: aiSuggest(p.desc + ' ' + e.target.value) }))} placeholder="Anything else the technician should know…" />
