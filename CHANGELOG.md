@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Gustav (sieving: fix Coarse Leaf serial number validation)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Coarse Leaf serial numbers use a date-based format (e.g. `18.06.01`), not the raw-material lot format (`GS-####` etc.). The format validation now only applies to non-Coarse-Leaf tabs, so QC can save Coarse Leaf runs without a false error on the serial number field.
+
+---
+
 ## 2026-06-18 — Gustav (pasteuriser: per-sample QC Controller name)
 
 **Files changed:**
