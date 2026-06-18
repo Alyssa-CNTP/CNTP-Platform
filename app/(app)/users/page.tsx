@@ -2,7 +2,7 @@
 
 // app/(app)/users/page.tsx
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Fragment } from 'react'
 import { useAuth }   from '@/lib/auth/context'
 import {
   ALL_DEPARTMENTS, DEPARTMENT_META, DEPARTMENT_ROLES,
@@ -10,6 +10,7 @@ import {
   resolvePermission, resolveAllPermissions,
   type Department, type PermissionKey, type Permissions,
 } from '@/lib/auth/permissions'
+import { PERMISSION_MATRIX } from '@/lib/auth/permission-registry'
 import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Globe, Clock } from 'lucide-react'
 
 const ALYSSA_UUID = 'df6cc2b1-c0ec-47ed-bb2e-b07771f3bf0e'
@@ -259,6 +260,127 @@ function AuditLogTab({ myId }: { myId: string | null }) {
 }
 
 // ─── Permission toggle panel ──────────────────────────────────────────────────
+
+// Master permissions matrix — every module/function as Read · Write · Delete · Manage,
+// driven by PERMISSION_MATRIX. Reuses the same resolved/override + onChange model.
+function PermissionMatrix({ role, department, overrides, onChange, readOnly }: {
+  role:       string | null
+  department: Department | null
+  overrides:  Permissions
+  onChange:   (key: PermissionKey, value: boolean | null) => void
+  readOnly?:  boolean
+}) {
+  const FONT = { fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, sans-serif' }
+  const [openManage, setOpenManage] = useState<Record<string, boolean>>({})
+
+  function resolved(key: PermissionKey) {
+    const defaultVal = resolvePermission(role, {}, key)
+    if (key in overrides) return { value: overrides[key] === true, overridden: true, defaultVal }
+    return { value: defaultVal, overridden: false, defaultVal }
+  }
+
+  function CellToggle({ pk }: { pk: PermissionKey }) {
+    const { value, overridden } = resolved(pk)
+    return (
+      <button type="button" disabled={readOnly}
+        onClick={() => !readOnly && onChange(pk, !value)}
+        title={pk + (overridden ? ' · override' : '')}
+        style={{ position: 'relative', width: 34, height: 19, borderRadius: 10, cursor: readOnly ? 'not-allowed' : 'pointer',
+          background: value ? '#16A34A' : '#D1D5DB', border: overridden ? '2px solid #D97706' : 'none',
+          opacity: readOnly ? 0.5 : 1, transition: 'background 150ms', verticalAlign: 'middle' }}
+        aria-checked={value}>
+        <span style={{ position: 'absolute', top: value ? 2.5 : 2.5, width: 14, height: 14, borderRadius: '50%', background: 'white',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.2)', left: value ? 17 : 2.5, transition: 'left 150ms' }} />
+      </button>
+    )
+  }
+
+  const cellTd: React.CSSProperties = { padding: '7px 8px', textAlign: 'center', borderBottom: '1px solid #F3F4F6' }
+  const dash = <span style={{ ...FONT, fontSize: 12, color: '#D1D5DB' }}>—</span>
+  function ActionCell({ v }: { v?: PermissionKey | 'dept' }) {
+    if (!v) return <td style={cellTd}>{dash}</td>
+    if (v === 'dept') return <td style={cellTd}><span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 20, padding: '1px 6px' }}>by dept</span></td>
+    return <td style={cellTd}><CellToggle pk={v} /></td>
+  }
+
+  const th: React.CSSProperties = { ...FONT, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6B7280', padding: '6px 8px', textAlign: 'center' }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ ...FONT, fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Master permissions — every module &amp; function</span>
+        <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF' }}>{Object.keys(overrides).length} override(s)</span>
+      </div>
+
+      {PERMISSION_MATRIX.map(m => (
+        <div key={m.module} style={{ border: '1px solid #E5E7EB', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ ...FONT, fontSize: 13, fontWeight: 700, color: '#111827' }}>{m.module}</span>
+            {m.department && m.department !== department && (
+              <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#6B7280', background: '#F3F4F6', borderRadius: 20, padding: '1px 7px' }}>cross-dept</span>
+            )}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#FCFCFC' }}>
+                <th style={{ ...th, textAlign: 'left' }}>Function</th>
+                <th style={{ ...th, width: 70 }}>Read</th>
+                <th style={{ ...th, width: 70 }}>Write</th>
+                <th style={{ ...th, width: 70 }}>Delete</th>
+                <th style={{ ...th, width: 90 }}>Manage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {m.resources.map(r => {
+                const manageTotal = r.manage?.length ?? 0
+                const manageOn = r.manage?.filter(x => resolved(x.key).value).length ?? 0
+                const isOpen = openManage[r.key] ?? false
+                return (
+                  <Fragment key={r.key}>
+                    <tr>
+                      <td style={{ ...cellTd, textAlign: 'left' }}>
+                        <span style={{ ...FONT, fontSize: 12.5, color: '#111827', fontWeight: 500 }}>{r.label}</span>
+                        {r.note && <div style={{ ...FONT, fontSize: 10, color: '#9CA3AF', fontStyle: 'italic', marginTop: 1 }}>{r.note}</div>}
+                      </td>
+                      <ActionCell v={r.read} />
+                      <ActionCell v={r.write} />
+                      <ActionCell v={r.delete} />
+                      <td style={cellTd}>
+                        {manageTotal === 0 ? dash : (
+                          <button type="button" onClick={() => setOpenManage(p => ({ ...p, [r.key]: !p[r.key] }))}
+                            style={{ ...FONT, fontSize: 11, fontWeight: 600, color: '#374151', background: 'white', border: '1px solid #E5E7EB', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            {manageOn}/{manageTotal} {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {isOpen && r.manage && (
+                      <tr>
+                        <td colSpan={5} style={{ background: '#FAFAFB', padding: '6px 12px 10px', borderBottom: '1px solid #F3F4F6' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 6 }}>
+                            {r.manage.map(sub => {
+                              const { overridden } = resolved(sub.key)
+                              return (
+                                <div key={sub.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 8px', background: 'white', border: '1px solid #EEF0F2', borderRadius: 6 }}>
+                                  <span style={{ ...FONT, fontSize: 11.5, color: '#374151' }}>{sub.label}{overridden && <span style={{ color: '#D97706', fontWeight: 700 }}> ·</span>}</span>
+                                  <CellToggle pk={sub.key} />
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
   role:       string | null
@@ -524,6 +646,7 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
   const { isIT } = useAuth()
   const isEdit = !!existing && !isAssignRole
   const [tab,        setTab]        = useState<'details' | 'permissions'>('details')
+  const [permView,   setPermView]   = useState<'matrix' | 'list'>('matrix')
   const [dept,       setDept]       = useState<Department>(existing?.department ?? 'Quality')
   const [role,       setRole]       = useState(existing?.role ?? '')
   const [customRole, setCustomRole] = useState('')
@@ -809,7 +932,20 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
                   </div>
                 </div>
               </div>
-              <PermissionsPanel role={effectiveRole || null} department={dept} overrides={overrides} onChange={handlePermChange} />
+              {/* View toggle: master matrix (default) vs detailed grouped list */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                {(['matrix', 'list'] as const).map(v => (
+                  <button key={v} type="button" onClick={() => setPermView(v)}
+                    style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
+                      border: '1px solid ' + (permView === v ? '#1A3A0E' : '#E5E7EB'),
+                      background: permView === v ? '#1A3A0E' : 'white', color: permView === v ? 'white' : '#6B7280' }}>
+                    {v === 'matrix' ? 'Master matrix' : 'Detailed list'}
+                  </button>
+                ))}
+              </div>
+              {permView === 'matrix'
+                ? <PermissionMatrix role={effectiveRole || null} department={dept} overrides={overrides} onChange={handlePermChange} />
+                : <PermissionsPanel role={effectiveRole || null} department={dept} overrides={overrides} onChange={handlePermChange} />}
             </div>
           )}
 

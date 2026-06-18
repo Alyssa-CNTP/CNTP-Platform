@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (permissions: master matrix view + standardized read/write/delete registry)
+
+Standardize the permission model into a clean Module → Function → Read/Write/Delete taxonomy and surface a single master view of every function. UI + API enforcement (RLS deny-by-default is a future phase). Existing keys are kept and mapped — no rename, no data migration.
+
+**Files changed:**
+- `lib/auth/permission-registry.ts` — NEW canonical `PERMISSION_MATRIX`: every module's functions mapped to `read / write / delete` (+ a `manage` list for workflow/special actions like finalise, approve, allocate, verify, export — so nothing is lost). Reads that are implied by department show as "by dept".
+- `lib/auth/permissions.ts` — added the previously-undocumented `can_access_intelligence` key (already used by `app/api/sales/*`, `app/api/signals/*`, Sidebar) to the type + `ALL_PERMISSION_KEYS`. Existing keys untouched.
+- `app/(app)/users/page.tsx` — new **Master matrix** view in the Permissions tab (default): every module/function as Read · Write · Delete columns + an expandable Manage list, each cell a toggle bound to its key, reusing the existing role-default/override resolution and save flow (sparse overrides → `app_roles.permissions`, no schema change). A **Detailed list** toggle keeps the previous grouped editor.
+
+**Note:** enforcement remains UI + API layer (route guards + `getCallerPermissions().can()`), now consistently defined via the registry. Database-level RLS enforcement (activate the JWT-claims hook + deny-by-default policies) is a deliberate future phase.
+
+---
+
 ## 2026-06-17 — Alyssa (access: co_developer is a near-full developer role again)
 
 Gustav (co_developer / IT) could see module links but routes blocked him after the recent "IT is not a blanket key" change. Restore co_developer as a developer role that reaches every module — while still excluded from destructive/admin actions.

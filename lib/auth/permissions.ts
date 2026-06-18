@@ -63,6 +63,7 @@ export type PermissionKey =
   | 'can_access_sales'
   | 'can_access_marketing'
   | 'can_access_research'
+  | 'can_access_intelligence'
   // Management & Reporting
   | 'can_view_management'
   | 'can_view_reports'
@@ -103,7 +104,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_ops_dashboard',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
-  'can_access_sales','can_access_marketing','can_access_research',
+  'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
