@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-13 — Gustav (maintenance: auto-pause a job when a breakdown pulls the technician away)
+
+**Files changed:**
+- app/api/maintenance/job-cards/route.ts
+- components/maintenance/{JobCardItem,Timer}.tsx
+- lib/maintenance/{types,useMaintenanceData}.ts
+- Supabase staging migration: maintenance_jobcard_pause
+
+**Changes:**
+- When a **breakdown is auto-assigned to a technician who is already mid-job**, that in-progress job's timer now **pauses automatically** (frozen) so the breakdown takes priority. Logged as "Timer paused — pulled to breakdown JC-xxx"
+- The paused card shows a **"Continue previous job"** button — disabled while the technician still has the breakdown in progress, enabled once it's finalised — which **resumes the timer** from where it stopped
+- New `job_cards` columns `paused`, `paused_at`, `pause_ms`, `paused_reason`. `pause_ms` banks the paused duration so the recorded worked time stays accurate (the timer and the completion "Duration" both subtract paused time)
+- Timer component shows a greyed "Paused" state when frozen
+- The work-logging panel is hidden while a card is paused, so a tech can't log work against a job they've stepped away from
+
+---
+
 ## 2026-06-17 — Alyssa (sales: live EXCO dashboard from Acumatica via Supabase)
 
 The sales dashboard now shows **live actuals from Acumatica `CNTP`**, stored in Supabase (so KPIs are consistent and we keep history) rather than read live on every load. Acumatica → Supabase → dashboard, with live-OData as a fallback.

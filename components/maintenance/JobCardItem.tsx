@@ -60,6 +60,8 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const prioMeta = PRIORITY_META[prio]
   const timerStart = isBd ? j.raised_at : j.accepted_at
   const showTimer = (j.status === 'in_progress') || (isBd && j.status === 'assigned')
+  // Worked minutes net of any paused (breakdown-interruption) time.
+  const netMin = Math.max(0, diffM(timerStart, j.completed_at) - Math.round((j.pause_ms ?? 0) / 60000))
   const lgs = cardLogs(j.id)
   const sps = cardSpares(j.id)
   const hasDetail = !!(j.long_desc || j.photo_url || j.ai_suggestion)
@@ -150,9 +152,26 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
           {showTimer && (
             <div className="mt-2.5">
               <div className="text-[10px] text-text-muted uppercase tracking-wide">Time elapsed {isBd ? '(since raised — breakdown)' : '(since accepted)'}</div>
-              <Timer start={timerStart} />
+              <Timer start={timerStart} pauseMs={j.pause_ms ?? 0} pausedAt={j.paused ? j.paused_at ?? null : null} />
             </div>
           )}
+
+          {/* Auto-paused by a breakdown — resume once the breakdown is finalised */}
+          {j.status === 'in_progress' && isTech && j.paused && (() => {
+            const techBusy = data.jcs.some(x => x.id !== j.id && x.assigned_to === j.assigned_to && x.status === 'in_progress' && !x.paused)
+            return (
+              <div className="rounded-xl border border-warn/30 bg-warn/5 p-3.5 mt-3">
+                <div className="text-[12px] font-semibold text-warn">Paused — {j.paused_reason || 'technician pulled to a breakdown'}</div>
+                <div className="text-[11px] text-text-muted mt-0.5">The timer is frozen. {techBusy ? 'Finish the breakdown first, then continue this job.' : 'The breakdown is done — you can continue this job.'}</div>
+                <button
+                  disabled={techBusy}
+                  className={`mt-2 rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] transition ${techBusy ? 'bg-surface-dim text-text-faint cursor-not-allowed' : 'bg-brand text-white hover:brightness-110'}`}
+                  onClick={() => actions.resumeJob(j)}>
+                  Continue previous job
+                </button>
+              </div>
+            )
+          })()}
 
           {/* raised → manager allocates / sends back for clarification */}
           {j.status === 'raised' && canManage && (
@@ -216,8 +235,8 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
-          {/* in_progress → work details, tools, spares */}
-          {j.status === 'in_progress' && isTech && (
+          {/* in_progress → work details, tools, spares (hidden while paused) */}
+          {j.status === 'in_progress' && isTech && !j.paused && (
             <div className="mt-3 space-y-2.5">
               <div>
                 <label className={LB}>Work Done</label>
@@ -305,7 +324,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Work:</span> {j.work_done || '—'}</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Root Cause:</span> {j.root_cause || '—'}</div>
               {j.tools_used && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Tools:</span> {j.tools_used}</div>}
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {diffM(isBd ? j.raised_at : j.accepted_at, j.completed_at)} min</div>
+              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
               {j.qc_required && <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
               <div className="flex gap-2 flex-wrap mt-1">
                 <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>Satisfactory — close</button>
@@ -317,7 +336,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
           {j.status === 'complete' && (
             <div className="mt-2.5 text-[12px] text-text-muted flex gap-x-3 gap-y-1 flex-wrap">
               <span><span className="text-text font-medium">{j.external ? 'External' : 'Tech'}:</span> {j.assigned_to ?? '—'}</span>
-              <span><span className="text-text font-medium">Duration:</span> {diffM(isBd ? j.raised_at : j.accepted_at, j.completed_at)} min</span>
+              <span><span className="text-text font-medium">Duration:</span> {netMin} min</span>
               {j.qc_required && <span><span className="text-text font-medium">QC:</span> {j.qc_name || '—'} {fmtT(j.qc_done_at)}</span>}
               <span><span className="text-text font-medium">Verified:</span> {j.verified_ok ? <span className="text-ok">OK</span> : <span className="text-err">Redo</span>}</span>
               {j.root_cause && <span><span className="text-text font-medium">Root Cause:</span> {j.root_cause}</span>}
