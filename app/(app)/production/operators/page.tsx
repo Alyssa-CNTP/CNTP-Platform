@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  ChevronLeft, Loader2, Plus, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Trash2,
+  ChevronLeft, Loader2, Plus, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Trash2, Search,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -38,6 +38,8 @@ export default function OperatorsPage() {
   const [editing, setEditing]     = useState<FormState | null>(null)
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState<string | null>(null)
+  const [query, setQuery]         = useState('')
+  const [activeOnly, setActiveOnly] = useState(true)
 
   async function load() {
     const { data } = await getDb().schema('production').from('operators')
@@ -113,6 +115,14 @@ export default function OperatorsPage() {
     await load()
   }
 
+  const q = query.trim().toLowerCase()
+  const filtered = operators
+    .filter(op => !activeOnly || op.active)
+    .filter(op => q === '' ||
+      (op.display_name ?? '').toLowerCase().includes(q) ||
+      op.name.toLowerCase().includes(q) ||
+      (op.operator_code ?? '').toLowerCase().includes(q))
+
   if (!canManage) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-2 text-center px-4">
@@ -138,15 +148,34 @@ export default function OperatorsPage() {
         </button>
       </div>
 
+      {!loading && operators.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200 bg-white flex-1 min-w-[200px] focus-within:border-brand">
+            <Search size={15} className="text-stone-400" />
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search operators by name…"
+              className="flex-1 py-2.5 text-[13px] outline-none bg-transparent" />
+          </div>
+          <button onClick={() => setActiveOnly(a => !a)}
+            className={`px-3 py-2.5 rounded-xl border text-[12px] font-medium transition-colors ${activeOnly ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
+            {activeOnly ? 'Active only' : 'Showing all'}
+          </button>
+          <span className="text-[12px] text-text-muted font-mono">{filtered.length} / {operators.length}</span>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center h-40"><Loader2 size={22} className="animate-spin text-text-muted" /></div>
       ) : operators.length === 0 ? (
         <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-[13px] text-text-muted">
           No operators yet. Tap “Add operator” to create the first one.
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-[13px] text-text-muted">
+          No operators match “{query}”.
+        </div>
       ) : (
         <div className="space-y-2">
-          {operators.map(op => (
+          {filtered.map(op => (
             <div key={op.id} className={`flex items-center gap-3 px-4 py-3 bg-white border border-stone-200 rounded-2xl ${!op.active ? 'opacity-50' : ''}`}>
               <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
                 <span className="font-mono font-bold text-[11px] text-stone-600">{(op.operator_code || op.name).slice(0, 3).toUpperCase()}</span>
@@ -157,7 +186,7 @@ export default function OperatorsPage() {
                   {op.role === 'production_supervisor' && <span className="text-[10px] font-medium text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">Supervisor</span>}
                 </div>
                 <div className="text-[11px] text-text-muted font-mono truncate">
-                  {(op.section_ids ?? []).map(s => sectionMeta(s).code).join(' · ') || 'No sections'}
+                  {sectionSummary(op.section_ids ?? [])}
                 </div>
               </div>
               <button onClick={() => toggleActive(op)} title={op.active ? 'Deactivate' : 'Activate'} className="p-2 text-stone-400 hover:text-text">
@@ -250,6 +279,14 @@ export default function OperatorsPage() {
       )}
     </div>
   )
+}
+
+// Collapse the per-section code list — operators rostered to every section show
+// "All sections" instead of six codes, which kept the list noisy.
+function sectionSummary(ids: string[]): string {
+  if (!ids.length) return 'No sections'
+  if (SECTION_ORDER.every(s => ids.includes(s))) return 'All sections'
+  return ids.map(s => sectionMeta(s).code).join(' · ')
 }
 
 const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
