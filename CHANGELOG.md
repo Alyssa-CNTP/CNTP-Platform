@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Gustav (granule + pasteuriser: cross-workcenter open-batch banners + button UX)
+
+**Files changed:**
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+
+**Changes:**
+- Granule dashboard: moved "+ New Run" button to the **left** of the active runs header (was on the right).
+- Added hover tooltip to **+ Sample** button: "Add when a new sample is taken during the current run".
+- Added hover tooltip to **+ New Run** button: "Start when a new batch has been completed or begun".
+- Granule page: on load, queries `qms.quality_records` (workcenter=pasteuriser) for open batches (no `final_result` in `data_json`). If any are found, shows an amber warning banner linking to the Pasteuriser dashboard.
+- Pasteuriser RunDashboard: on load, queries `qms.granule_runs` for runs where `final_status IS NULL`. If any are found, shows an amber warning banner linking to the Granule Line dashboard.
+
+---
+
 ## 2026-06-17 — Alyssa (permissions: master matrix view + standardized read/write/delete registry)
 
 Standardize the permission model into a clean Module → Function → Read/Write/Delete taxonomy and surface a single master view of every function. UI + API enforcement (RLS deny-by-default is a future phase). Existing keys are kept and mapped — no rename, no data migration.
