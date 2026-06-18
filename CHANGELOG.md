@@ -5,6 +5,26 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Gustav (sieving: runs table sorted newest-first)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Runs table now displays in reverse chronological order (newest entry at the top) across all product tabs (Fine Leaf, Coarse Leaf, Indent Stick, Block). Previously the order was inconsistent due to merging QMS and legacy data sources.
+
+---
+
+## 2026-06-18 — Gustav (sieving: remove serial number format validation)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Removed the `GS-####` / `VS-####` / `MAT-####` / `Lab samples` format check from the serial number field across all product tabs. Serial numbers vary per run type; only blank-check remains for in-process runs.
+
+---
+
 ## 2026-06-18 — Gustav (sieving: fix Coarse Leaf serial number validation)
 
 **Files changed:**
