@@ -21,6 +21,8 @@ export interface JobCard {
   verified_at: string | null; verified_ok: boolean | null
   photo_url: string | null; ai_suggestion: string; comments: string
   reopen_count: number
+  // Pause/resume — set when a breakdown pulls the tech off this job.
+  paused?: boolean; paused_at?: string | null; pause_ms?: number; paused_reason?: string
 }
 export interface CardLog { id: number; card_id: number; kind: 'comment' | 'event'; stage: string; author: string; body: string; created_at: string }
 export interface SpareUsed { id: number; card_id: number; part_id: number | null; description: string; qty: number; from_stock: string; is_critical: boolean; logged_by: string; created_at: string }

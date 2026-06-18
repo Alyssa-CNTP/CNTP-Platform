@@ -44,6 +44,23 @@ export async function POST(req: NextRequest) {
     const { data: card, error } = await db.schema('maintenance' as any).from('job_cards').insert(row).select().single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+    // If this breakdown was auto-assigned to a technician who is already mid-job,
+    // pause that other in-progress job (freeze its timer) so the breakdown takes
+    // priority. They resume it with "Continue previous job" once free.
+    if (isBd && duty?.name) {
+      const { data: busy } = await db.schema('maintenance' as any).from('job_cards')
+        .select('id, card_no').eq('assigned_to', duty.name).eq('status', 'in_progress').eq('paused', false)
+      for (const other of busy ?? []) {
+        await db.schema('maintenance' as any).from('job_cards')
+          .update({ paused: true, paused_at: new Date().toISOString(), paused_reason: `Pulled to breakdown ${card.card_no}`, updated_at: new Date().toISOString() })
+          .eq('id', other.id)
+        await db.schema('maintenance' as any).from('job_card_logs').insert({
+          card_id: other.id, kind: 'event', stage: 'in_progress', author: 'System',
+          body: `Timer paused — ${duty.name} pulled to urgent breakdown ${card.card_no}. Resume when the breakdown is finalised.`,
+        })
+      }
+    }
+
     // Activity log (mirrors the original createJC copy)
     await db.schema('maintenance' as any).from('job_card_logs').insert({
       card_id: card.id, kind: 'event', stage: 'raised', author: b.raised_by ?? 'Unknown',

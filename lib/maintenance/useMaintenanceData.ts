@@ -258,6 +258,15 @@ export function useMaintenanceData() {
     setSpForm(p => ({ ...p, [j.id]: {} }))
   }
 
+  // Resume a job that was auto-paused by a breakdown. Banks the paused duration
+  // into pause_ms so the worked time stays accurate, then restarts the timer.
+  const resumeJob = async (j: JobCard) => {
+    if (!j.paused || !j.paused_at) return
+    const banked = (j.pause_ms ?? 0) + (Date.now() - new Date(j.paused_at).getTime())
+    await upJC(j.id, { paused: false, paused_at: null, pause_ms: banked, paused_reason: '' })
+    await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, 'Resumed previous job after the breakdown — timer running again.')
+  }
+
   const completeWork = async (j: JobCard) => {
     const next: Status = j.qc_required ? 'qc_check' : 'verify'
     await upJC(j.id, {
@@ -624,7 +633,7 @@ export function useMaintenanceData() {
 
     actions: {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
-      logSpare, completeWork, qcSubmit, verifyCard, postComment,
+      logSpare, completeWork, resumeJob, qcSubmit, verifyCard, postComment,
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
