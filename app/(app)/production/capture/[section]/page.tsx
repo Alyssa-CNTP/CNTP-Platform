@@ -503,7 +503,8 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {/* This batch record's variant + destination + lot */}
+              {/* This batch record's variant + destination. The batch/lot is captured
+                  per bulk bag (with suggestions) — not duplicated here. */}
               <div className="flex items-center gap-2 flex-wrap">
                 <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
                   className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
@@ -513,8 +514,6 @@ function CaptureScreen() {
                   className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
                   {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-                <input value={active.lot} disabled={locked} onChange={e => updateActiveMeta('lot', e.target.value)} placeholder="Lot / batch"
-                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand w-40" />
               </div>
 
               <SievingCapture

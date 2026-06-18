@@ -5,6 +5,27 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Alyssa (production capture: kiosk, bulk-bag, secure, roster dropdown)
+
+**Files changed:**
+- `public/manifest.json`
+- `components/production/capture/SievingCapture.tsx`
+- `components/production/capture/OutputPicker.tsx`
+- `components/production/capture/OperatorPicker.tsx` (new)
+- `app/(app)/production/capture/[section]/page.tsx`
+- `app/(app)/production/capture/assign/page.tsx`
+- `supabase/migrations/20260618_001_operators_seed_employees.sql` (new)
+
+**Changes:**
+- **PWA / kiosk:** manifest now installs the app fullscreen (`display: fullscreen`, landscape) starting at `/production/capture`, with the CNTP logo as the app icon — so an Android kiosk launcher (e.g. Fully Kiosk Browser) or Screen Pinning can lock the tablet to the app. (Tablet lock itself is an OS-level setting, documented separately.)
+- **Bulk bag:** renamed "Farm bag" → "Bulk bag" in the Sieving capture UI; removed the Gross (kg) and Delivery date fields (and the now-unused nett-vs-gross overfill check). Remaining fields: Bag no., Lot/serial (with suggestions), Nett (kg), Local/export. Stored `product_type` value `'500kg Farm Bag'` is unchanged for data/Acumatica consistency.
+- **Batch consistency:** removed the duplicate top-of-form "Lot / batch" input on the capture screen. The batch is now captured per bulk bag (type-or-pick suggestion box); the output picker pre-suggests the most recent bulk-bag lot.
+- **Secure a bag:** each bulk bag and each output bag can be "Secured" — it collapses to a read-only summary with a lock badge; "Edit"/"Unlock" reopens it. Persisted with the draft so it survives reload. Layered under the existing whole-session sign-off lock.
+- **Bagging weights:** the output picker prefills standard full-bag weights when an item is picked — Fine/Coarse Leaf 300 kg, Indent Sticks 252 kg (editable for end-of-shift half bags). Family shortlist (conventional-first) remains the default view; full master search stays secondary.
+- **Supervisor roster:** the assign screen now uses a searchable name dropdown (new `OperatorPicker`) listing all active operators, instead of section-filtered chips. Migration imports the full 77-name employee roster into `production.operators` and makes `pin` nullable (PINs assigned later in the operators admin; sign-on still requires a PIN).
+
+---
+
 ## 2026-06-18 — Gustav (sieving: runs table sorted newest-first)
 
 **Files changed:**
