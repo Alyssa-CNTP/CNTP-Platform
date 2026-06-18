@@ -19,6 +19,35 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Gustav (maintenance: voice-note → smart job card via Gemini, no audio stored)
+
+**Files changed:**
+- app/api/maintenance/transcribe/route.ts (new)
+- components/maintenance/VoiceCapture.tsx (new)
+- components/maintenance/RaiseJobCardForm.tsx
+- components/maintenance/JobCardItem.tsx
+
+**Changes:**
+- New **voice-note** button on the Raise Job Card form and on the technician's Root Cause field. Record up to 30s; Gemini transcribes + refines it and fills the structured fields. **The audio is never stored** — sent for transcription in-memory and discarded; only the refined text is saved
+- Raise form: voice note fills short description, detailed description and suggests maintenance type(s)
+- Technician: voice note fills the Root Cause (and appends Work Done if mentioned)
+- New `/api/maintenance/transcribe` route (Gemini 2.5 Flash → flash-lite fallback); SA English with Afrikaans/isiXhosa handled, written back in English; caps ~30s / 4MB
+- **Smart job card validation:** raising now requires area, machine/equipment, a description, and (for planned) at least one maintenance type
+
+---
+
+## 2026-06-18 — Gustav (maintenance: raiser linked to signed-in user + close button)
+
+**Files changed:**
+- components/maintenance/RaiseJobCardForm.tsx
+
+**Changes:**
+- "Raised By" is now taken from the **signed-in account** — when the account has a real name it's shown read-only ("your account") and nothing is typed, keeping the data clean (the card is already linked to the user id server-side)
+- Accounts with **only an email (no name)** get an editable field that is **mandatory and must be a name + surname** (validated on submit) so every card traces to a real person
+- Added an **X close button** to the Raise Job Card screen header
+
+---
+
 ## 2026-06-18 — Gustav (granule + pasteuriser: cross-workcenter open-batch banners + button UX)
 
 **Files changed:**
