@@ -1013,7 +1013,7 @@ export default function SievingPage() {
     if (f.runType==='in-process') {
       if (!f.serialNumber.trim()) {
         errs.serialNumber='Serial number is required'
-      } else {
+      } else if (activeProduct !== 'Coarse Leaf') {
         const sn = f.serialNumber.trim()
         const validSN = /^(GS|VS|MAT)\s*-\s*\d+$/i.test(sn) || /^Lab\s+samples?$/i.test(sn)
         if (!validSN) errs.serialNumber='Format: GS-####, VS-####, MAT-####, or "Lab samples"'
