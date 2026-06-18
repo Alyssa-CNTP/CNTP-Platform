@@ -27,6 +27,7 @@ const CROSS_DEPT_PERMISSIONS: { key: PermissionKey; label: string; dept: Departm
   { key: 'can_access_sales',     label: 'Access Sales module',            dept: 'Sales'      },
   { key: 'can_access_research',  label: 'Access Research engine',         dept: 'Sales'      },
   { key: 'can_access_marketing', label: 'Access Marketing module',        dept: 'Marketing'  },
+  { key: 'can_access_maintenance', label: 'Access Maintenance module',    dept: 'Maintenance' },
 ]
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -775,22 +776,25 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
                   <div>
                     <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6B7280', marginBottom: 6 }}>Primary modules</div>
                     <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {dept === 'IT' && ['Operations', 'Logistics', 'Quality', 'Sales', 'Management', 'AXIS'].map(m => (
+                      {dept === 'IT' && ['Operations', 'Logistics', 'Quality', 'Sales', 'Management', 'Maintenance', 'AXIS'].map(m => (
                         <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
                       ))}
-                      {dept === 'Production' && ['Operations', 'Logistics'].map(m => (
+                      {dept === 'Production' && ['Operations', 'Logistics', 'Maintenance (Job Cards)'].map(m => (
                         <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
                       ))}
                       {dept === 'Quality' && ['Quality', 'Operations'].map(m => (
                         <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
                       ))}
+                      {dept === 'Maintenance' && ['Maintenance'].map(m => (
+                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
+                      ))}
                       {dept === 'Sales' && ['Sales'].map(m => (
                         <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
                       ))}
-                      {dept === 'Management' && ['Management', 'Sales (read)'].map(m => (
+                      {dept === 'Management' && ['Management', 'Sales (read)', 'Maintenance'].map(m => (
                         <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
                       ))}
-                      {!['IT','Production','Quality','Sales','Management'].includes(dept) && (
+                      {!['IT','Production','Quality','Sales','Management','Maintenance'].includes(dept) && (
                         <li style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#9CA3AF' }}>Select a department above</li>
                       )}
                     </ul>

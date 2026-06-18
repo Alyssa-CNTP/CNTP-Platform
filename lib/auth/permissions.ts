@@ -83,6 +83,7 @@ export type PermissionKey =
   | 'can_assign_tickets'
   | 'can_access_workspace'
   // Maintenance
+  | 'can_access_maintenance'
   | 'can_raise_breakdown'
   | 'can_raise_planned'
   | 'can_allocate_jobs'
@@ -108,6 +109,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
+  'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
 ]
 
@@ -436,6 +438,7 @@ export const PERMISSION_GROUPS: {
     group: 'Maintenance',
     department: 'Maintenance',
     permissions: [
+      { key: 'can_access_maintenance', label: 'Access the Maintenance module (grant to other departments)' },
       { key: 'can_raise_breakdown', label: 'Raise urgent breakdown job cards' },
       { key: 'can_raise_planned',   label: 'Raise planned / scheduled job cards' },
       { key: 'can_allocate_jobs',   label: 'Allocate job cards to technicians' },

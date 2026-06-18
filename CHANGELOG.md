@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (maintenance: grant access to users outside the Maintenance department)
+
+Maintenance access was department-only, so there was no way to give a non-Maintenance user (e.g. an IT/co-developer) access. Added a `can_access_maintenance` permission that works as an *alternative* to department membership.
+
+**Files changed:**
+- `lib/auth/permissions.ts` — new `can_access_maintenance` permission key (in the Maintenance permission group).
+- `app/(app)/layout.tsx` — route guards: added an `orPermission` flag (permission acts as department **OR**, not an extra requirement) and applied it to the `/maintenance` guards. In-department users are unaffected; anyone with `can_access_maintenance` granted gets in regardless of department.
+- `components/layout/Sidebar.tsx` — same `orPermission` semantics so the Maintenance nav shows for cross-department grantees too.
+- `app/(app)/users/page.tsx` — added "Access Maintenance module" to the **Cross-department view access** toggles; fixed the "Primary modules" summary (Maintenance was missing from IT/Management lists and the Maintenance department itself showed "select a department").
+
+So to grant an outsider: edit the user → Permissions → **Cross-department view access** → enable **Access Maintenance module**. Action permissions (allocate/verify/QC) still gate what they can *do*.
+
+---
+
 ## 2026-06-17 — Alyssa (maintenance: reorder / request-inventory flow)
 
 Raise a reorder when a part is low/out of stock (or a tech needs one), track it to received, and add received qty back into the register. Booking/deduct (`logSpare`) unchanged.

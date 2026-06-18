@@ -27,6 +27,11 @@ const ROUTE_GUARDS: Array<{
   departments?: string[]
   permission?:  PermissionKey
   itOnly?:      boolean
+  // When true, `permission` is an ALTERNATIVE to department (department OR
+  // permission grants access), instead of an additional requirement. Lets us
+  // grant a module to someone outside its department via a toggle without
+  // forcing every in-department user to also hold the permission.
+  orPermission?: boolean
 }> = [
   // AXIS — IT only (except /axis/request, excluded in guard logic)
   { prefix: '/axis/consideration', itOnly: true },
@@ -51,8 +56,8 @@ const ROUTE_GUARDS: Array<{
   // Maintenance — full module is Maintenance + Management. Production may only
   // reach Job Cards (to report breakdowns + track their own cards). Longest-prefix
   // matcher means the job-cards rule wins for that sub-route.
-  { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production'] },
-  { prefix: '/maintenance',           departments: ['Maintenance','Management'] },
+  { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 
   // Logistics (barcode-driven receiving, warehouse, dispatch)
   { prefix: '/logistics',        departments: ['Production','Quality','Management'] },
@@ -248,8 +253,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (guard.departments && !(department && guard.departments.includes(department))) {
       router.replace('/dashboard'); return
     }
-    // Department matches but permission still required
-    if (guard.permission && !p(guard.permission)) {
+    // Department matches but permission still required — unless the permission is
+    // an alternative to department (orPermission), in which case department alone suffices.
+    if (guard.permission && !guard.orPermission && !p(guard.permission)) {
       router.replace('/dashboard'); return
     }
   }, [loading, permissionsReady, user, pathname, isIT, isFullAdmin, department, role, p, router])

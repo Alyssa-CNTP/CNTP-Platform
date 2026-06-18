@@ -26,6 +26,9 @@ interface NavItem {
   departments?: string[]
   permission?:  PermissionKey
   itOnly?:      boolean
+  // permission is an ALTERNATIVE to department (department OR permission), not an
+  // additional requirement — see the matching flag in app/(app)/layout.tsx.
+  orPermission?: boolean
 }
 
 const NAV: NavItem[] = [
@@ -54,11 +57,11 @@ const NAV: NavItem[] = [
 
   // Maintenance — own section. Full module is Maintenance + Management.
   // Production sees ONLY Job Cards (to report breakdowns + track their own cards).
-  { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'] },
-  { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'] },
-  { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'] },
-  { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'] },
-  { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance', departments: ['Maintenance','Management'] },
+  { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
 
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },
   { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['Management'], permission: 'can_view_management' },
@@ -114,8 +117,9 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
     if (!hasExplicitPermission) {
       // No explicit permission — fall back to department check
       if (item.departments && !(department && item.departments.includes(department))) return false
-      // Department matches — still need the permission
-      if (item.permission && !p(item.permission)) return false
+      // Department matches — still need the permission, unless it's an alternative
+      // to department (orPermission), in which case department alone suffices.
+      if (item.permission && !item.orPermission && !p(item.permission)) return false
     }
 
     return true
