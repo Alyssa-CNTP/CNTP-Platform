@@ -5,6 +5,31 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Alyssa (smart checks engine: machine verification, AI, quality + maintenance links)
+
+**Files changed:**
+- `supabase/migrations/20260618_002_checks_engine.sql` (new)
+- `lib/production/checks-config.ts` (new)
+- `lib/production/check-specs.ts` (new)
+- `lib/production/checks-db.ts` (new)
+- `components/production/capture/ChecksPanel.tsx` (new)
+- `components/production/capture/ChecksStatusStrip.tsx` (new)
+- `app/api/production/read-value/route.ts` (new)
+- `app/api/production/check-summary/route.ts` (new)
+- `app/(app)/production/capture/[section]/page.tsx`
+
+**Changes:**
+- New **Checks** tab on the capture screen — a config-driven machine-verification engine (sieving authored first as the template; other sections inherit by config). Phases: Start-up / Running / Shut-down. Confirm-style checks are exception-based (assumed OK, flag only what isn't); identity + timestamps recorded automatically.
+- **Smart "due now" strip** on the Production tab pulls the operator to the right check at the right time (start-up pending, hourly VSD reading due, shut-down near shift end) and deep-links into the Checks tab. Afternoon-only checks (rotex clean, shut-down mass balance) auto show/hide for the Afternoon/Night block.
+- **Photo-read readings (Gemini vision):** `read-value` endpoint extracts a number from a photo of the VSD/scale/gauge so operators don't mistype; keypad entry remains. Out-of-range values soft-flag against the spec.
+- **One source of truth for ranges:** machine params (VSD 10–20, scale tolerance, screen speed/angle) from new `production.check_specs`; QC sieve targets pulled live from `qms.customer_specs` as guidance on the sieving-configuration check.
+- **Failure → maintenance:** a failed/out-of-tolerance check offers one-tap "Raise to maintenance" (operator picks breakdown vs planned) via `POST /api/maintenance/job-cards`; the job links back into the check event for traceability.
+- **Auto mass balance:** closing mass balance is snapshotted automatically at each grade/variant change-over and at shut-down — no typing.
+- **PIN sign-off + AI summary:** operator signs the checks (mirrors cleaning); a concise Gemini shift-audit summary is generated and stored on the record for supervisor review. Everything writes to the append-only `production.check_events` audit trail.
+- **Grade help:** info popover next to the destination dropdown — A = Export, B = Export Blend, C = Domestic/Local.
+
+---
+
 ## 2026-06-18 — Alyssa (operators admin: search, filters, cleaner section labels)
 
 **Files changed:**
