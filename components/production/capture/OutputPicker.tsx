@@ -16,6 +16,15 @@ export interface PickedOutput {
 
 const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
 
+// Standard full-bag weights so the operator only overrides for end-of-shift
+// half bags. Matched on the item description/name; '' = no standard (type it in).
+function standardWeight(label: string): string {
+  const s = label.toLowerCase()
+  if (/indent stick/.test(s)) return '252'
+  if (/fine leaf/.test(s) || /coarse leaf/.test(s)) return '300'
+  return ''
+}
+
 /**
  * Easy output picker: the few items that fit the section + variant up top
  * (AI-suggested), full 630-item master search only when the operator looks.
@@ -76,7 +85,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             {outputs.map(o => (
               <PickRow key={o.code} active={picked?.code === o.code}
                 title={o.description} code={o.code}
-                onClick={() => setPicked({ productType: o.description, code: o.code, description: o.description, batchTracked: o.batchTracked })} />
+                onClick={() => { setPicked({ productType: o.description, code: o.code, description: o.description, batchTracked: o.batchTracked }); setWeight(standardWeight(o.description)) }} />
             ))}
           </>
         ) : (
@@ -85,7 +94,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             {results.map(it => (
               <PickRow key={it.inventory_id} active={picked?.code === it.inventory_id}
                 title={it.description ?? it.inventory_id} code={it.inventory_id} highlight={query}
-                onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', batchTracked: /leaf/i.test(it.description ?? '') })} />
+                onClick={() => { setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', batchTracked: /leaf/i.test(it.description ?? '') }); setWeight(standardWeight(it.description ?? it.inventory_id)) }} />
             ))}
           </>
         )}
