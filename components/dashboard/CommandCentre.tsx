@@ -232,21 +232,10 @@ export default function CommandCentre() {
       color: 'info',
       href:  '/tags', icon: <Scale size={18} />,
     } as KpiItem,
-    canAccessSales && {
-      id: 'revenue', label: 'YTD Revenue', sublabel: '2026',
-      value: 'R 70.5M',
-      numericValue: 70500000,
-      color: 'ok', trend: 'up',
-      href:  '/sales', icon: <DollarSign size={18} />,
-    } as KpiItem,
-    canAccessSales && {
-      id: 'margin', label: 'Gross Margin', sublabel: 'YTD',
-      value: '34.7%',
-      numericValue: 34.7,
-      color: 'ok',
-      href:  '/sales', icon: <TrendingUp size={18} />,
-    } as KpiItem,
-    (p('can_access_research') || isIT || isManagement) && signalCount != null && {
+    // Sales revenue/margin KPIs intentionally removed from the main dashboard —
+    // confidential sales figures live only on the dedicated, access-gated
+    // /sales dashboard (Sales / IT / Management).
+    (p('can_access_research') || isManagement) && signalCount != null && {
       id: 'signals', label: 'Signals', sublabel: 'tracked',
       value: String(signalCount),
       numericValue: signalCount,
@@ -277,7 +266,7 @@ export default function CommandCentre() {
   ].filter(Boolean) as KpiItem[]
 
   // ── Can see floor/map section ───────────────────────────────────────────────
-  const canSeeFloor = canAccessProduction || isManagement || isIT
+  const canSeeFloor = canAccessProduction || isManagement
 
   return (
     <div className="px-4 py-5 space-y-5 max-w-[1400px] animate-in">
@@ -361,8 +350,8 @@ export default function CommandCentre() {
         )
       }
 
-      {/* ── TODAY'S COUNT STATUS (supervisors + production + IT) ───────────── */}
-      {(isSupervisor || canAccessProduction || isIT) && todayCount && (
+      {/* ── TODAY'S COUNT STATUS (supervisors + production) ───────────── */}
+      {(isSupervisor || canAccessProduction) && todayCount && (
         <div className="bg-surface-card border border-surface-rule rounded-2xl overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-3.5 border-b border-surface-rule">
             <ClipboardList size={14} className="text-brand" />

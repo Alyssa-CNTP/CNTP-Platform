@@ -30,26 +30,27 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { href: '/dashboard',                 label: 'Dashboard',                  icon: LayoutDashboard, group: 'Operations' },
-  { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['IT','Production'] },
-  { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
+  { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production'] },
+  { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['Production'], permission: 'can_submit_count' },
+  { href: '/production/dashboard',       label: 'Production Dashboard',       icon: LayoutDashboard, group: 'Operations', departments: ['Production','Management'] },
   // Supervisor hub — a single entry; module nav (Timesheets, Productions, Calendar,
   // Messages, Analytics) lives in the in-page tabs to keep the sidebar lean.
-  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Operations', departments: ['IT','Production','Management'] },
+  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Operations', departments: ['Production','Management'] },
   // Live Capture (barcode scanning) is the Phase-2 entry — hidden from nav until scanning goes live.
-  { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['IT','Management'] },
-  { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['IT','Production'], permission: 'can_submit_count' },
+  { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['Management'] },
+  { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['Production'], permission: 'can_submit_count' },
 
-  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
-  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
-  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
-  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['IT','Production','Quality','Management'] },
+  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'] },
 
-  { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['IT','Quality','Sales'], permission: 'can_edit_customer_specs' },
-  { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['IT','Quality'], permission: 'can_save_lab_results' },
-  { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['IT','Quality'], permission: 'can_create_runs' },
-  { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['IT','Quality'], permission: 'can_create_runs' },
-  { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['IT','Quality'], permission: 'can_upload_pdfs' },
-  { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['IT','Quality'], permission: 'can_add_sieving_runs' },
+  { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
+  { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
+  { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
+  { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
+  { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['Quality'], permission: 'can_upload_pdfs' },
+  { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['Quality'], permission: 'can_add_sieving_runs' },
 
   // Maintenance — own section (not Quality). Open to all for now; per-user
   // permissions will be added as roles are defined.
@@ -59,18 +60,18 @@ const NAV: NavItem[] = [
   { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance' },
   { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance' },
 
-  { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },
-  { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['IT','Management'], permission: 'can_view_management' },
+  { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },
+  { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['Management'], permission: 'can_view_management' },
 
-  { href: '/sales',                     label: 'Sales Dashboard',            icon: TrendingUp,      group: 'Sales', departments: ['IT','Sales','Management'], permission: 'can_access_sales' },
-  { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/intelligence/linkedin',     label: 'LinkedIn',                   icon: Network,         group: 'Sales', departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/research',                  label: 'Research Engine',            icon: Beaker,          group: 'Sales', departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_research' },
-  { href: '/intelligence',              label: 'Signal Engine',              icon: Radio,           group: 'Sales', departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/sales',                     label: 'Sales Dashboard',            icon: TrendingUp,      group: 'Sales', departments: ['Sales','Management'], permission: 'can_access_sales' },
+  { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/intelligence/linkedin',     label: 'LinkedIn',                   icon: Network,         group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/research',                  label: 'Research Engine',            icon: Beaker,          group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
+  { href: '/intelligence',              label: 'Signal Engine',              icon: Radio,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
 
-  { href: '/marketing',                 label: 'Marketing Hub',              icon: Sparkles,        group: 'Marketing', departments: ['IT','Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
-  { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['IT','Marketing','Sales','Management'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/marketing',                 label: 'Marketing Hub',              icon: Sparkles,        group: 'Marketing', departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
+  { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['Marketing','Sales','Management'], permission: 'can_access_intelligence' as PermissionKey },
 
   { href: '/workspace',                 label: 'My Workspace',               icon: Flower2,         group: 'Workspace', permission: 'can_access_workspace' as PermissionKey },
 

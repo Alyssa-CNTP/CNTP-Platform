@@ -425,7 +425,7 @@ function NotesPad({ userId }: { userId: string | null }) {
 // ═════════════════════════════════════════════════════════════════════════════
 export default function ManagementPage() {
   const db = getDb()
-  const { displayName, userId, canAccessManagement, canAccessSales, isIT } = useAuth()
+  const { displayName, userId, canAccessManagement, canAccessSales } = useAuth()
 
   const [period,         setPeriod]        = useState<Period>('month')
   const [kpi,            setKpi]           = useState<KpiData | null>(null)
@@ -534,7 +534,7 @@ export default function ManagementPage() {
 
   useEffect(() => { load() }, [load])
 
-  if (!canAccessManagement && !isIT) {
+  if (!canAccessManagement) {
     return (
       <div className="flex items-center justify-center min-h-full font-mono text-[12px] text-text-muted">
         Access restricted

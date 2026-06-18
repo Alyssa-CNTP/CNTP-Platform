@@ -5,6 +5,58 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (sales: live EXCO dashboard from Acumatica via Supabase)
+
+The sales dashboard now shows **live actuals from Acumatica `CNTP`**, stored in Supabase (so KPIs are consistent and we keep history) rather than read live on every load. Acumatica → Supabase → dashboard, with live-OData as a fallback.
+
+**Files changed:**
+- `lib/acumatica/sales-actuals.ts` — NEW. Aggregates `CNTPSALESREPORT` into KPI/monthly/customers/products/categories (ZAR base currency: revenue=`ARTran_extPrice`, cost=`ARTran_unitCost`×qty, volume=`BaseQty`). Reads from Supabase first; falls back to live OData if empty/error. Filterable scope: product / contract / freight / other.
+- `lib/acumatica/sales-sync.ts` — NEW. Pulls the full sales report and full-replaces `acumatica.sales_lines` via RPC. Guards against wiping on an empty fetch.
+- `app/api/dashboard/sales/route.ts` — NEW. `GET ?year=&include=` — gated to Sales/Management/IT/Marketing; 5-min cache.
+- `app/api/acumatica/sync-sales/route.ts` — NEW. Triggers the sync (logged-in user **or** `x-sync-secret` header for cron/webhook).
+- `supabase/migrations/20260615_004_acumatica_sales_lines.sql` — NEW. Typed `acumatica.sales_lines` table + `acumatica_replace_sales_lines` / `acumatica_get_sales_lines` SECURITY DEFINER RPCs. **Run in Supabase before deploy.**
+- `app/(app)/sales/page.tsx`, `app/(app)/layout.tsx`, `app/(app)/sales/layout.tsx`, `components/dashboard/CommandCentre.tsx` — wired the page to the live API + scope chips; consolidated the duplicate sales header into one with a live "Synced" indicator; removed the hardcoded sales KPIs from the main Command Centre (sales figures now only on the gated /sales page).
+
+**Deploy notes:** run migration `20260615_004` in Supabase, set `ACUMATICA_*` env vars (live tenant = `CNTP`), then trigger `/api/acumatica/sync-sales` once. Webhook + scheduled sync to follow.
+
+---
+
+## 2026-06-17 — Alyssa (dashboards: user-editable department dashboards + Production template)
+
+A reusable engine for **per-user, customizable department dashboards**. Each user arranges their own widgets — drag to reorder, resize (S / M / L / Full), add from a catalogue, remove — and the layout persists per-user. With no saved layout, a code-defined default is shown, so nobody sees a blank page. **Production** is the first dashboard built on the engine; other departments follow by adding a widget set + default layout.
+
+**Files changed:**
+- `supabase/migrations/20260617_001_dashboard_layouts.sql` — NEW. `shared.dashboard_layouts` (PK `user_id,dashboard_key`; `widgets` jsonb) with own-row RLS + grants, mirroring `shared.user_preferences`. **Run in Supabase (staging, then prod) before deploy.**
+- `lib/dashboard/types.ts` — NEW. Widget span vocabulary (`sm`/`md`/`lg`/`full` → 12-col classes) + `WidgetInstance` / layout row types.
+- `lib/dashboard/data.tsx` — NEW. `DashboardDataProvider` — one fetch of the production ops dataset (sc_sessions, prod_sessions, mass balance, bag tags), exposes derived KPIs + section statuses so widgets share data instead of each querying.
+- `lib/dashboard/registry.tsx` — NEW. Widget catalogue (label, icon, allowed spans, category, optional permission) + the `production` default layout + permission-filtered picker helper.
+- `lib/dashboard/useDashboardLayout.ts` — NEW. Load / save (upsert) / reset (delete → default) a user's layout against `shared.dashboard_layouts`.
+- `components/dashboard/editable/widgets.tsx` — NEW. Concrete widgets reading from the provider: KPI tiles (accuracy, sections, yield, tags, tagged weight, sessions, variances), plus reuse of `WarehouseMap`/`UptimeGrid`/`ActivityFeed`/`Notepad`/`MiniCalendar`, and a new Recharts yield-by-section chart.
+- `components/dashboard/editable/EditableDashboard.tsx` — NEW. The shell: header (Refresh / Customize / Add / Reset / Cancel / Save), dnd-kit drag-reorder, size toggles, widget picker, loading + empty states.
+- `components/dashboard/editable/WidgetFrame.tsx`, `WidgetPicker.tsx` — NEW. Sortable per-widget frame (view = bare; edit = toolbar) and the add-widget panel.
+- `app/(app)/production/dashboard/page.tsx` — NEW. Mounts `EditableDashboard` with `dashboardKey="production"`.
+- `components/layout/Sidebar.tsx` — added an Operations nav entry "Production Dashboard" (`/production/dashboard`, Production + Management).
+- `package.json` — added `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` (drag-and-drop). Install with `--legacy-peer-deps`.
+
+**Notes:** Home `CommandCentre` is untouched. Drag/drop uses dnd-kit with preset size toggles (not freeform pixel resize) to match the design language and stay React-19/SSR-safe. Per-widget permission gating is supported in the registry (`requiredPermission`) but mostly unused in v1 — route-level access still applies. Follow-ups: role-managed default layouts, and replicating the engine to Quality / Maintenance / Sales.
+
+---
+
+## 2026-06-15 — Alyssa (access control: IT is no longer a blanket all-access key)
+
+Being in the **IT department** no longer auto-grants access to every department and module. IT users are now gated by the same role/permission rules as everyone else. Two things are deliberately preserved: the **full admin** role (`senior_developer`) still bypasses guards (it's role-based and is the break-glass account), and IT's *own* modules — **AXIS** (`itOnly`) and **`/status`** platform diagnostics, plus the platform-health Connections panel — stay IT-scoped.
+
+**Files changed:**
+- `lib/auth/context.tsx` — removed `isIT` from the `canAccessQuality/Production/Sales/Marketing/Management/Maintenance` flags; each module is now gated by its own department or explicit permission (full admin still sees all).
+- `app/(app)/layout.tsx` — `ROUTE_GUARDS`: dropped `'IT'` from every cross-department `departments` list. AXIS stays `itOnly`; `/status` stays `['IT']` (IT's own platform-diagnostics module). Updated the header comment.
+- `components/layout/Sidebar.tsx` — `NAV`: dropped `'IT'` from every cross-department item so IT no longer sees other departments' modules in the sidebar. AXIS items remain `itOnly`.
+- `app/(app)/management/page.tsx`, `app/(app)/production/operations/page.tsx`, `components/layout/page.tsx` — removed the `|| !isIT` blanket escape from the page-level Management guards (now rely on `canAccessManagement`); tidied the unused `isIT` destructure and the "or IT only" copy.
+- `components/dashboard/CommandCentre.tsx` — removed blanket `isIT` from the Signals KPI, the floor/production status card, and `canSeeFloor`, so the dashboard only surfaces modules the user can actually reach. The IT/Management Connections (platform-health) panel is unchanged.
+
+**Notes:** Server-side API routes were already permission-based (`caller.can(...)`); only AXIS endpoints check `department === 'IT'`, which is correct for IT's own module — so no server changes were needed. IT users who genuinely need cross-department access should be granted the relevant permission override or role, same as any other user.
+
+---
+
 ## 2026-06-15 — Alyssa (acumatica: read-only OData integration + incremental sync)
 
 Live read-only link to Acumatica via its OData Generic Inquiry API, plus a high-water-mark incremental sync that lands GI data into a dedicated `acumatica` schema in Supabase. Reads from Acumatica only — there is no write path back to Acumatica.
