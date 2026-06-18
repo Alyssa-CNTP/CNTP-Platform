@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (maintenance: tighten access control)
+
+The maintenance module was visible/accessible too broadly — the sidebar group had no gating (shown to every department) and the route guard let all of Production into the whole module.
+
+**Files changed:**
+- `components/layout/Sidebar.tsx` — gated the Maintenance nav items: Dashboard / Scheduled / Planner / Stock → `IT, Maintenance, Management`; Job Cards → those + `Production` (so Production can report breakdowns + track their own cards). No longer shown to Sales / Quality / Marketing.
+- `app/(app)/layout.tsx` — split the `/maintenance` route guard: `/maintenance/job-cards` → `IT, Maintenance, Management, Production`; `/maintenance` (dashboard, scheduled, planner, stock) → `IT, Maintenance, Management` only (longest-prefix matcher). Production can no longer reach the dashboard/planner/stock directly.
+
+---
+
 ## 2026-06-17 — Alyssa (sales: live EXCO dashboard from Acumatica via Supabase)
 
 The sales dashboard now shows **live actuals from Acumatica `CNTP`**, stored in Supabase (so KPIs are consistent and we keep history) rather than read live on every load. Acumatica → Supabase → dashboard, with live-OData as a fallback.

@@ -50,7 +50,10 @@ const ROUTE_GUARDS: Array<{
 
   // Maintenance — own module. Production needs access to raise breakdowns.
   // One rule covers all sub-routes via the longest-prefix matcher.
-  { prefix: '/maintenance',      departments: ['Maintenance','Production','Management'] },
+  // Maintenance — full module is Maintenance + Management (+ IT). Production may
+  // only reach Job Cards (to report breakdowns + track their own cards).
+  { prefix: '/maintenance/job-cards', departments: ['IT','Maintenance','Management','Production'] },
+  { prefix: '/maintenance',           departments: ['IT','Maintenance','Management'] },
 
   // Logistics (barcode-driven receiving, warehouse, dispatch)
   { prefix: '/logistics',        departments: ['Production','Quality','Management'] },
