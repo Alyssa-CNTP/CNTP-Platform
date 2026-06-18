@@ -5,20 +5,6 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-18 — Gustav (sieving tower: batch format, leaf shade pull-through, required fields, collapsible table)
-
-**Files changed:**
-- `app/(app)/quality/sieving/page.tsx`
-
-**Changes:**
-- Serial number validation: in-process runs now enforce format `GS-####`, `VS-####`, `MAT-####`, or `Lab samples`. Error shown on save if format doesn't match.
-- Leaf shade auto-fill: page loads from `qms.leaf_shade_predictions` keyed by lot number — uses `actual_leaf_shade` if set, falls back to `leaf_shade` prediction. Auto-fills when lot number is entered (alongside existing fill from previous sieving runs).
-- Bulk density is now **required** for all run types (was optional). Red border + error message shown if missing.
-- Leaf shade is now **required** for all run types on Coarse Leaf / Fine Leaf (was only required for Final QC). Red border + error message shown if missing.
-- Runs table below the chart now has a **collapse/expand toggle** button showing the record count.
-
----
-
 ## 2026-06-18 — Gustav (maintenance: voice-note → smart job card via Gemini, no audio stored)
 
 **Files changed:**
