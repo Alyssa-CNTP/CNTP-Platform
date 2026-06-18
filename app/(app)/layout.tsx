@@ -249,8 +249,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     const hasExplicitPermission = guard.permission && !isFullAdmin && p(guard.permission)
     if (isFullAdmin || hasExplicitPermission) return
 
+    // Developers (senior_developer = full admin, co_developer) bypass the
+    // DEPARTMENT check so they can reach every module — but they remain subject
+    // to the permission check below, so destructive/admin routes (e.g. /users,
+    // which co_developer lacks can_manage_users for) stay blocked.
+    const isDeveloper = isFullAdmin || role === 'co_developer'
+
     // No explicit permission — enforce department check
-    if (guard.departments && !(department && guard.departments.includes(department))) {
+    if (guard.departments && !isDeveloper && !(department && guard.departments.includes(department))) {
       router.replace('/dashboard'); return
     }
     // Department matches but permission still required — unless the permission is

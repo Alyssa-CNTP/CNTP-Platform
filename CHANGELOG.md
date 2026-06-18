@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (access: co_developer is a near-full developer role again)
+
+Gustav (co_developer / IT) could see module links but routes blocked him after the recent "IT is not a blanket key" change. Restore co_developer as a developer role that reaches every module — while still excluded from destructive/admin actions.
+
+**Files changed:**
+- `app/(app)/layout.tsx` — `co_developer` (like `senior_developer`) now **bypasses the department check** in route guards, but remains subject to the per-route **permission** check, so `/users` and other admin/destructive routes stay blocked (co_developer lacks `can_manage_users` / `can_run_migrations` / `can_manage_integrations`).
+- `components/layout/Sidebar.tsx` — same: `co_developer` sees every department's nav, minus items requiring permissions it doesn't hold.
+
+Net: Gustav can now open Quality (and all other modules) — links no longer dead-end — without granting destructive/admin powers. `senior_developer` remains the only true full-bypass admin.
+
+---
+
 ## 2026-06-17 — Alyssa (maintenance: grant access to users outside the Maintenance department)
 
 Maintenance access was department-only, so there was no way to give a non-Maintenance user (e.g. an IT/co-developer) access. Added a `can_access_maintenance` permission that works as an *alternative* to department membership.

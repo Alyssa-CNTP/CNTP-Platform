@@ -114,9 +114,14 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
     // Department is only used when there is NO explicit permission override.
     const hasExplicitPermission = item.permission && p(item.permission)
 
+    // Developers (senior_developer handled above, co_developer here) see every
+    // department's nav — they bypass the department check but still need any
+    // permission an item requires (so admin-only items stay hidden).
+    const isDeveloper = role === 'co_developer'
+
     if (!hasExplicitPermission) {
       // No explicit permission — fall back to department check
-      if (item.departments && !(department && item.departments.includes(department))) return false
+      if (item.departments && !isDeveloper && !(department && item.departments.includes(department))) return false
       // Department matches — still need the permission, unless it's an alternative
       // to department (orPermission), in which case department alone suffices.
       if (item.permission && !item.orPermission && !p(item.permission)) return false
