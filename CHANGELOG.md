@@ -57,6 +57,39 @@ Being in the **IT department** no longer auto-grants access to every department 
 
 ---
 
+## 2026-06-13 — Gustav (maintenance: roster from both shift pairs + on-duty quick-pick allocation)
+
+**Files changed:**
+- lib/maintenance/useMaintenanceData.ts
+- components/maintenance/JobCardItem.tsx
+- Supabase staging migration: reseed duty_roster from boiler shift pairs
+
+**Changes:**
+- The duty roster now seeds from **both shift columns** of the boiler-start sheet, not just the single boiler-starter: Morning Shift = 07:00–16:00, Afternoon Shift = 16:00–01:00, each with its **two** technicians. The 4 technicians run in fixed pairs (Shane+Yamkela, John+Mohapi) alternating morning/afternoon weekly, so a breakdown routes to whichever pair is on duty at that time
+- **Easier allocation:** the allocate panel now shows "On duty now:" quick-pick chips for the technician(s) currently on shift — one tap selects them, then Forward. The full technician dropdown and external option remain
+- New `dutyNow` selector returns everyone on duty right now (a shift has two)
+
+---
+
+## 2026-06-13 — Gustav (maintenance: IT full view, machine catalogue, roster from boiler schedule, QC→Quality notify)
+
+**Files changed:**
+- lib/maintenance/{roles,types,useMaintenanceData}.ts
+- components/maintenance/RaiseJobCardForm.tsx
+- app/(app)/maintenance/job-cards/page.tsx
+- app/api/maintenance/job-cards/[id]/to-qc/route.ts (new)
+- lib/notifications/recipients.ts
+- Supabase staging migration: maintenance_machines_and_roster_seed
+
+**Changes:**
+- **IT / full-admin full view:** the Job Cards board now shows a "View as" switcher (Maintenance Manager / Technician / QC / Raiser) for IT and full admins, so IT sees every profile. Other users keep their single derived role; access still refined per-user in the permissions UI
+- **Machine catalogue:** new `maintenance.machines` table seeded with ~60 machines from the spreadsheet's Job Card "Equipment" column. The raise form's Machine field is now a dropdown (datalist) that also lets you **type a new machine** — it's saved to the catalogue on submit and appears next time
+- **Consistent name entry:** "Your Name / Reported By" on the raise form is now a datalist of staff + roster names so names are entered consistently (breakdown included), while still allowing free text
+- **Duty roster seeded from the boiler-start schedule:** the 4 technicians (Shane, Mohapi, Yamkela, John) now populate the duty roster on their weekly rotation from the boiler-start log — this drives breakdown auto-assign. (Names will bind to real logins once Gustav creates the technician users and allocates roles.)
+- **QC → Quality hand-off:** when a completed card needs QC, a notification now fires to the station QC (area→QC map) or all Quality users via the new `to-qc` route, so the Quality dashboard can surface the pending check (Gustav is adding that feature on the Quality side)
+
+---
+
 ## 2026-06-15 — Alyssa (acumatica: read-only OData integration + incremental sync)
 
 Live read-only link to Acumatica via its OData Generic Inquiry API, plus a high-water-mark incremental sync that lands GI data into a dedicated `acumatica` schema in Supabase. Reads from Acumatica only — there is no write path back to Acumatica.

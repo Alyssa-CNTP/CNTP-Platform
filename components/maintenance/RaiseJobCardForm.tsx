@@ -8,20 +8,31 @@
 import { useRef, useEffect } from 'react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { useAuth } from '@/lib/auth/context'
-import { AREAS, PLANNED_TYPES } from '@/lib/maintenance/constants'
+import { AREAS, PLANNED_TYPES, TECHS } from '@/lib/maintenance/constants'
 import { aiSuggest, downscalePhoto } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
 
 const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
 
 export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => void; initialWorkflow?: 'breakdown' | 'planned' }) {
-  const { ui, actions, derived } = useMaintenanceContext()
+  const { ui, actions, derived, data } = useMaintenanceContext()
   const { isProduction, p } = useAuth()
   const { nj, setNj, saving, setPopup } = ui
   const { duty } = derived
   const fRef = useRef<HTMLInputElement>(null)
   const canRaiseBreakdown = isProduction || p('can_raise_breakdown')
   const isBd = nj.workflow === 'breakdown'
+
+  // Name suggestions (staff directory + roster names) keep "Reported by" and
+  // technician names consistent while still allowing free text.
+  const nameOptions = Array.from(new Set([...data.staff.map(s => s.name), ...TECHS])).filter(Boolean).sort()
+  // Machine catalogue — the selected area's machines first, then the rest.
+  const machineOptions = (() => {
+    const all = data.machines.map(m => m.name)
+    if (!nj.area) return all
+    const forArea = data.machines.filter(m => m.area === nj.area).map(m => m.name)
+    return Array.from(new Set([...forArea, ...all]))
+  })()
 
   // Open straight into the requested mode (Report Breakdown vs New Job Card).
   useEffect(() => {
@@ -37,6 +48,12 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
   }, [canRaiseBreakdown, nj.workflow, setNj])
 
   async function submit() {
+    // Save a newly-typed machine to the catalogue so it's in the dropdown next time.
+    const m = nj.machine?.trim()
+    if (m && !data.machines.some(x => x.name.toLowerCase() === m.toLowerCase())) {
+      const saved = await actions.addMachine(m, nj.area)
+      if (saved && saved !== m) setNj(p => ({ ...p, machine: saved }))
+    }
     await actions.createJC()
     onDone?.()
   }
@@ -64,13 +81,20 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <div><label className={LB}>Your Name</label><input className={INP} value={nj.raisedBy} onChange={e => setNj(p => ({ ...p, raisedBy: e.target.value }))} placeholder="Type your name…" /></div>
+        <div><label className={LB}>{isBd ? 'Reported By (your name)' : 'Your Name'}</label>
+          <input className={INP} list="maint-names" value={nj.raisedBy} onChange={e => setNj(p => ({ ...p, raisedBy: e.target.value }))} placeholder="Start typing your name…" />
+          <datalist id="maint-names">{nameOptions.map(n => <option key={n} value={n} />)}</datalist>
+        </div>
         <div><label className={LB}>Area / Location</label>
           <select className={INP} value={nj.area} onChange={e => setNj(p => ({ ...p, area: e.target.value }))}>
             <option value="">Select area…</option>{AREAS.map(a => <option key={a}>{a}</option>)}
           </select>
         </div>
-        <div><label className={LB}>Machine (optional)</label><input className={INP} value={nj.machine} onChange={e => setNj(p => ({ ...p, machine: e.target.value }))} placeholder="Machine name…" /></div>
+        <div><label className={LB}>Machine / Equipment</label>
+          <input className={INP} list="maint-machines" value={nj.machine} onChange={e => setNj(p => ({ ...p, machine: e.target.value }))} placeholder="Pick from list or type a new one…" />
+          <datalist id="maint-machines">{machineOptions.map(m => <option key={m} value={m} />)}</datalist>
+          <div className="text-[10px] text-text-faint mt-1">Not in the list? Type it — it will be saved to the catalogue.</div>
+        </div>
       </div>
 
       {!isBd && (

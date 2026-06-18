@@ -14,7 +14,7 @@ import { isoWeekKey, monthKey, normQc, diffM, diffDays, daysUntil, fmtDT, fmtT, 
 import type {
   JobCard, CardLog, SpareUsed, Roster, AreaQc, Slot,
   Template, Completion, AnnualItem, SparePart, Offsite, Status, QcAnswer, Staff,
-  IpReading, DieselReading, LsLog, WaterReading, BoilerStart, EqConfig, EqHours, CalAsset,
+  IpReading, DieselReading, LsLog, WaterReading, BoilerStart, EqConfig, EqHours, CalAsset, Machine,
 } from './types'
 
 // Fallback staff directory built from the hardcoded TECHS (id: null) until the
@@ -55,6 +55,7 @@ export function useMaintenanceData() {
   const [eqConfig, setEqConfig] = useState<EqConfig[]>([])
   const [eqHours, setEqHours] = useState<EqHours[]>([])
   const [calAssets, setCalAssets] = useState<CalAsset[]>([])
+  const [machines, setMachines] = useState<Machine[]>([])
 
   // Acting-as name — defaults to the signed-in user; preserved from the original.
   const [actor, setActor] = useState('')
@@ -78,7 +79,7 @@ export function useMaintenanceData() {
   const loadAll = useCallback(async () => {
     try {
       const m = db.schema('maintenance')
-      const [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal] = await Promise.all([
+      const [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal, mac] = await Promise.all([
         m.from('job_cards').select('*').order('raised_at', { ascending: false }),
         m.from('job_card_logs').select('*').order('created_at'),
         m.from('job_card_spares').select('*').order('created_at', { ascending: false }),
@@ -98,6 +99,7 @@ export function useMaintenanceData() {
         m.from('equipment_config').select('*').eq('active', true),
         m.from('equipment_hours').select('*').order('reading_date'),
         m.from('calibration_assets').select('*').eq('active', true),
+        m.from('machines').select('*').eq('active', true).order('name'),
       ])
       const firstErr = [jc, lg, sp, ro, aq, sl, tpl, comp, ann, stk, off, ipr, dsr, lsl, wtr, bst, ecf, eqh, cal].find((r: any) => r.error)
       if (firstErr?.error) throw firstErr.error
@@ -108,6 +110,7 @@ export function useMaintenanceData() {
       setIpReadings(ipr.data ?? []); setDieselReadings(dsr.data ?? []); setLsLogs(lsl.data ?? [])
       setWaterReadings(wtr.data ?? []); setBoilerStarts(bst.data ?? [])
       setEqConfig(ecf.data ?? []); setEqHours(eqh.data ?? []); setCalAssets(cal.data ?? [])
+      setMachines(mac.data ?? [])
       setError('')
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load maintenance data')
@@ -154,6 +157,15 @@ export function useMaintenanceData() {
   const onDutyTech = () => {
     const now = Date.now()
     return roster.find(r => new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime())?.technician ?? null
+  }
+  // All technicians on duty right now (a shift has two) — drives quick-pick
+  // allocation buttons on the board.
+  const onDutyTechs = () => {
+    const now = Date.now()
+    return Array.from(new Set(
+      roster.filter(r => new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime())
+        .map(r => r.technician)
+    ))
   }
 
   const createJC = async () => {
@@ -255,6 +267,31 @@ export function useMaintenanceData() {
     })
     await addLog(j.id, 'event', next, j.assigned_to ?? actor,
       j.qc_required ? `Work complete — sent to QC (${qcFor(j.area) || 'QC on duty'})` : 'Work complete — QC not required, sent to originator for verification.')
+    // Notify the Quality dashboard to run the post-maintenance QC check. The
+    // server resolves the station QC (area→QC map) or all Quality users.
+    if (j.qc_required) {
+      fetch(`/api/maintenance/job-cards/${j.id}/to-qc`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ area: j.area, card_no: j.card_no, actor: actor || displayName || '' }),
+      }).catch(() => {}) // best-effort — the card is already in the QC queue regardless
+    }
+  }
+
+  // Add a machine to the catalogue (free-type entry on the raise form). Returns
+  // the saved name so the form can select it immediately.
+  const addMachine = async (name: string, area = ''): Promise<string | null> => {
+    const clean = name.trim()
+    if (!clean) return null
+    const existing = machines.find(m => m.name.toLowerCase() === clean.toLowerCase())
+    if (existing) return existing.name
+    const { data, error: err } = await db.schema('maintenance').from('machines')
+      .insert({ name: clean, area, created_by: actor || displayName || '' }).select().single()
+    if (err) {
+      if (err.code === '23505') return clean // unique-violation race — name already exists
+      setPopup('Could not save machine: ' + err.message); return null
+    }
+    setMachines(p => [...p, data].sort((a, b) => a.name.localeCompare(b.name)))
+    return data.name
   }
 
   // QC submits — any YES sends the card back to the technician
@@ -502,6 +539,7 @@ export function useMaintenanceData() {
   const cardLogs = (id: number) => logs.filter(l => l.card_id === id)
   const cardSpares = (id: number) => sparesUsed.filter(s => s.card_id === id)
   const duty = onDutyTech()
+  const dutyNow = onDutyTechs()
 
   const newCards = jcs.filter(j => j.status === 'raised')
   const hist = jcs.filter(j => j.status === 'complete').slice(0, 20)
@@ -574,7 +612,7 @@ export function useMaintenanceData() {
 
     data: {
       jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite, staff,
-      ipReadings, dieselReadings, lsLogs, waterReadings, boilerStarts, eqConfig, eqHours, calAssets,
+      ipReadings, dieselReadings, lsLogs, waterReadings, boilerStarts, eqConfig, eqHours, calAssets, machines,
     },
 
     // Shared form/UI state + setters that the route components drive.
@@ -590,11 +628,11 @@ export function useMaintenanceData() {
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
-      raiseFromChecklist, saveReading, calDone, eqServiced,
+      raiseFromChecklist, saveReading, calDone, eqServiced, addMachine,
     },
 
     derived: {
-      cnt, cardLogs, cardSpares, duty, newCards, hist, annualRows, openPlannedCards,
+      cnt, cardLogs, cardSpares, duty, dutyNow, newCards, hist, annualRows, openPlannedCards,
       completed, totalMins, avgCloseDays, techCounts, areaCounts, reopens,
       breakdowns, completionRate, statuses: STATUSES,
       lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists,
