@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (maintenance: tighten access control)
+
+The maintenance module was visible/accessible too broadly — the sidebar group had no gating (shown to every department) and the route guard let all of Production into the whole module.
+
+**Files changed:**
+- `components/layout/Sidebar.tsx` — gated the Maintenance nav items: Dashboard / Scheduled / Planner / Stock → `Maintenance, Management`; Job Cards → those + `Production` (so Production can report breakdowns + track their own cards). No longer shown to Sales / Quality / Marketing. (Per app convention, IT is not a blanket key — `senior_developer` still bypasses.)
+- `app/(app)/layout.tsx` — split the `/maintenance` route guard: `/maintenance/job-cards` → `Maintenance, Management, Production`; `/maintenance` (dashboard, scheduled, planner, stock) → `Maintenance, Management` only (longest-prefix matcher). Production can no longer reach the dashboard/planner/stock directly.
+
+---
+
 ## 2026-06-13 — Gustav (maintenance: auto-pause a job when a breakdown pulls the technician away)
 
 **Files changed:**

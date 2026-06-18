@@ -52,13 +52,13 @@ const NAV: NavItem[] = [
   { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['Quality'], permission: 'can_upload_pdfs' },
   { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['Quality'], permission: 'can_add_sieving_runs' },
 
-  // Maintenance — own section (not Quality). Open to all for now; per-user
-  // permissions will be added as roles are defined.
-  { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance' },
-  { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance' },
-  { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance' },
-  { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance' },
-  { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance' },
+  // Maintenance — own section. Full module is Maintenance + Management.
+  // Production sees ONLY Job Cards (to report breakdowns + track their own cards).
+  { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'] },
+  { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'] },
+  { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'] },
+  { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'] },
+  { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance', departments: ['Maintenance','Management'] },
 
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },
   { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['Management'], permission: 'can_view_management' },
