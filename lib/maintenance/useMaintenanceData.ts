@@ -15,6 +15,7 @@ import type {
   JobCard, CardLog, SpareUsed, Roster, AreaQc, Slot,
   Template, Completion, AnnualItem, SparePart, Offsite, Status, QcAnswer, Staff,
   IpReading, DieselReading, LsLog, WaterReading, BoilerStart, EqConfig, EqHours, CalAsset, Machine,
+  SpareRequest,
 } from './types'
 
 // Fallback staff directory built from the hardcoded TECHS (id: null) until the
@@ -56,6 +57,8 @@ export function useMaintenanceData() {
   const [eqHours, setEqHours] = useState<EqHours[]>([])
   const [calAssets, setCalAssets] = useState<CalAsset[]>([])
   const [machines, setMachines] = useState<Machine[]>([])
+  // Reorder / part requests (loaded defensively in its own effect — see loadRequests).
+  const [requests, setRequests] = useState<SpareRequest[]>([])
 
   // Acting-as name — defaults to the signed-in user; preserved from the original.
   const [actor, setActor] = useState('')
@@ -138,6 +141,56 @@ export function useMaintenanceData() {
   }, [])
 
   useEffect(() => { loadStaff() }, [loadStaff])
+
+  // ── Reorder / part requests ──
+  // Loaded DEFENSIVELY in its own effect (wrapped in try/catch), NOT in loadAll's
+  // Promise.all: the spare_requests table is created by a separate migration that
+  // may not have been run yet, so a missing table must not break the whole module.
+  const loadRequests = useCallback(async () => {
+    try {
+      const { data, error: err } = await db.schema('maintenance').from('spare_requests')
+        .select('*').order('requested_at', { ascending: false })
+      if (err) return // table not migrated yet — keep []
+      setRequests((data ?? []) as SpareRequest[])
+    } catch { /* table not migrated yet — keep [] */ }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadRequests() }, [loadRequests])
+
+  // Raise a reorder / part request → server route (gating + manager notify).
+  const createRequest = async (payload: { part_id?: number | null; part_no?: string | null; description: string; qty: number; reason: string; card_id?: number | null; note?: string }) => {
+    let res: Response
+    try {
+      res = await fetch('/api/maintenance/spare-requests', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, requested_by: displayName }),
+      })
+    } catch (e: any) { setPopup('Could not send request: ' + (e?.message ?? 'network error')); return false }
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) { setPopup(json?.error ?? 'Could not send the part request.'); return false }
+    await loadRequests()
+    setPopup(`Reorder request raised: ${payload.qty} × ${payload.part_no || payload.description}.\nThe maintenance manager has been notified.`)
+    return true
+  }
+
+  // Manager moves a request through its lifecycle. On 'received' the qty is added
+  // back into the spare-parts register (qty_new) for any linked part.
+  const setRequestStatus = async (id: number, status: SpareRequest['status']) => {
+    const now = new Date().toISOString()
+    const patch: Partial<SpareRequest> = { status, updated_at: now }
+    if (status === 'ordered') patch.ordered_at = now
+    if (status === 'received') patch.received_at = now
+    const req = requests.find(r => r.id === id)
+    setRequests(p => p.map(r => (r.id === id ? { ...r, ...patch } : r)))
+    const { error: err } = await db.schema('maintenance').from('spare_requests').update(patch).eq('id', id)
+    if (err) { setPopup('Save failed: ' + err.message); loadRequests(); return }
+    // Received → bump the linked part back into stock.
+    if (status === 'received' && req?.part_id) {
+      const part = stock.find(s => s.id === req.part_id)
+      if (part) await updatePart(req.part_id, { qty_new: part.qty_new + req.qty })
+    }
+  }
+  const cancelRequest = (id: number) => setRequestStatus(id, 'cancelled')
 
   // ── Log helper: every comment + transition recorded for analysis ──
   const addLog = async (cardId: number, kind: 'comment' | 'event', stage: string, author: string, body: string) => {
@@ -622,6 +675,7 @@ export function useMaintenanceData() {
     data: {
       jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite, staff,
       ipReadings, dieselReadings, lsLogs, waterReadings, boilerStarts, eqConfig, eqHours, calAssets, machines,
+      requests,
     },
 
     // Shared form/UI state + setters that the route components drive.
@@ -638,6 +692,7 @@ export function useMaintenanceData() {
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, eqServiced, addMachine,
+      createRequest, setRequestStatus, cancelRequest,
     },
 
     derived: {

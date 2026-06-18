@@ -6,21 +6,25 @@
 // equipment. Usage log (from job cards) stays read-only.
 
 import { useMemo, useState } from 'react'
-import { Plus, Search, Trash2, Minus, Check, X, PackageOpen, ScanLine } from 'lucide-react'
+import { Plus, Search, Trash2, Minus, Check, X, PackageOpen, ScanLine, ShoppingCart } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
-import { fmtD } from '@/lib/maintenance/helpers'
-import type { SparePart } from '@/lib/maintenance/types'
+import { fmtD, fmtDT } from '@/lib/maintenance/helpers'
+import type { SparePart, SpareRequest } from '@/lib/maintenance/types'
 import PartScanner from '@/components/maintenance/PartScanner'
+import { useAuth } from '@/lib/auth/context'
+import { deriveMaintRole } from '@/lib/maintenance/roles'
 
 const CLASSES = ['Mechanical', 'Electrical', 'Pneumatic', 'Hydraulic', 'Consumable', 'Fastener', 'Bearing', 'Belt', 'Seal', 'Other']
 
 export default function StockPage() {
   const { loading, data, actions } = useMaintenanceContext()
-  const { stock, sparesUsed, offsite, jcs } = data
+  const { stock, sparesUsed, offsite, jcs, requests } = data
+  const canManage = deriveMaintRole(useAuth()).canManage
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
   const [addingOffsite, setAddingOffsite] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [requestingPart, setRequestingPart] = useState(false)
 
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
@@ -33,7 +37,8 @@ export default function StockPage() {
     low: stock.filter(s => { const t = s.qty_new + s.qty_used; return t > 0 && t <= 2 }).length,
     out: stock.filter(s => s.qty_new + s.qty_used === 0).length,
     offsite: offsite.length,
-  }), [stock, offsite])
+    openReq: requests.filter(r => r.status === 'open' || r.status === 'ordered').length,
+  }), [stock, offsite, requests])
 
   if (loading) return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading…</div></div>
 
@@ -45,11 +50,12 @@ export default function StockPage() {
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">
         <Stat label="Parts on register" value={totals.parts} />
         <Stat label="Low stock" value={totals.low} tone={totals.low ? 'warn' : undefined} />
         <Stat label="Out of stock" value={totals.out} tone={totals.out ? 'err' : undefined} />
         <Stat label="Items offsite" value={totals.offsite} tone={totals.offsite ? 'info' : undefined} />
+        <Stat label="Open requests" value={totals.openReq} tone={totals.openReq ? 'info' : undefined} />
       </div>
 
       {/* ── Spare parts register ── */}
@@ -103,6 +109,46 @@ export default function StockPage() {
             </tbody>
           </table>
           {filtered.length === 0 && <div className="text-[12px] text-text-faint py-6 text-center">{q ? 'No parts match your search.' : 'No parts yet — add your first one.'}</div>}
+        </div>
+      </div>
+
+      {/* ── Reorder requests ── */}
+      <div className="rounded-xl border border-surface-rule bg-surface-card p-4 mb-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <h2 className="text-sm font-semibold text-text">Reorder Requests <span className="font-normal text-text-muted">— raised to the maintenance manager (purchasing)</span></h2>
+          <button onClick={() => setRequestingPart(p => !p)}
+            className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 h-9 text-[13px] font-semibold hover:border-text/25">
+            <ShoppingCart className="w-4 h-4" /> Request a part
+          </button>
+        </div>
+
+        {requestingPart && (
+          <FreeRequestRow
+            onSubmit={async (desc, qty, note) => {
+              const ok = await actions.createRequest({ part_id: null, part_no: null, description: desc, qty, reason: 'other', note })
+              if (ok) setRequestingPart(false)
+            }}
+            onCancel={() => setRequestingPart(false)}
+          />
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-text-muted border-b border-surface-rule">
+                <th className="text-left font-semibold py-2 px-2">Item</th>
+                <th className="text-center font-semibold py-2 px-2 w-12">Qty</th>
+                <th className="text-left font-semibold py-2 px-2">Reason</th>
+                <th className="text-left font-semibold py-2 px-2">Requested by</th>
+                <th className="text-center font-semibold py-2 px-2">Status</th>
+                <th className="text-right font-semibold py-2 px-2 w-[260px]"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map(r => <RequestRow key={r.id} r={r} canManage={canManage} actions={actions} />)}
+            </tbody>
+          </table>
+          {requests.length === 0 && <div className="text-[12px] text-text-faint py-6 text-center">No reorder requests yet — raise one from a part below, or use “Request a part”.</div>}
         </div>
       </div>
 
@@ -170,27 +216,122 @@ export default function StockPage() {
 function PartRow({ r, actions }: { r: SparePart; actions: any }) {
   const total = r.qty_new + r.qty_used
   const status = total === 0 ? { c: 'badge-err', t: 'OUT' } : total <= 2 ? { c: 'badge-warn', t: 'LOW' } : { c: 'badge-ok', t: 'OK' }
+  const [requesting, setRequesting] = useState(false)
+  const [qty, setQty] = useState('1')
+  const [note, setNote] = useState('')
+  const submitReq = async () => {
+    const n = Math.max(1, parseInt(qty, 10) || 1)
+    const ok = await actions.createRequest({
+      part_id: r.id, part_no: r.part_no, description: r.description, qty: n,
+      reason: total === 0 ? 'out_of_stock' : 'low_stock', note: note.trim() || undefined,
+    })
+    if (ok) { setRequesting(false); setQty('1'); setNote('') }
+  }
   return (
-    <tr className={`border-b border-surface-rule/60 hover:bg-surface-dim/40 ${total === 0 ? 'bg-err/5' : total <= 2 ? 'bg-warn/5' : ''}`}>
-      <td className="py-1.5 px-2"><Cell value={r.part_no} mono onSave={v => actions.updatePart(r.id, { part_no: v })} placeholder="Part #" /></td>
-      <td className="py-1.5 px-2"><Cell value={r.barcode ?? ''} mono onSave={v => actions.updatePart(r.id, { barcode: v.trim() || null })} placeholder="Barcode" /></td>
+    <>
+      <tr className={`border-b border-surface-rule/60 hover:bg-surface-dim/40 ${total === 0 ? 'bg-err/5' : total <= 2 ? 'bg-warn/5' : ''}`}>
+        <td className="py-1.5 px-2"><Cell value={r.part_no} mono onSave={v => actions.updatePart(r.id, { part_no: v })} placeholder="Part #" /></td>
+        <td className="py-1.5 px-2"><Cell value={r.barcode ?? ''} mono onSave={v => actions.updatePart(r.id, { barcode: v.trim() || null })} placeholder="Barcode" /></td>
+        <td className="py-1.5 px-2">
+          <select value={r.class || ''} onChange={e => actions.updatePart(r.id, { class: e.target.value })}
+            className="bg-transparent border border-transparent hover:border-surface-rule focus:border-brand rounded px-1.5 py-1 text-[12px] text-text-muted focus:outline-none">
+            {!CLASSES.includes(r.class) && r.class && <option value={r.class}>{r.class}</option>}
+            {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </td>
+        <td className="py-1.5 px-2"><Cell value={r.description} onSave={v => actions.updatePart(r.id, { description: v })} placeholder="Description" /></td>
+        <td className="py-1.5 px-2"><Stepper value={r.qty_new} tone="ok" onStep={d => actions.adjustPartQty(r.id, 'qty_new', d)} /></td>
+        <td className="py-1.5 px-2"><Stepper value={r.qty_used} tone="warn" onStep={d => actions.adjustPartQty(r.id, 'qty_used', d)} /></td>
+        <td className="py-1.5 px-2 text-center font-semibold tabular-nums">{total}</td>
+        <td className="py-1.5 px-2 text-center"><span className={`badge ${status.c}`}>{status.t}</span></td>
+        <td className="py-1.5 px-2">
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={() => setRequesting(v => !v)} title="Request reorder"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-info hover:underline whitespace-nowrap">
+              <ShoppingCart className="w-3.5 h-3.5" /> Reorder
+            </button>
+            <button onClick={() => { if (confirm(`Delete part ${r.part_no || r.description}?`)) actions.deletePart(r.id) }}
+              className="text-text-faint hover:text-err"><Trash2 className="w-3.5 h-3.5" /></button>
+          </div>
+        </td>
+      </tr>
+      {requesting && (
+        <tr className="border-b border-surface-rule/60 bg-info/5">
+          <td colSpan={9} className="py-2.5 px-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[12px] text-text-muted">Reorder <strong className="text-text">{r.part_no || r.description}</strong> — qty</span>
+              <input type="number" min={1} value={qty} onChange={e => setQty(e.target.value)} className="h-8 w-16 rounded-lg border border-surface-rule px-2 text-[13px]" />
+              <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note…" className="h-8 flex-1 min-w-[140px] rounded-lg border border-surface-rule px-2 text-[13px]" />
+              <button onClick={submitReq} className="inline-flex items-center gap-1.5 bg-brand text-white rounded-lg px-3 h-8 text-[12px] font-semibold"><Check className="w-3.5 h-3.5" /> Send request</button>
+              <button onClick={() => setRequesting(false)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-dim text-text-muted"><X className="w-4 h-4" /></button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+// ── Reorder request row ──
+const REQ_STATUS: Record<SpareRequest['status'], { c: string; t: string }> = {
+  open:      { c: 'badge-warn', t: 'OPEN' },
+  ordered:   { c: 'badge-info', t: 'ORDERED' },
+  received:  { c: 'badge-ok',   t: 'RECEIVED' },
+  cancelled: { c: 'badge-gray', t: 'CANCELLED' },
+}
+const REASON_LABEL: Record<string, string> = {
+  low_stock: 'Low stock', out_of_stock: 'Out of stock', job_card: 'Job card', other: 'Other',
+}
+function RequestRow({ r, canManage, actions }: { r: SpareRequest; canManage: boolean; actions: any }) {
+  const st = REQ_STATUS[r.status] ?? REQ_STATUS.open
+  return (
+    <tr className="border-b border-surface-rule/60 hover:bg-surface-dim/40">
       <td className="py-1.5 px-2">
-        <select value={r.class || ''} onChange={e => actions.updatePart(r.id, { class: e.target.value })}
-          className="bg-transparent border border-transparent hover:border-surface-rule focus:border-brand rounded px-1.5 py-1 text-[12px] text-text-muted focus:outline-none">
-          {!CLASSES.includes(r.class) && r.class && <option value={r.class}>{r.class}</option>}
-          {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <div className="text-text">{r.part_no ? <span className="font-mono text-[11px] text-accent">{r.part_no}</span> : null} {r.description}</div>
+        <div className="text-[10px] text-text-faint">{fmtDT(r.requested_at)}</div>
       </td>
-      <td className="py-1.5 px-2"><Cell value={r.description} onSave={v => actions.updatePart(r.id, { description: v })} placeholder="Description" /></td>
-      <td className="py-1.5 px-2"><Stepper value={r.qty_new} tone="ok" onStep={d => actions.adjustPartQty(r.id, 'qty_new', d)} /></td>
-      <td className="py-1.5 px-2"><Stepper value={r.qty_used} tone="warn" onStep={d => actions.adjustPartQty(r.id, 'qty_used', d)} /></td>
-      <td className="py-1.5 px-2 text-center font-semibold tabular-nums">{total}</td>
-      <td className="py-1.5 px-2 text-center"><span className={`badge ${status.c}`}>{status.t}</span></td>
-      <td className="py-1.5 px-2 text-center">
-        <button onClick={() => { if (confirm(`Delete part ${r.part_no || r.description}?`)) actions.deletePart(r.id) }}
-          className="text-text-faint hover:text-err"><Trash2 className="w-3.5 h-3.5" /></button>
+      <td className="py-1.5 px-2 text-center font-semibold tabular-nums">{r.qty}</td>
+      <td className="py-1.5 px-2 text-text-muted">{REASON_LABEL[r.reason ?? 'other'] ?? r.reason}</td>
+      <td className="py-1.5 px-2 text-text-muted">{r.requested_by || '—'}</td>
+      <td className="py-1.5 px-2 text-center"><span className={`badge ${st.c}`}>{st.t}</span></td>
+      <td className="py-1.5 px-2">
+        {canManage && (r.status === 'open' || r.status === 'ordered') ? (
+          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+            {r.status === 'open' && (
+              <button onClick={() => actions.setRequestStatus(r.id, 'ordered')}
+                className="border border-surface-rule bg-surface-card text-text rounded-lg px-2.5 h-8 text-[11px] font-semibold hover:border-text/25">Mark ordered</button>
+            )}
+            <button onClick={() => actions.setRequestStatus(r.id, 'received')}
+              className="bg-brand text-white rounded-lg px-2.5 h-8 text-[11px] font-semibold">Mark received</button>
+            <button onClick={() => actions.cancelRequest(r.id)}
+              className="border border-err/30 text-err bg-err/5 rounded-lg px-2.5 h-8 text-[11px] font-semibold hover:bg-err/10">Cancel</button>
+          </div>
+        ) : (
+          <div className="text-right text-[11px] text-text-faint">
+            {r.status === 'received' && r.received_at ? `Received ${fmtD(r.received_at)}` : r.status === 'ordered' && r.ordered_at ? `Ordered ${fmtD(r.ordered_at)}` : ''}
+          </div>
+        )}
       </td>
     </tr>
+  )
+}
+
+// Free-text part request (no part_id) — for an item not on the register.
+function FreeRequestRow({ onSubmit, onCancel }: { onSubmit: (desc: string, qty: number, note?: string) => void; onCancel: () => void }) {
+  const [desc, setDesc] = useState('')
+  const [qty, setQty] = useState('1')
+  const [note, setNote] = useState('')
+  const submit = () => { if (!desc.trim()) return; onSubmit(desc.trim(), Math.max(1, parseInt(qty, 10) || 1), note.trim() || undefined) }
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[1fr_80px_1fr_auto] gap-2 items-center p-3 mb-3 rounded-lg border border-info/20 bg-info/5">
+      <input autoFocus value={desc} onChange={e => setDesc(e.target.value)} placeholder="What part / item do you need? *" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px]" />
+      <input type="number" min={1} value={qty} onChange={e => setQty(e.target.value)} placeholder="Qty" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px]" />
+      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note…" className="h-9 rounded-lg border border-surface-rule px-2 text-[13px]" />
+      <div className="flex gap-1.5">
+        <button onClick={submit} className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-brand text-white"><Check className="w-4 h-4" /></button>
+        <button onClick={onCancel} className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-surface-dim text-text-muted"><X className="w-4 h-4" /></button>
+      </div>
+    </div>
   )
 }
 

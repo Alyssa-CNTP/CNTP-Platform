@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-17 — Alyssa (maintenance: reorder / request-inventory flow)
+
+Raise a reorder when a part is low/out of stock (or a tech needs one), track it to received, and add received qty back into the register. Booking/deduct (`logSpare`) unchanged.
+
+**Files changed:**
+- `supabase/migrations/20260617_010_spare_requests.sql` — NEW `maintenance.spare_requests` (part_id/part_no, qty, reason, card_id, status open→ordered→received/cancelled, requester). **Run in Supabase before requests persist.**
+- `app/api/maintenance/spare-requests/route.ts` — NEW. POST creates a request and notifies maintenance managers (in-app + email, best-effort).
+- `lib/maintenance/types.ts` — `SpareRequest`.
+- `lib/maintenance/useMaintenanceData.ts` — defensive `requests` load (own effect, won't break the module pre-migration); `createRequest`, `setRequestStatus` (received → `qty_new += qty`), `cancelRequest`.
+- `app/(app)/maintenance/stock/page.tsx` — "Open requests" stat; "Reorder Requests" section (manager actions: ordered / received / cancel; read-only otherwise); per-part "Reorder" inline form (auto low/out reason); "Request a part" free-text.
+- `components/maintenance/JobCardItem.tsx` — "Request part" button on the in-progress spares panel (reason `job_card`).
+
+**Deploy note:** run `20260617_010_spare_requests.sql` in Supabase (staging). Built defensively — the module works before it's applied; requests just won't persist until then.
+
+---
+
 ## 2026-06-17 — Alyssa (maintenance: tighten access control)
 
 The maintenance module was visible/accessible too broadly — the sidebar group had no gating (shown to every department) and the route guard let all of Production into the whole module.
