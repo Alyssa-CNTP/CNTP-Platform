@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Alyssa (operators admin: search, filters, cleaner section labels)
+
+**Files changed:**
+- `app/(app)/production/operators/page.tsx`
+
+**Changes:**
+- After importing the full 77-name roster the operators list was an unsearchable wall of ~85 rows. Added a **search box** (name / display name / operator code), an **Active only** toggle (on by default, so deactivated test rows hide), and a matched/total count. Operators rostered to every section now show **"All sections"** instead of six section codes, removing the per-row chip noise.
+
+---
+
 ## 2026-06-18 — Alyssa (production capture: kiosk, bulk-bag, secure, roster dropdown)
 
 **Files changed:**
