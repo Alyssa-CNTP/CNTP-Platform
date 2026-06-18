@@ -1,0 +1,172 @@
+// lib/auth/permission-registry.ts
+//
+// Canonical, properly-defined permission map: Module → Function → action.
+// Single source of truth for the "master permissions matrix" in Users & Roles.
+//
+// Every permission key in lib/auth/permissions.ts is mapped here into one of:
+//   read    — view the resource (often implied by department today → 'dept')
+//   write   — create / save / edit
+//   delete  — delete
+//   manage  — extra workflow/special actions that aren't plain CRUD (kept so
+//             nothing is lost: approve, finalise, allocate, verify, export, …)
+//
+// The matrix renders read/write/delete as columns and manage as an expandable
+// list. Cells that are genuinely N/A are simply omitted. We do NOT rename or
+// migrate existing keys — this is a clean overlay that maps what exists.
+
+import type { PermissionKey } from './permissions'
+import type { Department } from './permissions'
+
+export type ResourceAction = 'read' | 'write' | 'delete'
+
+export interface ResourceDef {
+  key:      string                          // stable id, e.g. 'quality.runs'
+  label:    string
+  read?:    PermissionKey | 'dept'          // 'dept' = currently implied by department membership
+  write?:   PermissionKey
+  delete?:  PermissionKey
+  manage?:  { key: PermissionKey; label: string }[]
+  note?:    string
+}
+
+export interface ModuleDef {
+  module:      string
+  department?: Department
+  resources:   ResourceDef[]
+}
+
+export const PERMISSION_MATRIX: ModuleDef[] = [
+  {
+    module: 'Quality', department: 'Quality',
+    resources: [
+      { key: 'quality.records', label: 'Raw-material records',
+        read: 'can_view_history', write: 'can_save_records', delete: 'can_delete_records',
+        manage: [
+          { key: 'can_upload_pdfs', label: 'Upload PDFs & AI extract' },
+          { key: 'can_edit_records', label: 'Edit records' },
+          { key: 'can_export_csv', label: 'Export to CSV' },
+        ] },
+      { key: 'quality.lab_results', label: 'Final-product lab results',
+        read: 'dept', write: 'can_save_lab_results', delete: 'can_delete_lab_results',
+        manage: [{ key: 'can_edit_lab_comments', label: 'Edit comments' }] },
+      { key: 'quality.specs', label: 'Specifications',
+        read: 'dept', write: 'can_edit_customer_specs', delete: 'can_delete_specs',
+        manage: [
+          { key: 'can_edit_sieve_specs', label: 'Edit sieve specs' },
+          { key: 'can_edit_granule_specs', label: 'Edit granule specs' },
+        ] },
+      { key: 'quality.runs', label: 'Runs (granule / pasteuriser)',
+        read: 'dept', write: 'can_create_runs', delete: 'can_delete_runs',
+        manage: [
+          { key: 'can_edit_runs', label: 'Edit runs & batch numbers' },
+          { key: 'can_finalise_runs', label: 'Finalise runs (Pass/Fail)' },
+          { key: 'can_reopen_runs', label: 'Re-open finalised runs' },
+          { key: 'can_add_samples', label: 'Add samples' },
+          { key: 'can_edit_samples', label: 'Edit samples' },
+          { key: 'can_add_tastings', label: 'Record tastings' },
+          { key: 'can_edit_tastings', label: 'Edit tastings' },
+        ] },
+      { key: 'quality.sieving', label: 'Sieving',
+        read: 'dept', write: 'can_add_sieving_runs', delete: 'can_delete_sieving_runs',
+        manage: [{ key: 'can_edit_sieving_specs', label: 'Edit sieving specs' }] },
+    ],
+  },
+  {
+    module: 'Production', department: 'Production',
+    resources: [
+      { key: 'production.count', label: 'Morning stock count',
+        read: 'can_view_ops_dashboard', write: 'can_submit_count',
+        manage: [
+          { key: 'can_edit_count', label: 'Edit a submitted count' },
+          { key: 'can_view_all_sections', label: 'View all sections' },
+        ] },
+      { key: 'production.live', label: 'Live capture',
+        read: 'can_view_live_history', write: 'can_start_live_session',
+        manage: [
+          { key: 'can_scan_inputs', label: 'Scan bags in' },
+          { key: 'can_add_outputs', label: 'Add output bags & labels' },
+          { key: 'can_approve_session', label: 'Approve & lock session' },
+          { key: 'can_reset_operator_pin', label: 'Reset operator PIN' },
+        ] },
+    ],
+  },
+  {
+    module: 'Maintenance', department: 'Maintenance',
+    resources: [
+      { key: 'maintenance.access', label: 'Maintenance module', read: 'can_access_maintenance',
+        note: 'Grant Read to give a non-Maintenance user the module.' },
+      { key: 'maintenance.job_cards', label: 'Job cards',
+        read: 'can_access_maintenance', write: 'can_raise_planned',
+        manage: [
+          { key: 'can_raise_breakdown', label: 'Raise breakdowns' },
+          { key: 'can_allocate_jobs', label: 'Allocate to technicians' },
+          { key: 'can_qc_jobs', label: 'Post-maintenance QC' },
+          { key: 'can_verify_jobs', label: 'Verify / bounce back' },
+        ] },
+    ],
+  },
+  {
+    module: 'Sales', department: 'Sales',
+    resources: [
+      { key: 'sales.module', label: 'Sales module', read: 'can_access_sales' },
+      { key: 'sales.research', label: 'Research engine', read: 'can_access_research' },
+      { key: 'sales.intelligence', label: 'Signal / intelligence engine', read: 'can_access_intelligence' },
+    ],
+  },
+  {
+    module: 'Marketing', department: 'Marketing',
+    resources: [
+      { key: 'marketing.module', label: 'Marketing module', read: 'can_access_marketing' },
+    ],
+  },
+  {
+    module: 'Management', department: 'Management',
+    resources: [
+      { key: 'management.dashboard', label: 'Management dashboard & reports',
+        read: 'can_view_management',
+        manage: [
+          { key: 'can_view_reports', label: 'View reports & analytics' },
+          { key: 'can_export_reports', label: 'Export reports' },
+        ] },
+    ],
+  },
+  {
+    module: 'Workspace',
+    resources: [
+      { key: 'workspace.board', label: 'Personal workspace', read: 'can_access_workspace' },
+      { key: 'workspace.ticketing', label: 'Ticketing',
+        manage: [{ key: 'can_assign_tickets', label: 'Assign tickets to users' }] },
+    ],
+  },
+  {
+    module: 'Administration', department: 'IT',
+    resources: [
+      { key: 'admin.users', label: 'User administration',
+        manage: [
+          { key: 'can_manage_users', label: 'Create & delete users' },
+          { key: 'can_reset_passwords', label: 'Reset passwords' },
+          { key: 'can_change_roles', label: 'Change roles' },
+          { key: 'can_edit_permissions', label: 'Edit permissions' },
+          { key: 'can_invite_users', label: 'Send invitations' },
+          { key: 'can_confirm_emails', label: 'Confirm emails' },
+        ] },
+      { key: 'admin.system', label: 'System & developer',
+        manage: [
+          { key: 'can_view_audit_log', label: 'View audit log' },
+          { key: 'can_run_migrations', label: 'Run migrations' },
+          { key: 'can_access_dev_tools', label: 'Developer tools' },
+          { key: 'can_manage_integrations', label: 'Manage integrations' },
+        ] },
+    ],
+  },
+]
+
+// Every PermissionKey that appears anywhere in the matrix (sanity/coverage use).
+export const MATRIX_KEYS: PermissionKey[] = Array.from(new Set(
+  PERMISSION_MATRIX.flatMap(m => m.resources.flatMap(r => [
+    r.read && r.read !== 'dept' ? r.read : null,
+    r.write ?? null,
+    r.delete ?? null,
+    ...(r.manage?.map(x => x.key) ?? []),
+  ].filter(Boolean) as PermissionKey[]))
+))
