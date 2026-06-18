@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Gustav (pasteuriser: per-sample QC Controller name)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+
+**Changes:**
+- QC Controller name is now required per individual sample (was only at the batch level). `AddSampleModal` includes a required "QC Controller" input field, and saving is blocked if it is empty.
+- `BatchSample` interface extended with `qc_name: string`.
+- Samples table gains a new **QC** column between Bin/Bag and Temp°C so each row shows which controller recorded that specific sample.
+
+---
+
 ## 2026-06-18 — Gustav (sieving tower: batch format, leaf shade pull-through, required fields, collapsible table)
 
 **Files changed:**
