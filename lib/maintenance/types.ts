@@ -39,6 +39,26 @@ export interface AnnualItem { id: number; category: string; asset: string; seria
 export interface SparePart { id: number; part_no: string; class: string; description: string; qty_new: number; qty_used: number; barcode?: string | null }
 export interface Offsite { id: number; item: string; sent_to: string; date_sent: string | null; status: string }
 
+// Reorder / part-request raised to the maintenance manager (purchasing).
+// Lifecycle: open → ordered → received (received adds qty back to the register) | cancelled.
+export interface SpareRequest {
+  id: number
+  part_id: number | null
+  part_no: string | null
+  description: string
+  qty: number
+  reason: string | null                // low_stock | out_of_stock | job_card | other
+  card_id: number | null
+  status: 'open' | 'ordered' | 'received' | 'cancelled'
+  note: string | null
+  requested_by: string | null
+  requested_by_user_id: string | null
+  ordered_at: string | null
+  received_at: string | null
+  requested_at: string
+  updated_at: string
+}
+
 // ── Readings & registers (imported from Maintenance_Database.xlsx) ──
 export interface IpReading { id: number; reading_date: string; flow_meter_l: number | null; tank_dip_l: number | null; fuel_received_l: number | null; cost_r: number | null; recorded_by: string }
 export interface DieselReading { id: number; reading_date: string; run_hours: number | null; fuel_l: number | null; recorded_by: string }

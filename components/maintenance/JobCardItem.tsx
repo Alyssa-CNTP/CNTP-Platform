@@ -6,7 +6,7 @@
 // detail page it renders fully expanded. All workflow logic is unchanged.
 
 import { useEffect, useState } from 'react'
-import { ChevronDown, ScanLine } from 'lucide-react'
+import { ChevronDown, ScanLine, ShoppingCart } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
@@ -40,6 +40,10 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const [showDetail, setShowDetail] = useState(false)
   const [showLog, setShowLog] = useState(false)
   const [scanning, setScanning] = useState(false)
+  // Compact "request a part not in stock" form (in-progress spares panel).
+  const [requesting, setRequesting] = useState(false)
+  const [reqDesc, setReqDesc] = useState('')
+  const [reqQty, setReqQty] = useState('1')
 
   useEffect(() => {
     if (!roles.canManage || j.status !== 'raised' || !expanded) return
@@ -268,6 +272,9 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                   <button type="button" className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 min-h-[40px] text-[11px] font-semibold hover:border-text/25 transition" onClick={() => setScanning(true)}>
                     <ScanLine size={13} /> Scan / identify
                   </button>
+                  <button type="button" className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 min-h-[40px] text-[11px] font-semibold hover:border-text/25 transition" onClick={() => setRequesting(v => !v)}>
+                    <ShoppingCart size={13} /> Request part
+                  </button>
                   <input className={`${INP} w-36`} placeholder="…or describe item" value={spForm[j.id]?.desc ?? ''} onChange={e => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], desc: e.target.value } }))} />
                   <input className={`${INP} w-16`} type="number" min={1} placeholder="Qty" value={spForm[j.id]?.qty ?? ''} onChange={e => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], qty: e.target.value } }))} />
                   <select className={`${INP} w-20`} value={spForm[j.id]?.from ?? 'new'} onChange={e => setSpForm(p => ({ ...p, [j.id]: { ...p[j.id], from: e.target.value } }))}><option value="new">New</option><option value="used">Used</option></select>
@@ -280,6 +287,21 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                     onPick={p => setSpForm(prev => ({ ...prev, [j.id]: { ...prev[j.id], partId: String(p.id) } }))}
                     onClose={() => setScanning(false)}
                   />
+                )}
+                {/* Request a part that isn't in stock — raises a reorder request to the manager. */}
+                {requesting && (
+                  <div className="flex gap-1.5 flex-wrap items-center mt-2 rounded-lg border border-info/20 bg-info/5 p-2">
+                    <input className={`${INP} flex-1 min-w-[160px]`} placeholder="Part / item needed…" value={reqDesc} onChange={e => setReqDesc(e.target.value)} />
+                    <input className={`${INP} w-16`} type="number" min={1} placeholder="Qty" value={reqQty} onChange={e => setReqQty(e.target.value)} />
+                    <button type="button" className={PRIMARY.replace('px-4 py-2.5 text-sm', 'px-3 py-2 text-[11px]').replace('min-h-[44px]', 'min-h-[40px]')}
+                      onClick={async () => {
+                        if (!reqDesc.trim()) return
+                        const ok = await actions.createRequest({ card_id: j.id, description: reqDesc.trim(), qty: Math.max(1, parseInt(reqQty, 10) || 1), reason: 'job_card' })
+                        if (ok) { setRequesting(false); setReqDesc(''); setReqQty('1') }
+                      }}>
+                      Send request
+                    </button>
+                  </div>
                 )}
               </div>
 
