@@ -6,9 +6,10 @@
 // maintenance data context.
 
 import { useRef, useEffect } from 'react'
+import { X } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { useAuth } from '@/lib/auth/context'
-import { AREAS, PLANNED_TYPES, TECHS } from '@/lib/maintenance/constants'
+import { AREAS, PLANNED_TYPES } from '@/lib/maintenance/constants'
 import { aiSuggest, downscalePhoto } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
 
@@ -16,16 +17,30 @@ const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em
 
 export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => void; initialWorkflow?: 'breakdown' | 'planned' }) {
   const { ui, actions, derived, data } = useMaintenanceContext()
-  const { isProduction, p } = useAuth()
+  const auth = useAuth()
+  const { isProduction, p } = auth
   const { nj, setNj, saving, setPopup } = ui
   const { duty } = derived
   const fRef = useRef<HTMLInputElement>(null)
   const canRaiseBreakdown = isProduction || p('can_raise_breakdown')
   const isBd = nj.workflow === 'breakdown'
 
-  // Name suggestions (staff directory + roster names) keep "Reported by" and
-  // technician names consistent while still allowing free text.
-  const nameOptions = Array.from(new Set([...data.staff.map(s => s.name), ...TECHS])).filter(Boolean).sort()
+  // The raiser is the signed-in user. If their account carries a real name we use
+  // it (no typing, cleaner data); accounts that only have an email must enter a
+  // name + surname so the card can be traced to a person.
+  const accountName = (auth.fullName
+    || (auth.user?.user_metadata?.full_name as string)
+    || (auth.user?.user_metadata?.display_name as string)
+    || '').trim()
+  const hasAccountName = accountName.length > 0
+  const looksLikeFullName = (s: string) => s.trim().split(/\s+/).filter(w => w.length >= 2).length >= 2
+
+  // Bind the raiser to the signed-in account: prefill from the account name, or
+  // (for email-only accounts) leave it for them to type once.
+  useEffect(() => {
+    if (hasAccountName) setNj(prev => (prev.raisedBy === accountName ? prev : { ...prev, raisedBy: accountName }))
+  }, [hasAccountName, accountName]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Machine catalogue — the selected area's machines first, then the rest.
   const machineOptions = (() => {
     const all = data.machines.map(m => m.name)
@@ -48,6 +63,11 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
   }, [canRaiseBreakdown, nj.workflow, setNj])
 
   async function submit() {
+    // Email-only accounts must give a full name so the card traces to a person.
+    if (!hasAccountName && !looksLikeFullName(nj.raisedBy)) {
+      setPopup('Please enter your name and surname — your account has no name on file, so we need it to know who raised this job card.')
+      return
+    }
     // Save a newly-typed machine to the catalogue so it's in the dropdown next time.
     const m = nj.machine?.trim()
     if (m && !data.machines.some(x => x.name.toLowerCase() === m.toLowerCase())) {
@@ -65,7 +85,15 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
           not a second selector. */}
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="text-sm font-semibold text-text">Raise Job Card</div>
-        <span className={`badge ${isBd ? 'badge-err' : 'badge-info'}`}>{isBd ? 'BREAKDOWN — URGENT' : 'SCHEDULED / PLANNED'}</span>
+        <div className="flex items-center gap-2">
+          <span className={`badge ${isBd ? 'badge-err' : 'badge-info'}`}>{isBd ? 'BREAKDOWN — URGENT' : 'SCHEDULED / PLANNED'}</span>
+          {onDone && (
+            <button onClick={onDone} aria-label="Close" title="Close"
+              className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-text-muted hover:bg-surface-dim hover:text-text transition">
+              <X size={18} />
+            </button>
+          )}
+        </div>
       </div>
 
       {initialWorkflow === 'breakdown' && !canRaiseBreakdown && (
@@ -81,9 +109,18 @@ export function RaiseJobCardForm({ onDone, initialWorkflow }: { onDone?: () => v
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <div><label className={LB}>{isBd ? 'Reported By (your name)' : 'Your Name'}</label>
-          <input className={INP} list="maint-names" value={nj.raisedBy} onChange={e => setNj(p => ({ ...p, raisedBy: e.target.value }))} placeholder="Start typing your name…" />
-          <datalist id="maint-names">{nameOptions.map(n => <option key={n} value={n} />)}</datalist>
+        <div><label className={LB}>Raised By</label>
+          {hasAccountName ? (
+            <div className={`${INP} flex items-center justify-between cursor-default bg-surface-dim`} title="Linked to your account">
+              <span className="text-text font-medium">{accountName}</span>
+              <span className="text-[10px] text-text-faint uppercase tracking-wide">your account</span>
+            </div>
+          ) : (
+            <>
+              <input className={INP} value={nj.raisedBy} onChange={e => setNj(p => ({ ...p, raisedBy: e.target.value }))} placeholder="Name & surname (required)…" />
+              <div className="text-[10px] text-warn mt-1">Your account has no name on file — enter your name &amp; surname.</div>
+            </>
+          )}
         </div>
         <div><label className={LB}>Area / Location</label>
           <select className={INP} value={nj.area} onChange={e => setNj(p => ({ ...p, area: e.target.value }))}>
