@@ -84,6 +84,7 @@ interface BatchSample {
   id:             string
   time:           string
   date:           string
+  qc_name:        string
   serial_bin:     string
   hourly_temp:    string
   has_sieve:      boolean
@@ -537,7 +538,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   function blank(): any {
     return {
       time: format(now,'HH:mm'), date: format(now,'yyyy-MM-dd'),
-      serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
+      qc_name:'', serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
       gt6:'',gt10:'',gt12:'',gt16:'',gt20:'',gt60:'',dust:'',
       gt6_g:'',gt10_g:'',gt12_g:'',gt16_g:'',gt20_g:'',gt60_g:'',dust_g:'',
       moisture:'', untapped_bd:'', customer_bd:'',
@@ -590,8 +591,9 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   })()
 
   function submit() {
-    if (!row.time.trim())  { alert('Time is required'); return }
-    if (!row.date)         { alert('Date is required'); return }
+    if (!row.time.trim())     { alert('Time is required'); return }
+    if (!row.date)            { alert('Date is required'); return }
+    if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
     onSave(row)
@@ -639,6 +641,11 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
+            <div>
+              <label className={lbl}>QC Controller *</label>
+              <input value={row.qc_name||''} onChange={e => set('qc_name', e.target.value)}
+                placeholder="Name" className={`${inp} w-full`} />
+            </div>
             <div>
               <label className={lbl}>Temp (°C)</label>
               {(() => {
@@ -1271,7 +1278,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         <table className="w-full text-left">
                           <thead>
                             <tr>
-                              <th colSpan={6} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
+                              <th colSpan={7} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
                               <th colSpan={8} className="px-3 py-2 bg-info text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sieve Analysis (%)</th>
                               <th colSpan={3} className="px-3 py-2 bg-purple-600 text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Moisture & BD</th>
                               <th colSpan={6} className="px-3 py-2 bg-ok text-white text-[10px] font-semibold text-center">Sensorial</th>
@@ -1283,6 +1290,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                               <th className="px-2 py-2">Time</th>
                               <th className="px-2 py-2 text-info">Date</th>
                               <th className="px-2 py-2">Bin/Bag</th>
+                              <th className="px-2 py-2">QC</th>
                               <th className="px-2 py-2 text-center border-r-2 border-surface-rule">Temp°C</th>
                               {PAST_SIEVE_COLS.map(c => <th key={c.key} className="px-1.5 py-2 text-center whitespace-nowrap">{c.label}</th>)}
                               <th className="px-1.5 py-2 text-center font-bold border-r-2 border-surface-rule">Total</th>
@@ -1315,6 +1323,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     <td className="px-2 py-2.5 font-mono font-bold text-[11px]">{s.time||'—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-info font-semibold whitespace-nowrap">{s.date ? format(new Date(s.date+'T12:00:00'),'dd MMM') : '—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-text-muted">{s.serial_bin||'—'}</td>
+                                    <td className="px-2 py-2.5 text-[10px]">{s.qc_name||'—'}</td>
                                     <td className="px-2 py-2.5 text-center text-[10px] border-r-2 border-surface-rule">{s.hourly_temp||'—'}</td>
                                     {PAST_SIEVE_COLS.map(c => {
                                       const val = s[c.key as keyof BatchSample] as string
