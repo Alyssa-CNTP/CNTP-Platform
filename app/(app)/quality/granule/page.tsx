@@ -1266,7 +1266,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
           </div>
         </div>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-          <button onClick={() => onAddSample(run)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
+          <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
           <button onClick={() => onAddTasting(run, null)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">🍵 Tasting</button>
           <button
             onClick={() => { if (noTastings) { alert('Cannot finalise: at least one tasting record is required before finalising a run.'); return } onFinalise(run.id, 'Pass') }}
@@ -1857,6 +1857,7 @@ export default function GranulePage() {
   const [showNewRun, setShowNewRun]             = useState(false)
   const [sampleTarget, setSampleTarget]         = useState<any>(null)
   const [tastingTarget, setTastingTarget]       = useState<any>(null) // { run, sampleId }
+  const [openPastCount, setOpenPastCount]       = useState(0)
 
   // ── Load runs, samples, tastings, and specs in parallel ──
   const load = useCallback(async () => {
@@ -1895,6 +1896,22 @@ export default function GranulePage() {
   }, [db])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    db.schema('qms').from('quality_records')
+      .select('id, data_json')
+      .eq('workcenter', 'pasteuriser')
+      .eq('workflow', 'pasteuriser_run')
+      .then(({ data }: { data: any[] | null }) => {
+        const open = (data || []).filter((r: any) => {
+          try {
+            const d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {})
+            return !d.final_result
+          } catch { return false }
+        }).length
+        setOpenPastCount(open)
+      })
+  }, [db])
 
   // ── CRUD handlers — all mirror Express server logic ──
 
@@ -2047,9 +2064,18 @@ export default function GranulePage() {
           <div className="text-center py-16 text-text-muted text-[12px] animate-pulse">Loading granule runs…</div>
         ) : tab === 'dashboard' ? (
           <div className="space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
+            {openPastCount > 0 && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-warn/10 border border-warn/30">
+                <span className="text-warn text-[16px]">⚠</span>
+                <div>
+                  <span className="font-bold text-[12px] text-warn">Pasteuriser has {openPastCount} open batch{openPastCount !== 1 ? 'es' : ''}</span>
+                  <span className="ml-2 text-[11px] text-text-muted">— check the Pasteuriser dashboard to finalise</span>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={() => setShowNewRun(true)} title="Start when a new batch has been completed or begun" className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
               <span className="font-bold text-[12px]">Active Runs · {currentRuns.length} run{currentRuns.length !== 1 ? 's' : ''}</span>
-              <button onClick={() => setShowNewRun(true)} className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
             </div>
 
             {currentRuns.length === 0 ? (
