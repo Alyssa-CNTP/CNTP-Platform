@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-13 — Gustav (maintenance: raiser linked to signed-in user + close button)
+
+**Files changed:**
+- components/maintenance/RaiseJobCardForm.tsx
+
+**Changes:**
+- The "Raised By" name is now **taken from the signed-in account** — if the account has a real name on file it's shown read-only ("your account") and the user doesn't type anything, keeping the data clean. The card is already linked to the user id server-side
+- Accounts that only have an **email (no name)** get an editable field that is **mandatory and must be a name + surname** (validated on submit) so every card traces to a real person
+- Added an **X close button** to the Raise Job Card screen header to exit the form
+
+---
+
 ## 2026-06-13 — Gustav (maintenance: auto-pause a job when a breakdown pulls the technician away)
 
 **Files changed:**
