@@ -921,7 +921,11 @@ export default function SievingPage() {
   const specDef     = SIEVING_SPECS_DB[activeProduct]
   const activeSpecs = customSpecs[activeProduct] || specDef.variants
   const productRuns = runs[activeProduct] || []
-  const filteredRuns = filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter)
+  const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
+    .slice().sort((a:any,b:any) => {
+      const da = (a.date||'')+(a.time||''), db2 = (b.date||'')+(b.time||'')
+      return da < db2 ? 1 : da > db2 ? -1 : 0
+    })
   const activeMesh  = sdGetMesh(activeProduct, form.variant)
   const specKey     = `${form.grade}|${form.variant}`
   const activeSpec  = activeSpecs[specKey] || {}
