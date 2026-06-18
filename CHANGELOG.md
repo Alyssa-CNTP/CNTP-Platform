@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-18 — Gustav (maintenance: voice-note → smart job card via Gemini, no audio stored)
+
+**Files changed:**
+- app/api/maintenance/transcribe/route.ts (new)
+- components/maintenance/VoiceCapture.tsx (new)
+- components/maintenance/RaiseJobCardForm.tsx
+- components/maintenance/JobCardItem.tsx
+
+**Changes:**
+- New **voice-note** button on the Raise Job Card form and on the technician's Root Cause field. Record up to 30s; Gemini transcribes + refines it and fills the structured fields. **The audio is never stored** — it's sent for transcription in-memory and discarded; only the refined text is saved
+- Raise form (mode 'jobcard'): voice note fills short description, detailed description and suggests maintenance type(s)
+- Technician (mode 'rootcause'): voice note fills the Root Cause (and appends Work Done if mentioned) — quick way to explain the root cause without typing
+- New `/api/maintenance/transcribe` route (Gemini 2.5 Flash, falls back to flash-lite). South African English with Afrikaans/isiXhosa handled, written back in English. Caps at ~30s / 4MB
+- **Smart job card validation:** raising now requires area, machine/equipment, a description, and (for planned) at least one maintenance type
+- No Supabase Storage used for audio (transcribe-and-discard)
+
+---
+
 ## 2026-06-18 — Gustav (maintenance: raiser linked to signed-in user + close button)
 
 **Files changed:**

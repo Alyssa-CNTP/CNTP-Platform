@@ -10,6 +10,7 @@ import { ChevronDown, ScanLine, ShoppingCart } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
+import { VoiceCapture } from './VoiceCapture'
 import { QC_CHECKS } from '@/lib/maintenance/constants'
 import { fmtDT, fmtT, diffM, diffDays, normQc, priorityOf, PRIORITY_META } from '@/lib/maintenance/helpers'
 import type { JobCard, QcAnswer } from '@/lib/maintenance/types'
@@ -247,8 +248,16 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                 <textarea className={`${INP} min-h-[40px]`} value={drafts['wd' + j.id] ?? j.work_done} onChange={e => setDrafts(p => ({ ...p, ['wd' + j.id]: e.target.value }))} onBlur={e => actions.upJC(j.id, { work_done: e.target.value })} placeholder="Work carried out…" />
               </div>
               <div>
-                <label className={LB}>Root Cause</label>
-                <textarea className={`${INP} min-h-[36px]`} value={drafts['rc' + j.id] ?? j.root_cause} onChange={e => setDrafts(p => ({ ...p, ['rc' + j.id]: e.target.value }))} onBlur={e => actions.upJC(j.id, { root_cause: e.target.value })} placeholder="Why did this fail?" />
+                <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                  <label className={LB} style={{ marginBottom: 0 }}>Root Cause</label>
+                  <VoiceCapture mode="rootcause" onResult={r => {
+                    const rc = r.root_cause?.trim()
+                    const wd = r.work_done?.trim()
+                    if (rc) { setDrafts(p => ({ ...p, ['rc' + j.id]: rc })); actions.upJC(j.id, { root_cause: rc }) }
+                    if (wd) { setDrafts(p => ({ ...p, ['wd' + j.id]: (drafts['wd' + j.id] ?? j.work_done ? (drafts['wd' + j.id] ?? j.work_done) + '\n' : '') + wd })); actions.upJC(j.id, { work_done: ((j.work_done ? j.work_done + '\n' : '') + wd) }) }
+                  }} />
+                </div>
+                <textarea className={`${INP} min-h-[36px]`} value={drafts['rc' + j.id] ?? j.root_cause} onChange={e => setDrafts(p => ({ ...p, ['rc' + j.id]: e.target.value }))} onBlur={e => actions.upJC(j.id, { root_cause: e.target.value })} placeholder="Why did this fail? (or record a voice note)" />
               </div>
               <div>
                 <label className={LB}>Tools Used{j.external ? ' (required for external jobs)' : ''}</label>
