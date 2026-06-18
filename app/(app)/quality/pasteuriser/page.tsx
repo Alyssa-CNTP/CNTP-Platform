@@ -924,6 +924,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [pubLoading,    setPubLoading]     = useState(false)
   const [showPubHistory,setShowPubHistory] = useState(false)
   const prevBatchIdRef = useRef<string|null>(null)
+  const [openGranuleCount, setOpenGranuleCount] = useState(0)
 
   // Load batches from DB
   useEffect(() => {
@@ -974,6 +975,13 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   useEffect(() => {
     if (activeBatchId !== prevBatchIdRef.current) { setCollapsed(false); prevBatchIdRef.current = activeBatchId }
   }, [activeBatchId])
+
+  useEffect(() => {
+    db.schema('qms').from('granule_runs')
+      .select('id', { count: 'exact', head: true })
+      .is('final_status', null)
+      .then(({ count }: { count: number | null }) => setOpenGranuleCount(count || 0))
+  }, [db])
 
   async function saveBatchToDB(batch: Batch) {
     setDbSaving(true)
@@ -1101,6 +1109,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
 
   return (
     <div className="space-y-4">
+      {openGranuleCount > 0 && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-warn/10 border border-warn/30">
+          <span className="text-warn text-[16px]">⚠</span>
+          <div>
+            <span className="font-bold text-[12px] text-warn">Granule line has {openGranuleCount} open run{openGranuleCount !== 1 ? 's' : ''}</span>
+            <span className="ml-2 text-[11px] text-text-muted">— check the Granule Line dashboard to finalise</span>
+          </div>
+        </div>
+      )}
       {/* View toggle */}
       <div className="flex border border-surface-rule rounded-xl overflow-hidden w-fit">
         {([['active','🏭 Active Runs'],['history','📊 History & Performance']] as const).map(([v,l],i) => (
