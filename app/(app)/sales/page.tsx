@@ -19,10 +19,14 @@ import {
 import SignalCard   from '@/components/intelligence/SignalCard'
 import SignalDrawer from '@/components/intelligence/SignalDrawer'
 import type { Signal } from '@/components/intelligence/types'
+import type { SalesActuals, SalesCategory } from '@/lib/acumatica/sales-actuals'
 
-// ─── Real data from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx ─────────────────
+// ─── Planning / forecast data from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx ──
+// Live ACTUALS now come from GET /api/dashboard/sales. These constants are kept
+// for (a) planning fields not in the live source (targets, tiers, OKRs) and
+// (b) fallback display if the live fetch fails.
 
-const KPI = {
+const FALLBACK_KPI = {
   totalRevenue:  70525831,
   totalCost:     48042495,
   grossMargin:   24472707,
@@ -38,14 +42,14 @@ const KPI = {
   margin2025:    0.398,
 }
 
-const MONTHLY_DATA = [
+const PLAN_MONTHLY = [
   { month: 'Jan', actualRev: 14405912, targetRev: 18665279, actualVol: 231150, targetVol: 286563, gp: 5309616 },
   { month: 'Feb', actualRev: 9590923,  targetRev: 18665279, actualVol: 179045, targetVol: 286563, gp: 3566423 },
   { month: 'Mar', actualRev: 21611865, targetRev: 21153983, actualVol: 317199, targetVol: 324771, gp: 7359716 },
   { month: 'Apr', actualRev: 24917130, targetRev: 19909631, actualVol: 356945, targetVol: 305667, gp: 8236952 },
 ]
 
-const CUSTOMERS = [
+const PLAN_CUSTOMERS = [
   { name: 'Kunitaro Co. Ltd',                    tier: 'T1', action: 'MAINTAIN', region: 'Japan',        seg: 'Bulk', ytdRev: 31256639, ytdCost: 23426465, ytdVol: 373788, ytdGP: 0.314, gp25: 0.344, gpTgt: 0.35  },
   { name: 'National Brands Limited',             tier: 'T1', action: 'MAINTAIN', region: 'South Africa', seg: 'Bulk', ytdRev: 24121865, ytdCost: 15291786, ytdVol: 448726, ytdGP: 0.366, gp25: 0.331, gpTgt: 0.34  },
   { name: 'Lipton Teas & Infusions',             tier: 'T1', action: 'MAINTAIN', region: 'South Africa', seg: 'Bulk', ytdRev: 2820096,  ytdCost: 1964730,  ytdVol: 57600,  ytdGP: 0.303, gp25: 0.252, gpTgt: 0.26  },
@@ -72,7 +76,7 @@ const CUSTOMERS = [
   { name: 'Gold Crown (Kenya)',              tier: 'T3', action: 'REPRICE',  region: 'Kenya',         seg: 'Bulk', ytdRev: 0,        ytdCost: 0,        ytdVol: 0,      ytdGP: null,  gp25: 0.128, gpTgt: 0.35  },
 ]
 
-const PRODUCTS = [
+const FALLBACK_PRODUCTS = [
   { sku: 'Super Grade',                       jan: 93400,  feb: 148845, mar: 154984, apr: 117812, ytd: 515041, pct: 0.4750 },
   { sku: 'Super Fine Cut - Conventional',     jan: 54000,  feb: 0,      mar: 72000,  apr: 90000,  ytd: 216000, pct: 0.1992 },
   { sku: 'SFC Bold - RA Conventional',        jan: 18000,  feb: 0,      mar: 0,      apr: 72000,  ytd: 90000,  pct: 0.0830 },
@@ -176,10 +180,113 @@ function Tab({ label, active, onClick }: { label: string; active: boolean; onCli
 
 type TabKey = 'overview' | 'customers' | 'products' | 'okrs'
 
+// Category toggle chips → live API `include` scope.
+const CATEGORY_CHIPS: { key: SalesCategory; label: string }[] = [
+  { key: 'product',  label: 'Tea Product'         },
+  { key: 'contract', label: 'Contract Processing' },
+  { key: 'freight',  label: 'Freight'             },
+  { key: 'other',    label: 'Other'               },
+]
+
 export default function SalesPage() {
   const [tab, setTab]             = useState<TabKey>('overview')
   const [search, setSearch]       = useState('')
   const [tierFilter, setTier]     = useState('ALL')
+
+  // Live sales actuals — fetched on mount + when year/scope changes.
+  const [year]                    = useState(2026)
+  const [include, setInclude]     = useState<SalesCategory[]>(['product'])
+  const [data, setData]           = useState<SalesActuals | null>(null)
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    fetch(`/api/dashboard/sales?year=${year}&include=${include.join(',')}`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then((d: SalesActuals) => { if (!cancelled) setData(d) })
+      .catch(() => { if (!cancelled) setError('Live data unavailable — showing last known figures') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [year, include])
+
+  const toggleCategory = (key: SalesCategory) =>
+    setInclude(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      return next.length ? next : ['product']  // never empty — API defaults to product
+    })
+
+  // ── Merge: live actuals + planning overlay (fall back to constants) ─────────
+  const kpi = data?.kpi ?? null
+
+  // Monthly chart: live actuals keyed by month, plan targets joined by name.
+  const monthlyData = useMemo(() => {
+    const planByMonth = new Map(PLAN_MONTHLY.map(p => [p.month, p]))
+    if (data?.monthly) {
+      return data.monthly.map(m => {
+        const plan = planByMonth.get(m.month)
+        return {
+          month:     m.month,
+          actualRev: m.actualRev,
+          actualVol: m.actualVol,
+          gp:        m.gp,
+          targetRev: plan?.targetRev ?? 0,
+          targetVol: plan?.targetVol ?? 0,
+        }
+      })
+    }
+    return PLAN_MONTHLY
+  }, [data])
+
+  // Customers: live actuals joined onto plan for tier/action/seg/targets.
+  const customers = useMemo(() => {
+    const planByName = new Map(PLAN_CUSTOMERS.map(p => [p.name, p]))
+    if (data?.customers) {
+      return data.customers.map(c => {
+        const plan = planByName.get(c.name)
+        return {
+          name:    c.name,
+          region:  c.region,
+          seg:     plan?.seg    ?? 'Bulk',
+          tier:    plan?.tier   ?? 'T3',
+          action:  plan?.action ?? 'MAINTAIN',
+          gpTgt:   plan?.gpTgt  ?? 0,
+          gp25:    plan?.gp25   ?? 0,
+          ytdRev:  c.ytdRev,
+          ytdCost: c.ytdCost,
+          ytdVol:  c.ytdVol,
+          ytdGP:   c.ytdGP,
+        }
+      })
+    }
+    return PLAN_CUSTOMERS
+  }, [data])
+
+  // Products: live monthly record + ytd + pct (fall back to seeded jan..apr shape).
+  const products = useMemo(() => {
+    if (data?.products) {
+      return data.products.map(p => ({
+        sku:     p.sku,
+        monthly: p.monthly,
+        ytd:     p.ytd,
+        pct:     p.pct,
+      }))
+    }
+    return FALLBACK_PRODUCTS.map(p => ({
+      sku:     p.sku,
+      monthly: { Jan: p.jan, Feb: p.feb, Mar: p.mar, Apr: p.apr } as Record<string, number>,
+      ytd:     p.ytd,
+      pct:     p.pct,
+    }))
+  }, [data])
+
+  const categoryRev = useMemo(() => {
+    const map = new Map<SalesCategory, number>()
+    data?.categories?.forEach(c => map.set(c.category, c.revenue))
+    return map
+  }, [data])
 
   // Market Pulse — signal data
   const [signals,        setSignals]        = useState<Signal[]>([])
@@ -214,7 +321,7 @@ export default function SalesPage() {
     { key: 'okrs',      label: 'OKRs'        },
   ]
 
-  const filteredCustomers = CUSTOMERS.filter(c => {
+  const filteredCustomers = customers.filter(c => {
     const s = search.toLowerCase()
     return (
       (c.name.toLowerCase().includes(s) || c.region.toLowerCase().includes(s)) &&
@@ -241,18 +348,57 @@ export default function SalesPage() {
           ════════════════════════════════════════════════════════════════ */}
           {tab === 'overview' && (
             <>
+              {/* Category scope chips */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-[10px] tracking-widest uppercase text-text-muted mr-1">Scope</span>
+                {CATEGORY_CHIPS.map(chip => {
+                  const on  = include.includes(chip.key)
+                  const rev = categoryRev.get(chip.key)
+                  return (
+                    <button key={chip.key} onClick={() => toggleCategory(chip.key)}
+                      className={`px-3 py-1.5 text-[12px] rounded-full border transition-colors ${
+                        on
+                          ? 'bg-brand text-white border-brand'
+                          : 'bg-surface-card border-surface-rule text-text-muted hover:text-text'
+                      }`}>
+                      {chip.label}
+                      {rev !== undefined && rev > 0 && (
+                        <span className={`ml-1.5 font-mono text-[10px] ${on ? 'text-white/70' : 'text-text-faint'}`}>{fR(rev)}</span>
+                      )}
+                    </button>
+                  )
+                })}
+                {loading && <span className="text-[11px] text-text-faint ml-1">Loading…</span>}
+              </div>
+
+              {/* Live-data fallback notice */}
+              {error && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-status-warnBg border border-surface-rule text-[12px] text-status-warn">
+                  <AlertTriangle size={13} className="shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
               {/* KPI row */}
               <div>
                 <SectionLabel text="Financial performance · YTD Jan–Apr 2026" />
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <KPICard label="Total revenue"  value={fR(KPI.totalRevenue)} sub={`vs ${fR(KPI.rev2025)} 2025`} up={false} />
-                  <KPICard label="Gross margin"   value={fR(KPI.grossMargin)}  sub="R24.5M YTD" />
-                  <KPICard label="Margin %"       value={fP(KPI.marginPct)}    sub={`2025: ${fP(KPI.margin2025)} · −5.1pp`} up={false} />
-                  <KPICard label="Volume (kg)"    value={fK(KPI.volumeKg)}     sub={`vs ${fK(KPI.vol2025)} 2025`} up={false} />
-                  <KPICard label="Avg rev / kg"   value={`R${KPI.avgRevPerKg.toFixed(2)}`} sub="+15.3% pricing uplift" up />
-                  <KPICard label="Bulk revenue"   value={fR(KPI.bulkRevenue)}  sub="98.6% of total" />
-                  <KPICard label="VA revenue"     value={`R${(KPI.vaRevenue/1000).toFixed(0)}k`} sub="1.4% — grow target" />
-                  <KPICard label="Super Grade mix" value={fP(KPI.superGradeMix)} sub="515k kg · concentration risk" />
+                  <KPICard label="Total revenue"  value={fR(kpi?.totalRevenue ?? FALLBACK_KPI.totalRevenue)} sub={`vs ${fR(FALLBACK_KPI.rev2025)} 2025`} up={false} />
+                  <KPICard label="Gross margin"   value={fR(kpi?.grossMargin ?? FALLBACK_KPI.grossMargin)}  sub={`${fR(kpi?.grossMargin ?? FALLBACK_KPI.grossMargin)} YTD`} />
+                  <KPICard label="Margin %"       value={fP(kpi?.marginPct ?? FALLBACK_KPI.marginPct)}    sub={`2025: ${fP(FALLBACK_KPI.margin2025)} · −5.1pp`} up={false} />
+                  <KPICard label="Volume (kg)"    value={fK(kpi?.volumeKg ?? FALLBACK_KPI.volumeKg)}     sub={`vs ${fK(FALLBACK_KPI.vol2025)} 2025`} up={false} />
+                  <KPICard label="Avg rev / kg"   value={`R${(kpi?.avgRevPerKg ?? FALLBACK_KPI.avgRevPerKg).toFixed(2)}`} sub="+15.3% pricing uplift" up />
+                  {kpi
+                    ? <>
+                        <KPICard label="Export revenue" value={fR(kpi.exportRevenue)} sub={`${fP(kpi.totalRevenue > 0 ? kpi.exportRevenue / kpi.totalRevenue : 0)} of total`} />
+                        <KPICard label="Local revenue"  value={fR(kpi.localRevenue)}  sub={`${fP(kpi.totalRevenue > 0 ? kpi.localRevenue / kpi.totalRevenue : 0)} of total`} />
+                      </>
+                    : <>
+                        <KPICard label="Bulk revenue"   value={fR(FALLBACK_KPI.bulkRevenue)}  sub="98.6% of total" />
+                        <KPICard label="VA revenue"     value={`R${(FALLBACK_KPI.vaRevenue/1000).toFixed(0)}k`} sub="1.4% — grow target" />
+                      </>
+                  }
+                  <KPICard label="Active SKUs"    value={`${kpi?.activeSkus ?? FALLBACK_KPI.activeSkus}`} sub="distinct grades dispatched" />
                 </div>
               </div>
 
@@ -263,7 +409,7 @@ export default function SalesPage() {
                   <SectionLabel text="Monthly revenue vs target (R)" />
                   <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={MONTHLY_DATA} barGap={6} barCategoryGap="30%">
+                      <BarChart data={monthlyData} barGap={6} barCategoryGap="30%">
                         <CartesianGrid strokeDasharray="2 4" stroke="#f3f4f6" vertical={false} />
                         <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false}
@@ -274,8 +420,8 @@ export default function SalesPage() {
                         />
                         <Bar dataKey="targetRev" fill="#f3f4f6" radius={[3,3,0,0]} name="Target" />
                         <Bar dataKey="actualRev" radius={[3,3,0,0]} name="Actual">
-                          {MONTHLY_DATA.map((d, i) => (
-                            <Cell key={i} fill={d.actualRev >= d.targetRev ? '#16a34a' : '#2563eb'} />
+                          {monthlyData.map((d, i) => (
+                            <Cell key={i} fill={d.targetRev > 0 && d.actualRev >= d.targetRev ? '#16a34a' : '#2563eb'} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -293,7 +439,7 @@ export default function SalesPage() {
                   <SectionLabel text="Volume dispatched (kg) vs target" />
                   <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={MONTHLY_DATA}>
+                      <AreaChart data={monthlyData}>
                         <defs>
                           <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%"  stopColor="var(--color-brand)" stopOpacity={0.15}/>
@@ -431,8 +577,8 @@ export default function SalesPage() {
                 <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
                   <SectionLabel text="Revenue engine mix · YTD" />
                   {[
-                    { label: 'Bulk Engine',      value: KPI.bulkRevenue, color: '#2563eb', pct: 0.986 },
-                    { label: 'Value-Add Engine', value: KPI.vaRevenue,   color: '#7c3aed', pct: 0.014 },
+                    { label: 'Bulk Engine',      value: FALLBACK_KPI.bulkRevenue, color: '#2563eb', pct: 0.986 },
+                    { label: 'Value-Add Engine', value: FALLBACK_KPI.vaRevenue,   color: '#7c3aed', pct: 0.014 },
                   ].map(e => (
                     <div key={e.label} className="mb-5 last:mb-0">
                       <div className="flex justify-between items-baseline mb-1.5">
@@ -507,11 +653,11 @@ export default function SalesPage() {
               {/* Summary chips */}
               <div className="flex gap-3 flex-wrap">
                 {[
-                  { label: 'T1 accounts', value: CUSTOMERS.filter(c=>c.tier==='T1').length, color: 'blue' },
-                  { label: 'T2 accounts', value: CUSTOMERS.filter(c=>c.tier==='T2').length, color: 'gray' },
-                  { label: 'T3 / exit',   value: CUSTOMERS.filter(c=>c.tier==='T3').length, color: 'red'  },
-                  { label: 'GP% ≥ 35%',  value: CUSTOMERS.filter(c=>c.ytdGP!==null&&c.ytdGP>=0.35).length, color: 'green' },
-                  { label: 'Below target',value: CUSTOMERS.filter(c=>c.ytdGP!==null&&c.ytdGP<c.gpTgt).length, color: 'amber' },
+                  { label: 'T1 accounts', value: customers.filter(c=>c.tier==='T1').length, color: 'blue' },
+                  { label: 'T2 accounts', value: customers.filter(c=>c.tier==='T2').length, color: 'gray' },
+                  { label: 'T3 / exit',   value: customers.filter(c=>c.tier==='T3').length, color: 'red'  },
+                  { label: 'GP% ≥ 35%',  value: customers.filter(c=>c.ytdGP!==null&&c.ytdGP>=0.35).length, color: 'green' },
+                  { label: 'Below target',value: customers.filter(c=>c.ytdGP!==null&&c.ytdGP<c.gpTgt).length, color: 'amber' },
                 ].map((s, i) => (
                   <div key={i} className="bg-surface-card border border-surface-rule rounded-lg px-3 py-2 text-center min-w-[90px]">
                     <div className="font-display font-bold text-lg text-text">{s.value}</div>
@@ -589,7 +735,7 @@ export default function SalesPage() {
                 </div>
                 <div className="h-64 mb-6">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={PRODUCTS} layout="vertical" barCategoryGap="25%">
+                    <BarChart data={products} layout="vertical" barCategoryGap="25%">
                       <CartesianGrid strokeDasharray="2 4" stroke="#f3f4f6" horizontal={false} />
                       <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false}
                         tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
@@ -599,7 +745,7 @@ export default function SalesPage() {
                         formatter={(v: any) => [`${((v as number)/1000).toFixed(0)}k kg`, 'YTD Volume'] as [string, string]}
                       />
                       <Bar dataKey="ytd" radius={[0,3,3,0]}>
-                        {PRODUCTS.map((_, i) => (
+                        {products.map((_, i) => (
                           <Cell key={i} fill={i === 0 ? '#2563eb' : i < 3 ? '#60a5fa' : '#bfdbfe'} />
                         ))}
                       </Bar>
@@ -618,13 +764,13 @@ export default function SalesPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-surface-rule">
-                      {PRODUCTS.map((p, i) => (
+                      {products.map((p, i) => (
                         <tr key={i} className={`hover:bg-surface ${i < 3 ? 'font-semibold' : ''}`}>
                           <td className="py-2 px-3 text-text text-[12px]">{p.sku}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.jan > 0 ? p.jan.toLocaleString() : '—'}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.feb > 0 ? p.feb.toLocaleString() : '—'}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.mar > 0 ? p.mar.toLocaleString() : '—'}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.apr > 0 ? p.apr.toLocaleString() : '—'}</td>
+                          {['Jan','Feb','Mar','Apr'].map(mo => {
+                            const v = p.monthly[mo] ?? 0
+                            return <td key={mo} className="py-2 px-3 font-mono text-[11px] text-text-muted">{v > 0 ? v.toLocaleString() : '—'}</td>
+                          })}
                           <td className="py-2 px-3 font-mono text-[11px] text-text font-bold">{p.ytd.toLocaleString()}</td>
                           <td className="py-2 px-3">
                             <div className="flex items-center gap-2">

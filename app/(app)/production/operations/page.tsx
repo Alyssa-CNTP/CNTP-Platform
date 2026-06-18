@@ -26,16 +26,16 @@ const TABS = [
 ] as const
 
 export default function ProductionOperationsPage() {
-  const { canAccessManagement, isIT } = useAuth()
+  const { canAccessManagement } = useAuth()
   const [tab, setTab] = useState<'live' | 'orders' | 'trends'>('live')
 
   const dateFrom = format(subMonths(new Date(), 6), 'yyyy-MM-dd')
   const dateTo   = format(new Date(), 'yyyy-MM-dd')
 
-  if (!canAccessManagement && !isIT) {
+  if (!canAccessManagement) {
     return (
       <div className="flex items-center justify-center min-h-full font-mono text-[12px] text-text-muted">
-        Access restricted — Management or IT only
+        Access restricted — Management only
       </div>
     )
   }

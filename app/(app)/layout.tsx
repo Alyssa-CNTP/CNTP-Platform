@@ -14,8 +14,13 @@ import CommandSearch    from '@/components/search/CommandSearch'
 import { LanguageProvider } from '@/lib/i18n/context'
 
 // ─── Route access rules ────────────────────────────────────────────────────────
-// Mirrors Sidebar NAV. IT bypasses all. More-specific prefixes must come first.
+// Mirrors Sidebar NAV. More-specific prefixes must come first.
 // /dashboard, /settings, /axis/request are always open (excluded below).
+//
+// IT is NOT a blanket key. Being in the IT department does not grant access to
+// another department's module — IT users are gated by the same department/
+// permission rules as everyone else. AXIS and /status are IT's OWN modules, so
+// they stay IT-scoped. Only the full admin (senior_developer) bypasses guards.
 
 const ROUTE_GUARDS: Array<{
   prefix:       string
@@ -30,44 +35,44 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/axis',               itOnly: true },
 
   // Quality — Sales can only reach customer-specs
-  { prefix: '/quality/customer-specs', departments: ['IT','Quality','Sales'], permission: 'can_edit_customer_specs' },
-  { prefix: '/quality',                departments: ['IT','Quality'] },
+  { prefix: '/quality/customer-specs', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
+  { prefix: '/quality',                departments: ['Quality'] },
 
-  // Supervisor hub — production supervisors + management + IT
-  { prefix: '/supervisor',           departments: ['IT','Production','Management'] },
+  // Supervisor hub — production supervisors + management
+  { prefix: '/supervisor',           departments: ['Production','Management'] },
 
   // Production
-  { prefix: '/count',                departments: ['IT','Production'], permission: 'can_submit_count'       },
-  { prefix: '/info',                 departments: ['IT','Production'], permission: 'can_view_ops_dashboard' },
-  { prefix: '/production/operations',departments: ['IT','Management'] },
-  { prefix: '/production/live',      departments: ['IT','Production'] },
-  { prefix: '/production',           departments: ['IT','Production'] },
+  { prefix: '/count',                departments: ['Production'], permission: 'can_submit_count'       },
+  { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
+  { prefix: '/production/operations',departments: ['Management'] },
+  { prefix: '/production/live',      departments: ['Production'] },
+  { prefix: '/production',           departments: ['Production'] },
 
   // Maintenance — own module. Production needs access to raise breakdowns.
   // One rule covers all sub-routes via the longest-prefix matcher.
-  { prefix: '/maintenance',      departments: ['IT','Maintenance','Production','Management'] },
+  { prefix: '/maintenance',      departments: ['Maintenance','Production','Management'] },
 
   // Logistics (barcode-driven receiving, warehouse, dispatch)
-  { prefix: '/logistics',        departments: ['IT','Production','Quality','Management'] },
+  { prefix: '/logistics',        departments: ['Production','Quality','Management'] },
 
-  // Management
+  // Management — /status is IT's platform-diagnostics module
   { prefix: '/status',     departments: ['IT'] },
-  { prefix: '/management', departments: ['IT','Management'] },
+  { prefix: '/management', departments: ['Management'] },
 
   // Sales & Research
-  { prefix: '/research',   departments: ['IT','Sales','Management','Marketing'], permission: 'can_access_research' },
-  { prefix: '/sales',      departments: ['IT','Sales','Management'], permission: 'can_access_sales'    },
+  { prefix: '/research',   departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
+  { prefix: '/sales',      departments: ['Sales','Management'], permission: 'can_access_sales'    },
 
   // Marketing
-  { prefix: '/marketing',  departments: ['IT','Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
+  { prefix: '/marketing',  departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
 
   // Intelligence — `can_access_intelligence` is a planned permission key honoured
   // by the /api/signals route; cast until it's added to PermissionKey.
-  { prefix: '/intelligence', departments: ['IT', 'Sales', 'Management', 'Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { prefix: '/intelligence', departments: ['Sales', 'Management', 'Marketing'], permission: 'can_access_intelligence' as PermissionKey },
 
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },
-  { prefix: '/tags',       departments: ['IT','Production'] },
+  { prefix: '/tags',       departments: ['Production'] },
 ]
 
 // ─── Route metadata ────────────────────────────────────────────────────────────
@@ -118,7 +123,7 @@ const ROUTE_META: Record<string, {
   '/production/operations':        { title: 'Production Operations', variant: 'management', chips: [{ label: 'IT + Management', color: 'purple' }] },
 
   // Sales section
-  '/sales':                  { title: 'Sales Overview',         variant: 'sales' },
+  '/sales':                  { title: 'Sales Dashboard',        variant: 'sales', chips: [{ label: 'CONFIDENTIAL', color: 'amber' }] },
   '/sales/customers':        { title: 'Accounts',               variant: 'sales' },
   '/sales/intelligence':     { title: 'Intelligence',           variant: 'sales' },
   '/sales/targets':          { title: 'Targets & OKRs',         variant: 'sales' },
@@ -278,6 +283,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             onMobileMenu={() => setMobileOpen(true)}
             chips={meta.chips ?? []}
             variant={meta.variant}
+            acumaticaSync={routeKey === '/sales' ? 'ok' : undefined}
             rightSlot={<NotificationBell />}
           />
           <main className="flex-1 overflow-y-auto overflow-x-hidden">

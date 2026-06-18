@@ -260,14 +260,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isSupervisor = role === 'production_supervisor' || role === 'supervisor'
   const isFloor      = role === 'operator' || role === 'section_operator'
 
-  // Access flags — IT can access everything, others only their dept + what's toggled
-  const canAccessQuality    = isFullAdmin || isIT || isQuality    || p('can_upload_pdfs') || p('can_view_history')
-  const canAccessProduction = isFullAdmin || isIT || isProduction || p('can_submit_count') || p('can_view_ops_dashboard')
-  const canAccessSales      = isFullAdmin || isIT || isSales      || p('can_access_sales')
-  const canAccessMarketing  = isFullAdmin || isIT || isMarketing  || p('can_access_marketing')
-  const canAccessManagement = isFullAdmin || isIT || isManagement || p('can_view_management')
+  // Access flags — each module is gated by its own department or an explicit
+  // permission. Only the full admin (senior_developer) sees everything; the IT
+  // department is NOT a blanket key — IT users need the permission/role for a
+  // module just like everyone else.
+  const canAccessQuality    = isFullAdmin || isQuality    || p('can_upload_pdfs') || p('can_view_history')
+  const canAccessProduction = isFullAdmin || isProduction || p('can_submit_count') || p('can_view_ops_dashboard')
+  const canAccessSales      = isFullAdmin || isSales      || p('can_access_sales')
+  const canAccessMarketing  = isFullAdmin || isMarketing  || p('can_access_marketing')
+  const canAccessManagement = isFullAdmin || isManagement || p('can_view_management')
   // Maintenance is open to its own dept + Management view + Production (they raise breakdowns)
-  const canAccessMaintenance= isFullAdmin || isIT || isMaintenance || isManagement || isProduction
+  const canAccessMaintenance= isFullAdmin || isMaintenance || isManagement || isProduction
   const canAccessAdmin      = p('can_manage_users') || p('can_reset_passwords') || p('can_view_audit_log')
 
   const value: AuthContextValue = {
