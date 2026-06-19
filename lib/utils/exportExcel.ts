@@ -133,6 +133,68 @@ export function exportPasteuriserBatch(batch: any) {
   dl(wb, `Pasteuriser_${batch.batch_number}_${date}.xlsx`)
 }
 
+// Combined export of many pasteuriser batches (all raw samples in one sheet +
+// a per-batch summary sheet) — used for the historical archive.
+export function exportPasteuriserBatches(batches: any[], filename: string) {
+  const wb = XLSX.utils.book_new()
+
+  // ── Sheet 1: All Raw Samples (every sample across every batch) ────────────
+  const rawRows: any[] = []
+  batches.forEach((b: any) => {
+    (b.samples || []).forEach((s: any, i: number) => {
+      const row: any = {
+        'Batch Number': b.batch_number || '',
+        'Product': b.type_grade || b.product_family || '',
+        'Customer': b.customer || '',
+        'Final Result': b.final_result || '',
+        'Sample #': i + 1,
+        'Date': s.date || '',
+        'Time': s.time || '',
+        'QC Controller': s.qc_name || '',
+        'Bin/Bag': s.serial_bin || '',
+        'Type': s.has_sieve ? 'Full Sieve+MB' : 'MB only',
+        'Temp (°C)': n(s.hourly_temp),
+      }
+      PAST_SIEVES.forEach(k => { row[PAST_SIEVE_LABELS[k]] = n(s[k]) })
+      row['Moisture %'] = n(s.moisture)
+      row['BD (cc/100g)'] = n(s.untapped_bd)
+      row['Aroma'] = n(s.aroma)
+      row['Flavour'] = n(s.flavour_profile)
+      row['Briskness'] = n(s.briskness)
+      row['Strength'] = n(s.strength)
+      row['Cup Colour'] = n(s.cup_colour)
+      row['Sensorial'] = s.sensorial_pass || ''
+      row['Comment'] = s.comment || ''
+      rawRows.push(row)
+    })
+  })
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows.length ? rawRows : [{ Note: 'No samples' }]), 'All Raw Samples')
+
+  // ── Sheet 2: Batch Summary (one row per batch with averages) ──────────────
+  const summaryRows = batches.map((b: any) => {
+    const samples: any[] = b.samples || []
+    const sieveSamples = samples.filter((s: any) => s.has_sieve)
+    const mbSamples = samples.filter((s: any) => s.has_mb)
+    const row: any = {
+      'Batch Number': b.batch_number || '',
+      'Production Date': b.production_date || '',
+      'Product': b.type_grade || b.product_family || '',
+      'Customer': b.customer || '',
+      'QC Controller': b.qc_name || '',
+      'Final Result': b.final_result || '',
+      'Total Samples': samples.length,
+      'Avg Temp (°C)': avg(samples.map((s: any) => s.hourly_temp)),
+    }
+    PAST_SIEVES.forEach(k => { row[`Avg ${PAST_SIEVE_LABELS[k]}`] = avg(sieveSamples.map((s: any) => s[k])) })
+    row['Avg Moisture %'] = avg(mbSamples.map((s: any) => s.moisture))
+    row['Avg BD (cc/100g)'] = avg(mbSamples.map((s: any) => s.untapped_bd))
+    return row
+  })
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows.length ? summaryRows : [{ Note: 'No batches' }]), 'Batch Summary')
+
+  dl(wb, filename)
+}
+
 // ── Granule Line ──────────────────────────────────────────────────────────────
 
 export function exportGranuleRun(
