@@ -86,6 +86,12 @@ export const FREQUENCY_LABEL: Record<Frequency, string> = {
   daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly',
 }
 
+// How often each frequency comes due, in days — used to surface weekly/monthly
+// tasks only when actually due (from cleaning_task_state.last_done_at).
+export const FREQUENCY_DAYS: Record<Frequency, number> = {
+  daily: 1, weekly: 7, monthly: 30,
+}
+
 export function cleaningTasksFor(sectionId: string): CleaningTaskDef[] {
   return CLEANING_TASKS[sectionId] ?? CLEANING_TASKS.refining1
 }
