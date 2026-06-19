@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (Excel export + duplicate batch prevention across QC workcenters)
+
+**Files changed:**
+- `lib/utils/exportExcel.ts` (new)
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- New shared export utility `lib/utils/exportExcel.ts` generates multi-sheet `.xlsx` workbooks using the existing `xlsx` library.
+- **Pasteuriser**: "⬇ Export Excel" button on each active batch header and each expanded history row. Exports 3 sheets — Raw Data (all samples with every measurement), Daily Averages (grouped by date), and Batch Summary (metadata + overall averages).
+- **Granule Line**: "⬇ Excel" button on active run cards and history rows. Same 3-sheet structure — Raw Data, Daily Averages, Run Summary.
+- **Sieving Tower**: "⬇ Export CSV" replaced with "⬇ Export Excel" — now exports Raw Data, Daily Averages, and a By Grade/Variant summary sheet.
+- **Duplicate batch prevention (Pasteuriser)**: `createBatch` now checks for an existing run with the same batch number. If one is open, QC is told to add a sample to the existing run. If it's already finalised, they're told to use a different batch number.
+- **Duplicate batch prevention (Granule Line)**: Same logic in `handleCreateRun` — blocks creation and redirects to the open run if one exists.
+
+---
+
 ## 2026-06-19 — Alyssa (operators admin: auto codes, auto display name, simpler form)
 
 **Files changed:**
