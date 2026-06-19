@@ -23,6 +23,16 @@ export function deriveAuthPassword(pin: string, email: string): string {
   return `flr_${pin}_${email}`.slice(0, 64)
 }
 
+/** Next sequential operator code (OP001, OP002, …) given the codes already in use. */
+export function nextOperatorCode(existing: (string | null | undefined)[]): string {
+  let max = 0
+  for (const c of existing) {
+    const m = /^OP(\d+)$/i.exec((c ?? '').trim())
+    if (m) max = Math.max(max, parseInt(m[1], 10))
+  }
+  return `OP${String(max + 1).padStart(3, '0')}`
+}
+
 /** Permission overrides given to floor-operator app_roles so they can reach capture. */
 export const FLOOR_OPERATOR_PERMISSIONS = {
   can_submit_count:       true,

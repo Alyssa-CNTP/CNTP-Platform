@@ -10,23 +10,15 @@ import { useAuth } from '@/lib/auth/context'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
 import type { Operator } from '@/lib/supabase/database.types'
 
-type Role = 'floor_operator' | 'production_supervisor'
-
 interface FormState {
   id?: string
   name: string
-  display_name: string
-  operator_code: string
-  role: Role
   section_ids: string[]
   pin: string
   active: boolean
 }
 
-const emptyForm = (): FormState => ({
-  name: '', display_name: '', operator_code: '', role: 'floor_operator',
-  section_ids: [], pin: '', active: true,
-})
+const emptyForm = (): FormState => ({ name: '', section_ids: [], pin: '', active: true })
 
 export default function OperatorsPage() {
   const router = useRouter()
@@ -52,11 +44,7 @@ export default function OperatorsPage() {
   function startAdd()  { setError(null); setEditing(emptyForm()) }
   function startEdit(op: Operator) {
     setError(null)
-    setEditing({
-      id: op.id, name: op.name, display_name: op.display_name ?? '',
-      operator_code: op.operator_code ?? '', role: op.role as Role,
-      section_ids: op.section_ids ?? [], pin: op.pin ?? '', active: op.active,
-    })
+    setEditing({ id: op.id, name: op.name, section_ids: op.section_ids ?? [], pin: op.pin ?? '', active: op.active })
   }
 
   function toggleSection(id: string) {
@@ -74,14 +62,12 @@ export default function OperatorsPage() {
     setSaving(true); setError(null)
     try {
       const payload = {
-        id:            editing.id,
-        name:          editing.name.trim(),
-        display_name:  editing.display_name.trim() || editing.name.trim(),
-        operator_code: editing.operator_code.trim() || null,
-        role:          editing.role,
-        section_ids:   editing.section_ids,
-        pin:           editing.pin,
-        active:        editing.active,
+        id:          editing.id,
+        name:        editing.name.trim(),
+        role:        'floor_operator',     // display name + code are auto-assigned server-side
+        section_ids: editing.section_ids,
+        pin:         editing.pin,
+        active:      editing.active,
       }
       const res = await fetch('/api/production/operators', {
         method:  editing.id ? 'PATCH' : 'POST',
@@ -141,7 +127,7 @@ export default function OperatorsPage() {
         <button onClick={() => router.push('/production/capture')} className="p-2 rounded-lg hover:bg-stone-100 text-stone-400"><ChevronLeft size={18} /></button>
         <div className="flex-1">
           <h1 className="font-semibold text-[22px] text-text leading-tight">Operators</h1>
-          <p className="text-[12px] text-text-muted mt-0.5">Floor operators sign in with their name + 4-digit PIN — no email needed.</p>
+          <p className="text-[12px] text-text-muted mt-0.5">Floor operators sign in with their name + 4-digit PIN. A code is assigned automatically. Supervisors are managed in Users &amp; Roles.</p>
         </div>
         <button onClick={startAdd} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-medium text-[13px] hover:bg-brand-mid transition-colors">
           <Plus size={15} /> Add operator
@@ -181,9 +167,10 @@ export default function OperatorsPage() {
                 <span className="font-mono font-bold text-[11px] text-stone-600">{(op.operator_code || op.name).slice(0, 3).toUpperCase()}</span>
               </div>
               <div className="flex-1 min-w-0">
-                <div className="font-semibold text-[14px] text-text flex items-center gap-2">
+                <div className="font-semibold text-[14px] text-text flex items-center gap-2 flex-wrap">
                   {op.display_name || op.name}
-                  {op.role === 'production_supervisor' && <span className="text-[10px] font-medium text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">Supervisor</span>}
+                  {op.operator_code && <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{op.operator_code}</span>}
+                  {!op.pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
                 </div>
                 <div className="text-[11px] text-text-muted font-mono truncate">
                   {sectionSummary(op.section_ids ?? [])}
@@ -210,25 +197,11 @@ export default function OperatorsPage() {
               <Field label="Full name *">
                 <input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} className={INP} placeholder="e.g. John Smith" />
               </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Display name">
-                  <input value={editing.display_name} onChange={e => setEditing({ ...editing, display_name: e.target.value })} className={INP} placeholder="Shown on tablet" />
-                </Field>
-                <Field label="Operator code">
-                  <input value={editing.operator_code} onChange={e => setEditing({ ...editing, operator_code: e.target.value })} className={INP} placeholder="e.g. OP01" />
-                </Field>
-              </div>
 
-              <Field label="Role">
-                <div className="flex gap-2">
-                  {(['floor_operator', 'production_supervisor'] as Role[]).map(r => (
-                    <button key={r} onClick={() => setEditing({ ...editing, role: r })}
-                      className={`flex-1 py-2.5 rounded-xl border text-[12px] font-medium transition-colors ${editing.role === r ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
-                      {r === 'floor_operator' ? 'Floor operator' : 'Supervisor'}
-                    </button>
-                  ))}
-                </div>
-              </Field>
+              <p className="text-[11px] text-text-muted leading-relaxed">
+                Display name and operator code are assigned automatically. Supervisors are added in{' '}
+                <a href="/users" className="text-brand hover:underline">Users &amp; Roles</a> (Production → Production Supervisor).
+              </p>
 
               <Field label="4-digit PIN *">
                 <input
@@ -261,7 +234,7 @@ export default function OperatorsPage() {
               {error && <p className="text-[12px] text-err">{error}</p>}
 
               {editing.id && (
-                <button onClick={() => { const e = editing; setEditing(null); remove({ id: e.id, name: e.name, display_name: e.display_name, operator_code: e.operator_code, role: e.role, section_ids: e.section_ids, pin: e.pin, active: e.active } as any) }}
+                <button onClick={() => { const e = editing; setEditing(null); remove({ id: e.id, name: e.name, section_ids: e.section_ids, pin: e.pin, active: e.active } as any) }}
                   className="flex items-center gap-1.5 text-[12px] text-err hover:underline">
                   <Trash2 size={13} /> Remove operator
                 </button>

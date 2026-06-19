@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Alyssa (operators admin: auto codes, auto display name, simpler form)
+
+**Files changed:**
+- `lib/production/operator-auth.ts`
+- `app/api/production/operators/route.ts`
+- `app/(app)/production/operators/page.tsx`
+- `supabase/migrations/20260619_002_operator_codes_displaynames.sql` (new)
+
+**Changes:**
+- **Operator codes are now assigned automatically** (sequential `OP001`, `OP002`, …) on create and when a legacy operator without one is edited; the manual code field is gone. The migration backfills codes for existing operators (continuing past the highest existing number).
+- **Display name defaults to the full name** — the display-name field is removed; the migration backfills `display_name = name` where blank.
+- **Simpler operators form** — just Full name, PIN, Allowed sections, Active. The role toggle is removed: this page is for **floor operators** only. A note points supervisors to **Users & Roles** (Production → Production Supervisor), where they sign up with their work email and get a real account/role.
+- **List polish:** each row shows its code chip and a **"No PIN"** flag for operators that still need a PIN before they can sign in (e.g. the imported roster). Account + `floor_operator` app-role provisioning is unchanged (already handled by the operators API).
+
+---
+
 ## 2026-06-19 — Alyssa (tablet device binding for section/supervisor testing)
 
 **Files changed:**
