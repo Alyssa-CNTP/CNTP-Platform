@@ -26,7 +26,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
-import { exportPasteuriserBatch } from '@/lib/utils/exportExcel'
+import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
   CheckCircle2, AlertTriangle, X, MessageSquare,
@@ -979,6 +979,24 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     if (showPubHistory) loadPubHistory()
   }, [showPubHistory, loadPubHistory])
 
+  // Export every historical (public-schema) record as one combined workbook
+  function exportPubHistory(records: any[]) {
+    const batches = records.map((r: any) => {
+      let d: any = {}
+      try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+      return {
+        ...d,
+        batch_number: r.batch_number || d.batch_number || d.batch_no || '—',
+        customer: d.customer || r.customer || '',
+        type_grade: d.type_grade || d.product_family || r.product_family || '',
+        final_result: d.final_result || r.final_result || '',
+        production_date: d.production_date || (r.created_at ? String(r.created_at).slice(0, 10) : ''),
+        samples: d.samples || [],
+      }
+    })
+    exportPasteuriserBatches(batches, `Pasteuriser_Historical_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
   useEffect(() => {
     if (activeBatchId !== prevBatchIdRef.current) { setCollapsed(false); prevBatchIdRef.current = activeBatchId }
   }, [activeBatchId])
@@ -1623,6 +1641,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <span className="text-[10px] font-mono uppercase tracking-wide text-warn font-bold">📜 Historical — public schema (read-only)</span>
                 {pubLoading && <span className="text-[11px] text-text-muted animate-pulse">Loading…</span>}
                 {!pubLoading && <span className="text-[11px] text-text-muted">{pubBatches.length} records</span>}
+                {!pubLoading && pubBatches.length > 0 && (
+                  <button onClick={() => exportPubHistory(pubBatches)}
+                    className="ml-auto px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export All</button>
+                )}
               </div>
               {!pubLoading && pubBatches.length === 0 && (
                 <div className="text-[12px] text-text-muted">No historical pasteuriser records found in the public schema.</div>
@@ -1633,7 +1655,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                     <table className="w-full text-left">
                       <thead>
                         <tr className="bg-surface border-b border-warn/20">
-                          {['Batch','Date','Customer','Product','Samples','Result'].map(h => (
+                          {['Batch','Date','Customer','Product','Samples','Result','Export'].map(h => (
                             <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-warn/70 whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -1662,6 +1684,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                   ? <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold border" style={{ background:rc[0], color:rc[1], borderColor:rc[2] }}>{result}</span>
                                   : <span className="text-text-faint text-[11px]">—</span>
                                 }
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button onClick={() => exportPasteuriserBatch({ ...d, batch_number: batchNo, customer, type_grade: product, final_result: result })}
+                                  className="px-2 py-1 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[10px] font-semibold">⬇ Excel</button>
                               </td>
                             </tr>
                           )
