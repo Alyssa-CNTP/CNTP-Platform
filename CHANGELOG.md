@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (export pasteuriser historical runs to Excel)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `lib/utils/exportExcel.ts`
+
+**Changes:**
+- The pasteuriser "📜 Historical — public schema" archive table previously had no export option. Added a per-row "⬇ Excel" button (exports a single historical batch) and an "⬇ Export All" button that produces one combined workbook for every historical record.
+- New `exportPasteuriserBatches()` helper builds the combined workbook with an "All Raw Samples" sheet (every sample across all batches) plus a per-batch "Batch Summary" sheet for pivots.
+- Note: Granule Line and Sieving Tower already merge legacy/historical runs into their main run lists, so those historical runs were already exportable via the existing buttons.
+
+---
+
 ## 2026-06-19 — Gustav (Excel export + duplicate batch prevention across QC workcenters)
 
 **Files changed:**
