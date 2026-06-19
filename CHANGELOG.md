@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (maintenance: energy History view + daily usage stored in Supabase)
+
+**Files changed:**
+- supabase/migrations/20260619_001_energy_daily.sql (new)
+- app/api/maintenance/energy/history/route.ts (new)
+- components/maintenance/EnergyHistory.tsx (new)
+- app/api/maintenance/energy/route.ts
+- components/maintenance/EnergyWidget.tsx
+
+**Changes:**
+- New **`maintenance.energy_daily`** table (one row per SAST day): solar / grid-import / grid-export / generator / battery charge+discharge / total-consumed kWh. RLS enabled with a permissive authenticated policy (mirrors `spare_requests`). Migration applied to the staging Supabase project
+- The existing `/api/maintenance/energy` route now **upserts today's snapshot** into `energy_daily` on each load (keyed by `day`; best-effort — a DB failure never breaks the live widget), so usage history accrues over time
+- New **`/api/maintenance/energy/history`** route returns the last N days (`?days=`, 1–365, default 30), auth-gated
+- The Energy widget gains a **Today / History toggle**. History shows period totals plus daily **Electricity Usage** (grid imported vs total consumed) and **Solar Usage** (PV produced) bar charts, with a 7 / 30 / 90-day range selector (`EnergyHistory` component)
+- Note: history only captures days the widget is loaded; a scheduled capture (pg_cron / a daily ping) could be added later for full coverage
+
+---
+
 ## 2026-06-19 — Gustav (maintenance: "Energy Today" widget — Home Assistant solar/grid/battery)
 
 **Files changed:**
