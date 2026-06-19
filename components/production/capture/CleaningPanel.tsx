@@ -21,13 +21,13 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { d
  * cleaning_task_state); each area can be photo-verified (Gemini vision); and a
  * concise AI cleaning summary is stored on the record at sign-off.
  */
-export function CleaningPanel({ sectionId, date, shift, sessionId, locked, operator }: {
+export function CleaningPanel({ sectionId, date, shift, sessionId, locked, operators }: {
   sectionId: string
   date: string
   shift: string
   sessionId: string | null
   locked: boolean
-  operator: { id: string; name: string; pin: string } | null
+  operators: { id: string; name: string; pin: string }[]
 }) {
   const tasks = cleaningTasksFor(sectionId)
   const areas = [...new Set(tasks.map(t => t.area))]
@@ -106,8 +106,9 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
 
   async function sign() {
     setError(null)
-    if (!operator)               { setError('No operator identified for sign-off'); return }
-    if (pin !== operator.pin)    { setError('PIN does not match — re-enter to sign'); return }
+    if (!operators.length)       { setError('No operators rostered for this section'); return }
+    const op = operators.find(o => o.pin && o.pin === pin)
+    if (!op)                     { setError('PIN not recognised — check the roster'); return }
     if (missingReason)           { setError('Add a reason for each flagged task'); return }
     setSigning(true)
     try {
@@ -115,22 +116,22 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
       const { data: rec } = await db.schema('production').from('cleaning_records').upsert({
         section_id: sectionId, date, shift, session_id: sessionId,
         status: 'operator_signed',
-        operator_id: operator.id, operator_name: operator.name,
+        operator_id: op.id, operator_name: op.name,
         operator_signed_at: new Date().toISOString(),
         exceptions_count: flaggedKeys.length,
       } as any, { onConflict: 'section_id,date,shift' }).select('id').single()
       const recordId = (rec as any).id
 
       const logs: any[] = []
-      areas.forEach(area => logs.push({ record_id: recordId, action: 'area_confirmed', area, actor_id: operator.id, actor_name: operator.name }))
+      areas.forEach(area => logs.push({ record_id: recordId, action: 'area_confirmed', area, actor_id: op.id, actor_name: op.name }))
       flaggedKeys.forEach(k => {
         const t = tasks.find(x => x.key === k)
-        logs.push({ record_id: recordId, action: 'task_exception', area: t?.area ?? null, task_key: k, detail: { reason: exceptions[k].reason, task: t?.task }, actor_id: operator.id, actor_name: operator.name })
+        logs.push({ record_id: recordId, action: 'task_exception', area: t?.area ?? null, task_key: k, detail: { reason: exceptions[k].reason, task: t?.task }, actor_id: op.id, actor_name: op.name })
       })
       Object.entries(photos).forEach(([area, v]) => {
-        logs.push({ record_id: recordId, action: 'photo', area, detail: { source: 'ai_verify', clean: v.clean, note: v.note }, actor_id: operator.id, actor_name: operator.name })
+        logs.push({ record_id: recordId, action: 'photo', area, detail: { source: 'ai_verify', clean: v.clean, note: v.note }, actor_id: op.id, actor_name: op.name })
       })
-      logs.push({ record_id: recordId, action: 'operator_sign', detail: { pin_verified: true, done: doneCount, flagged: flaggedKeys.length }, actor_id: operator.id, actor_name: operator.name })
+      logs.push({ record_id: recordId, action: 'operator_sign', detail: { pin_verified: true, done: doneCount, flagged: flaggedKeys.length }, actor_id: op.id, actor_name: op.name })
       await db.schema('production').from('cleaning_logs').insert(logs as any)
 
       // Mark weekly/monthly tasks done (so they go quiet until next due).
