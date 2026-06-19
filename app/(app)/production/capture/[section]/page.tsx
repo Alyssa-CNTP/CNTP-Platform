@@ -47,6 +47,7 @@ function CaptureScreen() {
   const [loading, setLoading]     = useState(true)
   const [assignment, setAssignment] = useState<ShiftAssignment | null>(null)
   const [opNames, setOpNames]     = useState<string[]>([])
+  const [rosterOps, setRosterOps] = useState<{ id: string; name: string; pin: string }[]>([])
   const [verifiedOp, setVerifiedOp] = useState<Operator | null>(null)
 
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -85,8 +86,9 @@ function CaptureScreen() {
         const ids = (assign as any).operator_ids ?? []
         if (ids.length > 0) {
           const { data: ops } = await db.schema('production').from('operators')
-            .select('id,name,display_name').in('id', ids)
+            .select('id,name,display_name,pin').in('id', ids)
           setOpNames((ops as Operator[] ?? []).map(o => o.display_name || o.name))
+          setRosterOps((ops as Operator[] ?? []).map(o => ({ id: o.id, name: o.display_name || o.name, pin: o.pin ?? '' })))
         }
       }
 
@@ -391,6 +393,12 @@ function CaptureScreen() {
   const stWithinTol = Math.abs(stVariance) <= MASS_BALANCE_TOLERANCE_KG
   const multi = productions.length > 1
 
+  // Sign-off candidates: a person-logged-in tablet has a single verified operator;
+  // a section/machine tablet resolves the signer from the rostered operators by PIN.
+  const candidateOps = verifiedOp
+    ? [{ id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name, pin: verifiedOp.pin ?? '' }]
+    : rosterOps
+
   function updateActiveMeta(key: 'variant' | 'lot' | 'grade', val: string) {
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
   }
@@ -562,7 +570,7 @@ function CaptureScreen() {
           {tab === 'checks' && (
             <ChecksPanel
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
-              operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name, pin: verifiedOp.pin } : null}
+              operators={candidateOps}
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
               massBalance={{ totalIn: st.totalIn, totalOut: st.totalOut, variance: stVariance, withinTol: stWithinTol }}
             />
@@ -571,7 +579,7 @@ function CaptureScreen() {
           {tab === 'cleaning' && (
             <CleaningPanel
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
-              operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name, pin: verifiedOp.pin } : null}
+              operators={candidateOps}
             />
           )}
 

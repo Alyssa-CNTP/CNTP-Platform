@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Alyssa (tablet device binding for section/supervisor testing)
+
+**Files changed:**
+- `lib/production/device.ts` (new)
+- `app/(app)/production/device/page.tsx` (new)
+- `app/(app)/production/capture/page.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/ChecksPanel.tsx`
+- `components/production/capture/CleaningPanel.tsx`
+
+**Changes:**
+- **Per-tablet device binding** (localStorage, no backend) — a "This tablet" setup screen (`/production/device`) binds a device to a **section (machine)** or to the **Supervisor**, not to a person. A section-bound tablet opens straight to that section's capture on launch (once per launch, so the back button still works); a supervisor-bound tablet lands on the capture/assign home. A "This tablet: …" chip in the capture header shows the binding and links to change/reset it.
+- **Sign-off identifies the operator by PIN:** because a tablet is bound to a machine (not a person), the Checks and Cleaning sign-offs now resolve the signer from the entered PIN against the section's rostered operators (PIN still required — audit intact). A person-logged-in tablet still attributes live events to that single operator.
+
+---
+
 ## 2026-06-19 — Alyssa (smart cleaning: frequency-aware, photo-verify, AI summary)
 
 **Files changed:**

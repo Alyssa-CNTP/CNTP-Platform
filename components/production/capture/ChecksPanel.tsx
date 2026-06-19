@@ -19,13 +19,17 @@ interface MassBalance { totalIn: number; totalOut: number; variance: number; wit
 interface VsdReading { id: string; value: number; at: string; oor: boolean }
 
 export function ChecksPanel({
-  sectionId, date, shift, sessionId, locked, operator, variant, grade, massBalance,
+  sectionId, date, shift, sessionId, locked, operators, variant, grade, massBalance,
 }: {
   sectionId: string; date: string; shift: string; sessionId: string | null; locked: boolean
-  operator: { id: string; name: string; pin: string } | null
+  operators: { id: string; name: string; pin: string }[]
   variant: string; grade: string; massBalance: MassBalance
 }) {
   const checks = visibleChecks(sectionId, shift)
+  // When exactly one operator is bound (e.g. a person-logged-in tablet) live
+  // events are attributed to them; on a shared/section tablet the signer is
+  // resolved from the PIN at sign-off.
+  const soleOp = operators.length === 1 ? operators[0] : null
   const [specs, setSpecs] = useState<Record<string, CheckSpec>>({})
   const [qmsHint, setQmsHint] = useState<string | null>(null)
 
@@ -91,7 +95,7 @@ export function ChecksPanel({
       phase: 'running', check_key: 'infeed_vsd', check_label: 'Infeed speed (VSD)', kind: 'number',
       value_num: value, unit: spec?.unit ?? 'Hz', status: oor ? 'flagged' : 'ok',
       spec_min: spec?.min ?? null, spec_max: spec?.max ?? null, source, recorded_at: at,
-      actor_id: operator?.id ?? null, actor_name: operator?.name ?? null,
+      actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
     })
     setVsd(v => [...v, { id: at, value, at, oor }])
   }
@@ -104,7 +108,7 @@ export function ChecksPanel({
       phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance', kind: 'massbalance',
       value_num: massBalance.variance, value_text: `${massBalance.totalIn.toFixed(1)} in / ${massBalance.totalOut.toFixed(1)} out`,
       unit: 'kg', status: massBalance.withinTol ? 'ok' : 'flagged', source: 'keypad',
-      actor_id: operator?.id ?? null, actor_name: operator?.name ?? null,
+      actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
     })
     setMbConfirmed(true)
   }
@@ -137,7 +141,7 @@ export function ChecksPanel({
       body: JSON.stringify({
         workflow, area: SECTION_TO_AREA[sectionId] ?? 'Sieving Tower', machine: def.equipment ?? null,
         description: `${def.label} — ${SECTION_TO_AREA[sectionId] ?? sectionId}`, long_desc: reason,
-        raised_by: operator?.name ?? 'Production', maint_types: workflow === 'planned' ? ['Repair'] : undefined,
+        raised_by: soleOp?.name ?? 'Production', maint_types: workflow === 'planned' ? ['Repair'] : undefined,
       }),
     })
     const json = await res.json().catch(() => ({}))
@@ -147,7 +151,7 @@ export function ChecksPanel({
     if (id) await appendCheckEvent(id, {
       phase: def.phase, check_key: def.key, check_label: def.label, kind: def.kind,
       status: 'fail', reason, source: 'keypad', maintenance_card_id: cardId,
-      actor_id: operator?.id ?? null, actor_name: operator?.name ?? null,
+      actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
     })
     if (cardId) setRaised(r => ({ ...r, [def.key]: cardId }))
     setRaiseFor(null)
@@ -156,8 +160,9 @@ export function ChecksPanel({
   // ── Sign-off: write held checks, finalise record, generate AI summary ──────
   async function sign() {
     setError(null)
-    if (!operator)            { setError('No operator identified for sign-off'); return }
-    if (pin !== operator.pin) { setError('PIN does not match — re-enter to sign'); return }
+    if (!operators.length)    { setError('No operators rostered for this section'); return }
+    const op = operators.find(o => o.pin && o.pin === pin)
+    if (!op)                  { setError('PIN not recognised — check the roster'); return }
     const missingReason = checks.some(c => c.kind === 'confirm' && confirms[c.key]?.flagged && !confirms[c.key].reason.trim())
     if (missingReason)        { setError('Add a reason for each flagged check'); return }
     setSigning(true)
@@ -165,7 +170,7 @@ export function ChecksPanel({
       const id = await getRecord()
       if (!id) throw new Error('Could not create checks record')
       const now = new Date().toISOString()
-      const actor = { actor_id: operator.id, actor_name: operator.name }
+      const actor = { actor_id: op.id, actor_name: op.name }
 
       for (const c of checks) {
         if (raised[c.key]) continue   // already written live with its maintenance link
@@ -201,7 +206,7 @@ export function ChecksPanel({
       }
 
       await getDb().schema('production').from('check_records').update({
-        status: 'operator_signed', operator_id: operator.id, operator_name: operator.name,
+        status: 'operator_signed', operator_id: op.id, operator_name: op.name,
         operator_signed_at: now,
       } as any).eq('id', id)
 
