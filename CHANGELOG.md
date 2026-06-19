@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (Export Excel button in history rows + remove Sensorial tab)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+
+**Changes:**
+- Added an "⬇ Excel" export button directly in each completed-batch row of the History & Performance table, so the export is always visible without needing to expand the row. The button stops row-click propagation so it doesn't accidentally toggle expansion.
+- Removed the "🍵 Sensorial Table" tab from the top tab bar — the sensorial data is still captured per-sample inside the Run Dashboard but the separate stand-alone table tab has been removed as it was not in use.
+
+---
+
 ## 2026-06-19 — Gustav (export pasteuriser historical runs to Excel)
 
 **Files changed:**
