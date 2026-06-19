@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer } from 'lucide-react'
-import { sectionOutputItems, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
+import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
 import { BatchInput } from '@/components/production/capture/BatchInput'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -15,6 +15,15 @@ export interface PickedOutput {
 }
 
 const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
+
+// Standard full-bag weights so the operator only overrides for end-of-shift
+// half bags. Matched on the item description/name; '' = no standard (type it in).
+function standardWeight(label: string): string {
+  const s = label.toLowerCase()
+  if (/indent stick/.test(s)) return '252'
+  if (/fine leaf/.test(s) || /coarse leaf/.test(s)) return '300'
+  return ''
+}
 
 /**
  * Easy output picker: the few items that fit the section + variant up top
@@ -41,8 +50,10 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   // Load the master list once; filtering is then instant on every keystroke.
   useEffect(() => { loadAllInventory().then(setAll) }, [])
 
-  // The section's outputs for this variant + destination — straight from master.
-  const outputs = sectionOutputItems(all, sectionId, variantWord, gradeLetter)
+  // The curated family shortlist for this section + variant + destination
+  // (Fine/Coarse Leaf, Blocks, Rolsiev/Indent Sticks, Brown/Powder Dust) — codes
+  // come from the canonical getAcumaticaCode map. Waste streams (no code) drop out.
+  const outputs = suggestOutputs(sectionId, variantWord, gradeLetter).filter(o => o.code)
   const results = filterInventory(all, query, variantWord)
   function onSearch(q: string) { setQuery(q) }
 
@@ -74,9 +85,9 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               <span className="text-[12px] text-ok">Outputs for {variantWord}{outputs.length ? '' : ' — loading…'}</span>
             </div>
             {outputs.map(o => (
-              <PickRow key={o.code} active={picked?.code === o.code}
-                title={o.description} code={o.code}
-                onClick={() => setPicked({ productType: o.description, code: o.code, description: o.description, batchTracked: o.batchTracked })} />
+              <PickRow key={o.code ?? o.productType} active={picked?.code === o.code}
+                title={o.productType} code={o.code}
+                onClick={() => { setPicked({ productType: o.productType, code: o.code, description: o.description, batchTracked: o.isLeaf }); setWeight(standardWeight(o.productType)) }} />
             ))}
           </>
         ) : (
@@ -85,7 +96,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             {results.map(it => (
               <PickRow key={it.inventory_id} active={picked?.code === it.inventory_id}
                 title={it.description ?? it.inventory_id} code={it.inventory_id} highlight={query}
-                onClick={() => setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', batchTracked: /leaf/i.test(it.description ?? '') })} />
+                onClick={() => { setPicked({ productType: it.description ?? it.inventory_id, code: it.inventory_id, description: it.description ?? '', batchTracked: /leaf/i.test(it.description ?? '') }); setWeight(standardWeight(it.description ?? it.inventory_id)) }} />
             ))}
           </>
         )}

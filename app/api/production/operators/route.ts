@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
-import { newFloorEmail, deriveAuthPassword, FLOOR_OPERATOR_PERMISSIONS } from '@/lib/production/operator-auth'
+import { newFloorEmail, deriveAuthPassword, nextOperatorCode, FLOOR_OPERATOR_PERMISSIONS } from '@/lib/production/operator-auth'
 
 function canManage(caller: { can: (k: any) => boolean }) {
   return caller.can('can_reset_operator_pin') || caller.can('can_manage_users')
@@ -33,6 +33,13 @@ export async function POST(req: NextRequest) {
     const email   = newFloorEmail()
     const display = (body.display_name?.trim() || body.name.trim())
 
+    // Auto-assign an operator code (OP001, OP002, …) when none is supplied.
+    let code = body.operator_code?.trim() || ''
+    if (!code) {
+      const { data: existing } = await admin.schema('production').from('operators').select('operator_code')
+      code = nextOperatorCode((existing ?? []).map((r: any) => r.operator_code))
+    }
+
     // 1. Auth user (service role)
     const { data: created, error: authErr } = await admin.auth.admin.createUser({
       email,
@@ -49,7 +56,7 @@ export async function POST(req: NextRequest) {
       auth_email:    email,
       name:          body.name.trim(),
       display_name:  display,
-      operator_code: body.operator_code?.trim() || null,
+      operator_code: code,
       role:          body.role === 'production_supervisor' ? 'production_supervisor' : 'floor_operator',
       section_ids:   body.section_ids,
       pin:           body.pin,
@@ -94,11 +101,18 @@ export async function PATCH(req: NextRequest) {
     const display = (body.display_name?.trim() || body.name.trim())
 
     const { data: existing } = await admin.schema('production').from('operators')
-      .select('user_id, auth_email').eq('id', body.id).maybeSingle()
+      .select('user_id, auth_email, operator_code').eq('id', body.id).maybeSingle()
     if (!existing) return NextResponse.json({ error: 'Operator not found' }, { status: 404 })
 
     let userId    = (existing as any).user_id as string | null
     let authEmail = (existing as any).auth_email as string | null
+
+    // Keep the existing code, take a supplied one, or auto-assign if still missing.
+    let code = body.operator_code?.trim() || (existing as any).operator_code || ''
+    if (!code) {
+      const { data: all } = await admin.schema('production').from('operators').select('operator_code')
+      code = nextOperatorCode((all ?? []).map((r: any) => r.operator_code))
+    }
 
     // Legacy operator (seeded by SQL) with no auth account yet — create one now.
     if (!userId) {
@@ -123,7 +137,7 @@ export async function PATCH(req: NextRequest) {
       auth_email:    authEmail,
       name:          body.name.trim(),
       display_name:  display,
-      operator_code: body.operator_code?.trim() || null,
+      operator_code: code,
       role:          body.role === 'production_supervisor' ? 'production_supervisor' : 'floor_operator',
       section_ids:   body.section_ids,
       pin:           body.pin,

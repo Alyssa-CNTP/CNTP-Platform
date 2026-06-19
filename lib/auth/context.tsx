@@ -211,6 +211,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ action: 'sign_out' }),
     }).catch(() => {})
     await getDb().auth.signOut()
+    // Let a section-bound (dedicated) tablet re-open its section for the next
+    // person who logs in. Device binding itself (localStorage) is left intact.
+    try { sessionStorage.removeItem('cntp_device_routed') } catch { /* ignore */ }
     setRole(null); setDepartment(null); setSectionId(null); setResolved(null)
   }, [])
 

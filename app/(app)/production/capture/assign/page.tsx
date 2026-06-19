@@ -12,6 +12,7 @@ import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
+import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
@@ -76,10 +77,6 @@ function AssignScreen() {
         setLoading(false)
       })
   }, [date, shift])
-
-  function operatorsForSection(sectionId: string) {
-    return operators.filter(op => (op.section_ids ?? []).includes(sectionId))
-  }
 
   function toggleProdOrder(sectionId: string, code: string) {
     setDrafts(d => {
@@ -180,7 +177,7 @@ function AssignScreen() {
           {SECTION_ORDER.map(sectionId => {
             const meta   = sectionMeta(sectionId)
             const draft  = drafts[sectionId] ?? emptyDraft()
-            const ops    = operatorsForSection(sectionId)
+            const ops    = operators
             const saving = savingSection === sectionId
             const saved  = savedSection === sectionId
 
@@ -202,26 +199,16 @@ function AssignScreen() {
                   {/* Operators */}
                   {ops.length === 0 ? (
                     <p className="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      No operators are set up for this section. Add them in the operators table first.
+                      No operators are set up yet. Add them in the operators table first.
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      <p className="text-[11px] text-stone-400">Tap a name to roster them onto this section, then Save.</p>
-                      <div className="flex flex-wrap gap-2">
-                      {ops.map(op => {
-                        const on = draft.operatorIds.includes(op.id)
-                        return (
-                          <button
-                            key={op.id} onClick={() => toggleOperator(sectionId, op.id)}
-                            className={`px-3 py-2 rounded-xl border text-[13px] font-medium transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}
-                          >
-                            {on && <CheckCircle2 size={13} className="inline mr-1.5 -mt-0.5" />}
-                            {op.display_name || op.name}
-                            {op.role === 'production_supervisor' && <span className="opacity-60 ml-1">· Sup</span>}
-                          </button>
-                        )
-                      })}
-                      </div>
+                      <p className="text-[11px] text-stone-400">Search a name to roster them onto this section, then Save.</p>
+                      <OperatorPicker
+                        operators={ops}
+                        selectedIds={draft.operatorIds}
+                        onToggle={opId => toggleOperator(sectionId, opId)}
+                      />
                     </div>
                   )}
 

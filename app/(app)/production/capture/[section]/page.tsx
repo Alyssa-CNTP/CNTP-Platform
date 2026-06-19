@@ -5,7 +5,7 @@ import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
-  ClipboardList, PenLine, Save, Sparkles, Info, Plus,
+  ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -16,12 +16,15 @@ import {
   type SievingData,
 } from '@/components/production/capture/SievingCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
+import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
+import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
+import { ensureCheckRecord, appendCheckEvent } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 
-type Tab = 'production' | 'cleaning' | 'signoff' | 'messages'
+type Tab = 'production' | 'checks' | 'cleaning' | 'signoff' | 'messages'
 const n = (v: string) => parseFloat(v) || 0
 
 // A shift can contain several productions, each its own variant/destination/lot.
@@ -44,6 +47,7 @@ function CaptureScreen() {
   const [loading, setLoading]     = useState(true)
   const [assignment, setAssignment] = useState<ShiftAssignment | null>(null)
   const [opNames, setOpNames]     = useState<string[]>([])
+  const [rosterOps, setRosterOps] = useState<{ id: string; name: string; pin: string }[]>([])
   const [verifiedOp, setVerifiedOp] = useState<Operator | null>(null)
 
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -82,8 +86,9 @@ function CaptureScreen() {
         const ids = (assign as any).operator_ids ?? []
         if (ids.length > 0) {
           const { data: ops } = await db.schema('production').from('operators')
-            .select('id,name,display_name').in('id', ids)
+            .select('id,name,display_name,pin').in('id', ids)
           setOpNames((ops as Operator[] ?? []).map(o => o.display_name || o.name))
+          setRosterOps((ops as Operator[] ?? []).map(o => ({ id: o.id, name: o.display_name || o.name, pin: o.pin ?? '' })))
         }
       }
 
@@ -388,10 +393,28 @@ function CaptureScreen() {
   const stWithinTol = Math.abs(stVariance) <= MASS_BALANCE_TOLERANCE_KG
   const multi = productions.length > 1
 
+  // Sign-off candidates: a person-logged-in tablet has a single verified operator;
+  // a section/machine tablet resolves the signer from the rostered operators by PIN.
+  const candidateOps = verifiedOp
+    ? [{ id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name, pin: verifiedOp.pin ?? '' }]
+    : rosterOps
+
   function updateActiveMeta(key: 'variant' | 'lot' | 'grade', val: string) {
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
   }
-  function addProduction() {
+  async function addProduction() {
+    // Change-over: snapshot the closing mass balance of the production we're
+    // leaving into the append-only checks trail (auto-derived, no typing).
+    try {
+      const prev = sievingTotals(active!.data)
+      const recId = await ensureCheckRecord(sectionId, dateParam, shift, sessionId)
+      if (recId) await appendCheckEvent(recId, {
+        phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance (change-over)', kind: 'massbalance',
+        value_num: prev.totalIn - prev.totalOut, value_text: `${prev.totalIn.toFixed(1)} in / ${prev.totalOut.toFixed(1)} out`,
+        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= MASS_BALANCE_TOLERANCE_KG ? 'ok' : 'flagged',
+        production_idx: activeIdx, source: 'auto',
+      })
+    } catch { /* snapshot is best-effort */ }
     setProductions(ps => [...ps, emptyProduction(assignment?.variant, assignment?.lot_number)])
     setActiveIdx(productions.length)
     setTab('production')
@@ -465,7 +488,7 @@ function CaptureScreen() {
 
       {/* Tabs */}
       <div className="flex border-b border-stone-200 px-4 flex-shrink-0 bg-white">
-        {([['production', 'Production', ClipboardList], ['cleaning', 'Cleaning', Sparkles], ['signoff', 'Sign-off', PenLine], ['messages', 'Messages', MessageSquare]] as const).map(([id, label, Icon]) => (
+        {([['production', 'Production', ClipboardList], ['checks', 'Checks', Gauge], ['cleaning', 'Cleaning', Sparkles], ['signoff', 'Sign-off', PenLine], ['messages', 'Messages', MessageSquare]] as const).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors ${tab === id ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
             <Icon size={14} /> {label}
@@ -503,18 +526,25 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {/* This batch record's variant + destination + lot */}
+              {!locked && (
+                <ChecksStatusStrip sectionId={sectionId} date={dateParam} shift={shift}
+                  running={totalIn > 0} onOpen={() => setTab('checks')} />
+              )}
+
+              {/* This batch record's variant + destination. The batch/lot is captured
+                  per bulk bag (with suggestions) — not duplicated here. */}
               <div className="flex items-center gap-2 flex-wrap">
                 <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
                   className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
                   {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                 </select>
-                <select value={active.grade ?? 'A'} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
-                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
-                  {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-                <input value={active.lot} disabled={locked} onChange={e => updateActiveMeta('lot', e.target.value)} placeholder="Lot / batch"
-                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand w-40" />
+                <div className="flex items-center gap-1.5">
+                  <select value={active.grade ?? 'A'} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
+                    className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
+                    {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <GradeHelp />
+                </div>
               </div>
 
               <SievingCapture
@@ -537,10 +567,19 @@ function CaptureScreen() {
             </>
           )}
 
+          {tab === 'checks' && (
+            <ChecksPanel
+              sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
+              operators={candidateOps}
+              variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
+              massBalance={{ totalIn: st.totalIn, totalOut: st.totalOut, variance: stVariance, withinTol: stWithinTol }}
+            />
+          )}
+
           {tab === 'cleaning' && (
             <CleaningPanel
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
-              operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name, pin: verifiedOp.pin } : null}
+              operators={candidateOps}
             />
           )}
 
@@ -673,6 +712,26 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
       {locked && (
         <div className="flex items-center gap-3 px-5 py-4 bg-ok/8 border border-ok/30 rounded-2xl">
           <Lock size={20} className="text-ok" /><span className="font-semibold text-[14px] text-ok">Session signed off and locked.</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Small help cue mapping grade letters to destinations.
+function GradeHelp() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen(o => !o)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+        className="p-1.5 text-stone-400 hover:text-brand" title="What do A / B / C mean?">
+        <HelpCircle size={16} />
+      </button>
+      {open && (
+        <div className="absolute z-20 right-0 mt-1 w-52 bg-white border border-stone-200 rounded-xl shadow-lg p-3 text-[12px] text-text space-y-1">
+          <div><span className="font-mono font-semibold">A</span> — Export</div>
+          <div><span className="font-mono font-semibold">B</span> — Export Blend</div>
+          <div><span className="font-mono font-semibold">C</span> — Domestic / Local</div>
         </div>
       )}
     </div>

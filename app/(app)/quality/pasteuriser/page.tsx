@@ -26,6 +26,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
+import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
   CheckCircle2, AlertTriangle, X, MessageSquare,
@@ -84,6 +85,7 @@ interface BatchSample {
   id:             string
   time:           string
   date:           string
+  qc_name:        string
   serial_bin:     string
   hourly_temp:    string
   has_sieve:      boolean
@@ -537,7 +539,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   function blank(): any {
     return {
       time: format(now,'HH:mm'), date: format(now,'yyyy-MM-dd'),
-      serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
+      qc_name:'', serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
       gt6:'',gt10:'',gt12:'',gt16:'',gt20:'',gt60:'',dust:'',
       gt6_g:'',gt10_g:'',gt12_g:'',gt16_g:'',gt20_g:'',gt60_g:'',dust_g:'',
       moisture:'', untapped_bd:'', customer_bd:'',
@@ -590,8 +592,9 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   })()
 
   function submit() {
-    if (!row.time.trim())  { alert('Time is required'); return }
-    if (!row.date)         { alert('Date is required'); return }
+    if (!row.time.trim())     { alert('Time is required'); return }
+    if (!row.date)            { alert('Date is required'); return }
+    if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
     onSave(row)
@@ -639,6 +642,11 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
+            <div>
+              <label className={lbl}>QC Controller *</label>
+              <input value={row.qc_name||''} onChange={e => set('qc_name', e.target.value)}
+                placeholder="Name" className={`${inp} w-full`} />
+            </div>
             <div>
               <label className={lbl}>Temp (°C)</label>
               {(() => {
@@ -971,6 +979,24 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     if (showPubHistory) loadPubHistory()
   }, [showPubHistory, loadPubHistory])
 
+  // Export every historical (public-schema) record as one combined workbook
+  function exportPubHistory(records: any[]) {
+    const batches = records.map((r: any) => {
+      let d: any = {}
+      try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+      return {
+        ...d,
+        batch_number: r.batch_number || d.batch_number || d.batch_no || '—',
+        customer: d.customer || r.customer || '',
+        type_grade: d.type_grade || d.product_family || r.product_family || '',
+        final_result: d.final_result || r.final_result || '',
+        production_date: d.production_date || (r.created_at ? String(r.created_at).slice(0, 10) : ''),
+        samples: d.samples || [],
+      }
+    })
+    exportPasteuriserBatches(batches, `Pasteuriser_Historical_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
   useEffect(() => {
     if (activeBatchId !== prevBatchIdRef.current) { setCollapsed(false); prevBatchIdRef.current = activeBatchId }
   }, [activeBatchId])
@@ -996,6 +1022,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   }
 
   function createBatch(form: any) {
+    const dup = batches.find(b => b.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    if (dup) {
+      if (!dup.final_result) {
+        alert(`⚠ Batch "${form.batch_number}" already has an open run.\n\nPlease add a sample to the existing run instead of starting a new one.`)
+      } else {
+        alert(`⚠ Batch "${form.batch_number}" already exists (finalised as ${dup.final_result}).\n\nPlease use a different batch number.`)
+      }
+      return
+    }
     const nb: Batch = { ...form, id: Math.random().toString(36).slice(2), samples:[], created_at: new Date().toISOString() }
     setBatches(p => [nb, ...p])
     setActiveBatchId(nb.id)
@@ -1230,6 +1265,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         <button onClick={reopenBatch} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔓 Re-open</button>
                       </div>
                     )}
+                    <button
+                      onClick={() => exportPasteuriserBatch(activeBatch)}
+                      className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">
+                      ⬇ Export Excel
+                    </button>
                     {isAdmin && (
                       <button
                         onClick={() => { if (!confirm(`Delete entire run "${activeBatch.batch_number}" and all ${activeBatch.samples.length} samples?`)) return; deleteBatchFromDB(activeBatch._db_id); setBatches(p => p.filter(b => b.id !== activeBatchId)); setActiveBatchId(null) }}
@@ -1271,7 +1311,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         <table className="w-full text-left">
                           <thead>
                             <tr>
-                              <th colSpan={6} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
+                              <th colSpan={7} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
                               <th colSpan={8} className="px-3 py-2 bg-info text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sieve Analysis (%)</th>
                               <th colSpan={3} className="px-3 py-2 bg-purple-600 text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Moisture & BD</th>
                               <th colSpan={6} className="px-3 py-2 bg-ok text-white text-[10px] font-semibold text-center">Sensorial</th>
@@ -1283,6 +1323,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                               <th className="px-2 py-2">Time</th>
                               <th className="px-2 py-2 text-info">Date</th>
                               <th className="px-2 py-2">Bin/Bag</th>
+                              <th className="px-2 py-2">QC</th>
                               <th className="px-2 py-2 text-center border-r-2 border-surface-rule">Temp°C</th>
                               {PAST_SIEVE_COLS.map(c => <th key={c.key} className="px-1.5 py-2 text-center whitespace-nowrap">{c.label}</th>)}
                               <th className="px-1.5 py-2 text-center font-bold border-r-2 border-surface-rule">Total</th>
@@ -1315,6 +1356,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     <td className="px-2 py-2.5 font-mono font-bold text-[11px]">{s.time||'—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-info font-semibold whitespace-nowrap">{s.date ? format(new Date(s.date+'T12:00:00'),'dd MMM') : '—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-text-muted">{s.serial_bin||'—'}</td>
+                                    <td className="px-2 py-2.5 text-[10px]">{s.qc_name||'—'}</td>
                                     <td className="px-2 py-2.5 text-center text-[10px] border-r-2 border-surface-rule">{s.hourly_temp||'—'}</td>
                                     {PAST_SIEVE_COLS.map(c => {
                                       const val = s[c.key as keyof BatchSample] as string
@@ -1473,7 +1515,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-surface border-b border-surface-rule">
-                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result'].map(h => (
+                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result','Export'].map(h => (
                         <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1526,6 +1568,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <td className="px-4 py-3">
                               <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold border" style={{ background:rc[0], color:rc[1], borderColor:rc[2] }}>{b.final_result}</span>
                             </td>
+                            <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                              <button onClick={() => exportPasteuriserBatch(b)}
+                                className="px-2 py-1 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[10px] font-semibold whitespace-nowrap">⬇ Excel</button>
+                            </td>
                           </tr>
 
                           {isExpanded && (
@@ -1538,6 +1584,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     {b.final_reason && <span className="text-[10px] text-warn bg-warn/8 px-2 py-0.5 rounded-lg italic">💬 {b.final_reason}</span>}
                                     <button onClick={e => { e.stopPropagation(); setActiveBatchId(b.id); setDashView('active') }}
                                       className="ml-auto px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
+                                    <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
+                                      className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
                                   </div>
                                   {samples.length > 0 && (
                                     <div className="overflow-x-auto rounded-xl border border-surface-rule">
@@ -1597,6 +1645,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <span className="text-[10px] font-mono uppercase tracking-wide text-warn font-bold">📜 Historical — public schema (read-only)</span>
                 {pubLoading && <span className="text-[11px] text-text-muted animate-pulse">Loading…</span>}
                 {!pubLoading && <span className="text-[11px] text-text-muted">{pubBatches.length} records</span>}
+                {!pubLoading && pubBatches.length > 0 && (
+                  <button onClick={() => exportPubHistory(pubBatches)}
+                    className="ml-auto px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export All</button>
+                )}
               </div>
               {!pubLoading && pubBatches.length === 0 && (
                 <div className="text-[12px] text-text-muted">No historical pasteuriser records found in the public schema.</div>
@@ -1607,7 +1659,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                     <table className="w-full text-left">
                       <thead>
                         <tr className="bg-surface border-b border-warn/20">
-                          {['Batch','Date','Customer','Product','Samples','Result'].map(h => (
+                          {['Batch','Date','Customer','Product','Samples','Result','Export'].map(h => (
                             <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-warn/70 whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -1636,6 +1688,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                   ? <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold border" style={{ background:rc[0], color:rc[1], borderColor:rc[2] }}>{result}</span>
                                   : <span className="text-text-faint text-[11px]">—</span>
                                 }
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button onClick={() => exportPasteuriserBatch({ ...d, batch_number: batchNo, customer, type_grade: product, final_result: result })}
+                                  className="px-2 py-1 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[10px] font-semibold">⬇ Excel</button>
                               </td>
                             </tr>
                           )
@@ -1912,7 +1968,6 @@ function SpecificationsTab({ isAdmin }: { isAdmin:boolean }) {
 
 const TABS = [
   { key:'rundash',   label:'🏭 Run Dashboard'  },
-  { key:'sensorial', label:'🍵 Sensorial Table' },
   { key:'specs',     label:'📋 Specifications' },
 ]
 
@@ -2161,7 +2216,6 @@ export default function PasteuriserPage() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-5 max-w-[1400px] w-full mx-auto">
         {tab === 'rundash'   && <RunDashboard isAdmin={canWriteQuality} />}
-        {tab === 'sensorial' && <PastSensorialTable canWrite={canWriteQuality} />}
         {tab === 'specs'     && <SpecificationsTab isAdmin={canWriteQuality} />}
       </div>
     </div>

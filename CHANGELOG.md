@@ -20,6 +20,209 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (Export Excel button in history rows + remove Sensorial tab)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+
+**Changes:**
+- Added an "⬇ Excel" export button directly in each completed-batch row of the History & Performance table, so the export is always visible without needing to expand the row. The button stops row-click propagation so it doesn't accidentally toggle expansion.
+- Removed the "🍵 Sensorial Table" tab from the top tab bar — the sensorial data is still captured per-sample inside the Run Dashboard but the separate stand-alone table tab has been removed as it was not in use.
+
+---
+
+## 2026-06-19 — Gustav (export pasteuriser historical runs to Excel)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `lib/utils/exportExcel.ts`
+
+**Changes:**
+- The pasteuriser "📜 Historical — public schema" archive table previously had no export option. Added a per-row "⬇ Excel" button (exports a single historical batch) and an "⬇ Export All" button that produces one combined workbook for every historical record.
+- New `exportPasteuriserBatches()` helper builds the combined workbook with an "All Raw Samples" sheet (every sample across all batches) plus a per-batch "Batch Summary" sheet for pivots.
+- Note: Granule Line and Sieving Tower already merge legacy/historical runs into their main run lists, so those historical runs were already exportable via the existing buttons.
+
+---
+
+## 2026-06-19 — Gustav (Excel export + duplicate batch prevention across QC workcenters)
+
+**Files changed:**
+- `lib/utils/exportExcel.ts` (new)
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- New shared export utility `lib/utils/exportExcel.ts` generates multi-sheet `.xlsx` workbooks using the existing `xlsx` library.
+- **Pasteuriser**: "⬇ Export Excel" button on each active batch header and each expanded history row. Exports 3 sheets — Raw Data (all samples with every measurement), Daily Averages (grouped by date), and Batch Summary (metadata + overall averages).
+- **Granule Line**: "⬇ Excel" button on active run cards and history rows. Same 3-sheet structure — Raw Data, Daily Averages, Run Summary.
+- **Sieving Tower**: "⬇ Export CSV" replaced with "⬇ Export Excel" — now exports Raw Data, Daily Averages, and a By Grade/Variant summary sheet.
+- **Duplicate batch prevention (Pasteuriser)**: `createBatch` now checks for an existing run with the same batch number. If one is open, QC is told to add a sample to the existing run. If it's already finalised, they're told to use a different batch number.
+- **Duplicate batch prevention (Granule Line)**: Same logic in `handleCreateRun` — blocks creation and redirects to the open run if one exists.
+
+---
+
+## 2026-06-19 — Alyssa (operators admin: auto codes, auto display name, simpler form)
+
+**Files changed:**
+- `lib/production/operator-auth.ts`
+- `app/api/production/operators/route.ts`
+- `app/(app)/production/operators/page.tsx`
+- `supabase/migrations/20260619_002_operator_codes_displaynames.sql` (new)
+
+**Changes:**
+- **Operator codes are now assigned automatically** (sequential `OP001`, `OP002`, …) on create and when a legacy operator without one is edited; the manual code field is gone. The migration backfills codes for existing operators (continuing past the highest existing number).
+- **Display name defaults to the full name** — the display-name field is removed; the migration backfills `display_name = name` where blank.
+- **Simpler operators form** — just Full name, PIN, Allowed sections, Active. The role toggle is removed: this page is for **floor operators** only. A note points supervisors to **Users & Roles** (Production → Production Supervisor), where they sign up with their work email and get a real account/role.
+- **List polish:** each row shows its code chip and a **"No PIN"** flag for operators that still need a PIN before they can sign in (e.g. the imported roster). Account + `floor_operator` app-role provisioning is unchanged (already handled by the operators API).
+
+---
+
+## 2026-06-19 — Alyssa (tablet device binding for section/supervisor testing)
+
+**Files changed:**
+- `lib/production/device.ts` (new)
+- `app/(app)/production/device/page.tsx` (new)
+- `app/(app)/production/capture/page.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/ChecksPanel.tsx`
+- `components/production/capture/CleaningPanel.tsx`
+
+**Changes:**
+- **Per-tablet device binding** (localStorage, no backend) — a "This tablet" setup screen (`/production/device`) binds a device to a **section (machine)** or to the **Supervisor**, not to a person. A section-bound tablet opens straight to that section's capture on launch (once per launch, so the back button still works); a supervisor-bound tablet lands on the capture/assign home. A "This tablet: …" chip in the capture header shows the binding and links to change/reset it.
+- **Sign-off identifies the operator by PIN:** because a tablet is bound to a machine (not a person), the Checks and Cleaning sign-offs now resolve the signer from the entered PIN against the section's rostered operators (PIN still required — audit intact). A person-logged-in tablet still attributes live events to that single operator.
+
+---
+
+## 2026-06-19 — Alyssa (smart cleaning: frequency-aware, photo-verify, AI summary)
+
+**Files changed:**
+- `supabase/migrations/20260619_001_cleaning_smart.sql` (new)
+- `app/api/production/verify-clean/route.ts` (new)
+- `app/api/production/check-summary/route.ts`
+- `lib/production/cleaning-config.ts`
+- `components/production/capture/CleaningPanel.tsx`
+
+**Changes:**
+- **Frequency-aware surfacing:** weekly/monthly cleaning tasks now appear in the actionable list **only when due** (tracked in new `production.cleaning_task_state`); not-due tasks show a muted "next due …" line so nothing is hidden silently. Daily tasks always show. Cuts clutter and the risk of confirming a task that wasn't actually performed.
+- **Photo-verify evidence (Gemini vision):** each cleaning area has a "Verify" camera action — the operator snaps the cleaned equipment and `verify-clean` returns a clean/not-clean verdict + note, recorded in the append-only `cleaning_logs` trail (`photo` action). The image itself is not stored.
+- **AI cleaning summary** at sign-off: a concise hygiene summary is generated (reuses `check-summary` with `kind: 'cleaning'`) and stored in `cleaning_records.ai_summary` for supervisor review.
+- All additive — the existing exception-based flow, PIN sign-off, and supervisor verification are unchanged.
+
+---
+
+## 2026-06-18 — Alyssa (smart checks engine: machine verification, AI, quality + maintenance links)
+
+**Files changed:**
+- `supabase/migrations/20260618_002_checks_engine.sql` (new)
+- `lib/production/checks-config.ts` (new)
+- `lib/production/check-specs.ts` (new)
+- `lib/production/checks-db.ts` (new)
+- `components/production/capture/ChecksPanel.tsx` (new)
+- `components/production/capture/ChecksStatusStrip.tsx` (new)
+- `app/api/production/read-value/route.ts` (new)
+- `app/api/production/check-summary/route.ts` (new)
+- `app/(app)/production/capture/[section]/page.tsx`
+
+**Changes:**
+- New **Checks** tab on the capture screen — a config-driven machine-verification engine (sieving authored first as the template; other sections inherit by config). Phases: Start-up / Running / Shut-down. Confirm-style checks are exception-based (assumed OK, flag only what isn't); identity + timestamps recorded automatically.
+- **Smart "due now" strip** on the Production tab pulls the operator to the right check at the right time (start-up pending, hourly VSD reading due, shut-down near shift end) and deep-links into the Checks tab. Afternoon-only checks (rotex clean, shut-down mass balance) auto show/hide for the Afternoon/Night block.
+- **Photo-read readings (Gemini vision):** `read-value` endpoint extracts a number from a photo of the VSD/scale/gauge so operators don't mistype; keypad entry remains. Out-of-range values soft-flag against the spec.
+- **One source of truth for ranges:** machine params (VSD 10–20, scale tolerance, screen speed/angle) from new `production.check_specs`; QC sieve targets pulled live from `qms.customer_specs` as guidance on the sieving-configuration check.
+- **Failure → maintenance:** a failed/out-of-tolerance check offers one-tap "Raise to maintenance" (operator picks breakdown vs planned) via `POST /api/maintenance/job-cards`; the job links back into the check event for traceability.
+- **Auto mass balance:** closing mass balance is snapshotted automatically at each grade/variant change-over and at shut-down — no typing.
+- **PIN sign-off + AI summary:** operator signs the checks (mirrors cleaning); a concise Gemini shift-audit summary is generated and stored on the record for supervisor review. Everything writes to the append-only `production.check_events` audit trail.
+- **Grade help:** info popover next to the destination dropdown — A = Export, B = Export Blend, C = Domestic/Local.
+
+---
+
+## 2026-06-18 — Alyssa (operators admin: search, filters, cleaner section labels)
+
+**Files changed:**
+- `app/(app)/production/operators/page.tsx`
+
+**Changes:**
+- After importing the full 77-name roster the operators list was an unsearchable wall of ~85 rows. Added a **search box** (name / display name / operator code), an **Active only** toggle (on by default, so deactivated test rows hide), and a matched/total count. Operators rostered to every section now show **"All sections"** instead of six section codes, removing the per-row chip noise.
+
+---
+
+## 2026-06-18 — Alyssa (production capture: kiosk, bulk-bag, secure, roster dropdown)
+
+**Files changed:**
+- `public/manifest.json`
+- `components/production/capture/SievingCapture.tsx`
+- `components/production/capture/OutputPicker.tsx`
+- `components/production/capture/OperatorPicker.tsx` (new)
+- `app/(app)/production/capture/[section]/page.tsx`
+- `app/(app)/production/capture/assign/page.tsx`
+- `supabase/migrations/20260618_001_operators_seed_employees.sql` (new)
+
+**Changes:**
+- **PWA / kiosk:** manifest now installs the app fullscreen (`display: fullscreen`, landscape) starting at `/production/capture`, with the CNTP logo as the app icon — so an Android kiosk launcher (e.g. Fully Kiosk Browser) or Screen Pinning can lock the tablet to the app. (Tablet lock itself is an OS-level setting, documented separately.)
+- **Bulk bag:** renamed "Farm bag" → "Bulk bag" in the Sieving capture UI; removed the Gross (kg) and Delivery date fields (and the now-unused nett-vs-gross overfill check). Remaining fields: Bag no., Lot/serial (with suggestions), Nett (kg), Local/export. Stored `product_type` value `'500kg Farm Bag'` is unchanged for data/Acumatica consistency.
+- **Batch consistency:** removed the duplicate top-of-form "Lot / batch" input on the capture screen. The batch is now captured per bulk bag (type-or-pick suggestion box); the output picker pre-suggests the most recent bulk-bag lot.
+- **Secure a bag:** each bulk bag and each output bag can be "Secured" — it collapses to a read-only summary with a lock badge; "Edit"/"Unlock" reopens it. Persisted with the draft so it survives reload. Layered under the existing whole-session sign-off lock.
+- **Bagging picker:** the default list now shows only the curated sieving families — Fine Leaf, Coarse Leaf, RB Blocks, Rolsiev Sticks, Indent Sticks, Brown Dust, Powder Dust — sourced from the canonical `getAcumaticaCode` map (via `suggestOutputs`), conventional-first for the run's variant/destination. Previously it pulled every item in the Leaf/Dust/Sticks product groups (white/SG/SF/indent dust, etc.), which was overwhelming. Full master search stays available as the secondary path. Picking an item prefills the standard full-bag weight — Fine/Coarse Leaf 300 kg, Indent Sticks 252 kg (editable for end-of-shift half bags). Acumatica codes (`…-C`) are unchanged.
+- **Supervisor roster:** the assign screen now uses a searchable name dropdown (new `OperatorPicker`) listing all active operators, instead of section-filtered chips. Migration imports the full 77-name employee roster into `production.operators` and makes `pin` nullable (PINs assigned later in the operators admin; sign-on still requires a PIN).
+
+---
+
+## 2026-06-18 — Gustav (sieving: runs table sorted newest-first)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Runs table now displays in reverse chronological order (newest entry at the top) across all product tabs (Fine Leaf, Coarse Leaf, Indent Stick, Block). Previously the order was inconsistent due to merging QMS and legacy data sources.
+
+---
+
+## 2026-06-18 — Gustav (sieving: remove serial number format validation)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Removed the `GS-####` / `VS-####` / `MAT-####` / `Lab samples` format check from the serial number field across all product tabs. Serial numbers vary per run type; only blank-check remains for in-process runs.
+
+---
+
+## 2026-06-18 — Gustav (sieving: fix Coarse Leaf serial number validation)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Coarse Leaf serial numbers use a date-based format (e.g. `18.06.01`), not the raw-material lot format (`GS-####` etc.). The format validation now only applies to non-Coarse-Leaf tabs, so QC can save Coarse Leaf runs without a false error on the serial number field.
+
+---
+
+## 2026-06-18 — Gustav (pasteuriser: per-sample QC Controller name)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+
+**Changes:**
+- QC Controller name is now required per individual sample (was only at the batch level). `AddSampleModal` includes a required "QC Controller" input field, and saving is blocked if it is empty.
+- `BatchSample` interface extended with `qc_name: string`.
+- Samples table gains a new **QC** column between Bin/Bag and Temp°C so each row shows which controller recorded that specific sample.
+
+---
+
+## 2026-06-18 — Gustav (sieving tower: batch format, leaf shade pull-through, required fields, collapsible table)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Serial number validation: in-process runs now enforce format `GS-####`, `VS-####`, `MAT-####`, or `Lab samples`. Error shown on save if format doesn't match.
+- Leaf shade auto-fill: page loads from `qms.leaf_shade_predictions` keyed by lot number — uses `actual_leaf_shade` if set, falls back to `leaf_shade` prediction. Auto-fills when lot number is entered.
+- Bulk density is now **required** for all run types. Red border + error message shown if missing.
+- Leaf shade is now **required** for all run types on Coarse Leaf / Fine Leaf (not just Final QC).
+- Runs table below the chart has a **collapse/expand toggle** showing the record count.
+
+---
+
 ## 2026-06-18 — Gustav (maintenance: voice-note → smart job card via Gemini, no audio stored)
 
 **Files changed:**

@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { exportSievingRuns } from '@/lib/utils/exportExcel'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -807,6 +808,8 @@ export default function SievingPage() {
   const [highlightedRunId, setHighlightedRunId] = useState<any>(null)
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
   const [rLookup,        setRLookup]        = useState<Record<string,string>>({})
+  const [leafShadeLookup,setLeafShadeLookup]= useState<Record<string,number>>({})
+  const [tableCollapsed, setTableCollapsed] = useState(false)
 
   // Load PA levels from raw material records for lot auto-fill
   useEffect(() => {
@@ -843,6 +846,22 @@ export default function SievingPage() {
           if (lot && grade) map[lot] = grade
         })
         setRLookup(map)
+      })
+  }, [db])
+
+  // Load leaf shade from raw material leaf_shade_predictions table
+  useEffect(() => {
+    db.schema('qms').from('leaf_shade_predictions')
+      .select('lot_number, leaf_shade, actual_leaf_shade')
+      .then(({ data }: { data: any[] | null }) => {
+        if (!data) return
+        const map: Record<string, number> = {}
+        data.forEach((r: any) => {
+          const lot = (r.lot_number || '').trim().toUpperCase().replace(/\s*-\s*/g, '-')
+          const shade = r.actual_leaf_shade ?? r.leaf_shade
+          if (lot && shade != null) map[lot] = shade
+        })
+        setLeafShadeLookup(map)
       })
   }, [db])
 
@@ -903,7 +922,11 @@ export default function SievingPage() {
   const specDef     = SIEVING_SPECS_DB[activeProduct]
   const activeSpecs = customSpecs[activeProduct] || specDef.variants
   const productRuns = runs[activeProduct] || []
-  const filteredRuns = filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter)
+  const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
+    .slice().sort((a:any,b:any) => {
+      const da = (a.date||'')+(a.time||''), db2 = (b.date||'')+(b.time||'')
+      return da < db2 ? 1 : da > db2 ? -1 : 0
+    })
   const activeMesh  = sdGetMesh(activeProduct, form.variant)
   const specKey     = `${form.grade}|${form.variant}`
   const activeSpec  = activeSpecs[specKey] || {}
@@ -926,8 +949,15 @@ export default function SievingPage() {
       if (latest.leafShade)    fields.leafShade = latest.leafShade
     }
     if (paFromLookup) fields.paLevel = paFromLookup
-    const extras = [paFromLookup ? `PA: ${paFromLookup}` : '', rFromLookup ? `R: ${rFromLookup}` : ''].filter(Boolean).join(' · ')
-    const runMsg = matches.length ? `✓ Auto-filled from previous run — ${fields.grade} · ${fields.variant}` : ''
+    const normKey = key.replace(/\s*-\s*/g, '-')
+    const leafShadeFromRaw = leafShadeLookup[normKey] ?? leafShadeLookup[key]
+    if (leafShadeFromRaw != null && !fields.leafShade) fields.leafShade = String(leafShadeFromRaw)
+    const extras = [
+      paFromLookup ? `PA: ${paFromLookup}` : '',
+      rFromLookup  ? `R: ${rFromLookup}`  : '',
+      leafShadeFromRaw != null && !matches.length ? `Shade: ${leafShadeFromRaw}` : '',
+    ].filter(Boolean).join(' · ')
+    const runMsg = matches.length ? `✓ Auto-filled from previous run — ${fields.grade} · ${fields.variant}${fields.leafShade ? ` · Shade ${fields.leafShade}` : ''}` : ''
     const rawMsg = extras ? `📋 Raw material: ${extras}` : ''
     setLotMsg([runMsg, rawMsg].filter(Boolean).join('  ·  '))
     return fields
@@ -986,8 +1016,10 @@ export default function SievingPage() {
     if (!f.variant)           errs.variant='Variant is required'
     if (!f.runType)           errs.runType='Run type is required'
     if (f.runType==='in-process') {
-      if (!f.serialNumber.trim()) errs.serialNumber='Serial number is required'
-      if (!f.time.trim())         errs.time='Time is required'
+      if (!f.serialNumber.trim()) {
+        errs.serialNumber='Serial number is required'
+      }
+      if (!f.time.trim()) errs.time='Time is required'
     }
     if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
@@ -997,7 +1029,8 @@ export default function SievingPage() {
       const hasMesh = activeMesh.some(m=>f[m]!==''&&f[m]!==undefined&&f[m]!==null)
       if (!hasMesh) errs._mesh='Please enter at least one sieve result'
     }
-    if (f.runType==='final'&&specDef.hasLeafShade&&!f.leafShade) errs.leafShade='Leaf shade is required for Final QC'
+    if (!specDef.noBulkDensity&&(f.bulkDensity===''||f.bulkDensity==null)) errs.bulkDensity='Bulk density is required'
+    if (specDef.hasLeafShade&&!f.leafShade) errs.leafShade='Leaf shade is required (1–11)'
     if (f.leafShade) { const ls=parseInt(f.leafShade,10); if (isNaN(ls)||ls<1||ls>11) errs.leafShade='Leaf shade must be 1–11' }
     return errs
   }
@@ -1066,13 +1099,10 @@ export default function SievingPage() {
     }
   }
 
-  function exportCSV() {
-    if (!productRuns.length) { alert('No runs to export'); return }
-    const mesh = sdGetMesh(activeProduct,'CON')
-    const hdrs = ['Date','Lot Number','Serial No','Grade','Variant','Run Type','QC Name','Time','Bulk Density','Needle Count','Leaf Shade','PA Level',...mesh.map(m=>m.replace(' (%)','%')),'Pass/Fail','Violations','Comment']
-    const rows = productRuns.map((r:any)=>[r.date,r.lotNumber,r.serialNumber||'',r.grade,r.variant,r.runType,r.qcName||'',r.time||'',r.bulkDensity||'',r.needleCount||'',r.leafShade||'',r.paLevel||'',...mesh.map(m=>r[m]||''),r.passStatus||'',(r.violations||[]).join('; '),r.comment||''])
-    const csv = [hdrs,...rows].map(row=>row.map((v:any)=>(typeof v==='string'&&(v.includes(',')||v.includes('"')))?`"${v.replace(/"/g,'""')}"`:v).join(',')).join('\n')
-    const a = document.createElement('a'); a.href='data:text/csv;charset=utf-8,%EF%BB%BF'+encodeURIComponent(csv); a.download=`sieving_${activeProduct.replace(/ /g,'_')}_${new Date().toISOString().slice(0,10)}.csv`; a.click()
+  function doExcelExport() {
+    if (!filteredRuns.length) { alert('No runs to export'); return }
+    const mesh = [...new Set([...specDef.meshForORG, ...specDef.meshForCON])]
+    exportSievingRuns(activeProduct, filteredRuns, mesh)
   }
 
   const setF = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
@@ -1164,7 +1194,7 @@ export default function SievingPage() {
               background:filter===k?'#1f4e79':'#fff',color:filter===k?'#fff':'#374151',borderColor:filter===k?'#1f4e79':'#e5e7eb'}}>{l}</button>
         ))}
         <span style={{marginLeft:'auto',fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
-        <button onClick={exportCSV} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export CSV</button>
+        <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
         <button onClick={()=>setShowChart(s=>!s)} style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showChart?'#eff6ff':'#fff',color:showChart?'#1f4e79':'#374151'}}>
           📈 {showChart?'Hide':'Show'} Chart
         </button>
@@ -1256,8 +1286,9 @@ export default function SievingPage() {
               <ErrMsg field="variant"/>
             </div>
             {!specDef.noBulkDensity&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g)</label>
-              <input type="number" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,padding:'9px 10px',fontSize:13}}/>
+              <label style={{fontSize:10,fontWeight:700,color:errors.bulkDensity?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g) *</label>
+              <input type="number" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,borderColor:errors.bulkDensity?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <ErrMsg field="bulkDensity"/>
             </div>}
             <div>
               <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
@@ -1369,7 +1400,13 @@ export default function SievingPage() {
 
       {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New Run"</div>}
       {!loading&&filteredRuns.length>0&&(
-        <div style={{overflowX:'auto',borderRadius:10,border:'1px solid #e5e7eb',background:'#fff'}}>
+        <div style={{borderRadius:10,border:'1px solid #e5e7eb',background:'#fff',overflow:'hidden'}}>
+          <button onClick={()=>setTableCollapsed(c=>!c)}
+            style={{width:'100%',padding:'10px 16px',background:'#1f4e79',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',color:'#fff',fontFamily:'inherit'}}>
+            <span style={{fontSize:12,fontWeight:700}}>Runs — {filteredRuns.length} record{filteredRuns.length!==1?'s':''}</span>
+            <span style={{fontSize:10,opacity:.7,transform:tableCollapsed?'rotate(0deg)':'rotate(180deg)',transition:'transform .2s',display:'inline-block'}}>▲</span>
+          </button>
+          {!tableCollapsed&&<div style={{overflowX:'auto'}}>
           <table style={{borderCollapse:'collapse',fontSize:11,width:'100%'}}>
             <thead>
               <tr style={{background:'#1f4e79',color:'#fff',position:'sticky',top:0,zIndex:2}}>
@@ -1477,6 +1514,7 @@ export default function SievingPage() {
               })}
             </tbody>
           </table>
+          </div>}
         </div>
       )}
     </div>

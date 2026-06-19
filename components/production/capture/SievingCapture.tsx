@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Printer, Package, PackageCheck, Scale, AlertTriangle, Sparkles } from 'lucide-react'
+import { Plus, Trash2, Printer, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort } from '@/lib/production/capture-config'
@@ -14,11 +14,11 @@ import type { ShiftAssignment } from '@/lib/supabase/database.types'
 export interface SpillageRow { id: string; kg: string }
 export interface DebagRow {
   id: string; bag_no: string; lot: string; gross: string; nett: string
-  delivery_date: string; local_export: string
+  delivery_date: string; local_export: string; secured?: boolean
 }
 export interface OutBag {
   id: string; serial: string; productType: string; code: string | null
-  weight: string; batch: string; destination: string; printed: boolean
+  weight: string; batch: string; destination: string; printed: boolean; secured?: boolean
 }
 export interface SievingData {
   spillage: SpillageRow[]
@@ -84,6 +84,10 @@ export function SievingCapture({
   const updateDebag = (id: string, k: keyof DebagRow, v: string) =>
     patch({ debag: value.debag.map(r => r.id === id ? { ...r, [k]: v } : r) })
   const removeDebag = (id: string) => patch({ debag: value.debag.filter(r => r.id !== id) })
+  const setDebagSecured = (id: string, val: boolean) =>
+    patch({ debag: value.debag.map(r => r.id === id ? { ...r, secured: val } : r) })
+  const setOutputSecured = (id: string, val: boolean) =>
+    patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, secured: val } : b) })
   const updateSpillage = (id: string, v: string) =>
     patch({ spillage: value.spillage.map(r => r.id === id ? { ...r, kg: v } : r) })
 
@@ -167,11 +171,29 @@ export function SievingCapture({
 
           <div className="space-y-3">
             {value.debag.map((r, i) => {
-              const overfill = n(r.nett) > 0 && n(r.gross) > 0 && n(r.nett) > n(r.gross)
+              // Secured bulk bags collapse to a read-only summary so the operator
+              // can't accidentally change a finished bag — Edit re-opens it.
+              if (r.secured) {
+                return (
+                  <div key={r.id} className="flex items-center gap-3 bg-ok/5 border border-ok/30 rounded-2xl px-4 py-3">
+                    <Lock size={15} className="text-ok shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-medium text-text">Bulk bag {i + 1} · {n(r.nett).toFixed(1)} kg</div>
+                      <div className="font-mono text-[11px] text-text-muted truncate">{[r.bag_no, r.lot, r.local_export].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    {!locked && (
+                      <button onClick={() => setDebagSecured(r.id, false)}
+                        className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg">
+                        <Pencil size={13} /> Edit
+                      </button>
+                    )}
+                  </div>
+                )
+              }
               return (
-                <div key={r.id} className={`bg-white border rounded-2xl p-4 space-y-3 ${overfill ? 'border-err/40' : 'border-stone-200'}`}>
+                <div key={r.id} className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-[13px] text-text">Farm bag {i + 1}</span>
+                    <span className="font-semibold text-[13px] text-text">Bulk bag {i + 1}</span>
                     {!locked && <button onClick={() => removeDebag(r.id)} className="text-stone-300 hover:text-err p-1"><Trash2 size={15} /></button>}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -179,28 +201,25 @@ export function SievingCapture({
                       <input value={r.bag_no} disabled={locked} onChange={e => updateDebag(r.id, 'bag_no', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
                       <BatchInput value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} placeholder="Type or pick" /></div>
-                    <div className="space-y-1"><label className={LBL}>Gross (kg)</label>
-                      <input type="number" inputMode="decimal" value={r.gross} disabled={locked} onChange={e => updateDebag(r.id, 'gross', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
-                      <input type="number" inputMode="decimal" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP + (overfill ? ' border-err' : '')} /></div>
-                    <div className="space-y-1"><label className={LBL}>Delivery date</label>
-                      <input type="date" value={r.delivery_date} disabled={locked} onChange={e => updateDebag(r.id, 'delivery_date', e.target.value)} className={INP} /></div>
+                      <input type="number" inputMode="decimal" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
                       <select value={r.local_export} disabled={locked} onChange={e => updateDebag(r.id, 'local_export', e.target.value)} className={INP + ' cursor-pointer'}>
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
                       </select></div>
                   </div>
-                  {overfill && (
-                    <div className="flex items-center gap-2 text-[12px] text-err">
-                      <AlertTriangle size={14} /> Nett can't exceed gross — check the scale reading
-                    </div>
+                  {!locked && (
+                    <button onClick={() => setDebagSecured(r.id, true)} disabled={n(r.nett) <= 0}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
+                      <Check size={15} /> Secure bag
+                    </button>
                   )}
                 </div>
               )
             })}
             {!locked && (
               <button onClick={addDebag} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
-                <Plus size={16} /> Add farm bag
+                <Plus size={16} /> Add bulk bag
               </button>
             )}
           </div>
@@ -217,14 +236,20 @@ export function SievingCapture({
           {value.outputs.length > 0 && (
             <div className="bg-white border border-stone-200 rounded-2xl divide-y divide-stone-100">
               {value.outputs.map(b => (
-                <div key={b.id} className="flex items-center gap-3 px-4 py-3">
+                <div key={b.id} className={`flex items-center gap-3 px-4 py-3 ${b.secured ? 'bg-ok/5' : ''}`}>
+                  {b.secured && <Lock size={14} className="text-ok shrink-0" />}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg</div>
                     <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
                   </div>
-                  <span className="text-[11px] text-ok flex items-center gap-1"><Printer size={13} /> printed</span>
-                  <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5"><Printer size={15} /></button>
-                  {!locked && <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>}
+                  <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
+                  {!locked && (b.secured
+                    ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
+                    : <>
+                        <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
+                        <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
+                      </>
+                  )}
                 </div>
               ))}
             </div>
@@ -237,7 +262,8 @@ export function SievingCapture({
           )}
 
           {!locked && (picking
-            ? <OutputPicker sectionId="sieving" variantWord={variantWord} gradeLetter={gradeLetter} defaultBatch={assignment.lot_number ?? ''}
+            ? <OutputPicker sectionId="sieving" variantWord={variantWord} gradeLetter={gradeLetter}
+                defaultBatch={[...value.debag].reverse().find(r => r.lot)?.lot ?? assignment.lot_number ?? ''}
                 batchHints={[assignment.lot_number ?? '', ...value.outputs.map(b => b.batch), ...value.debag.map(r => r.lot)].filter(Boolean) as string[]}
                 onAdd={addOutput} onClose={() => setPicking(false)} />
             : <button onClick={() => setPicking(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
