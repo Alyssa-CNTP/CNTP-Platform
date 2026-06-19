@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Alyssa (smart cleaning: frequency-aware, photo-verify, AI summary)
+
+**Files changed:**
+- `supabase/migrations/20260619_001_cleaning_smart.sql` (new)
+- `app/api/production/verify-clean/route.ts` (new)
+- `app/api/production/check-summary/route.ts`
+- `lib/production/cleaning-config.ts`
+- `components/production/capture/CleaningPanel.tsx`
+
+**Changes:**
+- **Frequency-aware surfacing:** weekly/monthly cleaning tasks now appear in the actionable list **only when due** (tracked in new `production.cleaning_task_state`); not-due tasks show a muted "next due …" line so nothing is hidden silently. Daily tasks always show. Cuts clutter and the risk of confirming a task that wasn't actually performed.
+- **Photo-verify evidence (Gemini vision):** each cleaning area has a "Verify" camera action — the operator snaps the cleaned equipment and `verify-clean` returns a clean/not-clean verdict + note, recorded in the append-only `cleaning_logs` trail (`photo` action). The image itself is not stored.
+- **AI cleaning summary** at sign-off: a concise hygiene summary is generated (reuses `check-summary` with `kind: 'cleaning'`) and stored in `cleaning_records.ai_summary` for supervisor review.
+- All additive — the existing exception-based flow, PIN sign-off, and supervisor verification are unchanged.
+
+---
+
 ## 2026-06-18 — Alyssa (smart checks engine: machine verification, AI, quality + maintenance links)
 
 **Files changed:**
