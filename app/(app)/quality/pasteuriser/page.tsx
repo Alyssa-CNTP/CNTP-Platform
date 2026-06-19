@@ -1515,7 +1515,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-surface border-b border-surface-rule">
-                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result'].map(h => (
+                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result','Export'].map(h => (
                         <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1567,6 +1567,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <td className="px-4 py-3 font-bold text-[11px]" style={{ color:sieveFails>0?'var(--color-err)':'var(--color-ok)' }}>{sieveFails>0?`⚠ ${sieveFails}`:'✓ 0'}</td>
                             <td className="px-4 py-3">
                               <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold border" style={{ background:rc[0], color:rc[1], borderColor:rc[2] }}>{b.final_result}</span>
+                            </td>
+                            <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                              <button onClick={() => exportPasteuriserBatch(b)}
+                                className="px-2 py-1 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[10px] font-semibold whitespace-nowrap">⬇ Excel</button>
                             </td>
                           </tr>
 
@@ -1964,7 +1968,6 @@ function SpecificationsTab({ isAdmin }: { isAdmin:boolean }) {
 
 const TABS = [
   { key:'rundash',   label:'🏭 Run Dashboard'  },
-  { key:'sensorial', label:'🍵 Sensorial Table' },
   { key:'specs',     label:'📋 Specifications' },
 ]
 
@@ -2213,7 +2216,6 @@ export default function PasteuriserPage() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-5 max-w-[1400px] w-full mx-auto">
         {tab === 'rundash'   && <RunDashboard isAdmin={canWriteQuality} />}
-        {tab === 'sensorial' && <PastSensorialTable canWrite={canWriteQuality} />}
         {tab === 'specs'     && <SpecificationsTab isAdmin={canWriteQuality} />}
       </div>
     </div>
