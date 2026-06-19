@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { ClipboardList, CalendarCheck, Boxes, ArrowRight } from 'lucide-react'
 import { useMaintenanceContext } from './layout'
 import MaintenanceAnalytics from '@/components/maintenance/MaintenanceDashboard'
+import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 
 export default function MaintenanceDashboard() {
   const { loading, error, data, derived } = useMaintenanceContext()
@@ -51,6 +52,9 @@ export default function MaintenanceDashboard() {
           </Link>
         ))}
       </div>
+
+      {/* Energy monitoring — solar vs grid kWh today from Home Assistant */}
+      <EnergyWidget />
 
       {/* Focused analytics + AI analyst */}
       <MaintenanceAnalytics />

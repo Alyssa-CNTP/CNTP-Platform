@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (maintenance: "Energy Today" widget — Home Assistant solar/grid/battery)
+
+**Files changed:**
+- app/api/maintenance/energy/route.ts (new)
+- components/maintenance/EnergyWidget.tsx (new)
+- app/(app)/maintenance/page.tsx
+
+**Changes:**
+- New **Energy Today** card on the Maintenance dashboard (rendered above the analytics). Shows today's solar / grid / generator / battery kWh pulled from Home Assistant, plus hourly Electricity Usage and Solar Production charts (Recharts) and a Sources breakdown table
+- New `/api/maintenance/energy` route fetches today's daily-total sensors and best-effort hourly power history from HA, bucketing power into per-hour kWh (SAST day window). Auth-gated via `getCallerPermissions`
+- Reads the `HOMEASSISTANT_TOKEN` env var server-side; entity IDs default to the CNTP inverter config and are overridable via `HA_ENTITY_*` env vars. Without the token the widget shows a "Home Assistant not connected" setup prompt
+- Note: the `HOMEASSISTANT_TOKEN` env var must be set on the VPS for live data
+
+---
+
 ## 2026-06-18 — Gustav (maintenance: voice-note → smart job card via Gemini, no audio stored)
 
 **Files changed:**
