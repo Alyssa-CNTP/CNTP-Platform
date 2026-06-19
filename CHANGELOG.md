@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-19 — Gustav (maintenance: scheduled daily energy capture)
+
+**Files changed:**
+- lib/maintenance/energy.ts (new)
+- app/api/maintenance/energy/capture/route.ts (new)
+- .github/workflows/energy-capture.yml (new)
+- app/api/maintenance/energy/route.ts
+
+**Changes:**
+- New shared `lib/maintenance/energy.ts` — `getDailyEnergyTotals()` (fetch the day's HA totals) + `upsertEnergyDaily()` (one definition of the `energy_daily` row shape) + `sastDayString()`. The live energy route now upserts via this helper
+- New **`/api/maintenance/energy/capture`** route — unattended snapshot capture. Authorised by `Authorization: Bearer <CRON_SECRET>` (no user session) and writes with the service-role client. Accepts GET or POST
+- New scheduled workflow **`.github/workflows/energy-capture.yml`** — pings the capture endpoint daily at 23:50 SAST (also `workflow_dispatch`), so usage is recorded even on days nobody opens the dashboard
+- Setup required: set a `CRON_SECRET` (same value as `CRON_SECRET` env on the server + the `CRON_SECRET` GitHub Actions secret); optionally set the `ENERGY_CAPTURE_URL` Actions variable to point at the live deployment
+
+---
+
 ## 2026-06-19 — Gustav (maintenance: energy History view + daily usage stored in Supabase)
 
 **Files changed:**

@@ -1,0 +1,27 @@
+name: Capture daily energy snapshot
+
+# Records the day's energy totals into maintenance.energy_daily even on days
+# nobody opens the dashboard. Runs near the end of the SAST day (UTC+2).
+#
+# Requires:
+#   secrets.CRON_SECRET   — must match the CRON_SECRET env var on the server
+#   vars.ENERGY_CAPTURE_URL (optional) — base URL of the deployment to hit;
+#       defaults to the staging site.
+
+on:
+  schedule:
+    - cron: '50 21 * * *' # 23:50 SAST — just before the daily HA totals reset
+  workflow_dispatch: {}
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping capture endpoint
+        env:
+          BASE_URL: ${{ vars.ENERGY_CAPTURE_URL || 'https://cntpplatform-staging.rooibostea.co.za' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BASE_URL}/api/maintenance/energy/capture"
