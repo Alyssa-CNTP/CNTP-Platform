@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { exportSievingRuns } from '@/lib/utils/exportExcel'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1098,13 +1099,10 @@ export default function SievingPage() {
     }
   }
 
-  function exportCSV() {
-    if (!productRuns.length) { alert('No runs to export'); return }
-    const mesh = sdGetMesh(activeProduct,'CON')
-    const hdrs = ['Date','Lot Number','Serial No','Grade','Variant','Run Type','QC Name','Time','Bulk Density','Needle Count','Leaf Shade','PA Level',...mesh.map(m=>m.replace(' (%)','%')),'Pass/Fail','Violations','Comment']
-    const rows = productRuns.map((r:any)=>[r.date,r.lotNumber,r.serialNumber||'',r.grade,r.variant,r.runType,r.qcName||'',r.time||'',r.bulkDensity||'',r.needleCount||'',r.leafShade||'',r.paLevel||'',...mesh.map(m=>r[m]||''),r.passStatus||'',(r.violations||[]).join('; '),r.comment||''])
-    const csv = [hdrs,...rows].map(row=>row.map((v:any)=>(typeof v==='string'&&(v.includes(',')||v.includes('"')))?`"${v.replace(/"/g,'""')}"`:v).join(',')).join('\n')
-    const a = document.createElement('a'); a.href='data:text/csv;charset=utf-8,%EF%BB%BF'+encodeURIComponent(csv); a.download=`sieving_${activeProduct.replace(/ /g,'_')}_${new Date().toISOString().slice(0,10)}.csv`; a.click()
+  function doExcelExport() {
+    if (!filteredRuns.length) { alert('No runs to export'); return }
+    const mesh = [...new Set([...specDef.meshForORG, ...specDef.meshForCON])]
+    exportSievingRuns(activeProduct, filteredRuns, mesh)
   }
 
   const setF = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
@@ -1196,7 +1194,7 @@ export default function SievingPage() {
               background:filter===k?'#1f4e79':'#fff',color:filter===k?'#fff':'#374151',borderColor:filter===k?'#1f4e79':'#e5e7eb'}}>{l}</button>
         ))}
         <span style={{marginLeft:'auto',fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
-        <button onClick={exportCSV} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export CSV</button>
+        <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
         <button onClick={()=>setShowChart(s=>!s)} style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showChart?'#eff6ff':'#fff',color:showChart?'#1f4e79':'#374151'}}>
           📈 {showChart?'Hide':'Show'} Chart
         </button>

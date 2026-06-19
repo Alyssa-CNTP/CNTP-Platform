@@ -26,6 +26,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
+import { exportPasteuriserBatch } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
   CheckCircle2, AlertTriangle, X, MessageSquare,
@@ -1003,6 +1004,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   }
 
   function createBatch(form: any) {
+    const dup = batches.find(b => b.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    if (dup) {
+      if (!dup.final_result) {
+        alert(`⚠ Batch "${form.batch_number}" already has an open run.\n\nPlease add a sample to the existing run instead of starting a new one.`)
+      } else {
+        alert(`⚠ Batch "${form.batch_number}" already exists (finalised as ${dup.final_result}).\n\nPlease use a different batch number.`)
+      }
+      return
+    }
     const nb: Batch = { ...form, id: Math.random().toString(36).slice(2), samples:[], created_at: new Date().toISOString() }
     setBatches(p => [nb, ...p])
     setActiveBatchId(nb.id)
@@ -1237,6 +1247,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         <button onClick={reopenBatch} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔓 Re-open</button>
                       </div>
                     )}
+                    <button
+                      onClick={() => exportPasteuriserBatch(activeBatch)}
+                      className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">
+                      ⬇ Export Excel
+                    </button>
                     {isAdmin && (
                       <button
                         onClick={() => { if (!confirm(`Delete entire run "${activeBatch.batch_number}" and all ${activeBatch.samples.length} samples?`)) return; deleteBatchFromDB(activeBatch._db_id); setBatches(p => p.filter(b => b.id !== activeBatchId)); setActiveBatchId(null) }}
@@ -1547,6 +1562,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     {b.final_reason && <span className="text-[10px] text-warn bg-warn/8 px-2 py-0.5 rounded-lg italic">💬 {b.final_reason}</span>}
                                     <button onClick={e => { e.stopPropagation(); setActiveBatchId(b.id); setDashView('active') }}
                                       className="ml-auto px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
+                                    <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
+                                      className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
                                   </div>
                                   {samples.length > 0 && (
                                     <div className="overflow-x-auto rounded-xl border border-surface-rule">

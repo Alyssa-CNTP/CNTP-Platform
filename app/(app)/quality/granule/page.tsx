@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -1275,6 +1276,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
             title={noTastings ? 'Add at least one tasting before finalising' : 'Mark as complete and move to History'}>
             ✓ Finalise{noTastings ? ' 🍵?' : ''}
           </button>
+          <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer">⬇ Excel</button>
           {isAdmin && <button onClick={() => onDelete(run.id)} className="px-2 py-1.5 rounded-lg border-none bg-err/10 text-err text-[12px] cursor-pointer">🗑</button>}
         </div>
       </div>
@@ -1607,6 +1609,7 @@ function GranuleHistoryTab({ runs, onReopen, onUpdateBatch }: { runs: any[]; onR
                           <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${run.overall_status === 'Pass' ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>{run.overall_status || 'Pass'}</span>
                         </td>
                         <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                          <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="text-[10px] px-2 py-1 rounded-lg font-semibold cursor-pointer mr-1" style={{ border: '1px solid #166534', background: '#f0fdf4', color: '#166534' }}>⬇ Excel</button>
                           <button onClick={() => onReopen(run.id)} className="text-[10px] px-2 py-1 rounded-lg font-semibold cursor-pointer" style={{ border: '1px solid #d97706', background: '#fef3c7', color: '#92400e' }}>↩ Re-open</button>
                         </td>
                       </tr>
@@ -1899,14 +1902,21 @@ export default function GranulePage() {
   // ── CRUD handlers — all mirror Express server logic ──
 
   async function handleCreateRun(form: any) {
+    const dup = runs.find((r: any) => r.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    if (dup) {
+      if (!dup.final_status) {
+        alert(`⚠ A run for batch "${form.batch_number}" is already open.\n\nPlease add a sample to the existing run instead of starting a new one.`)
+      } else {
+        alert(`⚠ Batch "${form.batch_number}" already exists (finalised as ${dup.final_status}).\n\nPlease use a different batch number.`)
+      }
+      return
+    }
     const { data, error } = await db.schema('qms').from('granule_runs').insert({
       batch_number: form.batch_number, qc_name: form.qc_name || '', production_date: form.production_date || '',
       type_grade: form.type_grade || '', customer: form.customer || '', is_cntp: form.is_cntp !== false,
       spec_json: form.spec_json || {}, reference_used: form.reference_used || '', overall_status: 'Pass',
     }).select().single()
     if (error) { alert(error.message); return }
-    // Specs are managed only in the Specifications tab — runs reference a saved
-    // spec (snapshot copied into spec_json), so no spec rows are created here.
     setRuns(prev => [{ ...data, samples: [], tastings: [] }, ...prev])
     setShowNewRun(false)
   }
