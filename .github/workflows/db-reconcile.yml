@@ -73,6 +73,7 @@ jobs:
           PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: |
           set -euo pipefail
+          mkdir -p reconcile_out
           Q="SELECT n.nspname AS schema, c.relname AS table,
                     COALESCE(s.n_live_tup,0) AS rows
              FROM pg_class c
@@ -88,14 +89,49 @@ jobs:
             echo "================= auth.users counts ========================="
             echo -n "staging users: "; psql "$STAGING_DB_URL" -t -A -c "SELECT count(*) FROM auth.users;"
             echo -n "prod users:    "; psql "$PROD_DB_URL"    -t -A -c "SELECT count(*) FROM auth.users;"
-          } | tee reconcile_diff.txt
+          } | tee reconcile_out/diff.txt
 
-      - name: Upload diff report
+      - name: Dump full schema DDL + user-reference report (read-only)
+        if: github.ref_name == 'reconcile/diff'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p reconcile_out
+          # canonical target structure (all app schemas) + current prod structure
+          pg_dump --schema-only --no-owner --no-privileges -n public -n qms -n acumatica \
+            "$STAGING_DB_URL" -f reconcile_out/staging_schema.sql
+          pg_dump --schema-only --no-owner --no-privileges -n public -n qms -n acumatica \
+            "$PROD_DB_URL" -f reconcile_out/prod_schema.sql
+          # every column in prod's public/qms (for public.* -> qms.* column mapping)
+          psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_columns.txt -c "
+            SELECT table_schema, table_name, ordinal_position AS pos, column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema IN ('public','qms') ORDER BY 1,2,3;"
+          # FK constraints that reference any *users* table, in prod
+          psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_user_fks.txt -c "
+            SELECT conrelid::regclass AS child_table, conname,
+                   confrelid::regclass AS references_table,
+                   pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint
+            WHERE contype='f' AND confrelid::regclass::text ~ 'users'
+            ORDER BY 1;"
+          # uuid columns in prod that look like user references (may have no FK)
+          psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_user_like_cols.txt -c "
+            SELECT table_schema, table_name, column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema IN ('public','qms')
+              AND (column_name ~ '(user|_by|owner|created_by|updated_by|operator)')
+            ORDER BY 1,2,3;"
+          ls -lh reconcile_out
+
+      - name: Upload analysis report
         if: github.ref_name == 'reconcile/diff'
         uses: actions/upload-artifact@v4
         with:
           name: reconcile-diff
-          path: reconcile_diff.txt
+          path: reconcile_out/
           retention-days: 14
 
       # ----- APPLY (reconcile/apply only, double-gated) -----
