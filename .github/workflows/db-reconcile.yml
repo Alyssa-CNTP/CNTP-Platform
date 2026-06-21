@@ -74,19 +74,40 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reconcile_out
+          # all non-system schemas, with table count + approx total rows
+          CEN="SELECT n.nspname AS schema,
+                      count(*) FILTER (WHERE c.relkind='r') AS tables,
+                      COALESCE(sum(s.n_live_tup),0) AS approx_rows
+               FROM pg_namespace n
+               LEFT JOIN pg_class c ON c.relnamespace=n.oid AND c.relkind='r'
+               LEFT JOIN pg_stat_user_tables s ON s.relid=c.oid
+               WHERE n.nspname NOT IN ('pg_catalog','information_schema','pg_toast',
+                     'auth','storage','realtime','vault','extensions','graphql','graphql_public',
+                     'supabase_functions','supabase_migrations','net','pgbouncer','cron','_realtime')
+                 AND n.nspname NOT LIKE 'pg_%'
+               GROUP BY 1 ORDER BY 1;"
+          # every app table across all schemas
           Q="SELECT n.nspname AS schema, c.relname AS table,
                     COALESCE(s.n_live_tup,0) AS rows
              FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
              LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-             WHERE c.relkind='r' AND n.nspname IN ('public','qms','acumatica')
+             WHERE c.relkind='r'
+               AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast',
+                   'auth','storage','realtime','vault','extensions','graphql','graphql_public',
+                   'supabase_functions','supabase_migrations','net','pgbouncer','cron','_realtime')
+               AND n.nspname NOT LIKE 'pg_%'
              ORDER BY 1,2;"
           {
-            echo "================= STAGING (source of truth) ================="
+            echo "################# SCHEMA CENSUS — STAGING #################"
+            psql "$STAGING_DB_URL" -P pager=off -c "$CEN"
+            echo "################# SCHEMA CENSUS — PRODUCTION #############"
+            psql "$PROD_DB_URL" -P pager=off -c "$CEN"
+            echo "################# ALL TABLES — STAGING ###################"
             psql "$STAGING_DB_URL" -P pager=off -c "$Q"
-            echo "================= PRODUCTION (target) ======================="
+            echo "################# ALL TABLES — PRODUCTION ################"
             psql "$PROD_DB_URL" -P pager=off -c "$Q"
-            echo "================= auth.users counts ========================="
+            echo "################# auth.users counts ######################"
             echo -n "staging users: "; psql "$STAGING_DB_URL" -t -A -c "SELECT count(*) FROM auth.users;"
             echo -n "prod users:    "; psql "$PROD_DB_URL"    -t -A -c "SELECT count(*) FROM auth.users;"
           } | tee reconcile_out/diff.txt
@@ -99,16 +120,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reconcile_out
-          # canonical target structure (all app schemas) + current prod structure
-          pg_dump --schema-only --no-owner --no-privileges -n public -n qms -n acumatica \
-            "$STAGING_DB_URL" -f reconcile_out/staging_schema.sql
-          pg_dump --schema-only --no-owner --no-privileges -n public -n qms -n acumatica \
-            "$PROD_DB_URL" -f reconcile_out/prod_schema.sql
-          # every column in prod's public/qms (for public.* -> qms.* column mapping)
-          psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_columns.txt -c "
-            SELECT table_schema, table_name, ordinal_position AS pos, column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_schema IN ('public','qms') ORDER BY 1,2,3;"
+          # canonical target structure (all app schemas) + current prod structure.
+          # Exclude only Supabase-managed schemas so this works regardless of which app schemas exist.
+          EXC="-N auth -N storage -N realtime -N vault -N extensions -N graphql -N graphql_public -N supabase_functions -N supabase_migrations -N net -N pgbouncer -N cron -N _realtime -N pg_*"
+          pg_dump --schema-only --no-owner --no-privileges $EXC "$STAGING_DB_URL" -f reconcile_out/staging_schema.sql
+          pg_dump --schema-only --no-owner --no-privileges $EXC "$PROD_DB_URL"    -f reconcile_out/prod_schema.sql
+          # every column across all app schemas (for table -> table column mapping)
+          COLQ="SELECT table_schema, table_name, ordinal_position AS pos, column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('pg_catalog','information_schema','auth','storage','realtime','vault','extensions','graphql','graphql_public','supabase_functions','supabase_migrations','net','pgbouncer','cron','_realtime')
+                  AND table_schema NOT LIKE 'pg_%'
+                ORDER BY 1,2,3;"
+          psql "$STAGING_DB_URL" -P pager=off -o reconcile_out/staging_columns.txt -c "$COLQ"
+          psql "$PROD_DB_URL"    -P pager=off -o reconcile_out/prod_columns.txt    -c "$COLQ"
           # FK constraints that reference any *users* table, in prod
           psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_user_fks.txt -c "
             SELECT conrelid::regclass AS child_table, conname,
