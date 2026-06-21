@@ -1,0 +1,121 @@
+name: DB Reconcile (one-time)
+
+# One-time job to align PRODUCTION to STAGING (source of truth).
+# Isolated on its own trigger branches so it never runs from main/staging.
+#
+#   push to `reconcile/diff`   -> back up BOTH dbs to the VPS, then print a read-only diff
+#   push to `reconcile/apply`  -> back up prod again, then run supabase/reconcile/apply_prod.sql
+#                                 (only if that file AND supabase/reconcile/CONFIRMED exist)
+#
+# Required GitHub repo secrets — use the **Session Pooler** URIs (GitHub runners are
+# IPv4-only; Supabase "Direct connection" is IPv6-only without an add-on):
+#   STAGING_DB_URL      postgresql://postgres.qjqkpockmujecjgmdple:PW@aws-0-<region>.pooler.supabase.com:5432/postgres
+#   PRODUCTION_DB_URL   postgresql://postgres.sxzjjcyuzyfneesnsjna:PW@aws-0-<region>.pooler.supabase.com:5432/postgres
+#   VPS_SSH_KEY         (already set) — used to copy backups to the VPS
+#
+# Connection strings are never printed; GitHub also masks secret values in logs.
+
+on:
+  push:
+    branches:
+      - reconcile/diff
+      - reconcile/apply
+
+concurrency:
+  group: db-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Postgres 17 client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      # ----- BACKUPS (run in both modes, before anything else) -----
+      - name: Back up both databases
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%d_%H%M%S)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          pg_dump -Fc --no-owner --no-privileges "$PROD_DB_URL"    -f "prod_full_${STAMP}.dump"
+          pg_dump -Fc --no-owner --no-privileges "$STAGING_DB_URL" -f "staging_full_${STAMP}.dump"
+          ls -lh ./*.dump
+
+      - name: Copy backups to VPS (/home/cntpdev/apps/backups)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 154.65.97.200
+          username: cntpdev
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 2022
+          source: "*.dump"
+          target: "/home/cntpdev/apps/backups"
+
+      # ----- DIFF (reconcile/diff only) -----
+      - name: Diff staging vs production (read-only)
+        if: github.ref_name == 'reconcile/diff'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          Q="SELECT n.nspname AS schema, c.relname AS table,
+                    COALESCE(s.n_live_tup,0) AS rows
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+             WHERE c.relkind='r' AND n.nspname IN ('public','qms','acumatica')
+             ORDER BY 1,2;"
+          {
+            echo "================= STAGING (source of truth) ================="
+            psql "$STAGING_DB_URL" -P pager=off -c "$Q"
+            echo "================= PRODUCTION (target) ======================="
+            psql "$PROD_DB_URL" -P pager=off -c "$Q"
+            echo "================= auth.users counts ========================="
+            echo -n "staging users: "; psql "$STAGING_DB_URL" -t -A -c "SELECT count(*) FROM auth.users;"
+            echo -n "prod users:    "; psql "$PROD_DB_URL"    -t -A -c "SELECT count(*) FROM auth.users;"
+          } | tee reconcile_diff.txt
+
+      - name: Upload diff report
+        if: github.ref_name == 'reconcile/diff'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconcile-diff
+          path: reconcile_diff.txt
+          retention-days: 14
+
+      # ----- APPLY (reconcile/apply only, double-gated) -----
+      - name: Guard — require confirmed apply script
+        if: github.ref_name == 'reconcile/apply'
+        run: |
+          test -f supabase/reconcile/CONFIRMED || { echo "::error::supabase/reconcile/CONFIRMED missing — refusing to apply"; exit 1; }
+          test -f supabase/reconcile/apply_prod.sql || { echo "::error::supabase/reconcile/apply_prod.sql missing"; exit 1; }
+
+      - name: Apply reconciliation to PRODUCTION
+        if: github.ref_name == 'reconcile/apply'
+        env:
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 -f supabase/reconcile/apply_prod.sql
+
+      - name: Verify production structure
+        if: github.ref_name == 'reconcile/apply'
+        env:
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          psql "$PROD_DB_URL" -P pager=off -c "
+            SELECT n.nspname AS schema, count(*) AS tables
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind='r' AND n.nspname IN ('public','qms','acumatica')
+            GROUP BY 1 ORDER BY 1;"
