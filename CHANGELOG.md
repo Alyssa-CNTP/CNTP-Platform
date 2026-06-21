@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-21 — Alyssa (DB promotion flow: staging→prod migrations + nightly data refresh)
+
+**Files changed:**
+- `.github/workflows/db-migrate.yml` (new)
+- `.github/workflows/staging-data-refresh.yml` (new)
+- `docs/db-reconciliation-runbook.md` (new)
+
+**Changes:**
+- Groundwork to clean up the production Supabase DB (`sxzjjcyuzyfneesnsjna`) to match staging (`qjqkpockmujecjgmdple`), which is the source of truth (full `qms` schema, users, roles). The repo migrations had drifted (mostly `public`; `qms` was built directly on staging), so staging's live DB — not the repo — is the real source of truth.
+- Established a **"schema up, data down"** flow:
+  - `db-migrate.yml` — applies `supabase/migrations` via `supabase db push` on merge: `staging` branch → staging DB, `main` branch → production DB. DB passwords held as GitHub Actions secrets (`STAGING_DB_URL`, `PRODUCTION_DB_URL`, `SUPABASE_ACCESS_TOKEN`).
+  - `staging-data-refresh.yml` — nightly (01:00 UTC / 03:00 SAST) + manual job that copies `qms` data prod → staging (truncate + `pg_restore`), so staging tests against recent real data. Read-only on production; the app remains the single writer of prod data.
+- `docs/db-reconciliation-runbook.md` — one-time reconciliation steps (backups → diff → capture staging baseline → review → apply to prod → verify → enable automation). All password-bearing steps are run locally by the developer; secrets never enter the repo.
+- No database changes executed yet — these are the workflow/runbook scaffolding. The destructive prod cleanup is gated behind backups and explicit review.
+
+---
+
 ## 2026-06-19 — Gustav (maintenance: "Energy Today" widget — Home Assistant solar/grid/battery)
 
 **Files changed:**

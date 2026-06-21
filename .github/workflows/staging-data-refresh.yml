@@ -1,0 +1,70 @@
+name: Staging Data Refresh
+
+# The "data down" half of the flow: copies real qms data PRODUCTION -> STAGING
+# so staging testing always runs against recent production data.
+#
+# This NEVER writes to production. It only reads from prod and reloads staging's
+# qms tables (truncate + restore). The app on the prod VPS remains the single
+# writer of production data.
+#
+# Required GitHub repo secrets:
+#   STAGING_DB_URL      full Postgres connection string for staging   (incl. password)
+#   PRODUCTION_DB_URL   full Postgres connection string for production (incl. password)
+#
+# Runs nightly at 01:00 UTC (03:00 SAST) and on demand from the Actions tab.
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "refresh" to confirm reloading staging qms data from prod'
+        required: true
+        default: ""
+
+concurrency:
+  group: staging-data-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    # manual runs must type the confirmation; scheduled runs skip the gate
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.confirm == 'refresh' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Postgres 17 client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Dump qms data from production (read-only)
+        env:
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          pg_dump --data-only --no-owner --no-privileges \
+            --schema=qms -Fc "$PROD_DB_URL" -f qms_data.dump
+          ls -lh qms_data.dump
+
+      - name: Reload qms data into staging
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+        run: |
+          # 1. clear every existing qms table (order-independent via CASCADE)
+          psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c "
+            DO \$\$
+            DECLARE r record;
+            BEGIN
+              FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'qms' LOOP
+                EXECUTE format('TRUNCATE qms.%I CASCADE', r.tablename);
+              END LOOP;
+            END
+            \$\$;"
+          # 2. load the production snapshot (triggers disabled so FK order doesn't matter)
+          pg_restore --data-only --disable-triggers --no-owner --no-privileges \
+            --schema=qms -d "$STAGING_DB_URL" qms_data.dump
+
+      - name: Summary
+        run: echo "✅ Staging qms data refreshed from production ($(date -u))"
