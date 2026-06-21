@@ -33,10 +33,14 @@ jobs:
 
       - name: Install Postgres 17 client
         run: |
+          set -euo pipefail
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
+          # ensure the v17 binaries take precedence over the runner's preinstalled v16
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       # ----- BACKUPS (run in both modes, before anything else) -----
       - name: Back up both databases
