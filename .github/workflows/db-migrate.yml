@@ -1,0 +1,55 @@
+name: DB Migrate
+
+# Promotes schema migrations from supabase/migrations to the target database.
+#   push to `staging` branch  -> applies migrations to the STAGING db
+#   push to `main` branch      -> applies migrations to the PRODUCTION db
+# This is the "schema up" half of the flow: dev/staging -> prod.
+#
+# Required GitHub repo secrets (Settings -> Secrets and variables -> Actions):
+#   STAGING_DB_URL        full Postgres connection string for staging  (incl. password)
+#   PRODUCTION_DB_URL     full Postgres connection string for production (incl. password)
+#   SUPABASE_ACCESS_TOKEN personal access token from `supabase login` (Account -> Access Tokens)
+#
+# Passwords live here as encrypted GitHub secrets — never in the repo, never in chat.
+
+on:
+  push:
+    branches: [staging, main]
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/config.toml"
+  workflow_dispatch: {} # allow a manual run from the Actions tab
+
+concurrency:
+  # never let two migration runs hit the same database at once
+  group: db-migrate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Select target database
+        id: target
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env_name=PRODUCTION" >> "$GITHUB_OUTPUT"
+            echo "db_url=${{ secrets.PRODUCTION_DB_URL }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "env_name=STAGING" >> "$GITHUB_OUTPUT"
+            echo "db_url=${{ secrets.STAGING_DB_URL }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show pending migrations (dry run)
+        run: supabase migration list --db-url "${{ steps.target.outputs.db_url }}"
+
+      - name: Apply migrations to ${{ steps.target.outputs.env_name }}
+        run: supabase db push --db-url "${{ steps.target.outputs.db_url }}"
