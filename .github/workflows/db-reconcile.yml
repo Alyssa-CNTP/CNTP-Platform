@@ -133,6 +133,13 @@ jobs:
                 ORDER BY 1,2,3;"
           psql "$STAGING_DB_URL" -P pager=off -o reconcile_out/staging_columns.txt -c "$COLQ"
           psql "$PROD_DB_URL"    -P pager=off -o reconcile_out/prod_columns.txt    -c "$COLQ"
+          # --- qms module (Phase 1 source artifacts) ---
+          # canonical structure: staging qms schema only (DDL) — used to rebuild prod's qms
+          pg_dump --schema-only --no-owner --no-privileges -n qms "$STAGING_DB_URL" -f reconcile_out/staging_qms_schema.sql
+          # authoritative data: staging qms (clean copy to load into prod)
+          pg_dump --data-only   --no-owner --no-privileges -n qms "$STAGING_DB_URL" -f reconcile_out/staging_qms_data.sql
+          # prod's OLD quality data (public design) + partial qms — for the ETL/merge design
+          pg_dump --schema-only --no-owner --no-privileges -n public -n qms "$PROD_DB_URL" -f reconcile_out/prod_public_qms_schema.sql
           # FK constraints that reference any *users* table, in prod
           psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_user_fks.txt -c "
             SELECT conrelid::regclass AS child_table, conname,
