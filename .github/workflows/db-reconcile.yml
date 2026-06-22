@@ -191,41 +191,40 @@ jobs:
           set -euo pipefail
           P="${{ steps.phase.outputs.phase }}"
           case "$P" in
-            # --- rebuild whole schemas from staging (drop + recreate + data) ---
-            phase1-qms-rebuild)      SCHEMAS="qms" ;;
-            bucket1-maint-acumatica) SCHEMAS="maintenance acumatica" ;;
-            # --- additive: create missing tables (structure only) + ADD COLUMNs ---
-            bucket2-prod-axis-shared) SCHEMAS="" ;;
+            phase1-qms-rebuild)       MODE=rebuild; SCHEMAS="qms" ;;
+            bucket1-maint-acumatica)  MODE=rebuild; SCHEMAS="maintenance acumatica" ;;
+            bucket2-prod-axis-shared) MODE=bucket2; SCHEMAS="production axis shared workspace" ;;
+            grant-app-schemas)        MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/grant_app_schemas.sql ;;
             *) echo "::error::unknown phase '$P'"; exit 1 ;;
           esac
+          echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
 
-          if [ -n "$SCHEMAS" ]; then
-            echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
-            NFLAGS=""; for s in $SCHEMAS; do NFLAGS="$NFLAGS -n $s"; done
-            # one atomic transaction: any error => full rollback, prod left as-is
-            {
-              for s in $SCHEMAS; do echo "DROP SCHEMA IF EXISTS $s CASCADE;"; done
-              pg_dump --schema-only --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
-              pg_dump --data-only   --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
-            } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
-          else
-            # Bucket 2 additive — never drops, never overwrites existing prod data.
-            echo "SCHEMAS=production axis shared workspace" >> "$GITHUB_ENV"
-            MISSING="-t production.capture_activity -t production.check_events -t production.check_records \
-                     -t production.check_specs -t production.cleaning_logs -t production.cleaning_records \
-                     -t production.cleaning_stations -t production.cleaning_task_state -t production.line_messages \
-                     -t production.mc_entries -t production.mc_reviews -t production.mc_sessions \
-                     -t production.prod_timesheets -t production.session_signatures -t production.shift_assignments \
-                     -t shared.dashboard_layouts"
-            {
-              # trigger fn the new tables' BEFORE UPDATE triggers depend on (absent in prod)
-              echo 'CREATE OR REPLACE FUNCTION production.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;'
-              # CREATE the missing tables (structure only — prod fills them live)
-              pg_dump --schema-only --no-owner --no-privileges $MISSING "$STAGING_DB_URL"
-              # ADD the staging-only columns onto existing prod tables (all nullable)
-              cat supabase/reconcile/bucket2_add_columns.sql
-            } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
-          fi
+          case "$MODE" in
+            rebuild)
+              # drop + recreate whole schemas from staging (structure + data), one atomic txn
+              NFLAGS=""; for s in $SCHEMAS; do NFLAGS="$NFLAGS -n $s"; done
+              {
+                for s in $SCHEMAS; do echo "DROP SCHEMA IF EXISTS $s CASCADE;"; done
+                pg_dump --schema-only --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+                pg_dump --data-only   --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+              } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction ;;
+            bucket2)
+              # additive — never drops, never overwrites existing prod data
+              MISSING="-t production.capture_activity -t production.check_events -t production.check_records \
+                       -t production.check_specs -t production.cleaning_logs -t production.cleaning_records \
+                       -t production.cleaning_stations -t production.cleaning_task_state -t production.line_messages \
+                       -t production.mc_entries -t production.mc_reviews -t production.mc_sessions \
+                       -t production.prod_timesheets -t production.session_signatures -t production.shift_assignments \
+                       -t shared.dashboard_layouts"
+              {
+                echo 'CREATE OR REPLACE FUNCTION production.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;'
+                pg_dump --schema-only --no-owner --no-privileges $MISSING "$STAGING_DB_URL"
+                cat supabase/reconcile/bucket2_add_columns.sql
+              } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction ;;
+            sqlfile)
+              # run a committed SQL file against prod (e.g. grants), one atomic txn
+              psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$SQLFILE" ;;
+          esac
 
       - name: Verify (staging vs prod row counts for touched schemas)
         if: github.ref_name == 'reconcile/apply'
