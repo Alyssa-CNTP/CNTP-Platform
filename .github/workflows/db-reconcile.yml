@@ -195,6 +195,7 @@ jobs:
             bucket1-maint-acumatica)  MODE=rebuild; SCHEMAS="maintenance acumatica" ;;
             bucket2-prod-axis-shared) MODE=bucket2; SCHEMAS="production axis shared workspace" ;;
             grant-app-schemas)        MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/grant_app_schemas.sql ;;
+            fix-operators-nullable)   MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/fix_operators_nullable.sql ;;
             *) echo "::error::unknown phase '$P'"; exit 1 ;;
           esac
           echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
