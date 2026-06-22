@@ -189,19 +189,41 @@ jobs:
           PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: |
           set -euo pipefail
-          case "${{ steps.phase.outputs.phase }}" in
+          P="${{ steps.phase.outputs.phase }}"
+          case "$P" in
+            # --- rebuild whole schemas from staging (drop + recreate + data) ---
             phase1-qms-rebuild)      SCHEMAS="qms" ;;
             bucket1-maint-acumatica) SCHEMAS="maintenance acumatica" ;;
-            *) echo "::error::unknown phase '${{ steps.phase.outputs.phase }}'"; exit 1 ;;
+            # --- additive: create missing tables (structure only) + ADD COLUMNs ---
+            bucket2-prod-axis-shared) SCHEMAS="" ;;
+            *) echo "::error::unknown phase '$P'"; exit 1 ;;
           esac
-          echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
-          NFLAGS=""; for s in $SCHEMAS; do NFLAGS="$NFLAGS -n $s"; done
-          # one atomic transaction: any error => full rollback, prod left as-is
-          {
-            for s in $SCHEMAS; do echo "DROP SCHEMA IF EXISTS $s CASCADE;"; done
-            pg_dump --schema-only --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
-            pg_dump --data-only   --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
-          } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
+
+          if [ -n "$SCHEMAS" ]; then
+            echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
+            NFLAGS=""; for s in $SCHEMAS; do NFLAGS="$NFLAGS -n $s"; done
+            # one atomic transaction: any error => full rollback, prod left as-is
+            {
+              for s in $SCHEMAS; do echo "DROP SCHEMA IF EXISTS $s CASCADE;"; done
+              pg_dump --schema-only --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+              pg_dump --data-only   --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+            } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
+          else
+            # Bucket 2 additive — never drops, never overwrites existing prod data.
+            echo "SCHEMAS=production axis shared workspace" >> "$GITHUB_ENV"
+            MISSING="-t production.capture_activity -t production.check_events -t production.check_records \
+                     -t production.check_specs -t production.cleaning_logs -t production.cleaning_records \
+                     -t production.cleaning_stations -t production.cleaning_task_state -t production.line_messages \
+                     -t production.mc_entries -t production.mc_reviews -t production.mc_sessions \
+                     -t production.prod_timesheets -t production.session_signatures -t production.shift_assignments \
+                     -t shared.dashboard_layouts"
+            {
+              # CREATE the missing tables (structure only — prod fills them live)
+              pg_dump --schema-only --no-owner --no-privileges $MISSING "$STAGING_DB_URL"
+              # ADD the staging-only columns onto existing prod tables (all nullable)
+              cat supabase/reconcile/bucket2_add_columns.sql
+            } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
+          fi
 
       - name: Verify (staging vs prod row counts for touched schemas)
         if: github.ref_name == 'reconcile/apply'
