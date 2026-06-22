@@ -104,7 +104,9 @@ Format: date · developer · files changed · description of code changes.
 **Changes (production database):**
 - Discovery via read-only diff: staging and production had **diverged in different directions** (staging ahead on qms/maintenance/acumatica; production ahead on fields ~1.38M rows/sales/logistics/marketing/public). The `qms` module was *redesigned* on staging (split sieve columns, `id` integer→bigint, `created_by` uuid→text, no FKs). So "make prod match staging" wholesale was rejected as destructive; scoped to a surgical, module-by-module reconciliation starting with qms.
 - **Phase 1 applied to production**: rebuilt prod `qms` to staging's design — `DROP SCHEMA qms CASCADE` + staging qms DDL + staging qms data, in one `--single-transaction`. Production backed up to the VPS first (`/home/cntpdev/apps/backups`). Verified prod `qms` == staging `qms` (39 tables, identical row counts). Production `public.*` quality data left intact; the dropped prod qms was only the redundant old service-role copy (also in backup).
-- Ran entirely via gated GitHub Actions; DB passwords live only in GitHub secrets. Phase 2 (merge prod's extra `public` quality records into qms) and Phase 3 (retire old `public` tables) still to come.
+- Ran entirely via gated GitHub Actions; DB passwords live only in GitHub secrets.
+- **Bucket 1 applied to production**: added `maintenance` (24 tables) and `acumatica` (3 tables) from staging — purely additive (prod had neither schema), counts match staging, no existing prod data touched. Backed up first; atomic.
+- Decisions for remaining work: prod's `production`/`axis`/`shared` data is real → align those **additively only** (preserve prod data); prod-only `fields`/`sales`/`logistics`/`marketing` left as-is; the old `public.*` JSON-blob quality data will be retired (not merged — blob format breaks the Acumatica push). Next: Bucket 2 additive structure, then first-time production app deploy. qms data cleanup deferred.
 
 ---
 
