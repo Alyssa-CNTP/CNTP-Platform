@@ -1,64 +1,113 @@
 @import "tailwindcss";
 
 /* ══════════════════════════════════════════════════════════════════════════
-   CNTP OPS — DESIGN SYSTEM
+   CNTP OPS — DESIGN SYSTEM v2
    Tailwind v4 CSS-first config. All tokens live in @theme.
-   Fonts: Geist (display/headings) · Inter (body) · Geist Mono (data)
-   Aesthetic: sophisticated industrial ops — Linear meets Bloomberg.
+
+   Fonts:   SF Pro / System UI stack — premium, legible, no webfont latency
+   Palette: Cape Natural brand — forest green · sage · azure · warm neutrals
+   Style:   Glass morphism · subtle gradients · generous spacing
 ══════════════════════════════════════════════════════════════════════════ */
 
 @theme {
-  /* ── Fonts — next/font injects the vars, @theme references them ── */
-  --font-display: var(--font-display, 'Geist', sans-serif);
-  --font-body:    var(--font-body,    'Inter', sans-serif);
-  --font-mono:    var(--font-mono,    'Geist Mono', monospace);
+  /* ── Fonts — Inter for all UI, Playfair for editorial headings ── */
+  --font-display: var(--font-inter), 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body:    var(--font-inter), 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:    'SF Mono', ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  --font-serif:   var(--font-playfair), 'Playfair Display', Georgia, serif;
 
-  /* ── Brand — deep forest green ── */
-  --color-brand:       #0D1F0D;
-  --color-brand-dark:  #060F06;
-  --color-brand-mid:   #1A3A1A;
-  --color-brand-hover: #162B16;
+  /* ── Brand — Cape Natural deep forest green ── */
+  --color-brand:       #1A3A0E;
+  --color-brand-dark:  #0F2508;
+  --color-brand-mid:   #2A5416;
+  --color-brand-hover: #224811;
 
-  /* ── Accent ── */
-  --color-accent:       #2E7D32;
-  --color-accent-light: #4CAF50;
-  --color-accent-bg:    #E8F5E9;
+  /* ── Accent — sage green from logo arc ── */
+  --color-accent:       #5A8A2A;
+  --color-accent-light: #7AAD45;
+  --color-accent-bg:    #EFF6E6;
+
+  /* ── Azure — blue from logo swirl ── */
+  --color-azure:        #2A7CB8;
+  --color-azure-light:  #4A9AD4;
+  --color-azure-bg:     #EBF4FB;
 
   /* ── Surfaces ── */
-  --color-surface:        #F5F5F4;
+  --color-surface:        #F4F6F8;
   --color-surface-card:   #FFFFFF;
-  --color-surface-raised: #FAFAF9;
-  --color-surface-rule:   #E7E5E4;
-  --color-surface-dim:    #EDEDE B;
+  --color-surface-raised: #FAFBFC;
+  --color-surface-rule:   #E4E7EC;
+  --color-surface-dim:    #EEF0F3;
 
   /* ── Text ── */
-  --color-text:       #1C1917;
-  --color-text-muted: #78716C;
-  --color-text-faint: #A8A29E;
+  --color-text:       #1A2415;
+  --color-text-muted: #637056;
+  --color-text-faint: #96A88A;
 
   /* ── Status ── */
-  --color-ok:       #15803D;
-  --color-ok-bg:    #F0FDF4;
-  --color-warn:     #C2410C;
-  --color-warn-bg:  #FFF7ED;
-  --color-err:      #B91C1C;
+  --color-ok:       #1A7A3C;
+  --color-ok-bg:    #EDFAF3;
+  --color-warn:     #B85C0A;
+  --color-warn-bg:  #FEF5ED;
+  --color-err:      #B81C1C;
   --color-err-bg:   #FEF2F2;
-  --color-info:     #1D4ED8;
-  --color-info-bg:  #EFF6FF;
+  --color-info:     #2A7CB8;
+  --color-info-bg:  #EBF4FB;
 
-  /* ── Status aliases (used in older components) ── */
-  --color-status-ok:     #15803D;
-  --color-status-warn:   #C2410C;
-  --color-status-err:    #B91C1C;
-  --color-status-info:   #1D4ED8;
-  --color-status-okBg:   #F0FDF4;
-  --color-status-warnBg: #FFF7ED;
+  /* ── Status aliases ── */
+  --color-status-ok:     #1A7A3C;
+  --color-status-warn:   #B85C0A;
+  --color-status-err:    #B81C1C;
+  --color-status-info:   #2A7CB8;
+  --color-status-okBg:   #EDFAF3;
+  --color-status-warnBg: #FEF5ED;
   --color-status-errBg:  #FEF2F2;
-  --color-status-infoBg: #EFF6FF;
+  --color-status-infoBg: #EBF4FB;
 
   /* ── Shadows ── */
-  --shadow-card: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-menu: 0 10px 38px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-card: 0 2px 8px rgba(0,0,0,0.09), 0 1px 2px rgba(0,0,0,0.06), 0 0 0 1px rgba(26,58,14,0.06);
+  --shadow-menu: 0 12px 40px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-glass: 0 8px 32px rgba(0,0,0,0.11), 0 2px 4px rgba(0,0,0,0.06), 0 1px 0 rgba(255,255,255,0.92) inset;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DARK MODE OVERRIDES
+══════════════════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-surface:        #111A0F;
+  --color-surface-card:   #1C2A18;
+  --color-surface-raised: #172214;
+  --color-surface-rule:   #2D3E28;
+  --color-surface-dim:    #141E11;
+
+  --color-text:       #E8F0E2;
+  --color-text-muted: #8FAA82;
+  --color-text-faint: #506048;
+
+  --color-brand:       #5EAD30;
+  --color-brand-dark:  #4A9020;
+  --color-brand-mid:   #3D8020;
+  --color-brand-hover: #52A028;
+
+  --color-ok:       #4ADE80;
+  --color-ok-bg:    rgba(74,222,128,0.10);
+  --color-warn:     #FB923C;
+  --color-warn-bg:  rgba(251,146,60,0.10);
+  --color-err:      #F87171;
+  --color-err-bg:   rgba(248,113,113,0.10);
+  --color-info:     #60A5FA;
+  --color-info-bg:  rgba(96,165,250,0.10);
+
+  --color-status-ok:     #4ADE80;
+  --color-status-warn:   #FB923C;
+  --color-status-err:    #F87171;
+  --color-status-info:   #60A5FA;
+  --color-status-okBg:   rgba(74,222,128,0.10);
+  --color-status-warnBg: rgba(251,146,60,0.10);
+  --color-status-errBg:  rgba(248,113,113,0.10);
+  --color-status-infoBg: rgba(96,165,250,0.10);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -69,19 +118,29 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-html, body {
+html {
   height: 100%;
-  overscroll-behavior: none;
+  /* Use dvh for mobile browsers (accounts for address bar) */
+  min-height: 100dvh;
 }
 
 body {
-  font-family: var(--font-body);
-  background-color: var(--color-surface);
+  font-family: var(--font-inter), 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Subtle sage-to-cool gradient — makes white cards pop */
+  background: linear-gradient(150deg, #EDF2FB 0%, #F0F7EE 40%, #FDF4F0 100%);
+  background-attachment: fixed;
   color: var(--color-text);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+[data-theme="dark"] body {
+  background: linear-gradient(150deg, #0A160A 0%, #0D1B0F 40%, #0A1520 100%);
+  background-attachment: fixed;
 }
 
 /* Remove number spinners */
@@ -90,36 +149,100 @@ input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
 input[type=number] { -moz-appearance: textfield; }
 
 /* Fine scrollbar */
-::-webkit-scrollbar        { width: 4px; height: 4px; }
+::-webkit-scrollbar        { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: var(--color-surface-rule); border-radius: 4px; }
+::-webkit-scrollbar-thumb  { background: var(--color-surface-rule); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-faint); }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   TYPOGRAPHY CLASSES
-   Tailwind v4 auto-generates font-display / font-body / font-mono from
-   @theme, but we also declare explicit classes as a safety net.
+   TYPOGRAPHY
+   Tailwind v4 auto-generates font-display / font-body / font-mono from @theme.
+   These explicit classes act as a safety net.
 ══════════════════════════════════════════════════════════════════════════ */
 .font-display { font-family: var(--font-display) !important; }
 .font-body    { font-family: var(--font-body)    !important; }
 .font-mono    { font-family: var(--font-mono)    !important; }
 
+/* Heading scale — use these on h1/h2/h3 within pages */
+h1, .h1 { font-family: var(--font-display); font-weight: 700; font-size: 1.875rem; line-height: 1.25; letter-spacing: -0.02em; }
+h2, .h2 { font-family: var(--font-display); font-weight: 600; font-size: 1.375rem; line-height: 1.35; letter-spacing: -0.01em; }
+h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125rem; line-height: 1.4; }
+
 /* ══════════════════════════════════════════════════════════════════════════
    CARD COMPONENTS
 ══════════════════════════════════════════════════════════════════════════ */
 .card {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-surface-rule);
-  border-radius: 16px;
-  box-shadow: var(--shadow-card);
-}
-
-.card-glass {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 16px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04);
+  box-shadow: var(--shadow-glass);
+}
+
+[data-theme="dark"] .card {
+  background: rgba(28, 42, 24, 0.85);
+  border: 1px solid rgba(255,255,255,0.07);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset;
+}
+
+/* Premium glass card — for featured/hero sections */
+.card-glass {
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 20px;
+  box-shadow:
+    0 12px 48px rgba(0,0,0,0.09),
+    0 2px 8px rgba(0,0,0,0.05),
+    0 1px 0 rgba(255,255,255,0.95) inset;
+}
+
+[data-theme="dark"] .card-glass {
+  background: rgba(20, 34, 18, 0.80);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 12px 48px rgba(0,0,0,0.4), 0 1px 0 rgba(255,255,255,0.05) inset;
+}
+
+/* bg-surface-card utility used throughout — override to be glass-aware */
+.bg-surface-card {
+  background: rgba(255, 255, 255, 0.88) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+[data-theme="dark"] .bg-surface-card {
+  background: rgba(28, 42, 24, 0.85) !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   GRADIENT UTILITIES
+══════════════════════════════════════════════════════════════════════════ */
+.gradient-brand {
+  background: linear-gradient(135deg, #1A3A0E 0%, #2A5416 50%, #3D7A20 100%);
+}
+
+.gradient-sage {
+  background: linear-gradient(135deg, #5A8A2A 0%, #7AAD45 100%);
+}
+
+.gradient-azure {
+  background: linear-gradient(135deg, #1A5C8C 0%, #2A7CB8 100%);
+}
+
+.gradient-surface {
+  background: linear-gradient(150deg, #E8F0E2 0%, #EEF2EA 50%, #E8EFF5 100%);
+}
+
+/* Glass shimmer — add to any card for a subtle top highlight */
+.glass-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255,255,255,0.35) 0%, transparent 60%);
+  pointer-events: none;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -130,65 +253,105 @@ input[type=number] { -moz-appearance: textfield; }
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.02em;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: 3px 9px;
+  border-radius: 7px;
   border: 1px solid transparent;
 }
-.badge-ok   { background: var(--color-ok-bg);   color: var(--color-ok);         border-color: rgba(21,128,61,0.2);   }
-.badge-warn { background: var(--color-warn-bg);  color: var(--color-warn);       border-color: rgba(194,65,12,0.2);   }
-.badge-err  { background: var(--color-err-bg);   color: var(--color-err);        border-color: rgba(185,28,28,0.2);   }
-.badge-info { background: var(--color-info-bg);  color: var(--color-info);       border-color: rgba(29,78,216,0.2);   }
+.badge-ok   { background: var(--color-ok-bg);   color: var(--color-ok);   border-color: rgba(26,122,60,0.18);  }
+.badge-warn { background: var(--color-warn-bg);  color: var(--color-warn); border-color: rgba(184,92,10,0.18);  }
+.badge-err  { background: var(--color-err-bg);   color: var(--color-err);  border-color: rgba(184,28,28,0.18);  }
+.badge-info { background: var(--color-info-bg);  color: var(--color-info); border-color: rgba(42,124,184,0.18); }
 .badge-gray { background: var(--color-surface);  color: var(--color-text-muted); border-color: var(--color-surface-rule); }
 
 /* ══════════════════════════════════════════════════════════════════════════
    DATA TABLE
 ══════════════════════════════════════════════════════════════════════════ */
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .data-table th {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 11.5px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: var(--color-text-muted);
-  font-weight: 500;
-  padding: 10px 14px;
+  font-weight: 600;
+  padding: 11px 16px;
   text-align: left;
   border-bottom: 1px solid var(--color-surface-rule);
-  background: var(--color-surface);
+  background: rgba(238, 242, 234, 0.6);
+  backdrop-filter: blur(8px);
 }
 .data-table td {
-  padding: 11px 14px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--color-surface-rule);
   color: var(--color-text);
   vertical-align: middle;
-  font-size: 13px;
+  font-size: 14px;
 }
 .data-table tr:last-child td { border-bottom: none; }
-.data-table tr:hover td      { background: var(--color-surface-raised); }
+.data-table tr:hover td      { background: rgba(238,242,234,0.4); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE HELPERS
+══════════════════════════════════════════════════════════════════════════ */
+
+/* Ensure page content is always scrollable and never clips on mobile */
+.page-content {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Safe area padding for notched phones */
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
+.safe-top    { padding-top:    env(safe-area-inset-top,    0); }
 
 /* ══════════════════════════════════════════════════════════════════════════
    ANIMATIONS
 ══════════════════════════════════════════════════════════════════════════ */
 @keyframes fade-in    { from { opacity: 0; }                              to { opacity: 1; }                  }
-@keyframes slide-up   { from { opacity: 0; transform: translateY(6px); }  to { opacity: 1; transform: none; } }
-@keyframes slide-down { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes slide-up   { from { opacity: 0; transform: translateY(8px); }  to { opacity: 1; transform: none; } }
+@keyframes slide-down { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
 @keyframes shake      { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 @keyframes spin       { to { transform: rotate(360deg); } }
-@keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes ping-slow  { 75%, 100% { transform: scale(1.7); opacity: 0; } }
+@keyframes shimmer    { from { background-position: -200% 0; } to { background-position: 200% 0; } }
 
-.animate-in         { animation: fade-in    0.15s ease both; }
-.slide-up           { animation: slide-up   0.18s ease both; }
-.slide-down         { animation: slide-down 0.15s ease both; }
-.shake              { animation: shake      0.25s ease; }
+.animate-in         { animation: fade-in    0.18s ease both; }
+.slide-up           { animation: slide-up   0.20s ease both; }
+.slide-down         { animation: slide-down 0.16s ease both; }
+.shake              { animation: shake      0.28s ease; }
 .animate-spin       { animation: spin       1s linear infinite; }
-.animate-pulse-soft { animation: pulse-soft 2s ease-in-out infinite; }
+.animate-pulse-soft { animation: pulse-soft 2.2s ease-in-out infinite; }
+.animate-ping-slow  { animation: ping-slow  2.4s cubic-bezier(0,0,0.2,1) infinite; }
 
-.stagger > *:nth-child(1) { animation: slide-up .18s ease both 0ms;   }
-.stagger > *:nth-child(2) { animation: slide-up .18s ease both 35ms;  }
-.stagger > *:nth-child(3) { animation: slide-up .18s ease both 70ms;  }
-.stagger > *:nth-child(4) { animation: slide-up .18s ease both 105ms; }
-.stagger > *:nth-child(5) { animation: slide-up .18s ease both 140ms; }
-.stagger > *:nth-child(6) { animation: slide-up .18s ease both 175ms; }
+/* Skeleton shimmer */
+.skeleton {
+  background: linear-gradient(90deg,
+    var(--color-surface-dim) 25%,
+    var(--color-surface)     50%,
+    var(--color-surface-dim) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Stagger entrance for lists */
+.stagger > *:nth-child(1)  { animation: slide-up .20s ease both 0ms;   }
+.stagger > *:nth-child(2)  { animation: slide-up .20s ease both 40ms;  }
+.stagger > *:nth-child(3)  { animation: slide-up .20s ease both 80ms;  }
+.stagger > *:nth-child(4)  { animation: slide-up .20s ease both 120ms; }
+.stagger > *:nth-child(5)  { animation: slide-up .20s ease both 160ms; }
+.stagger > *:nth-child(6)  { animation: slide-up .20s ease both 200ms; }
+.stagger > *:nth-child(7)  { animation: slide-up .20s ease both 240ms; }
+.stagger > *:nth-child(8)  { animation: slide-up .20s ease both 280ms; }
+.stagger > *:nth-child(9)  { animation: slide-up .20s ease both 320ms; }
+.stagger > *:nth-child(10) { animation: slide-up .20s ease both 360ms; }
+
+/* ── Scrollbar hide ── */
+.scrollbar-none                     { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar  { display: none; }

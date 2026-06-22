@@ -1,19 +1,14 @@
 'use client'
 
 // components/layout/Topbar.tsx
-//
-// Department-aware topbar.
-// variant='default'     — Operations / Admin pages (unchanged, matches existing style)
-// variant='management'  — Management pages (purple tint on status chip)
-// variant='sales'       — Sales pages (amber accent, live data indicator, Acumatica sync status)
-// variant='research'    — Research engine (green, engine status, feed count)
-//
-// Adding 'sales' as a first-class variant means:
-// - Sales reps who log in see a topbar styled to their context
-// - Acumatica sync status shows inline (last sync time + ok/error)
-// - Works identically on VPS — no static assets, pure React + CSS vars
+// Unified topbar — same base shell across all variants, departmental accent layer on top.
+// Height: 52px fixed. Background: warm #FAFAF9 glass. Dark sidebar complement.
+// variant='default'     — Operations / Quality / Admin
+// variant='research'    — Research / Intelligence (teal accent)
+// variant='sales'       — Sales pages (amber, Acumatica status, YTD)
+// variant='management'  — Management (violet accent)
 
-import { Menu, Beaker, RefreshCw, TrendingUp, BarChart2, Database } from 'lucide-react'
+import { Menu, Beaker, RefreshCw, TrendingUp, BarChart2, Database, Activity } from 'lucide-react'
 import { format } from 'date-fns'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,40 +26,73 @@ interface TopbarProps {
   onRefreshFeed?:  () => void
   feedRefreshing?: boolean
   // Sales props
-  acumaticaSync?:  'ok' | 'error' | 'syncing' | null   // Acumatica last sync status
-  lastSyncTime?:   string                               // e.g. "2 min ago"
-  ytdRevenue?:     string                               // e.g. "R70.5M" — shows in sales topbar
+  acumaticaSync?:  'ok' | 'error' | 'syncing' | null
+  lastSyncTime?:   string
+  ytdRevenue?:     string
+  // Extra right-side slot (e.g. NotificationBell)
+  rightSlot?:      React.ReactNode
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// ─── Shared shell ─────────────────────────────────────────────────────────────
 
-const chipColors: Record<string, string> = {
-  green:  'bg-status-okBg text-status-ok border border-status-ok/30',
-  amber:  'bg-status-warnBg text-status-warn border border-status-warn/30',
-  blue:   'bg-status-infoBg text-status-info border border-status-info/30',
-  red:    'bg-red-50 text-red-600 border border-red-200',
-  purple: 'bg-purple-50 text-purple-600 border border-purple-200',
-  gray:   'bg-surface text-text-muted border border-surface-rule',
+// Accent definitions per variant
+const VARIANT_ACCENT = {
+  default:    { iconBg: 'rgba(14,32,14,0.08)',  iconBorder: 'rgba(14,32,14,0.12)',  dot: '#2E7D32', dotBg: 'rgba(46,125,50,0.08)',  sub: 'Operations' },
+  research:   { iconBg: 'rgba(45,212,191,0.10)', iconBorder: 'rgba(45,212,191,0.2)', dot: '#0d9488', dotBg: 'rgba(13,148,136,0.08)', sub: 'Market Intelligence' },
+  sales:      { iconBg: 'rgba(251,191,36,0.10)', iconBorder: 'rgba(251,191,36,0.2)', dot: '#d97706', dotBg: 'rgba(217,119,6,0.08)',  sub: 'Sales Intelligence' },
+  management: { iconBg: 'rgba(167,139,250,0.10)', iconBorder: 'rgba(167,139,250,0.2)', dot: '#7c3aed', dotBg: 'rgba(124,58,237,0.08)', sub: 'Management' },
+}
+
+const VARIANT_ICON = {
+  default:    Activity,
+  research:   Beaker,
+  sales:      TrendingUp,
+  management: BarChart2,
 }
 
 const engineStatusConfig = {
-  ready:      { label: 'Engine ready',  dot: 'bg-green-400',               text: 'text-green-600'  },
-  processing: { label: 'Processing…',   dot: 'bg-amber-400 animate-ping',  text: 'text-amber-600'  },
-  offline:    { label: 'Brain offline', dot: 'bg-red-400',                 text: 'text-red-600'    },
+  ready:      { label: 'Engine ready',  color: '#059669', bg: 'rgba(5,150,105,0.08)',  border: 'rgba(5,150,105,0.2)',  pulse: false },
+  processing: { label: 'Processing',    color: '#d97706', bg: 'rgba(217,119,6,0.08)',  border: 'rgba(217,119,6,0.2)',  pulse: true  },
+  offline:    { label: 'Brain offline', color: '#dc2626', bg: 'rgba(220,38,38,0.08)',  border: 'rgba(220,38,38,0.2)',  pulse: false },
 }
 
 const syncStatusConfig = {
-  ok:      { label: 'Acumatica synced', dot: 'bg-green-400',  text: 'text-green-600'  },
-  syncing: { label: 'Syncing…',         dot: 'bg-amber-400 animate-ping', text: 'text-amber-500' },
-  error:   { label: 'Sync error',       dot: 'bg-red-400',    text: 'text-red-600'    },
+  ok:      { label: 'Synced',    color: '#059669', bg: 'rgba(5,150,105,0.08)',  border: 'rgba(5,150,105,0.2)'  },
+  syncing: { label: 'Syncing…',  color: '#d97706', bg: 'rgba(217,119,6,0.08)',  border: 'rgba(217,119,6,0.2)'  },
+  error:   { label: 'Sync error',color: '#dc2626', bg: 'rgba(220,38,38,0.08)',  border: 'rgba(220,38,38,0.2)'  },
+}
+
+// Chip token → inline style
+function chipStyle(color: string): React.CSSProperties {
+  const map: Record<string, { bg: string; text: string; border: string }> = {
+    green:  { bg: 'rgba(5,150,105,0.08)',   text: '#059669', border: 'rgba(5,150,105,0.2)'   },
+    amber:  { bg: 'rgba(217,119,6,0.08)',   text: '#d97706', border: 'rgba(217,119,6,0.2)'   },
+    blue:   { bg: 'rgba(29,78,216,0.08)',   text: '#1d4ed8', border: 'rgba(29,78,216,0.2)'   },
+    red:    { bg: 'rgba(220,38,38,0.08)',   text: '#dc2626', border: 'rgba(220,38,38,0.2)'   },
+    purple: { bg: 'rgba(124,58,237,0.08)',  text: '#7c3aed', border: 'rgba(124,58,237,0.2)'  },
+    gray:   { bg: 'rgba(120,113,108,0.07)', text: '#78716c', border: 'rgba(120,113,108,0.15)'},
+  }
+  const t = map[color] ?? map.gray
+  return {
+    background: t.bg,
+    color: t.text,
+    border: `1px solid ${t.border}`,
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    fontWeight: 500,
+    letterSpacing: '0.06em',
+    padding: '3px 9px',
+    borderRadius: '5px',
+    textTransform: 'uppercase' as const,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Topbar({
-  title, onMobileMenu, chips = [],
+  title,
+  onMobileMenu,
+  chips = [],
   variant      = 'default',
   engineState  = 'ready',
   signalCount  = 0,
@@ -73,199 +101,226 @@ export default function Topbar({
   acumaticaSync  = null,
   lastSyncTime,
   ytdRevenue,
+  rightSlot,
 }: TopbarProps) {
   const today = format(new Date(), 'EEE d MMM yyyy')
+  const accent = VARIANT_ACCENT[variant]
+  const IconComp = VARIANT_ICON[variant]
 
-  // ── Mobile trigger (shared) ──────────────────────────────────────────────
+  // ── Mobile hamburger ──────────────────────────────────────────────────────
   const MobileBtn = () => (
     <button
       onClick={onMobileMenu}
-      className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg
-        text-text-muted hover:text-text hover:bg-surface transition-colors"
+      className="xl:hidden flex items-center justify-center w-8 h-8 rounded-lg transition-colors"
+      style={{ color: 'rgba(28,25,23,0.45)' }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.05)'; (e.currentTarget as HTMLElement).style.color = 'rgba(28,25,23,0.8)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'rgba(28,25,23,0.45)' }}
       aria-label="Open menu"
     >
-      <Menu size={18} />
+      <Menu size={17} />
     </button>
   )
 
-  // ── Divider ─────────────────────────────────────────────────────────────
-  const Div = () => <div className="w-px h-4 bg-gray-100" />
+  // ── Rule divider ─────────────────────────────────────────────────────────
+  const Rule = () => (
+    <div style={{ width: 1, height: 18, background: 'rgba(28,25,23,0.08)', flexShrink: 0 }} />
+  )
+
+  // ── Status pill ───────────────────────────────────────────────────────────
+  const StatusPill = ({
+    dot, label, pulse, bg, border, color, extra,
+  }: { dot: string; label: string; pulse?: boolean; bg: string; border: string; color: string; extra?: React.ReactNode }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 6, background: bg, border: `1px solid ${border}` }}>
+      <span style={{
+        width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0,
+        boxShadow: pulse ? `0 0 0 0 ${dot}` : undefined,
+        animation: pulse ? 'topbar-pulse 1.8s ease-in-out infinite' : undefined,
+      }} />
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 500, letterSpacing: '0.05em', color }}>{label}</span>
+      {extra}
+    </div>
+  )
 
   // ════════════════════════════════════════════════════════════════════════
-  // RESEARCH variant
+  // SHELL — identical across all variants, just accent swaps
   // ════════════════════════════════════════════════════════════════════════
-  if (variant === 'research') {
-    const status = engineStatusConfig[engineState]
-    return (
-      <header className="h-[52px] bg-white border-b border-gray-100 flex items-center px-4 gap-3 flex-shrink-0">
+  return (
+    <>
+      {/* Pulse animation for processing/syncing states */}
+      <style>{`
+        @keyframes topbar-pulse {
+          0%,100% { opacity: 1; transform: scale(1); }
+          50%      { opacity: 0.5; transform: scale(1.25); }
+        }
+      `}</style>
+
+      <header style={{
+        height: 52,
+        background: 'rgba(250,250,249,0.88)',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        borderBottom: '1px solid rgba(220,215,210,0.7)',
+        boxShadow: '0 1px 12px rgba(0,0,0,0.06), 0 1px 0 rgba(255,255,255,0.8) inset',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 16px',
+        gap: 12,
+        flexShrink: 0,
+        position: 'relative',
+      }}>
+
+        {/* Left edge accent line */}
+        <div style={{
+          position: 'absolute', left: 0, top: '20%', bottom: '20%',
+          width: 2, borderRadius: '0 2px 2px 0',
+          background: accent.dot, opacity: 0.7,
+        }} />
+
         <MobileBtn />
 
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-green-50 border border-green-100 flex items-center justify-center">
-            <Beaker size={14} className="text-green-600" />
+        {/* ── Brand / title block ─────────────────────────────────────────── */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: accent.iconBg,
+            border: `1px solid ${accent.iconBorder}`,
+          }}>
+            <IconComp size={14} style={{ color: accent.dot }} />
           </div>
+
           <div>
-            <h1 className="text-sm font-semibold text-gray-900 leading-none">Research Engine</h1>
-            <p className="text-[11px] text-gray-400 leading-none mt-0.5">Rooibos · Rosehip Intelligence</p>
-          </div>
-        </div>
-
-        <div className="flex-1" />
-
-        <div className="hidden sm:flex items-center gap-3">
-          {signalCount > 0 && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">{signalCount} signals</span>
-              {onRefreshFeed && (
-                <button onClick={onRefreshFeed} disabled={feedRefreshing}
-                  className="w-6 h-6 flex items-center justify-center rounded-md text-gray-400
-                    hover:text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-30">
-                  <RefreshCw size={11} className={feedRefreshing ? 'animate-spin' : ''} />
-                </button>
-              )}
-            </div>
-          )}
-          <Div />
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 border border-gray-100">
-            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${status.dot}`} />
-            <span className={`text-[11px] font-medium ${status.text}`}>{status.label}</span>
-          </div>
-          <Div />
-          <span className="font-mono text-[11px] text-gray-400">{today}</span>
-        </div>
-      </header>
-    )
-  }
-
-  // ════════════════════════════════════════════════════════════════════════
-  // SALES variant
-  // ════════════════════════════════════════════════════════════════════════
-  if (variant === 'sales') {
-    const syncMeta = acumaticaSync ? syncStatusConfig[acumaticaSync] : null
-
-    return (
-      <header className="h-[52px] bg-white border-b border-amber-100/60 flex items-center px-4 gap-3 flex-shrink-0">
-        <MobileBtn />
-
-        {/* Icon + title */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-amber-50 border border-amber-100 flex items-center justify-center">
-            <TrendingUp size={14} className="text-amber-600" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-gray-900 leading-none">{title}</h1>
-            <p className="text-[11px] text-gray-400 leading-none mt-0.5">
-              CNTP · Sales Intelligence Portal
+            <h1 style={{
+              fontFamily: 'var(--font-display)',
+              fontWeight: 700,
+              fontSize: 14,
+              color: '#1C1917',
+              letterSpacing: '-0.01em',
+              lineHeight: 1,
+              margin: 0,
+            }}>
+              {title}
+            </h1>
+            <p style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 9,
+              color: '#A8A29E',
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              margin: '3px 0 0',
+              lineHeight: 1,
+            }}>
+              {accent.sub}
             </p>
           </div>
         </div>
 
-        <div className="flex-1" />
+        <div style={{ flex: 1 }} />
 
-        <div className="hidden sm:flex items-center gap-3">
+        {/* ── Right side — variant-specific indicators ─────────────────────── */}
+        <div className="hidden sm:flex" style={{ alignItems: 'center', gap: 10 }}>
 
-          {/* YTD Revenue pill — shows your real number */}
-          {ytdRevenue && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-100">
-              <span className="text-[10px] text-amber-500 font-mono">YTD</span>
-              <span className="text-[11px] font-semibold text-amber-700">{ytdRevenue}</span>
-            </div>
-          )}
-
-          <Div />
-
-          {/* Acumatica sync status — shown when wired up */}
-          {syncMeta && (
+          {/* RESEARCH: signal count + refresh + engine state */}
+          {variant === 'research' && (
             <>
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 border border-gray-100">
-                <Database size={10} className="text-gray-400" />
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${syncMeta.dot}`} />
-                <span className={`text-[11px] font-medium ${syncMeta.text}`}>{syncMeta.label}</span>
-                {lastSyncTime && <span className="text-[10px] text-gray-400 ml-1">{lastSyncTime}</span>}
-              </div>
-              <Div />
+              {signalCount > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#78716C', letterSpacing: '0.04em' }}>
+                    {signalCount.toLocaleString()} signals
+                  </span>
+                  {onRefreshFeed && (
+                    <button
+                      onClick={onRefreshFeed}
+                      disabled={feedRefreshing}
+                      style={{
+                        width: 24, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', border: '1px solid rgba(0,0,0,0.08)',
+                        background: feedRefreshing ? 'rgba(13,148,136,0.06)' : 'transparent',
+                        color: '#78716C', cursor: feedRefreshing ? 'not-allowed' : 'pointer',
+                        opacity: feedRefreshing ? 0.5 : 1,
+                      }}
+                    >
+                      <RefreshCw size={10} style={{ animation: feedRefreshing ? 'spin 1s linear infinite' : undefined }} />
+                    </button>
+                  )}
+                </div>
+              )}
+              <Rule />
+              {(() => {
+                const s = engineStatusConfig[engineState]
+                return <StatusPill dot={s.color} label={s.label} pulse={s.pulse} bg={s.bg} border={s.border} color={s.color} />
+              })()}
+              <Rule />
             </>
           )}
 
-          {/* Static data indicator when Acumatica not yet wired */}
-          {!syncMeta && (
+          {/* SALES: YTD revenue + Acumatica sync */}
+          {variant === 'sales' && (
             <>
-              <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-50 border border-gray-100">
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                <span className="text-[10px] font-mono text-gray-400">STATIC DATA</span>
-              </div>
-              <Div />
+              {ytdRevenue && (
+                <>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '3px 10px', borderRadius: 6,
+                    background: 'rgba(217,119,6,0.08)',
+                    border: '1px solid rgba(217,119,6,0.2)',
+                  }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: '#d97706', letterSpacing: '0.06em', textTransform: 'uppercase' }}>YTD</span>
+                    <span style={{ fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 700, color: '#92400e' }}>{ytdRevenue}</span>
+                  </div>
+                  <Rule />
+                </>
+              )}
+              {acumaticaSync ? (() => {
+                const s = syncStatusConfig[acumaticaSync]
+                return (
+                  <>
+                    <StatusPill
+                      dot={s.color} label={s.label} bg={s.bg} border={s.border} color={s.color}
+                      pulse={acumaticaSync === 'syncing'}
+                      extra={lastSyncTime ? (
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: '#A8A29E', marginLeft: 2 }}>{lastSyncTime}</span>
+                      ) : undefined}
+                    />
+                    <Rule />
+                  </>
+                )
+              })() : (
+                <>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    padding: '3px 8px', borderRadius: 5,
+                    background: 'rgba(120,113,108,0.06)',
+                    border: '1px solid rgba(120,113,108,0.12)',
+                  }}>
+                    <Database size={9} style={{ color: '#A8A29E' }} />
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: '#A8A29E', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Static</span>
+                  </div>
+                  <Rule />
+                </>
+              )}
             </>
           )}
 
-          {/* Chips */}
+          {/* Chips — all variants */}
           {chips.map((chip, i) => (
-            <span key={i} className={`font-mono text-[10px] tracking-[.5px] px-2.5 py-1 rounded-md ${chipColors[chip.color]}`}>
-              {chip.label}
-            </span>
+            <span key={i} style={chipStyle(chip.color)}>{chip.label}</span>
           ))}
 
-          <span className="font-mono text-[11px] text-gray-400">{today}</span>
-        </div>
-      </header>
-    )
-  }
+          {/* Right slot (e.g. NotificationBell) */}
+          {rightSlot}
 
-  // ════════════════════════════════════════════════════════════════════════
-  // MANAGEMENT variant
-  // ════════════════════════════════════════════════════════════════════════
-  if (variant === 'management') {
-    return (
-      <header className="h-[52px] bg-white border-b border-purple-100/60 flex items-center px-4 gap-3 flex-shrink-0">
-        <MobileBtn />
-
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-purple-50 border border-purple-100 flex items-center justify-center">
-            <BarChart2 size={14} className="text-purple-600" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-gray-900 leading-none">{title}</h1>
-            <p className="text-[11px] text-gray-400 leading-none mt-0.5">CNTP · Management</p>
-          </div>
-        </div>
-
-        <div className="flex-1" />
-
-        <div className="hidden sm:flex items-center gap-3">
-          {chips.map((chip, i) => (
-            <span key={i} className={`font-mono text-[10px] tracking-[.5px] px-2.5 py-1 rounded-md ${chipColors[chip.color]}`}>
-              {chip.label}
-            </span>
-          ))}
-          <span className="font-mono text-[11px] text-gray-400">{today}</span>
-        </div>
-      </header>
-    )
-  }
-
-  // ════════════════════════════════════════════════════════════════════════
-  // DEFAULT variant — Operations / Admin (unchanged from original)
-  // ════════════════════════════════════════════════════════════════════════
-  return (
-    <header className="h-[52px] bg-surface-card border-b border-surface-rule flex items-center px-4 gap-3 flex-shrink-0">
-      <MobileBtn />
-
-      <h1 className="font-display font-bold text-xl text-text tracking-[0.3px]">
-        {title}
-      </h1>
-
-      <div className="flex-1" />
-
-      <div className="hidden sm:flex items-center gap-2">
-        {chips.map((chip, i) => (
-          <span key={i} className={`font-mono text-[10px] tracking-[.5px] px-2.5 py-1 rounded-md ${chipColors[chip.color]}`}>
-            {chip.label}
+          {/* Date — all variants */}
+          <span style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            color: '#A8A29E',
+            letterSpacing: '0.05em',
+          }}>
+            {today}
           </span>
-        ))}
-        <span className="font-mono text-[10px] tracking-[.5px] px-2.5 py-1 rounded-md bg-surface text-text-muted border border-surface-rule">
-          {today}
-        </span>
-      </div>
-    </header>
+        </div>
+      </header>
+    </>
   )
 }

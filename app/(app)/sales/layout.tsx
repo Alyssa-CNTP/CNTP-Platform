@@ -1,28 +1,11 @@
 'use client'
 
 // app/(app)/sales/layout.tsx
-// Wraps all /sales routes with the sales-variant topbar.
-// This is what was missing — without a layout, sub-routes have no topbar.
+// The app shell (app/(app)/layout.tsx) already renders the sales Topbar via
+// ROUTE_META — this is just a passthrough wrapper so /sales sub-routes share it.
 
-import { ReactNode, useState } from 'react'
-import Topbar from '@/components/layout/Topbar'
+import { ReactNode } from 'react'
 
 export default function SalesLayout({ children }: { children: ReactNode }) {
-  const [mobileOpen, setMobileOpen] = useState(false)
-
-  return (
-    <div className="flex flex-col h-full">
-      <Topbar
-        title="Sales Dashboard"
-        onMobileMenu={() => setMobileOpen(o => !o)}
-        variant="sales"
-        ytdRevenue="R70.5M"
-        chips={[
-          { label: 'JAN–APR 2026', color: 'gray'  },
-          { label: 'CONFIDENTIAL', color: 'amber' },
-        ]}
-      />
-      {children}
-    </div>
-  )
+  return <div className="flex flex-col h-full">{children}</div>
 }

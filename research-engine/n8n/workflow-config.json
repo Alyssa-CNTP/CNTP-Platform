@@ -1,0 +1,294 @@
+{
+  "name": "Alara Signal Pipeline",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 15 }]
+        }
+      }
+    },
+    {
+      "id": "google-news",
+      "name": "Google News RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [500, 100],
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tea+export+OR+rooibos+bulk+OR+red+espresso&hl=en-ZA&gl=ZA&ceid=ZA:en"
+      }
+    },
+    {
+      "id": "reddit-fetch",
+      "name": "Reddit JSON API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 220],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.reddit.com/r/tea/search.json?q=rooibos&sort=new&limit=10",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "youtube-fetch",
+      "name": "YouTube Data API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 340],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/youtube/v3/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "part",     "value": "snippet" },
+            { "name": "q",        "value": "rooibos tea OR red espresso OR rooibos latte" },
+            { "name": "type",     "value": "video" },
+            { "name": "order",    "value": "viewCount" },
+            { "name": "maxResults", "value": "10" },
+            { "name": "key",      "value": "={{ $env.YOUTUBE_DATA_API_KEY }}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tiktok-apify",
+      "name": "TikTok via Apify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 460],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/clockworks~tiktok-scraper/run-sync-get-dataset-items",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.APIFY_API_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "hashtags": ["rooibos", "redespresso", "herbalcoffee", "caffeinefree", "rooiboslatte", "southafricantea", "healthytea"],
+          "resultsPerPage": 20,
+          "maxItems": 50
+        }
+      }
+    },
+    {
+      "id": "instagram-apify",
+      "name": "Instagram via Apify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 580],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.APIFY_API_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "hashtags": ["rooibos", "rooiboslatte", "redespresso", "herbalwellness", "southafricantea"],
+          "resultsType": "posts",
+          "resultsLimit": 30,
+          "onlyPostsNewerThan": "2 days"
+        }
+      }
+    },
+    {
+      "id": "exa-linkedin",
+      "name": "Exa LinkedIn + X",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 700],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.exa.ai/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key",    "value": "={{ $env.EXA_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "query": "site:linkedin.com rooibos tea innovation OR red espresso OR herbal ingredient supplier",
+          "numResults": 10,
+          "useAutoprompt": true
+        }
+      }
+    },
+    {
+      "id": "wire-rss",
+      "name": "Wire News RSS (Reuters + Food)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [500, 820],
+      "parameters": {
+        "url": "https://feeds.reuters.com/reuters/businessNews"
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge All Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [760, 460],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      }
+    },
+    {
+      "id": "gemini-classify",
+      "name": "Gemini Classification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [980, 460],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "contents": [
+            {
+              "parts": [
+                {
+                  "text": "=Classify this signal for a South African herbal tea export company. Respond ONLY with JSON:\n{\"summary_en\":\"...\",\"classification\":\"opportunity|threat|competitor|regulation|neutral\",\"relevance_score\":0-10,\"keyword_group\":\"...\",\"sections\":[\"sales\",\"expansion\"]}\n\nTitle: {{ $json.title || $json.snippet?.title || 'No title' }}\nContent: {{ ($json.summary || $json.snippet?.description || $json.text || '').substring(0, 400) }}"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "filter-relevance",
+      "name": "Filter Score >= 3",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [1200, 460],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ JSON.parse($json.candidates?.[0]?.content?.parts?.[0]?.text || '{}').relevance_score || 0 }}",
+              "operation": "largerEqual",
+              "value2": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ingest-signal",
+      "name": "POST to Alara Ingest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1420, 460],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL?.replace('5678', '3000') || 'http://localhost:3000' }}/api/pipeline/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-pipeline-secret", "value": "={{ $env.PIPELINE_INGEST_SECRET }}" },
+            { "name": "x-n8n-secret",      "value": "={{ $env.N8N_WEBHOOK_SECRET }}" },
+            { "name": "Content-Type",       "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "source_type":     "={{ $json.source_type || 'n8n' }}",
+          "source_url":      "={{ $json.link || $json.url || null }}",
+          "source_domain":   "={{ $json.source_domain || null }}",
+          "language":        "en",
+          "title":           "={{ $json.title || $json.snippet?.title || 'Untitled' }}",
+          "summary_en":      "={{ JSON.parse($json.classification_result || '{}').summary_en || '' }}",
+          "classification":  "={{ JSON.parse($json.classification_result || '{}').classification || 'neutral' }}",
+          "relevance_score": "={{ JSON.parse($json.classification_result || '{}').relevance_score || 0 }}",
+          "sections":        "={{ JSON.parse($json.classification_result || '{}').sections || [] }}",
+          "keyword_group":   "={{ JSON.parse($json.classification_result || '{}').keyword_group || null }}"
+        }
+      }
+    },
+    {
+      "id": "error-google",
+      "name": "Log Google News Error",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [500, 940],
+      "parameters": {}
+    },
+    {
+      "id": "error-ingest",
+      "name": "Log Ingest Error",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1420, 600],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[
+        { "node": "Google News RSS",        "type": "main", "index": 0 },
+        { "node": "Reddit JSON API",         "type": "main", "index": 0 },
+        { "node": "YouTube Data API",        "type": "main", "index": 0 },
+        { "node": "TikTok via Apify",        "type": "main", "index": 0 },
+        { "node": "Instagram via Apify",     "type": "main", "index": 0 },
+        { "node": "Exa LinkedIn + X",        "type": "main", "index": 0 },
+        { "node": "Wire News RSS (Reuters + Food)", "type": "main", "index": 0 }
+      ]]
+    },
+    "Google News RSS":              { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 0 }]], "error": [[{ "node": "Log Google News Error", "type": "main", "index": 0 }]] },
+    "Reddit JSON API":              { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 1 }]] },
+    "YouTube Data API":             { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 2 }]] },
+    "TikTok via Apify":             { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 3 }]] },
+    "Instagram via Apify":          { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 4 }]] },
+    "Exa LinkedIn + X":             { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 5 }]] },
+    "Wire News RSS (Reuters + Food)": { "main": [[{ "node": "Merge All Sources", "type": "main", "index": 6 }]] },
+    "Merge All Sources":            { "main": [[{ "node": "Gemini Classification", "type": "main", "index": 0 }]] },
+    "Gemini Classification":        { "main": [[{ "node": "Filter Score >= 3", "type": "main", "index": 0 }]] },
+    "Filter Score >= 3":            { "main": [[{ "node": "POST to Alara Ingest", "type": "main", "index": 0 }]] },
+    "POST to Alara Ingest":      { "error": [[{ "node": "Log Ingest Error", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["alara", "signal-pipeline"],
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "alara-signal-pipeline-v1"
+  }
+}

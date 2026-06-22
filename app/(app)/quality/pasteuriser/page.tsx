@@ -26,6 +26,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
+import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
   CheckCircle2, AlertTriangle, X, MessageSquare,
@@ -63,6 +64,7 @@ const PAST_SPEC_DEFAULTS: Record<string,{min:number|null,max:number|null}> = {
   gt6:  { min:null, max:1 }, gt10: { min:null, max:1 }, gt12: { min:null, max:5 },
   gt16: { min:10,  max:20 }, gt20: { min:20,  max:35 }, gt60: { min:35,  max:50 },
   dust: { min:null, max:1 }, moisture: { min:null, max:8.5 }, untapped_bd: { min:280, max:340 },
+  hourly_temp: { min: 85, max: null },
 }
 
 const PASS_COLORS: Record<string,[string,string,string]> = {
@@ -83,6 +85,7 @@ interface BatchSample {
   id:             string
   time:           string
   date:           string
+  qc_name:        string
   serial_bin:     string
   hourly_temp:    string
   has_sieve:      boolean
@@ -158,6 +161,7 @@ function getPastSpec(custName: string, field: string, batchSpec: any, batchSpecs
       dust: {min:batchSpecsOverride.dust_min, max:batchSpecsOverride.dust_max},
       moisture:    {min:null, max:batchSpecsOverride.moisture_max},
       untapped_bd: {min:batchSpecsOverride.bd_min, max:batchSpecsOverride.bd_max},
+      hourly_temp: {min:batchSpecsOverride.temp_min ?? 85, max:batchSpecsOverride.temp_max ?? null},
     }
     const v = MAP[field]
     if (v) {
@@ -535,7 +539,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   function blank(): any {
     return {
       time: format(now,'HH:mm'), date: format(now,'yyyy-MM-dd'),
-      serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
+      qc_name:'', serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
       gt6:'',gt10:'',gt12:'',gt16:'',gt20:'',gt60:'',dust:'',
       gt6_g:'',gt10_g:'',gt12_g:'',gt16_g:'',gt20_g:'',gt60_g:'',dust_g:'',
       moisture:'', untapped_bd:'', customer_bd:'',
@@ -563,9 +567,34 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   const total = PAST_SIEVE_COLS.reduce((s,c) => s + (parseFloat(row[c.key]) || 0), 0)
   const orderViolations = checkSieveOrder(row)
 
+  // ── Variation / outlier detection vs the other samples in this batch ──
+  // Mirrors the sieving dashboard logic: flag a value only when the batch
+  // already has real spread (std > floor) AND the new value sits >2.5 std away.
+  const priorSamples = (batch.samples || []).filter((s:any) => s.id !== (initialRow as any)?.id)
+  const anomalyWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const hist = priorSamples.map((s:any) => parseFloat(s[key])).filter((v:number) => !isNaN(v))
+      if (hist.length < 3) return
+      const mean = hist.reduce((a:number,b:number)=>a+b,0)/hist.length
+      const std  = Math.sqrt(hist.map((v:number)=>(v-mean)**2).reduce((a:number,b:number)=>a+b,0)/hist.length)
+      if (std > stdFloor && Math.abs(n-mean) > 2.5*std)
+        warns.push(`${label}: ${n}${unit} far from batch avg ${mean.toFixed(1)}${unit}`)
+    }
+    if (row.has_sieve) PAST_SIEVE_COLS.forEach(c => checkField(c.key, c.label, row[c.key], 1.0, '%'))
+    if (row.has_mb) {
+      checkField('moisture', 'Moisture', row.moisture, 0.3, '%')
+      checkField('untapped_bd', 'BD', row.untapped_bd, 5, '')
+    }
+    checkField('hourly_temp', 'Temp', row.hourly_temp, 1.0, '°C')
+    return warns
+  })()
+
   function submit() {
-    if (!row.time.trim())  { alert('Time is required'); return }
-    if (!row.date)         { alert('Date is required'); return }
+    if (!row.time.trim())     { alert('Time is required'); return }
+    if (!row.date)            { alert('Date is required'); return }
+    if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
     onSave(row)
@@ -606,13 +635,36 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
 
           {/* Identity fields */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number'],['hourly_temp','Temp (°C)','number']].map(([k,l,t]) => (
+            {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number']].map(([k,l,t]) => (
               <div key={k}>
                 <label className={`${lbl} ${k==='date'?'text-info':''}`}>{l as string}</label>
-                <input type={t as string} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
+                <input type={t as string} inputMode={t==='number'?'numeric':undefined} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
+            <div>
+              <label className={lbl}>QC Controller *</label>
+              <input value={row.qc_name||''} onChange={e => set('qc_name', e.target.value)}
+                placeholder="Name" className={`${inp} w-full`} />
+            </div>
+            <div>
+              <label className={lbl}>Temp (°C)</label>
+              {(() => {
+                const tempSpec = spec('hourly_temp')
+                const tempSt = pastChk(row.hourly_temp, tempSpec)
+                return (
+                  <>
+                    <input type="number" inputMode="decimal" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
+                      className={`${inp} w-full ${tempSt==='fail' ? 'border-err bg-err/5' : tempSt==='pass' ? 'border-ok/50' : ''}`} />
+                    {tempSt==='fail' && (
+                      <p className="mt-1 text-[10px] font-semibold text-err">
+                        ⚠ Temp below spec (min {tempSpec?.min}°C)
+                      </p>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
             <div>
               <label className={lbl}>Compares to Ref?</label>
               <select value={row.compares_to_ref} onChange={e => set('compares_to_ref', e.target.value)} className={`${inp} w-full`}>
@@ -657,8 +709,8 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                             {sp ? `${sp.min!=null?sp.min+'–':'≤'}${sp.max??''}%` : '—'}
                           </td>
                           <td className="px-2 py-1.5">
-                            <input type="number" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
-                              placeholder="g" className={`${inp} w-24 text-center border-info/40 bg-info/5`} />
+                            <input type="number" inputMode="decimal" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
+                              placeholder="g" className={`${inp} w-24 text-center border-info/40 bg-info/5 text-[15px] py-2`} />
                           </td>
                           <td className="px-2 py-1.5">
                             <div className={`px-3 py-1.5 rounded-lg border text-center font-mono font-bold text-[13px] ${fail ? 'border-err/40 bg-err/8 text-err' : st === 'pass' ? 'border-ok/40 bg-ok/8 text-ok' : 'border-surface-rule bg-surface text-text-muted'}`}>
@@ -698,7 +750,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                   return (
                     <div key={k as string}>
                       <label className={lbl}>{l as string}{sp && <span className="text-[9px] text-text-faint ml-1">{sp.min!=null?`${sp.min}–${sp.max}`:sp.max!=null?`≤${sp.max}`:''}</span>}</label>
-                      <input type="number" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
+                      <input type="number" inputMode="decimal" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
                         className={`${inp} w-full ${st==='fail'?'border-err/40 bg-err/8':st==='pass'?'border-ok/40 bg-ok/8':''}`} />
                       {st==='fail' && <div className="text-[9px] text-err mt-0.5">⚠ Out of spec</div>}
                     </div>
@@ -707,10 +759,24 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 {['1','2','3'].map(n => (
                   <div key={n}>
                     <label className={lbl}>Weight Check {n} (kg)</label>
-                    <input type="number" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" inputMode="decimal" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Variation / outlier warnings (non-blocking) */}
+          {anomalyWarnings.length > 0 && (
+            <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
+              <div className="flex items-center gap-2 font-bold text-[12px] text-warn mb-1">
+                <AlertTriangle size={14} /> Unusual variation — please double-check before saving
+              </div>
+              <ul className="list-disc pl-5 space-y-0.5">
+                {anomalyWarnings.map((w,i) => (
+                  <li key={i} className="text-[11px] text-warn">{w}</li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -770,6 +836,80 @@ function BatchCompleteness({ batch }: { batch:Batch }) {
 
 // ─── Run Dashboard ────────────────────────────────────────────────────────────
 
+// ─── Runs Overview Dashboard ──────────────────────────────────────────────────
+// At-a-glance summary across all active runs + a live moisture/temperature trend
+// for the currently selected batch.
+
+function RunsOverview({ batches, activeBatch }: { batches: Batch[]; activeBatch: Batch | null }) {
+  const active    = batches.filter(b => !b.final_result)
+  const completed = batches.filter(b => !!b.final_result)
+  const passRate  = completed.length ? Math.round(completed.filter(b=>b.final_result==='Pass').length/completed.length*100) : null
+
+  const activeSamples = active.flatMap(b => b.samples || [])
+  const moistVals = activeSamples.map(s => parseFloat(s.moisture as any)).filter(n=>!isNaN(n))
+  const tempVals  = activeSamples.map(s => parseFloat(s.hourly_temp as any)).filter(n=>!isNaN(n))
+  const avgMoist  = moistVals.length ? moistVals.reduce((a,b)=>a+b,0)/moistVals.length : null
+  const avgTemp   = tempVals.length  ? tempVals.reduce((a,b)=>a+b,0)/tempVals.length   : null
+
+  const sieveFails = active.reduce((acc,b) => acc + (b.samples||[]).filter(s =>
+    s.has_sieve && PAST_SIEVE_COLS.some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(b.customer,c.key,b._spec,b.batch_specs))==='fail')
+  ).length, 0)
+
+  const trend = (activeBatch?.samples || []).map((s,i) => ({
+    name: s.time || `#${i+1}`,
+    Moisture: !isNaN(parseFloat(s.moisture as any))    ? parseFloat(s.moisture as any)    : null,
+    Temp:     !isNaN(parseFloat(s.hourly_temp as any)) ? parseFloat(s.hourly_temp as any) : null,
+  })).filter(d => d.Moisture!=null || d.Temp!=null)
+
+  const cards: Array<{label:string,value:string|number,color:string}> = [
+    { label:'Active Runs',    value: active.length,                                  color:'text-brand' },
+    { label:'Samples (live)', value: activeSamples.length,                           color:'text-text' },
+    { label:'Avg Moisture',   value: avgMoist!=null?`${avgMoist.toFixed(1)}%`:'—',   color: avgMoist!=null&&avgMoist>8.5?'text-err':'text-ok' },
+    { label:'Avg Temp',       value: avgTemp!=null?`${avgTemp.toFixed(0)}°C`:'—',    color: avgTemp!=null&&avgTemp<85?'text-err':'text-ok' },
+    { label:'Sieve Fails',    value: sieveFails,                                     color: sieveFails>0?'text-err':'text-ok' },
+    { label:'Pass Rate',      value: passRate!=null?`${passRate}%`:'—',              color:'text-ok' },
+  ]
+
+  return (
+    <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="font-display font-bold text-[15px] text-text">📊 Runs Overview</div>
+        <div className="text-[11px] text-text-muted">{active.length} active · {completed.length} completed</div>
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+        {cards.map(c => (
+          <div key={c.label} className="bg-surface rounded-xl border border-surface-rule px-3 py-2.5 text-center">
+            <div className="font-mono text-[9px] uppercase tracking-wide text-text-muted mb-0.5">{c.label}</div>
+            <div className={`font-display font-bold text-[20px] ${c.color}`}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+      {trend.length >= 2 && (
+        <div>
+          <div className="text-[11px] font-semibold text-text-muted mb-1">
+            {activeBatch?.batch_number} — Moisture & Temperature trend
+          </div>
+          <div style={{ width:'100%', height:180 }}>
+            <ResponsiveContainer>
+              <LineChart data={trend} margin={{ top:5, right:10, left:-15, bottom:0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                <XAxis dataKey="name" tick={{ fontSize:10 }} />
+                <YAxis yAxisId="m" tick={{ fontSize:10 }} domain={['auto','auto']} />
+                <YAxis yAxisId="t" orientation="right" tick={{ fontSize:10 }} domain={['auto','auto']} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize:11 }} />
+                <ReferenceLine yAxisId="m" y={8.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value:'Moisture max', fontSize:9, fill:'#ef4444' }} />
+                <Line yAxisId="m" type="monotone" dataKey="Moisture" stroke="#f97316" strokeWidth={2} connectNulls dot={{ r:3 }} />
+                <Line yAxisId="t" type="monotone" dataKey="Temp"     stroke="#0ea5e9" strokeWidth={2} connectNulls dot={{ r:3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const db     = getDb()
   const { session } = useAuth()
@@ -796,42 +936,66 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   // Load batches from DB
   useEffect(() => {
     setDbLoading(true)
-    db.schema('qms').from('quality_records').select('*')
-      .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
-      .order('created_at',{ascending:false})
-      .then(({ data }: { data: any[] | null }) => {
-        if (!data) return
-        const loaded = data.map((r: any) => {
-          let d: any = {}
-          try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
-          const b = { ...d, _db_id: r.id }
-          return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
-            const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
-            return da < db2 ? -1 : da > db2 ? 1 : 0
-          })}
-        }).filter((b: any) => b.id)
-        setBatches(loaded)
-        if (loaded.length > 0) setActiveBatchId(loaded[0].id)
-      })
-      .finally(() => setDbLoading(false))
+    Promise.all([
+      db.schema('qms').from('quality_records').select('*')
+        .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
+        .order('created_at',{ascending:false}),
+      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()).then(j => ({ data: j.pasteuriser_runs ?? [] })),
+    ]).then(([{ data: qmsData }, { data: legacyData }]) => {
+      const parseRec = (r: any, isLegacy = false): any => {
+        let d: any = {}
+        try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+        if (!d.id) return null
+        const b = { ...d, _db_id: isLegacy ? undefined : r.id }
+        return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
+          const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
+          return da < db2 ? -1 : da > db2 ? 1 : 0
+        })}
+      }
+      const fromQms    = (qmsData    || []).map((r: any) => parseRec(r, false)).filter(Boolean)
+      const fromLegacy = (legacyData || []).map((r: any) => parseRec(r, true)).filter(Boolean)
+      const seen = new Set(fromQms.map((b: any) => b.id))
+      const all  = [...fromQms, ...fromLegacy.filter((b: any) => !seen.has(b.id))]
+      setBatches(all as any)
+      if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
+    }).finally(() => setDbLoading(false))
   }, [])
 
   // Load historical batches from public schema (read-only reference, never modified)
   const loadPubHistory = useCallback(async () => {
     setPubLoading(true)
-    // Use explicit public schema — getDb() defaults to 'production' schema
-    const { data } = await db.schema('public').from('quality_records')
-      .select('*')
-      .eq('workcenter', 'pasteuriser')
-      .order('created_at', { ascending: false })
-      .limit(200)
-    setPubBatches(data ?? [])
+    const [legacyRes, { data: current }] = await Promise.all([
+      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()),
+      db.schema('qms').from('quality_records').select('*')
+        .eq('workcenter', 'pasteuriser').order('created_at', { ascending: false }).limit(200),
+    ])
+    const merged = [...(current ?? []), ...(legacyRes.quality_records ?? [])]
+      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    setPubBatches(merged)
     setPubLoading(false)
   }, [db])
 
   useEffect(() => {
     if (showPubHistory) loadPubHistory()
   }, [showPubHistory, loadPubHistory])
+
+  // Export every historical (public-schema) record as one combined workbook
+  function exportPubHistory(records: any[]) {
+    const batches = records.map((r: any) => {
+      let d: any = {}
+      try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+      return {
+        ...d,
+        batch_number: r.batch_number || d.batch_number || d.batch_no || '—',
+        customer: d.customer || r.customer || '',
+        type_grade: d.type_grade || d.product_family || r.product_family || '',
+        final_result: d.final_result || r.final_result || '',
+        production_date: d.production_date || (r.created_at ? String(r.created_at).slice(0, 10) : ''),
+        samples: d.samples || [],
+      }
+    })
+    exportPasteuriserBatches(batches, `Pasteuriser_Historical_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
 
   useEffect(() => {
     if (activeBatchId !== prevBatchIdRef.current) { setCollapsed(false); prevBatchIdRef.current = activeBatchId }
@@ -858,6 +1022,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   }
 
   function createBatch(form: any) {
+    const dup = batches.find(b => b.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    if (dup) {
+      if (!dup.final_result) {
+        alert(`⚠ Batch "${form.batch_number}" already has an open run.\n\nPlease add a sample to the existing run instead of starting a new one.`)
+      } else {
+        alert(`⚠ Batch "${form.batch_number}" already exists (finalised as ${dup.final_result}).\n\nPlease use a different batch number.`)
+      }
+      return
+    }
     const nb: Batch = { ...form, id: Math.random().toString(36).slice(2), samples:[], created_at: new Date().toISOString() }
     setBatches(p => [nb, ...p])
     setActiveBatchId(nb.id)
@@ -963,6 +1136,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
 
   return (
     <div className="space-y-4">
+      {activeBatches.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-warn/10 border border-warn/30">
+          <span className="text-warn text-[16px]">⚠</span>
+          <div>
+            <span className="font-bold text-[12px] text-warn">Pasteuriser has {activeBatches.length} open batch{activeBatches.length !== 1 ? 'es' : ''}</span>
+            <span className="ml-2 text-[11px] text-text-muted">— finalise completed batches when done</span>
+          </div>
+        </div>
+      )}
       {/* View toggle */}
       <div className="flex border border-surface-rule rounded-xl overflow-hidden w-fit">
         {([['active','🏭 Active Runs'],['history','📊 History & Performance']] as const).map(([v,l],i) => (
@@ -979,6 +1161,9 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       {/* ── ACTIVE VIEW ── */}
       {dashView === 'active' && (
         <div className="space-y-4">
+          {/* Runs overview dashboard */}
+          <RunsOverview batches={batches} activeBatch={activeBatch} />
+
           {/* Batch selector */}
           <div className="flex gap-2 flex-wrap items-center">
             <button onClick={() => setShowNewBatch(true)}
@@ -1080,6 +1265,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         <button onClick={reopenBatch} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔓 Re-open</button>
                       </div>
                     )}
+                    <button
+                      onClick={() => exportPasteuriserBatch(activeBatch)}
+                      className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">
+                      ⬇ Export Excel
+                    </button>
                     {isAdmin && (
                       <button
                         onClick={() => { if (!confirm(`Delete entire run "${activeBatch.batch_number}" and all ${activeBatch.samples.length} samples?`)) return; deleteBatchFromDB(activeBatch._db_id); setBatches(p => p.filter(b => b.id !== activeBatchId)); setActiveBatchId(null) }}
@@ -1121,7 +1311,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         <table className="w-full text-left">
                           <thead>
                             <tr>
-                              <th colSpan={6} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
+                              <th colSpan={7} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
                               <th colSpan={8} className="px-3 py-2 bg-info text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sieve Analysis (%)</th>
                               <th colSpan={3} className="px-3 py-2 bg-purple-600 text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Moisture & BD</th>
                               <th colSpan={6} className="px-3 py-2 bg-ok text-white text-[10px] font-semibold text-center">Sensorial</th>
@@ -1133,6 +1323,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                               <th className="px-2 py-2">Time</th>
                               <th className="px-2 py-2 text-info">Date</th>
                               <th className="px-2 py-2">Bin/Bag</th>
+                              <th className="px-2 py-2">QC</th>
                               <th className="px-2 py-2 text-center border-r-2 border-surface-rule">Temp°C</th>
                               {PAST_SIEVE_COLS.map(c => <th key={c.key} className="px-1.5 py-2 text-center whitespace-nowrap">{c.label}</th>)}
                               <th className="px-1.5 py-2 text-center font-bold border-r-2 border-surface-rule">Total</th>
@@ -1165,6 +1356,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     <td className="px-2 py-2.5 font-mono font-bold text-[11px]">{s.time||'—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-info font-semibold whitespace-nowrap">{s.date ? format(new Date(s.date+'T12:00:00'),'dd MMM') : '—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-text-muted">{s.serial_bin||'—'}</td>
+                                    <td className="px-2 py-2.5 text-[10px]">{s.qc_name||'—'}</td>
                                     <td className="px-2 py-2.5 text-center text-[10px] border-r-2 border-surface-rule">{s.hourly_temp||'—'}</td>
                                     {PAST_SIEVE_COLS.map(c => {
                                       const val = s[c.key as keyof BatchSample] as string
@@ -1323,7 +1515,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-surface border-b border-surface-rule">
-                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result'].map(h => (
+                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result','Export'].map(h => (
                         <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1376,6 +1568,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <td className="px-4 py-3">
                               <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold border" style={{ background:rc[0], color:rc[1], borderColor:rc[2] }}>{b.final_result}</span>
                             </td>
+                            <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                              <button onClick={() => exportPasteuriserBatch(b)}
+                                className="px-2 py-1 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[10px] font-semibold whitespace-nowrap">⬇ Excel</button>
+                            </td>
                           </tr>
 
                           {isExpanded && (
@@ -1388,6 +1584,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     {b.final_reason && <span className="text-[10px] text-warn bg-warn/8 px-2 py-0.5 rounded-lg italic">💬 {b.final_reason}</span>}
                                     <button onClick={e => { e.stopPropagation(); setActiveBatchId(b.id); setDashView('active') }}
                                       className="ml-auto px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
+                                    <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
+                                      className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
                                   </div>
                                   {samples.length > 0 && (
                                     <div className="overflow-x-auto rounded-xl border border-surface-rule">
@@ -1447,6 +1645,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <span className="text-[10px] font-mono uppercase tracking-wide text-warn font-bold">📜 Historical — public schema (read-only)</span>
                 {pubLoading && <span className="text-[11px] text-text-muted animate-pulse">Loading…</span>}
                 {!pubLoading && <span className="text-[11px] text-text-muted">{pubBatches.length} records</span>}
+                {!pubLoading && pubBatches.length > 0 && (
+                  <button onClick={() => exportPubHistory(pubBatches)}
+                    className="ml-auto px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export All</button>
+                )}
               </div>
               {!pubLoading && pubBatches.length === 0 && (
                 <div className="text-[12px] text-text-muted">No historical pasteuriser records found in the public schema.</div>
@@ -1457,7 +1659,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                     <table className="w-full text-left">
                       <thead>
                         <tr className="bg-surface border-b border-warn/20">
-                          {['Batch','Date','Customer','Product','Samples','Result'].map(h => (
+                          {['Batch','Date','Customer','Product','Samples','Result','Export'].map(h => (
                             <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-warn/70 whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -1486,6 +1688,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                   ? <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold border" style={{ background:rc[0], color:rc[1], borderColor:rc[2] }}>{result}</span>
                                   : <span className="text-text-faint text-[11px]">—</span>
                                 }
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button onClick={() => exportPasteuriserBatch({ ...d, batch_number: batchNo, customer, type_grade: product, final_result: result })}
+                                  className="px-2 py-1 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[10px] font-semibold">⬇ Excel</button>
                               </td>
                             </tr>
                           )
@@ -1761,34 +1967,9 @@ function SpecificationsTab({ isAdmin }: { isAdmin:boolean }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { key:'rundash',    label:'🏭 Run Dashboard'  },
-  { key:'sensorial',  label:'🍵 Sensorial Table' },
-  { key:'micro',      label:'🦠 Microbiology'   },
-  { key:'residue',    label:'🌿 Residue'        },
-  { key:'heavymetals',label:'⚗️ Heavy Metals'   },
-  { key:'eto',        label:'🧪 EtO'            },
-  { key:'aflatoxin',  label:'🍄 Aflatoxins'     },
-  { key:'mosh',       label:'🛢 MOSH/MOAH'      },
-  { key:'pa',         label:'💊 PAs'            },
-  { key:'glyphosate', label:'🧫 Glyphosate'     },
-  { key:'specs',      label:'📋 Specifications' },
+  { key:'rundash',   label:'🏭 Run Dashboard'  },
+  { key:'specs',     label:'📋 Specifications' },
 ]
-
-const TEST_TYPE_MAP: Record<string,string> = {
-  micro:'micro', residue:'residue', heavymetals:'heavy_metals',
-  eto:'eto', aflatoxin:'aflatoxins', mosh:'mosh_moah', pa:'pa_final', glyphosate:'glyphosate',
-}
-
-const TEST_TITLE_MAP: Record<string,{title:string,icon:string}> = {
-  micro:       { title:'Microbiology',              icon:'🦠' },
-  residue:     { title:'Residue / Pesticides',       icon:'🌿' },
-  heavymetals: { title:'Heavy Metals',               icon:'⚗️' },
-  eto:         { title:'Ethylene Oxide',             icon:'🧪' },
-  aflatoxin:   { title:'Aflatoxins & Mycotoxins',    icon:'🍄' },
-  mosh:        { title:'MOSH / MOAH',               icon:'🛢' },
-  pa:          { title:'PA/TA Final (Pasteuriser)',  icon:'💊' },
-  glyphosate:  { title:'Glyphosate',                icon:'🧫' },
-}
 
 // ─── PastSensorialTable ──────────────────────────────────────────────────────
 // Full batch-level central table: sieve averages + sensorial averages per batch
@@ -2034,16 +2215,8 @@ export default function PasteuriserPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-5 max-w-[1400px] w-full mx-auto">
-        {tab === 'rundash'    && <RunDashboard isAdmin={canWriteQuality} />}
-        {tab === 'sensorial'  && <PastSensorialTable canWrite={canWriteQuality} />}
-
-        {/* Generic test tabs */}
-        {['micro','residue','heavymetals','eto','aflatoxin','mosh','pa','glyphosate'].includes(tab) && (() => {
-          const { title, icon } = TEST_TITLE_MAP[tab]
-          return <TestTab title={title} icon={icon} testType={TEST_TYPE_MAP[tab]} isAdmin={canWriteQuality} />
-        })()}
-
-        {tab === 'specs' && <SpecificationsTab isAdmin={canWriteQuality} />}
+        {tab === 'rundash'   && <RunDashboard isAdmin={canWriteQuality} />}
+        {tab === 'specs'     && <SpecificationsTab isAdmin={canWriteQuality} />}
       </div>
     </div>
   )

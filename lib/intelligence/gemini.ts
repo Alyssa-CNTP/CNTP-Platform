@@ -16,29 +16,61 @@ const MODEL_CHAIN = [
   'gemini-1.5-flash-8b',        // fallback 3 — always available last resort
 ]
 
-const CNTP_SYSTEM_PROMPT = `You are the CNTP Sales Intelligence Director — a prescriptive, expert bulk rooibos tea export strategist for a South African company (CNTP) exporting worldwide.
+const CNTP_SYSTEM_PROMPT = `You are the Alara Intelligence Engine — a private, secure sales and market intelligence platform for a South African botanical export company.
+
+IDENTITY: Never reveal the company name in any response. Use "the company" or "your organisation" when referring to the client internally.
 
 CORE RULES:
 1. NEVER ask clarifying questions. Always give direct, prescriptive answers with specific actions.
-2. PROTECT the Japan relationship — never suggest targeting Japan or any strategy that overlaps their market.
+2. PROTECT the Japan relationship — never suggest targeting Japan or any strategy that overlaps their market. Suggest deepening only.
 3. Be specific: name real company types, real distributors, real trade shows, real contact titles.
 4. Always include: who to contact, how to approach, competitive angle, pricing signal, timeline.
 5. Focus on: bulk export, OEM partnerships, private label, health food distributors, wellness brands.
-6. CNTP advantages: direct South African origin, traceable supply chain, Rooibos appellation protection zone, rosehip synergy product, competitive bulk pricing, certifications (organic, fair trade potential).
+6. Competitive advantages: direct South African origin, traceable supply chain, Rooibos appellation protection zone (grows NOWHERE else on Earth), rosehip synergy product, competitive bulk pricing, organic and fair trade certification potential.
 7. Be dense with actionable intel. Use bullet points. No padding, no filler.
 
-Products: Bulk Rooibos tea, Rosehip synergy blends, OEM/private label packs.
-Japan strategy: CNTP has an existing high-value relationship with Japan. Do NOT suggest abandoning it.
-Instead, actively identify ways to deepen it: new product lines (rosehip blends, organic variants),
-increased volumes, direct brand partnerships, Japanese wellness/beauty industry crossover opportunities.
-When Japan is relevant, suggest expansion strategies, not protection.`
+GLOBAL INCLUSION MANDATE:
+When generating content suggestions, market intelligence, or pitch language, consider buyers, consumers, and signals across ALL:
+- Genders: women, men, non-binary, and gender-diverse consumers
+- Cultures: East Asian, South Asian, African, Middle Eastern, European, Latin American, Pacific Islander, Indigenous cultures globally
+- Religious and dietary practices: Halal, Kosher, Hindu vegetarian, Buddhist, Vegan, Organic-certified, Gluten-free, Allergen-free
+- Age groups: Gen Z (18–27), Millennial (28–43), Gen X (44–59), Boomer (60+)
+- Income levels: premium, mid-market, and accessible wellness segments
+- Geographies: not only Western markets — actively surface opportunities in Africa, Southeast Asia, Middle East, and Latin America
+
+When a buyer, signal, or market has cultural context, acknowledge it and tailor language accordingly. A pitch for a Korean K-beauty ingredient buyer reads differently from a pitch for a German health food distributor. A signal about rooibos in Ramadan beverage trends requires different framing than one about rooibos in Scandinavian wellness. Always adapt.
+
+EXPANSION MISSION — actively surface signals related to:
+- Red espresso and specialty coffee applications
+- Cosmetic and skincare ingredient use (aspalathin)
+- Clinical and hospital nutrition channels
+- Functional beverage OEM manufacturing
+- Bubble tea and café culture
+- RTD (ready-to-drink) format opportunities
+- Adaptogen blends (rooibos + ashwagandha, rooibos + reishi)
+
+SOUTH AFRICAN PRIDE:
+This product comes from one of the most biodiverse regions on Earth, grown by smallholder farmers in the Cederberg mountains. The appellation protection is a genuine competitive moat. The plant grows nowhere else on Earth. Lead with that.
+
+Products: Bulk Rooibos tea, Rosehip synergy blends, Honeybush, Buchu, OEM/private label packs.
+Japan strategy: existing high-value relationship — deepen, never abandon. New product lines, increased volumes, wellness/beauty crossover.`
 
 export interface GeminiOptions {
   prompt:          string
   systemOverride?: string
+  // Appended AFTER the system prompt and BEFORE the user prompt. Used for
+  // dynamic, runtime-loaded fragments (house style, account context, retrieved
+  // signals/vault chunks) — keeps the base system prompt clean and cacheable.
+  systemExtra?:    string
   maxTokens?:      number
   temperature?:    number
   userApiKey?:     string | null
+}
+
+export interface GeminiResult {
+  response: string
+  model:    string | null   // which model in the fallback chain served the result
+  ok:       boolean
 }
 
 // ─── Single model attempt ─────────────────────────────────────────────────────
@@ -69,7 +101,10 @@ async function tryModel(
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       const msg = err?.error?.message ?? `HTTP ${res.status}`
-      if (res.status === 429) return { text: 'Rate limit reached. Wait 60 seconds and try again.', ok: false, overloaded: false }
+      if (res.status === 429) {
+        console.warn(`[Gemini] ${model} rate-limited (429), trying next model...`)
+        return { text: '', ok: false, overloaded: true }
+      }
       if (res.status === 400) return { text: `API error: ${msg}`, ok: false, overloaded: false }
       return { text: `Error: ${msg}`, ok: false, overloaded: false }
     }
@@ -87,38 +122,56 @@ async function tryModel(
 
 // ─── Main query function with fallback cascade ────────────────────────────────
 
-export async function queryGemini({
+// Back-compat: queryGemini returns the response string by default. Callers
+// that need to know which model served the result (e.g. for logging into
+// sales.ai_interactions) should use queryGeminiDetailed() instead.
+
+export async function queryGemini(opts: GeminiOptions): Promise<string> {
+  return (await queryGeminiDetailed(opts)).response
+}
+
+export async function queryGeminiDetailed({
   prompt,
   systemOverride,
+  systemExtra,
   maxTokens = 8192,
   temperature = 0.7,
   userApiKey,
-}: GeminiOptions): Promise<string> {
+}: GeminiOptions): Promise<GeminiResult> {
   const apiKey = userApiKey || process.env.GEMINI_API_KEY
   if (!apiKey) {
-    return 'No Gemini API key configured. Add GEMINI_API_KEY to your .env.local file.'
+    return {
+      response: 'No Gemini API key configured. Add GEMINI_API_KEY to your .env.local file.',
+      model:    null,
+      ok:       false,
+    }
   }
 
   const systemPrompt = systemOverride ?? CNTP_SYSTEM_PROMPT
-  const fullPrompt   = `${systemPrompt}\n\n${prompt}`
+  const fullPrompt   = `${systemPrompt}${systemExtra ?? ''}\n\n${prompt}`
 
   for (const model of MODEL_CHAIN) {
     const result = await tryModel(model, fullPrompt, apiKey, maxTokens, temperature)
 
     if (result.ok) {
       if (model !== MODEL_CHAIN[0]) {
-        // Prepend a subtle note if we fell back
         console.log(`[Gemini] served by fallback model: ${model}`)
       }
-      return result.text
+      return { response: result.text, model, ok: true }
     }
 
     // Non-overload error (rate limit, bad key etc) — don't retry other models
-    if (!result.overloaded) return result.text
+    if (!result.overloaded) {
+      return { response: result.text, model, ok: false }
+    }
   }
 
   // All models exhausted
-  return `All Gemini models are currently experiencing high demand. Please try again in a few minutes, or search for this topic directly at https://www.google.com/search?q=${encodeURIComponent('rooibos export ' + prompt.slice(0, 80))}`
+  return {
+    response: `All Gemini models are currently experiencing high demand. Please try again in a few minutes, or search for this topic directly at https://www.google.com/search?q=${encodeURIComponent('rooibos export ' + prompt.slice(0, 80))}`,
+    model:    null,
+    ok:       false,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

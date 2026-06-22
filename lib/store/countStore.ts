@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import type { Lang } from '@/lib/data/translations'
 import type { UserRole } from '@/lib/supabase/database.types'
 import { palletKg } from '@/lib/data/sections'
+import { getDb } from '@/lib/supabase/db'
 
 // ── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,15 @@ export type CountState = Record<string, ItemState>  // key = `${sectionId}__${it
 
 export function itemKey(sectionId: string, itemUid: string): string {
   return `${sectionId}__${itemUid}`
+}
+
+// The count's two reconciliation sides. DB values stay 'supervisor'/'admin';
+// these are the human labels shown across the count UI.
+export function countRoleLabel(role: UserRole): string {
+  return role === 'supervisor' ? 'Warehouse Supervisor' : 'Stock'
+}
+export function countRoleShort(role: UserRole): string {
+  return role === 'supervisor' ? 'Warehouse' : 'Stock'
 }
 
 export function defaultItemState(firstVariant?: string): ItemState {
@@ -69,29 +79,53 @@ export function groupByBatch(bags: BagEntry[]): Record<string, { count: number; 
   return out
 }
 
-// ── DEBOUNCED LOCALSTORAGE STORAGE ───────────────────────────────────────────
-// Replaces idb-keyval (IndexedDB) with localStorage + a write debounce.
-// IndexedDB causes "Another write batch is already active" when Zustand fires
-// multiple rapid set() calls (every keystroke). localStorage is synchronous so
-// there is no write-lock issue. The debounce prevents thrashing on rapid typing.
+// ── SUPABASE-BACKED STORAGE ───────────────────────────────────────────────────
+// Persists count draft state to public.count_drafts in Supabase.
+// Writes are debounced 800ms to avoid hammering the DB on every keystroke.
 
 let _writeTimer: ReturnType<typeof setTimeout> | null = null
 
-const debouncedLocalStorage = createJSONStorage(() => ({
-  getItem: (name: string) => {
-    try { return localStorage.getItem(name) } catch { return null }
+const supabaseCountStorage = createJSONStorage(() => ({
+  getItem: async (_name: string): Promise<string | null> => {
+    try {
+      const db = getDb()
+      const { data: { user } } = await db.auth.getUser()
+      if (!user) return null
+      const today = new Date().toISOString().slice(0, 10)
+      const { data } = await db
+        .from('count_drafts')
+        .select('state_json')
+        .eq('user_id', user.id)
+        .eq('date', today)
+        .maybeSingle()
+      return data?.state_json ? JSON.stringify(data.state_json) : null
+    } catch { return null }
   },
-  setItem: (name: string, value: string) => {
-    // Debounce writes — only persist after 800ms of no further changes
+  setItem: (_name: string, value: string): void => {
     if (_writeTimer) clearTimeout(_writeTimer)
-    _writeTimer = setTimeout(() => {
-      try { localStorage.setItem(name, value) } catch (e) {
-        console.warn('countStore persist failed:', e)
-      }
+    _writeTimer = setTimeout(async () => {
+      try {
+        const db = getDb()
+        const { data: { user } } = await db.auth.getUser()
+        if (!user) return
+        const parsed = JSON.parse(value)
+        const date   = parsed?.state?.date ?? new Date().toISOString().slice(0, 10)
+        const role   = parsed?.state?.role ?? 'admin'
+        await db.from('count_drafts').upsert(
+          { user_id: user.id, date, role, state_json: parsed, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id,date,role' }
+        )
+      } catch (e) { console.warn('[countStore] sync failed:', e) }
     }, 800)
   },
-  removeItem: (name: string) => {
-    try { localStorage.removeItem(name) } catch { /* ignore */ }
+  removeItem: async (_name: string): Promise<void> => {
+    try {
+      const db = getDb()
+      const { data: { user } } = await db.auth.getUser()
+      if (!user) return
+      const today = new Date().toISOString().slice(0, 10)
+      await db.from('count_drafts').delete().eq('user_id', user.id).eq('date', today)
+    } catch {}
   },
 }))
 
@@ -257,7 +291,7 @@ export const useCountStore = create<CountStore>()(
     }),
     {
       name: 'cntp-count',
-      storage: debouncedLocalStorage,
+      storage: supabaseCountStorage,
       // Only persist draft data — session IDs are transient
       partialize: (s) => ({
         role:        s.role,

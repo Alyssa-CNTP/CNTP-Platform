@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -222,58 +223,45 @@ function SieveTable({ grams, pcts, focusedSieve, setFocusedSieve, specJson, erro
 
 function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: (f: any) => void; onClose: () => void }) {
   const today = new Date().toISOString().split('T')[0]
-  const blankSpec = (): Record<string, any> => ({
-    moisture_max: '', bd_min: '', bd_max: '',
-    ...Object.fromEntries(GRANULE_SIEVES.map(s => [`sieve_${s.key}`, { min: '', max: '' }])),
-  })
 
   const [form, setForm] = useState<{
     batch_number: string; qc_name: string; production_date: string;
     type_grade: string; customer: string; is_cntp: boolean; reference_used: string;
-    spec_json: Record<string, any>
+    spec_id: number | null; spec_json: Record<string, any>
   }>({
     batch_number: '', qc_name: '', production_date: today,
     type_grade: '', customer: '', is_cntp: true, reference_used: '',
-    spec_json: blankSpec(),
+    spec_id: null, spec_json: {},
   })
   const [errors, setErrors] = useState<string[]>([])
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
-  const setSpec = (k: string, v: any) => setForm(f => ({ ...f, spec_json: { ...f.spec_json, [k]: v } }))
-  const setSpecSieve = (frac: string, bound: string, v: string) =>
-    setForm(f => ({ ...f, spec_json: { ...f.spec_json, [`sieve_${frac}`]: { ...(f.spec_json[`sieve_${frac}`] || {}), [bound]: v } } }))
 
-  // Auto-fill specs when type_grade or customer changes
-  useEffect(() => {
-    if (!form.type_grade) return
-    const customerMatch = specs.find(s =>
-      s.type_grade === form.type_grade && s.customer &&
-      s.customer.toLowerCase() === (form.customer || '').toLowerCase()
-    )
-    const genericMatch = specs.find(s => s.type_grade === form.type_grade && (!s.customer || s.customer === ''))
-    const match = customerMatch || genericMatch
-    if (!match) return
+  // Select a saved spec from the library — copies a snapshot into the run.
+  function selectSpec(idStr: string) {
+    const id = parseInt(idStr, 10)
+    const spec = specs.find(s => s.id === id)
+    if (!spec) { setForm(f => ({ ...f, spec_id: null, type_grade: '', customer: '', spec_json: {} })); return }
     const sieveSpecs: Record<string, any> = {}
     GRANULE_SIEVES.forEach(s => {
-      const sp = match.sieve_specs?.[s.key]
+      const sp = spec.sieve_specs?.[s.key]
       sieveSpecs[`sieve_${s.key}`] = { min: sp?.min ?? '', max: sp?.max ?? '' }
     })
     setForm(f => ({
       ...f,
-      spec_json: { moisture_max: match.moisture_max ?? '', bd_min: match.bd_min ?? '', bd_max: match.bd_max ?? '', ...sieveSpecs }
+      spec_id: spec.id,
+      type_grade: spec.type_grade,
+      customer: spec.customer || '',
+      spec_json: { moisture_max: spec.moisture_max ?? '', bd_min: spec.bd_min ?? '', bd_max: spec.bd_max ?? '', ...sieveSpecs },
     }))
-  }, [form.type_grade, form.customer, specs])
+  }
 
   function validate() {
     const errs: string[] = []
     if (!form.batch_number.trim()) errs.push('Batch Number')
     if (!form.qc_name.trim()) errs.push('Quality Controller')
     if (!form.production_date) errs.push('Production Date')
-    if (!form.type_grade) errs.push('Type & Grade')
-    const sp = form.spec_json
-    if (!sp.moisture_max && sp.moisture_max !== '') errs.push('Max Moisture')
-    if (!sp.bd_min && sp.bd_min !== '') errs.push('Min Bulk Density')
-    if (!sp.bd_max && sp.bd_max !== '') errs.push('Max Bulk Density')
+    if (!form.spec_id) errs.push('Specification')
     setErrors(errs)
     return errs.length === 0
   }
@@ -284,6 +272,7 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
   }
 
   const fieldErr = (name: string) => errors.includes(name)
+  const sp = form.spec_json
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
@@ -307,18 +296,16 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
                   className={`${inp} w-full ${fieldErr(label.replace(' *',''))?'border-err/40':''}`} />
               </div>
             ))}
-            <div>
-              <label className={`${lbl} ${fieldErr('Type & Grade')?'text-err':''}`}>Type & Grade *</label>
-              <select value={form.type_grade} onChange={e => set('type_grade', e.target.value)}
-                className={`${inp} w-full ${fieldErr('Type & Grade')?'border-err/40':''}`}>
-                <option value="">— Select grade —</option>
-                {GRANULE_TYPE_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
-              </select>
-            </div>
             <div className="col-span-2">
-              <label className={lbl}>Customer <span className="text-text-faint font-normal normal-case">(blank = CNTP own)</span></label>
-              <input value={form.customer} onChange={e => set('customer', e.target.value)}
-                placeholder="e.g. Kunitaro — leave blank for generic" className={`${inp} w-full`} />
+              <label className={`${lbl} ${fieldErr('Specification')?'text-err':''}`}>Specification *</label>
+              <select value={form.spec_id ?? ''} onChange={e => selectSpec(e.target.value)}
+                className={`${inp} w-full ${fieldErr('Specification')?'border-err/40':''}`}>
+                <option value="">— Select a saved specification —</option>
+                {specs.map(s => <option key={s.id} value={s.id}>{s.type_grade}{s.customer ? ` — ${s.customer}` : ''}</option>)}
+              </select>
+              {specs.length === 0 && (
+                <div className="text-[11px] text-warn mt-1">No specifications saved yet — add one in the Specifications tab first.</div>
+              )}
             </div>
             <div className="col-span-2">
               <label className={lbl}>Reference Used</label>
@@ -338,48 +325,45 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
             ))}
           </div>
 
-          {/* Specifications */}
-          <div className="border-t border-surface-rule pt-4">
-            <div className="font-mono text-[10px] uppercase tracking-wide text-brand font-bold mb-3">
-              📐 Specifications <span className="text-err">*</span>
-              <span className="text-text-faint font-normal normal-case ml-2">Required — enter limits for violation flagging</span>
-            </div>
-            <div className="grid grid-cols-3 gap-3 mb-4">
-              {([['Max Moisture (%)','moisture_max'],['Min Bulk Density','bd_min'],['Max Bulk Density','bd_max']] as const).map(([label, key]) => (
-                <div key={key}>
-                  <label className={`${lbl} ${fieldErr(label)?'text-err':''}`}>{label}</label>
-                  <input type="number" step="any" value={(form.spec_json as any)[key]}
-                    onChange={e => setSpec(key, e.target.value)}
-                    className={`${inp} w-full ${fieldErr(label)?'border-err/40':''}`} />
-                </div>
-              ))}
-            </div>
-            <div className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-2">Sieve Specs (% min / max)</div>
-            <div className="rounded-xl border border-surface-rule overflow-hidden">
-              <table className="w-full text-left" style={{ fontSize: 11, borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr className="bg-surface border-b border-surface-rule">
-                    {['Fraction','Min %','Max %'].map(h => <th key={h} className="px-3 py-2 font-mono text-[9px] uppercase text-text-muted">{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-surface-rule">
-                  {GRANULE_SIEVES.map((s, i) => (
-                    <tr key={s.key} className={i % 2 === 1 ? 'bg-surface/50' : ''}>
-                      <td className="px-3 py-1.5 font-semibold">{s.label}</td>
-                      {(['min','max'] as const).map(b => (
-                        <td key={b} className="px-2 py-1">
-                          <input type="number" step="any"
-                            value={form.spec_json[`sieve_${s.key}`]?.[b] || ''}
-                            onChange={e => setSpecSieve(s.key, b, e.target.value)}
-                            className={`${inp} w-full text-center`} style={{ width: 80 }} />
-                        </td>
-                      ))}
+          {/* Selected specification (read-only — managed in the Specifications tab) */}
+          {form.spec_id && (
+            <div className="border-t border-surface-rule pt-4">
+              <div className="font-mono text-[10px] uppercase tracking-wide text-brand font-bold mb-3">
+                📐 Specification — {form.type_grade}{form.customer ? ` · ${form.customer}` : ''}
+                <span className="text-text-faint font-normal normal-case ml-2">read-only · edit in the Specifications tab</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                {([['Max Moisture (%)','moisture_max'],['Min Bulk Density','bd_min'],['Max Bulk Density','bd_max']] as const).map(([label, key]) => (
+                  <div key={key}>
+                    <label className={lbl}>{label}</label>
+                    <div className={`${inp} w-full bg-surface text-text-muted`}>{(sp as any)[key] !== '' && (sp as any)[key] != null ? (sp as any)[key] : '—'}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-2">Sieve Specs (% min / max)</div>
+              <div className="rounded-xl border border-surface-rule overflow-hidden">
+                <table className="w-full text-left" style={{ fontSize: 11, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr className="bg-surface border-b border-surface-rule">
+                      {['Fraction','Min %','Max %'].map(h => <th key={h} className="px-3 py-2 font-mono text-[9px] uppercase text-text-muted">{h}</th>)}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule">
+                    {GRANULE_SIEVES.map((s, i) => {
+                      const v = sp[`sieve_${s.key}`] || {}
+                      return (
+                        <tr key={s.key} className={i % 2 === 1 ? 'bg-surface/50' : ''}>
+                          <td className="px-3 py-1.5 font-semibold">{s.label}</td>
+                          <td className="px-3 py-1.5 text-center font-mono">{v.min !== '' && v.min != null ? v.min : '—'}</td>
+                          <td className="px-3 py-1.5 text-center font-mono">{v.max !== '' && v.max != null ? v.max : '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
@@ -1283,7 +1267,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
           </div>
         </div>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-          <button onClick={() => onAddSample(run)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
+          <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
           <button onClick={() => onAddTasting(run, null)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">🍵 Tasting</button>
           <button
             onClick={() => { if (noTastings) { alert('Cannot finalise: at least one tasting record is required before finalising a run.'); return } onFinalise(run.id, 'Pass') }}
@@ -1292,6 +1276,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
             title={noTastings ? 'Add at least one tasting before finalising' : 'Mark as complete and move to History'}>
             ✓ Finalise{noTastings ? ' 🍵?' : ''}
           </button>
+          <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer">⬇ Excel</button>
           {isAdmin && <button onClick={() => onDelete(run.id)} className="px-2 py-1.5 rounded-lg border-none bg-err/10 text-err text-[12px] cursor-pointer">🗑</button>}
         </div>
       </div>
@@ -1624,6 +1609,7 @@ function GranuleHistoryTab({ runs, onReopen, onUpdateBatch }: { runs: any[]; onR
                           <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${run.overall_status === 'Pass' ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>{run.overall_status || 'Pass'}</span>
                         </td>
                         <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                          <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="text-[10px] px-2 py-1 rounded-lg font-semibold cursor-pointer mr-1" style={{ border: '1px solid #166534', background: '#f0fdf4', color: '#166534' }}>⬇ Excel</button>
                           <button onClick={() => onReopen(run.id)} className="text-[10px] px-2 py-1 rounded-lg font-semibold cursor-pointer" style={{ border: '1px solid #d97706', background: '#fef3c7', color: '#92400e' }}>↩ Re-open</button>
                         </td>
                       </tr>
@@ -1721,7 +1707,12 @@ function GranuleSpecsTab({ isAdmin }: { isAdmin: boolean }) {
     if (!form.type_grade) { setErr('Type & Grade is required'); return }
     setSaving(true); setErr('')
     const { data, error } = await db.schema('qms').from('granule_specs').insert({ ...form, moisture_max: form.moisture_max || null, bd_min: form.bd_min || null, bd_max: form.bd_max || null }).select().single()
-    if (error) { setErr(error.message); setSaving(false); return }
+    if (error) {
+      setErr(error.code === '23505'
+        ? 'A specification for this grade & customer already exists — edit that one instead.'
+        : error.message)
+      setSaving(false); return
+    }
     setSpecs(p => [...p, data]); setForm(emptyForm()); setShowNew(false); setSaving(false)
   }
 
@@ -1873,26 +1864,36 @@ export default function GranulePage() {
   // ── Load runs, samples, tastings, and specs in parallel ──
   const load = useCallback(async () => {
     setLoading(true)
-    const [runsRes, samplesRes, tastingsRes, specsRes] = await Promise.all([
+    const [runsRes, samplesRes, tastingsRes, specsRes,
+           legRunsRes, legSamplesRes, legTastingsRes, legSpecsRes] = await Promise.all([
       db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }),
       db.schema('qms').from('granule_samples').select('*').order('sample_date', { ascending: true, nullsFirst: false }).order('sample_time', { ascending: true, nullsFirst: false }),
       db.schema('qms').from('granule_tastings').select('*').order('created_at', { ascending: true }),
       db.schema('qms').from('granule_specs').select('*').order('type_grade').order('customer'),
+      fetch('/api/quality/legacy-public?table=granule_runs&limit=500').then(r=>r.json()),
+      fetch('/api/quality/legacy-public?table=granule_samples&limit=2000').then(r=>r.json()),
+      fetch('/api/quality/legacy-public?table=granule_tastings&limit=1000').then(r=>r.json()),
+      fetch('/api/quality/legacy-public?table=granule_specs&limit=200').then(r=>r.json()),
     ])
 
-    const samples  = (samplesRes.data || []) as any[]
-    const tastings = (tastingsRes.data || []) as any[]
+    const qmsRunIds   = new Set((runsRes.data || []).map((r: any) => r.batch_number))
+    const legRuns     = (legRunsRes.data     || []).filter((r: any) => !qmsRunIds.has(r.batch_number))
+    const allRuns     = [...(runsRes.data || []), ...legRuns]
+    const allSamples  = [...(samplesRes.data || []), ...(legSamplesRes.data || [])]
+    const allTastings = [...(tastingsRes.data || []), ...(legTastingsRes.data || [])]
+    const qmsSpecIds  = new Set((specsRes.data || []).map((s: any) => s.type_grade + '|' + (s.customer||'')))
+    const allSpecs    = [...(specsRes.data || []), ...(legSpecsRes.data || []).filter((s: any) => !qmsSpecIds.has(s.type_grade + '|' + (s.customer||'')))]
 
-    const byRun: Record<number, any[]>  = {}
+    const byRun: Record<number, any[]>     = {}
     const tastByRun: Record<number, any[]> = {}
-    samples.forEach(s => { if (!byRun[s.run_id]) byRun[s.run_id] = []; byRun[s.run_id].push(s) })
-    tastings.forEach(t => { if (!tastByRun[t.run_id]) tastByRun[t.run_id] = []; tastByRun[t.run_id].push(t) })
+    allSamples.forEach((s: any)  => { if (!byRun[s.run_id])     byRun[s.run_id]     = []; byRun[s.run_id].push(s) })
+    allTastings.forEach((t: any) => { if (!tastByRun[t.run_id]) tastByRun[t.run_id] = []; tastByRun[t.run_id].push(t) })
 
-    const assembled = (runsRes.data || []).map((r: any) => ({
+    const assembled = allRuns.map((r: any) => ({
       ...r, samples: sortSamples(byRun[r.id] || []), tastings: tastByRun[r.id] || [],
     }))
     setRuns(assembled)
-    setSpecs(specsRes.data || [])
+    setSpecs(allSpecs)
     setLoading(false)
   }, [db])
 
@@ -1901,19 +1902,21 @@ export default function GranulePage() {
   // ── CRUD handlers — all mirror Express server logic ──
 
   async function handleCreateRun(form: any) {
+    const dup = runs.find((r: any) => r.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    if (dup) {
+      if (!dup.final_status) {
+        alert(`⚠ A run for batch "${form.batch_number}" is already open.\n\nPlease add a sample to the existing run instead of starting a new one.`)
+      } else {
+        alert(`⚠ Batch "${form.batch_number}" already exists (finalised as ${dup.final_status}).\n\nPlease use a different batch number.`)
+      }
+      return
+    }
     const { data, error } = await db.schema('qms').from('granule_runs').insert({
       batch_number: form.batch_number, qc_name: form.qc_name || '', production_date: form.production_date || '',
       type_grade: form.type_grade || '', customer: form.customer || '', is_cntp: form.is_cntp !== false,
       spec_json: form.spec_json || {}, reference_used: form.reference_used || '', overall_status: 'Pass',
     }).select().single()
     if (error) { alert(error.message); return }
-    // Auto-save spec to library if meaningful
-    const sp = form.spec_json || {}
-    if (form.type_grade && sp.moisture_max !== '' && sp.bd_min !== '' && sp.bd_max !== '') {
-      const sieveSpecs: Record<string, any> = {}
-      GRANULE_SIEVES.forEach(s => { const sv = sp[`sieve_${s.key}`]; if (sv && (sv.min !== '' || sv.max !== '')) sieveSpecs[s.key] = { min: sv.min !== '' ? parseFloat(sv.min) : null, max: sv.max !== '' ? parseFloat(sv.max) : null } })
-      db.schema('qms').from('granule_specs').upsert({ type_grade: form.type_grade, customer: form.customer || '', moisture_max: parseFloat(sp.moisture_max), bd_min: parseFloat(sp.bd_min), bd_max: parseFloat(sp.bd_max), sieve_specs: sieveSpecs }, { onConflict: 'type_grade,customer' }).then(() => {})
-    }
     setRuns(prev => [{ ...data, samples: [], tastings: [] }, ...prev])
     setShowNewRun(false)
   }
@@ -2054,9 +2057,18 @@ export default function GranulePage() {
           <div className="text-center py-16 text-text-muted text-[12px] animate-pulse">Loading granule runs…</div>
         ) : tab === 'dashboard' ? (
           <div className="space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
+            {currentRuns.length > 0 && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-warn/10 border border-warn/30">
+                <span className="text-warn text-[16px]">⚠</span>
+                <div>
+                  <span className="font-bold text-[12px] text-warn">Granule line has {currentRuns.length} open run{currentRuns.length !== 1 ? 's' : ''}</span>
+                  <span className="ml-2 text-[11px] text-text-muted">— finalise completed batches when done</span>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={() => setShowNewRun(true)} title="Start when a new batch has been completed or begun" className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
               <span className="font-bold text-[12px]">Active Runs · {currentRuns.length} run{currentRuns.length !== 1 ? 's' : ''}</span>
-              <button onClick={() => setShowNewRun(true)} className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
             </div>
 
             {currentRuns.length === 0 ? (

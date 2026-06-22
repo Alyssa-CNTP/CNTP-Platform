@@ -1,0 +1,25 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 154.65.97.200
+          username: cntpdev
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 2022
+          script: |
+            export NVM_DIR="$HOME/.nvm" && source "$NVM_DIR/nvm.sh"
+            cd /home/cntpdev/apps/staging/app/cntp-ops
+            git pull origin staging
+            npm run build 2>&1 | tail -20
+            /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-staging
+            echo "✅ Deployed successfully"

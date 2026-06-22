@@ -1,0 +1,30 @@
+# /etc/systemd/system/meridian-watcher.service
+# Runs watcher.py as a persistent daemon — monitors /vault for new files.
+
+[Unit]
+Description=Alara — Vault Watcher Daemon
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/home/deploy/cntp-ops/research-engine/vault
+
+ExecStart=/home/deploy/cntp-ops/research-engine/venv/bin/python watcher.py
+
+EnvironmentFile=/home/deploy/cntp-ops/research-engine/.env
+
+# Auto-restart on crash, wait 10 seconds between restarts
+Restart=always
+RestartSec=10s
+StartLimitInterval=120s
+StartLimitBurst=5
+
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alara-watcher
+
+[Install]
+WantedBy=multi-user.target

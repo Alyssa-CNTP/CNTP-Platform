@@ -622,7 +622,7 @@ const SECTION_COLORS: Record<string, string> = {
   granule:'bg-amber-500', blender:'bg-purple-500', pasteuriser:'bg-red-500',
 }
 
-export default function AcumaticaSummary({
+function AcumaticaSummary({
   sectionId, sessionData, date, shift,
 }: {
   sectionId: string; sessionData: any; date: string; shift: string
@@ -694,3 +694,6 @@ export default function AcumaticaSummary({
     </div>
   )
 }
+
+export default AcumaticaSummary
+export { AcumaticaSummary }

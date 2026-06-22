@@ -1,54 +1,50 @@
 import type { Metadata, Viewport } from 'next'
-import { Inter, Geist, Geist_Mono } from 'next/font/google'
+import { Inter, Playfair_Display } from 'next/font/google'
 import './globals.css'
 import { AuthProvider } from '@/lib/auth/context'
 import { ToastProvider } from '@/components/ui/Toast'
 
-const geist = Geist({
-  subsets: ['latin'],
-  variable: '--font-display',
-  display: 'swap',
-})
-
+// Inter — clean, neutral, premium. Used by Vercel, Linear, Notion.
 const inter = Inter({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-body',
+  variable: '--font-inter',
   display: 'swap',
 })
 
-const geistMono = Geist_Mono({
+// Playfair Display — editorial serif for display headings.
+const playfair = Playfair_Display({
   subsets: ['latin'],
-  variable: '--font-mono',
+  variable: '--font-playfair',
   display: 'swap',
 })
 
 export const metadata: Metadata = {
-  title: 'CNTP · Ops',
-  description: 'Cape Natural Tea Products — Production Platform · Blackheath BHW',
+  title: 'CNTP Platform',
+  description: 'Cape Natural Tea Products — Operations Platform',
   manifest: '/manifest.json',
+  icons: {
+    icon:    [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    apple:   [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    shortcut: '/icon.svg',
+  },
   appleWebApp: {
     capable: true,
-    statusBarStyle: 'black-translucent',
-    title: 'CNTP Ops',
+    statusBarStyle: 'default',
+    title: 'CNTP Platform',
   },
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
-  themeColor: '#0D1F0D',
+  maximumScale: 5,
+  userScalable: true,
+  themeColor: '#1A3A0E',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      suppressHydrationWarning
-      className={`${geist.variable} ${inter.variable} ${geistMono.variable}`}
-    >
+    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${playfair.variable}`}>
       <body>
         <AuthProvider>
           <ToastProvider>

@@ -1,0 +1,23 @@
+{
+  "name": "CNTP Ops",
+  "short_name": "CNTP",
+  "description": "CNTP Operations Platform",
+  "start_url": "/production/capture",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#F5F5F4",
+  "theme_color": "#0D1F0D",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "1772x1772",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

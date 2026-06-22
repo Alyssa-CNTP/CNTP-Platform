@@ -1,0 +1,20 @@
+# /etc/systemd/system/meridian-gather.timer
+# Triggers gather_v2.py every 30 minutes.
+
+[Unit]
+Description=Alara — Signal Gather Timer
+Requires=meridian-gather.service
+
+[Timer]
+# First run 2 minutes after boot, then every 30 minutes
+OnBootSec=2min
+OnUnitActiveSec=30min
+
+# Randomize within 3 minutes to avoid thundering herd if multiple timers overlap
+RandomizedDelaySec=3min
+
+# Run any missed executions on the next opportunity (e.g. after suspend)
+Persistent=true
+
+[Install]
+WantedBy=timers.target

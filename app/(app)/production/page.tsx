@@ -67,7 +67,7 @@ function sessionStatus(status: string | null) {
 
 // ── Section card component ─────────────────────────────────────────────────────
 function SectionCard({
-  section, shift, session, mb, cleaning, hs, viewDate, isAdmin, role,
+  section, shift, session, mb, cleaning, hs, viewDate, isAdmin, canSignOff, role,
 }: {
   section: typeof SECTIONS[0]
   shift: Shift
@@ -77,6 +77,7 @@ function SectionCard({
   hs: ChecklistRow | null
   viewDate: string
   isAdmin: boolean
+  canSignOff: boolean
   role: string | null
 }) {
   const st     = sessionStatus(session?.status ?? null)
@@ -159,7 +160,7 @@ function SectionCard({
                 ? 'bg-brand text-white'
                 : session.status === 'draft'
                 ? 'bg-warn/15 text-warn border border-warn/30'
-                : session.status === 'submitted' && (role === 'supervisor' || isAdmin)
+                : session.status === 'submitted' && canSignOff
                 ? 'bg-info/15 text-info border border-info/30'
                 : session.status === 'approved'
                 ? 'bg-ok/10 text-ok border border-ok/20'
@@ -168,8 +169,8 @@ function SectionCard({
           >
             {!session && <><Play size={13} className="ml-0.5" /> Start session</>}
             {session?.status === 'draft'     && <><Pen size={13} /> Continue</>}
-            {session?.status === 'submitted' && (role === 'supervisor' || isAdmin) && <><CheckCircle2 size={13} /> Sign off</>}
-            {session?.status === 'submitted' && role === 'operator' && <><Clock size={13} /> Awaiting sign-off</>}
+            {session?.status === 'submitted' && canSignOff  && <><CheckCircle2 size={13} /> Sign off</>}
+            {session?.status === 'submitted' && !canSignOff && <><Clock size={13} /> Awaiting sign-off</>}
             {session?.status === 'approved'  && <><CheckCircle2 size={13} /> Signed off</>}
           </Link>
         )}
@@ -191,7 +192,7 @@ function SectionCard({
 // ── Shift panel ────────────────────────────────────────────────────────────────
 function ShiftPanel({
   shift, isCurrent, sessions, massBalances, cleaning, hs,
-  viewDate, isAdmin, role, defaultOpen,
+  viewDate, isAdmin, canSignOff, role, defaultOpen, visibleSections,
 }: {
   shift: Shift
   isCurrent: boolean
@@ -201,8 +202,10 @@ function ShiftPanel({
   hs: ChecklistRow[]
   viewDate: string
   isAdmin: boolean
+  canSignOff: boolean
   role: string | null
   defaultOpen: boolean
+  visibleSections: typeof SECTIONS
 }) {
   const [open, setOpen] = useState(defaultOpen)
 
@@ -256,7 +259,7 @@ function ShiftPanel({
       {/* Section grid — only shown when open */}
       {open && (
         <div className="px-4 pb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 border-t border-surface-rule pt-4">
-          {SECTIONS.map(section => {
+          {visibleSections.map(section => {
             const sess    = sessions.find(s => s.section_id === section.id && s.shift === shift) ?? null
             const mb      = massBalances.find(m => m.session_id === sess?.id) ?? null
             const clean   = cleaning.find(c => c.section_id === section.id && c.shift === shift) ?? null
@@ -273,6 +276,7 @@ function ShiftPanel({
                 hs={hsRow}
                 viewDate={viewDate}
                 isAdmin={isAdmin}
+                canSignOff={canSignOff}
                 role={role}
               />
             )
@@ -287,7 +291,13 @@ function ShiftPanel({
 // MAIN PAGE
 // ═════════════════════════════════════════════════════════════════════════════
 export default function ProductionPage() {
-  const { role } = useAuth()
+  const { role, sectionId: mySectionId, isIT, isSupervisor, isFloor } = useAuth()
+
+  const isSectionOperator = role === 'section_operator'
+  // section_operators see only their assigned section; everyone else sees all
+  const visibleSections = isSectionOperator && mySectionId
+    ? SECTIONS.filter(s => s.id === mySectionId)
+    : SECTIONS
 
   const [tab, setTab]           = useState<'capture' | 'overview'>('capture')
   const [sessions, setSessions] = useState<ProdSession[]>([])
@@ -296,9 +306,11 @@ export default function ProductionPage() {
   const [hs, setHs]             = useState<ChecklistRow[]>([])
   const [loading, setLoading]   = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  // section_operators always see today; others can navigate dates
   const [viewDate, setViewDate] = useState(format(new Date(), 'yyyy-MM-dd'))
 
-  const isAdmin    = role === 'admin'
+  const isAdmin    = isIT || role === 'admin'
+  const canSignOff = isAdmin || isSupervisor
   const today      = format(new Date(), 'yyyy-MM-dd')
   const active     = currentShift()
 
@@ -377,12 +389,14 @@ export default function ProductionPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="date"
-            value={viewDate}
-            onChange={e => setViewDate(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-surface-rule bg-surface-card font-mono text-[11px] text-text outline-none focus:border-brand"
-          />
+          {!isSectionOperator && (
+            <input
+              type="date"
+              value={viewDate}
+              onChange={e => setViewDate(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-surface-rule bg-surface-card font-mono text-[11px] text-text outline-none focus:border-brand"
+            />
+          )}
           <button
             onClick={() => load(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-card border border-surface-rule font-mono text-[10px] text-text-muted hover:text-text transition-colors"
@@ -390,13 +404,19 @@ export default function ProductionPage() {
             <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} />
             Refresh
           </button>
+          <Link
+            href="/production/history"
+            className="px-3 py-2 rounded-lg bg-surface-card border border-surface-rule font-mono text-[10px] text-text-muted hover:text-text transition-colors"
+          >
+            History
+          </Link>
         </div>
       </div>
 
       {/* ── ALERT STRIP ───────────────────────────────────────────────────── */}
       {(needSignOff > 0 || mbFlags > 0) && (
         <div className="space-y-2">
-          {needSignOff > 0 && (role === 'supervisor' || isAdmin) && (
+          {needSignOff > 0 && canSignOff && (
             <div className="flex items-center gap-3 px-4 py-3 bg-info/10 border border-info/30 rounded-xl">
               <Pen size={14} className="text-info shrink-0" />
               <span className="font-body font-semibold text-[13px] text-info">
@@ -432,13 +452,18 @@ export default function ProductionPage() {
               {label}
             </button>
           ))}
+          <Link
+            href="/production/history"
+            className="px-4 py-2 rounded-lg font-body font-medium text-[13px] text-text-muted hover:text-text transition-colors"
+          >
+            History
+          </Link>
         </div>
       )}
 
       {/* ── CAPTURE TAB ───────────────────────────────────────────────────── */}
       {(tab === 'capture' || !isAdmin) && (
         <div className="space-y-4">
-          {/* Render current shift first, always open — then other shifts collapsed */}
           {SHIFTS.map(shift => (
             <ShiftPanel
               key={shift}
@@ -450,8 +475,10 @@ export default function ProductionPage() {
               hs={hs}
               viewDate={viewDate}
               isAdmin={isAdmin}
+              canSignOff={canSignOff}
               role={role}
-              defaultOpen={shift === active}  // only current shift opens by default
+              defaultOpen={shift === active}
+              visibleSections={visibleSections}
             />
           ))}
         </div>

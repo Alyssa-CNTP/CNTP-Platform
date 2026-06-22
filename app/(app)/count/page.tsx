@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { getDb } from '@/lib/supabase/db'
-import { useCountStore, itemKey, bagTotal, palletTotal, itemTotal, groupByBatch, defaultItemState } from '@/lib/store/countStore'
+import { useCountStore, itemKey, bagTotal, palletTotal, itemTotal, groupByBatch, defaultItemState, countRoleLabel } from '@/lib/store/countStore'
 import { ROOIBOS_SECTIONS, ROSEHIP_SECTIONS, inventoryCode, palletKg, PALLET_PACKAGES } from '@/lib/data/sections'
 import type { Section, InventoryItem } from '@/lib/data/sections'
 import { t, type Lang } from '@/lib/data/translations'
@@ -21,6 +21,8 @@ import clsx from 'clsx'
 import CountCompareView from '@/components/count/CountCompareView'
 import AddItemModal from '@/components/count/AddItemModal'
 import type { AddedItem } from '@/components/count/AddItemModal'
+import RecountTab      from '@/components/count/RecountTab'
+import MonthlyCountTab from '@/components/count/monthly/MonthlyCountTab'
 
 // ── SAVE STATUS ───────────────────────────────────────────────────────────────
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
@@ -35,7 +37,7 @@ interface KpState {
 }
 
 function CountPage() {
-  const { user, role, displayName } = useAuth()
+  const { user, role, displayName, isIT } = useAuth()
   const toast = useToast()
   const store    = useCountStore()
   const db       = getDb()
@@ -76,7 +78,13 @@ function CountPage() {
       setDraftWarning(store.date)
     }
     if (!store.date) store.setDate(today)
-    if (role) store.setRole(role as 'admin' | 'supervisor')
+    // Pin the count side for the two counter roles; IT/management keep their toggle choice.
+    // The count's own domain value stays 'supervisor' (Warehouse Supervisor side) / 'admin'
+    // (Stock side) regardless of the app role. Factory staff don't reach this page.
+    // 'supervisor' is the legacy app-role alias for the warehouse side.
+    if (role === 'warehouse_supervisor' || role === 'supervisor') store.setRole('supervisor')
+    else if (role === 'stock_controller' || role === 'admin') store.setRole('admin')
+    else if (!store.role) store.setRole('admin') // sensible default for IT/management
     checkSubmission()
   }, [today, role])
 
@@ -324,7 +332,7 @@ function CountPage() {
         </div>
         <h2 className="font-display font-extrabold text-3xl text-white mb-2">Count submitted</h2>
         <p className="text-white/50 text-sm mb-8">
-          {isAdm ? 'Admin' : 'Supervisor'} count · {format(new Date(store.date+'T12:00:00'), 'd MMMM yyyy')} · {doneStats.time}
+          {countRoleLabel(store.role as any)} count · {format(new Date(store.date+'T12:00:00'), 'd MMMM yyyy')} · {doneStats.time}
         </p>
         <div className="flex gap-10 mb-10">
           <div>
@@ -391,38 +399,69 @@ function CountPage() {
           </div>
         )}
 
-        {/* Count header */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          <span className={clsx(
-            'font-display font-bold text-sm px-3 py-1.5 rounded-lg uppercase tracking-wide',
-            store.role === 'admin' ? 'bg-status-infoBg text-status-info' : 'bg-status-okBg text-status-ok'
-          )}>
-            {store.role === 'admin' ? 'Admin count' : 'Supervisor count'}
-          </span>
+        {/* Page header */}
+        <div className="mb-4">
+          <h1 className="font-display font-bold text-[22px] text-text">Stock Count</h1>
+          <p className="text-[12px] text-text-muted mt-0.5">
+            Two-person reconciliation · {format(new Date(store.date + 'T12:00:00'), 'EEEE d MMM yyyy')}
+          </p>
+        </div>
 
-          <input
-            type="date"
-            value={store.date}
-            onChange={e => handleDateChange(e.target.value)}
-            className="px-3 py-1.5 border border-surface-rule rounded-lg font-mono text-xs text-text bg-surface-card outline-none focus:border-accent"
-          />
+        {/* Controls */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {/* Count side — segmented control for oversight (IT/management), pinned badge otherwise */}
+          {(() => {
+            const pinned = role === 'warehouse_supervisor' || role === 'stock_controller' || role === 'admin' || role === 'supervisor'
+            const sideCls = (r: 'admin' | 'supervisor') =>
+              r === 'supervisor' ? 'bg-ok/10 text-ok' : 'bg-info/10 text-info'
+            return (isIT || !pinned) ? (
+              <div className="flex p-1 bg-stone-100 rounded-xl">
+                {(['supervisor', 'admin'] as const).map(r => (
+                  <button key={r} onClick={() => store.setRole(r)}
+                    className={clsx(
+                      'px-3 py-1.5 rounded-lg font-medium text-[12px] transition-colors',
+                      store.role === r ? `bg-white shadow-sm ${r === 'supervisor' ? 'text-ok' : 'text-info'}` : 'text-stone-500 hover:text-stone-700',
+                    )}>
+                    {countRoleLabel(r)}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className={clsx('inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-full', sideCls(store.role as any))}>
+                {countRoleLabel(store.role as any)} count
+              </span>
+            )
+          })()}
 
-          <span className="font-mono text-xs text-text-muted px-3 py-1.5 bg-surface rounded-lg border border-surface-rule">
-            {displayName}
-          </span>
+          <input type="date" value={store.date} onChange={e => handleDateChange(e.target.value)}
+            className="px-3 py-2 border border-surface-rule rounded-lg font-mono text-[12px] text-text bg-surface-card outline-none focus:border-brand" />
+
+          <span className="font-mono text-[12px] text-text-muted px-3 py-2 bg-surface rounded-lg border border-surface-rule">{displayName}</span>
 
           <div className="flex-1" />
 
-          <select
-            value={store.lang}
-            onChange={e => store.setLang(e.target.value as Lang)}
-            className="px-3 py-1.5 border border-surface-rule rounded-lg font-mono text-xs text-text bg-surface-card outline-none"
-          >
+          <select value={store.lang} onChange={e => store.setLang(e.target.value as Lang)}
+            className="px-3 py-2 border border-surface-rule rounded-lg font-mono text-[12px] text-text bg-surface-card outline-none focus:border-brand cursor-pointer">
             <option value="en">English</option>
             <option value="af">Afrikaans</option>
             <option value="zu">isiZulu</option>
             <option value="xh">isiXhosa</option>
           </select>
+        </div>
+
+        {/* KPI tiles */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          {[
+            { label: 'Items counted', value: `${gDone}/${gTotal}` },
+            { label: 'Total kg',      value: gKg > 0 ? Math.round(gKg).toLocaleString() : '—' },
+            { label: 'Complete',      value: `${gTotal ? Math.round((gDone / gTotal) * 100) : 0}%` },
+            { label: 'Counting as',   value: countRoleLabel(store.role as any), small: true },
+          ].map(tile => (
+            <div key={tile.label} className="bg-surface-card border border-surface-rule rounded-xl p-3.5">
+              <div className={clsx('font-display font-bold leading-none text-text', (tile as any).small ? 'text-[14px]' : 'text-[22px]')}>{tile.value}</div>
+              <div className="font-mono text-[10px] text-text-muted uppercase tracking-wide mt-1.5">{tile.label}</div>
+            </div>
+          ))}
         </div>
 
         {/* Product switcher */}
@@ -528,8 +567,18 @@ function CountPage() {
 
       {/* ── STICKY SUMMARY PANEL (desktop) ── */}
       <div className="hidden lg:flex flex-col w-72 flex-shrink-0 border-l border-surface-rule">
-        <div className="p-4 sticky top-0">
-          <SummaryPanel done={gDone} total={gTotal} kg={gKg} saving={saving} onSubmit={handleSubmit} />
+        <div className="p-4 sticky top-0 overflow-y-auto max-h-screen">
+          <SummaryPanel
+            done={gDone}
+            total={gTotal}
+            kg={gKg}
+            saving={saving}
+            onSubmit={handleSubmit}
+            sections={sections.map(sec => {
+              const { done, total, totalKg } = sectionProgress(sec)
+              return { id: sec.id, name: t(lang, sec.tk as any), color: sec.color, done, total, kg: totalKg }
+            })}
+          />
         </div>
       </div>
 
@@ -556,7 +605,7 @@ function CountPage() {
       {/* ── SUBMIT CONFIRM SHEET ── */}
       <ConfirmSheet
         open={showConfirm}
-        title={`Submit ${store.role === 'admin' ? 'admin' : 'supervisor'} count?`}
+        title={`Submit ${countRoleLabel(store.role as any)} count?`}
         message={`${format(new Date(store.date+'T12:00:00'), 'd MMMM yyyy')} · Once submitted you cannot edit entries for this date.`}
         confirmLabel="Yes, submit count"
         onConfirm={() => { setShowConfirm(false); doSubmit() }}
@@ -614,14 +663,31 @@ function CountPage() {
 }
 
 // ── SUMMARY PANEL ─────────────────────────────────────────────────────────────
-function SummaryPanel({ done, total, kg, saving, onSubmit }: {
-  done: number; total: number; kg: number; saving: SaveStatus; onSubmit: () => void
+interface SectionSummary {
+  id:    string
+  name:  string
+  color: string
+  done:  number
+  total: number
+  kg:    number
+}
+
+function SummaryPanel({ done, total, kg, saving, onSubmit, sections }: {
+  done:     number
+  total:    number
+  kg:       number
+  saving:   SaveStatus
+  onSubmit: () => void
+  sections: SectionSummary[]
 }) {
-  const pct = total ? Math.round((done/total)*100) : 0
+  const pct = total ? Math.round((done / total) * 100) : 0
+
   return (
     <div className="space-y-4">
+
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <span className="font-display font-bold text-base text-text">Count summary</span>
+        <span className="font-display font-bold text-base text-text">Count Summary</span>
         <span className={clsx('font-mono text-[10px]',
           saving === 'saving' ? 'text-status-warn' :
           saving === 'saved'  ? 'text-status-ok'   : 'text-text-faint'
@@ -629,26 +695,90 @@ function SummaryPanel({ done, total, kg, saving, onSubmit }: {
           {saving === 'saving' ? '⏳ Saving…' : saving === 'saved' ? '✓ Saved' : ''}
         </span>
       </div>
+
+      {/* Per-section table */}
+      <div className="rounded-xl border border-surface-rule overflow-hidden">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="bg-surface border-b border-surface-rule">
+              <th className="px-3 py-2 font-mono text-[9px] uppercase tracking-wide text-text-muted">Section</th>
+              <th className="px-3 py-2 font-mono text-[9px] uppercase tracking-wide text-text-muted text-right">Items</th>
+              <th className="px-3 py-2 font-mono text-[9px] uppercase tracking-wide text-text-muted text-right">kg</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-surface-rule">
+            {sections.map(sec => {
+              const secPct    = sec.total ? sec.done / sec.total : 0
+              const complete  = sec.done === sec.total && sec.total > 0
+              const hasData   = sec.kg > 0
+              return (
+                <tr key={sec.id} className={clsx(
+                  'transition-colors',
+                  complete ? 'bg-ok/4' : hasData ? '' : ''
+                )}>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sec.color}`} />
+                      <span className={clsx(
+                        'font-body text-[11px] truncate',
+                        complete ? 'text-ok font-semibold' : 'text-text'
+                      )}>
+                        {sec.name}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <span className={clsx(
+                      'font-mono text-[10px]',
+                      complete ? 'text-ok font-bold' : hasData ? 'text-text-muted' : 'text-text-faint'
+                    )}>
+                      {sec.done}/{sec.total}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <span className={clsx(
+                      'font-mono text-[11px]',
+                      hasData ? 'text-text font-semibold' : 'text-text-faint'
+                    )}>
+                      {hasData ? `${Math.round(sec.kg).toLocaleString()}` : '—'}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+          {/* Totals footer */}
+          <tfoot>
+            <tr className="bg-surface border-t-2 border-surface-rule">
+              <td className="px-3 py-2 font-mono text-[9px] uppercase tracking-wide text-text-muted font-bold">Total</td>
+              <td className="px-3 py-2 text-right font-mono text-[10px] font-bold text-text">{done}/{total}</td>
+              <td className="px-3 py-2 text-right font-mono text-[11px] font-bold text-text">
+                {kg > 0 ? Math.round(kg).toLocaleString() : '—'}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* Overall progress bar */}
       <div>
         <div className="flex justify-between font-mono text-[10px] text-text-muted mb-1.5">
-          <span>Sections completed</span>
-          <span>{done}/{total}</span>
+          <span>Overall progress</span>
+          <span>{pct}%</span>
         </div>
-        <div className="h-2 bg-surface-rule rounded-full overflow-hidden">
+        <div className="h-1.5 bg-surface-rule rounded-full overflow-hidden">
           <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${pct}%` }} />
         </div>
       </div>
-      <div className="space-y-2">
-        {[
-          { label: 'Total kg', value: `${Math.round(kg).toLocaleString()} kg` },
-          { label: 'Progress',  value: `${pct}%` },
-        ].map(r => (
-          <div key={r.label} className="flex justify-between items-center text-sm">
-            <span className="font-mono text-[10px] uppercase tracking-[.5px] text-text-muted">{r.label}</span>
-            <span className="font-mono font-bold text-text">{r.value}</span>
-          </div>
-        ))}
-      </div>
+
+      {/* Total kg callout */}
+      {kg > 0 && (
+        <div className="flex justify-between items-center px-3 py-2 bg-surface rounded-xl">
+          <span className="font-mono text-[10px] uppercase tracking-wide text-text-muted">Total kg</span>
+          <span className="font-mono font-bold text-text">{Math.round(kg).toLocaleString()} kg</span>
+        </div>
+      )}
+
       <button
         onClick={onSubmit}
         disabled={done === 0}
@@ -657,7 +787,7 @@ function SummaryPanel({ done, total, kg, saving, onSubmit }: {
           done > 0 ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed'
         )}
       >
-        {done > 0 ? 'Submit count' : 'Enter data first'}
+        {done > 0 ? 'Submit Count' : 'Enter data first'}
       </button>
     </div>
   )
@@ -944,13 +1074,45 @@ function PalletEntry({ k, state, store, onChange, lang }: any) {
 }
 
 export default function CountPageWrapper() {
+  const [tab, setTab] = React.useState<'count' | 'recount' | 'monthly'>('count')
+
   return (
-    <Suspense fallback={
-      <div className="min-h-full flex items-center justify-center">
-        <div className="font-mono text-[11px] tracking-[2px] uppercase text-text-muted animate-pulse">Loading…</div>
+    <div className="flex flex-col min-h-full">
+      {/* Tab switcher */}
+      <div className="flex border-b border-surface-rule bg-surface-card px-4 pt-3 gap-1">
+        {([
+          { key: 'count',   label: 'Stock Count'    },
+          { key: 'recount', label: 'Recount'        },
+          { key: 'monthly', label: 'Monthly Count'  },
+        ] as const).map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={clsx(
+              'px-4 py-2 font-display font-bold text-[13px] border-b-2 transition-colors -mb-px',
+              tab === t.key
+                ? 'border-brand text-brand'
+                : 'border-transparent text-text-muted hover:text-text'
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
-    }>
-      <CountPage />
-    </Suspense>
+
+      {tab === 'count' ? (
+        <Suspense fallback={
+          <div className="min-h-full flex items-center justify-center">
+            <div className="font-mono text-[11px] tracking-[2px] uppercase text-text-muted animate-pulse">Loading…</div>
+          </div>
+        }>
+          <CountPage />
+        </Suspense>
+      ) : tab === 'recount' ? (
+        <RecountTab />
+      ) : (
+        <MonthlyCountTab />
+      )}
+    </div>
   )
 }

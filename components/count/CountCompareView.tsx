@@ -223,11 +223,11 @@ export default function CountCompareView({ sessionId, date, onClose }: Props) {
       <div className="flex gap-4 text-xs text-text-muted">
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-sm bg-ok-bg border border-ok/30 inline-block" />
-          Supervisor
+          Warehouse Supervisor
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-sm bg-info-bg border border-info/30 inline-block" />
-          Admin
+          Stock
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-sm bg-warn-bg border border-warn/30 inline-block" />
@@ -332,7 +332,7 @@ function CompareLine({ line }: { line: CompareLine }) {
         )}>
           {line.sup_ns ? 'No stock' : line.sup_kg === null ? '—' : `${Math.round(line.sup_kg)} kg`}
         </div>
-        <div className="font-mono text-[9px] text-text-faint mt-0.5">Sup</div>
+        <div className="font-mono text-[9px] text-text-faint mt-0.5">Warehouse</div>
       </div>
 
       {/* Admin value */}
@@ -344,7 +344,7 @@ function CompareLine({ line }: { line: CompareLine }) {
         )}>
           {line.adm_ns ? 'No stock' : line.adm_kg === null ? '—' : `${Math.round(line.adm_kg)} kg`}
         </div>
-        <div className="font-mono text-[9px] text-text-faint mt-0.5">Admin</div>
+        <div className="font-mono text-[9px] text-text-faint mt-0.5">Stock</div>
       </div>
 
       {/* Variance */}

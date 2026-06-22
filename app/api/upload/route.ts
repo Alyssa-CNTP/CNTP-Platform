@@ -173,9 +173,12 @@ function parseJSON(raw: string): any {
 // ─── PA grade computation ─────────────────────────────────────────────────────
 
 function computePaGrade(sample: any): any {
-  const paUg = parseFloat(
+  let paUg = parseFloat(
     sample.final_summed_total_pa ?? sample.total_pa ?? sample.total_pa_ug_kg
   ) || 0
+  // Safety net: Microchem COAs report in mg/kg — if the model flagged the unit
+  // as mg/kg (instead of converting as instructed), convert to µg/kg here.
+  if (String(sample.unit ?? '').toLowerCase().replace(/\s/g, '').startsWith('mg')) paUg = paUg * 1000
 
   let pa_level: string, pa_status: string
   if (!paUg || paUg === 0)  { pa_level = 'P0'; pa_status = 'PASS' }
@@ -197,27 +200,54 @@ function computePaGrade(sample: any): any {
 // ─── Prompts — exact copy from Express server ─────────────────────────────────
 
 const PROMPTS: Record<string, string> = {
-  pa_ta_analysis: `You are a precision quality data extraction agent for herbal tea manufacturing. 
-Your goal is to extract Pyrrolizidine Alkaloid (PA) and Tropane Alkaloid (TA) data from Stellenbosch University CAF reports.
+  pa_ta_analysis: `You are a precision quality data extraction agent for herbal tea manufacturing.
+Your goal is to extract Pyrrolizidine Alkaloid (PA) and Tropane Alkaloid (TA) data from laboratory reports.
+Return ONLY valid JSON. No preamble, no markdown.
 
-### CRITICAL SUMMATION LOGIC:
+TWO REPORT FORMATS EXIST — first identify which one you are reading, then follow its rules.
+
+### FORMAT A — Stellenbosch University CAF (multi-batch tables, values in µg/kg)
 1. One report contains multiple tables. The first table contains primary PAs. Subsequent tables contain "Additional PAs."
 2. You MUST check all tables for the same Batch Number (e.g., MAT-0224).
-3. The "true_total_pa" is the sum of the "Total" column from EVERY table where that batch number appears. 
-   - Example: If Table 1 shows 350 and Table 2 shows 7, the result is 357.
-4. If a value is "ND", treat it as 0 for calculation purposes, but store it as null in the individual_alkaloids map.
+3. The true total PA is the sum of the "Total" column from EVERY table where that batch number appears.
+   - Example: If Table 1 shows 350 and Table 2 shows 7, final_summed_total_pa = 357.
+4. If a value is "ND", treat it as 0 for calculation purposes.
+5. Extract every unique batch number as its own object in the "samples" array.
+6. lab = "Stellenbosch University CAF".
 
-### EXTRACTION RULES:
-- Return ONLY valid JSON. No preamble, no markdown.
-- Units are µg/kg.
-- Extract every unique batch number as its own object in the "samples" array.
-- "p_level" must be calculated based on the FINAL SUMMED total_pa.
+### FORMAT B — Microchem / AGQ Labs "Certificate Of Analysis" (ONE sample per report, values in mg/kg)
+Recognise it by the title "Certificate Of Analysis", "Microchem" or "AGQ Labs", and a "Sample Details" block.
 
-### P-LEVEL RULES (Total PA µg/kg):
+WARNING — GARBLED TEXT LAYER: the PDF text extraction scrambles this report's two-column layout.
+Labels and their values are often separated, transposed or attached to the wrong neighbouring label
+(e.g. "Date Received: 2026/06/10  2026/06/02 Date Validated:" actually means Received 2026/06/02,
+Validated 2026/06/10; the batch like "MAT-0379" may appear next to "Commodity:" even though it is the
+Variety; the lab reference may appear on its own line far from its label). Therefore identify values
+by their CHARACTER PATTERNS, not only by the adjacent label:
+- batch_no: the code matching MAT-#### / GS-#### / VS-#### style near the Sample/Client Details (e.g. "MAT-0379"). NOT the Laboratory Sample ID.
+- report_name: the lab reference matching YYYY-MM-DD-NNN_NN (e.g. "2026-06-02-180_05").
+- sample_list: the Laboratory Sample ID matching BF##### (e.g. "BF29712").
+- purchase_order: the code matching BH-PO####### (e.g. "BH-PO0001634").
+- sample_date: the EARLIER of the two dates near Date Received / Date Validated, as YYYY-MM-DD.
+These four header fields are REQUIRED — never leave them empty if a matching pattern exists anywhere in the text.
+
+1. The "Compound(s) Detected" table reports results in mg/kg. The total PA is the row named like
+   "Sum of Pyrrolizidine alkaloids CR (EU) 2023/915" (or similar "Sum of Pyrrolizidine" wording).
+2. CRITICAL UNIT CONVERSION: convert mg/kg to µg/kg by multiplying by 1000.
+   - Example: Result 0.019 mg/kg → final_summed_total_pa = 19 (µg/kg).
+   - Set "unit": "µg/kg" after converting. Never output the raw mg/kg number as the total.
+3. If no "Sum of Pyrrolizidine" row exists, sum the individual PA compound rows (mg/kg) and convert to µg/kg.
+4. If the report states "No residue(s) detected" → final_summed_total_pa = 0. (A list of compounds with
+   only LOQ values like 0.01 is NOT detections — it is the screening list; ignore it.)
+5. total_ta: only if a tropane alkaloid row exists (atropine/scopolamine) in the DETECTED table, converted to µg/kg; otherwise null.
+6. lab = "Microchem Lab Services (Pty) Ltd" — never output another lab name for this format.
+7. There is exactly ONE sample in this format — the samples array has ONE object.
+
+### P-LEVEL RULES (final_summed_total_pa in µg/kg):
 - P0: 0  P1: 1–50  P2: 51–200  P3: 201–400  FAIL: >400
 
-### OUTPUT STRUCTURE:
-{"report_name":"","lab":"Stellenbosch University CAF","samples":[{"batch_no":"","sample_date":"","total_pa_primary_table":null,"total_pa_additional_table":null,"final_summed_total_pa":null,"total_ta":null,"p_level":""}]}`,
+### OUTPUT STRUCTURE (identical for both formats):
+{"report_name":"","lab":"","sample_list":"","purchase_order":"","samples":[{"batch_no":"","sample_date":"","total_pa_primary_table":null,"total_pa_additional_table":null,"final_summed_total_pa":null,"unit":"µg/kg","total_ta":null,"p_level":""}]}`,
 
   residue: `You are a precision quality data extraction agent for herbal tea manufacturing.
 Extract pesticide residue data from HKAL/laboratory residue reports.

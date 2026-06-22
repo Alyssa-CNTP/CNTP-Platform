@@ -1,21 +1,112 @@
-services:
-  # The Brain (AI)
-  ollama:
-    image: ollama/ollama
-    container_name: rooibos_brain
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./ollama_data:/root/.ollama
-    # Keeps tinyllama loaded in memory — 638MB so cold start is ~3s not 28s.
-    # sleep 8 gives ollama serve time to fully initialize before loading the model.
-    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 8 && ollama run tinyllama --keepalive 24h & wait"]
+# ─────────────────────────────────────────────────────────────────────────────
+# Alara — Research Engine Services
+# Production docker-compose for VPS deployment.
+#
+# Services:
+#   chromadb  — vector store for signals + vault (localhost:8000)
+#   ollama    — local LLM for research chat (localhost:11434)
+#   n8n       — workflow automation for social pipeline (proxied via nginx)
+#
+# ChromaDB and Ollama are INTERNAL only — never expose to public internet.
+# n8n is proxied through nginx on a separate subdomain (n8n.yourdomain.com).
+#
+# Usage:
+#   docker compose up -d              # start all
+#   docker compose logs -f n8n        # tail n8n logs
+#   docker compose restart chromadb   # restart one service
+# ─────────────────────────────────────────────────────────────────────────────
 
-  # The Memory (Vector Database)
+services:
+
+  # ── ChromaDB — vector store ────────────────────────────────────────────────
   chromadb:
-    image: chromadb/chroma
-    container_name: rooibos_memory
+    image: chromadb/chroma:latest
+    container_name: alara_chroma
+    restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # localhost only — nginx does NOT proxy this
+    volumes:
+      - chroma_data:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Ollama — local LLM for research chat tab ───────────────────────────────
+  # NOTE: gather_v2.py does NOT use Ollama. It uses the Gemini API directly.
+  # Ollama is only used by lib/intelligence.ts (the Research → Chat tab).
+  # You can skip this service if you don't need the local chat feature.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: alara_ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"  # localhost only
+    volumes:
+      - ollama_data:/root/.ollama
+    # Pre-loads phi3 on startup — keeps it in memory for fast responses.
+    # Remove this entrypoint if you want to pull models manually.
+    entrypoint: ["/bin/sh", "-c",
+      "ollama serve & sleep 10 && ollama pull phi3:mini && wait"]
+
+  # ── n8n — workflow automation for social media pipeline ───────────────────
+  # Runs the TikTok/Instagram/YouTube/Exa/RSS gather workflows.
+  # Exposed via nginx reverse proxy on n8n.yourdomain.com
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: alara_n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"   # nginx proxies this externally
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Mount workflow JSON for easy import on first boot
+      - ./n8n:/home/node/.n8n/workflows-import:ro
+    environment:
+      # ── Required ──────────────────────────────────────────────────────────
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?Set N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY}
+
+      # ── Public URL (required for webhooks to work) ─────────────────────
+      - N8N_HOST=${N8N_HOST:-n8n.yourdomain.com}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://${N8N_HOST:-n8n.yourdomain.com}/
+
+      # ── Timezone ────────────────────────────────────────────────────────
+      - GENERIC_TIMEZONE=${TZ:-Africa/Johannesburg}
+
+      # ── Pass through API keys so n8n nodes can use them ─────────────────
+      # These are available as $env vars inside n8n expressions:
+      # {{ $env.YOUTUBE_DATA_API_KEY }}
+      - YOUTUBE_DATA_API_KEY=${YOUTUBE_DATA_API_KEY}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - APIFY_API_TOKEN=${APIFY_API_TOKEN}
+      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET}
+      - PIPELINE_INGEST_URL=${PIPELINE_INGEST_URL:-https://yourdomain.com/api/ingest}
+      - PIPELINE_INGEST_SECRET=${PIPELINE_INGEST_SECRET}
+
+      # ── Security ────────────────────────────────────────────────────────
+      - N8N_DISABLE_UI=false
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168      # keep 7 days of execution history
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ─── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  chroma_data:
+    driver: local
+  ollama_data:
+    driver: local
+  n8n_data:
+    driver: local

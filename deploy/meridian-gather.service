@@ -1,0 +1,34 @@
+# /etc/systemd/system/meridian-gather.service
+# Runs gather_v2.py as a one-shot service triggered by the timer below.
+# Install: sudo cp meridian-gather.service /etc/systemd/system/
+#          sudo cp meridian-gather.timer   /etc/systemd/system/
+#          sudo systemctl daemon-reload
+#          sudo systemctl enable --now meridian-gather.timer
+
+[Unit]
+Description=Alara — Signal Gather (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/home/deploy/cntp-ops/research-engine/scraper
+
+# Activate the Python venv before running
+ExecStart=/home/deploy/cntp-ops/research-engine/venv/bin/python gather_v2.py
+
+# Env file — copy from .env.local, keep only Python-needed vars
+EnvironmentFile=/home/deploy/cntp-ops/research-engine/.env
+
+# Limits
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alara-gather
+
+# Restart policy: do NOT restart on failure (timer handles next run)
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

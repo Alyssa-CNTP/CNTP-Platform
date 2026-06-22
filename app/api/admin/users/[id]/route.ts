@@ -1,7 +1,7 @@
 // app/api/admin/users/[id]/route.ts
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
 
 // ─── PATCH — update role, permissions, name, password, confirm email ──────────
 
@@ -12,11 +12,15 @@ export async function PATCH(
   const { id } = await params
   const caller = await getCallerPermissions()
   const body   = await req.json()
-  const admin  = getAdminClient()
+
+  // Use session client for app_roles queries — service_role lacks schema access
+  // to 'shared' via PostgREST (Exposed schemas only grants anon/authenticated).
+  const sessionClient = await getSessionClient()
+  const admin         = getAdminClient()  // auth API calls only
 
   // Fetch the target user's department to enforce manager-scoped editing
-  const { data: targetRow } = await admin
-    .schema('production' as any)
+  const { data: targetRow } = await sessionClient
+    .schema('shared' as any)
     .from('app_roles')
     .select('department, role')
     .eq('user_id', id)
@@ -24,9 +28,30 @@ export async function PATCH(
 
   const targetDept = (targetRow as any)?.department
 
+  // If this user has no app_roles entry and we have enough info, create one
+  if (!targetRow && body.department && body.role) {
+    if (!caller.can('can_manage_users')) {
+      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+    }
+    const { error: insertErr } = await sessionClient
+      .schema('shared' as any)
+      .from('app_roles')
+      .upsert({
+        user_id:     id,
+        full_name:   body.full_name || body.fullName || '—',
+        department:  body.department,
+        role:        (body.role as string).trim().toLowerCase().replace(/\s+/g, '_'),
+        section_id:  body.sectionId ?? null,
+        permissions: body.permissions ?? {},
+        is_active:   true,
+      }, { onConflict: 'user_id' })
+    if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 })
+    return NextResponse.json({ success: true })
+  }
+
   // Managers can only edit users in their own department
   const canEditThisUser =
-    caller.can('can_manage_users') ||                              // IT full access
+    caller.can('can_manage_users') ||
     (caller.can('can_edit_permissions') && targetDept === caller.department)
 
   if (!canEditThisUser)
@@ -37,7 +62,6 @@ export async function PATCH(
     if (!caller.can('can_change_roles'))
       return NextResponse.json({ error: 'Permission denied — cannot change roles' }, { status: 403 })
 
-    // Only IT can change department
     if (body.department !== undefined && caller.department !== 'IT')
       return NextResponse.json({ error: 'Only IT can change a user\'s department' }, { status: 403 })
 
@@ -46,10 +70,24 @@ export async function PATCH(
     if (body.role       !== undefined) updates.role       = body.role
     if (body.sectionId  !== undefined) updates.section_id = body.sectionId ?? null
 
-    const { error } = await admin
-      .schema('production' as any)
+    const { error } = await sessionClient
+      .schema('shared' as any)
       .from('app_roles')
       .update(updates)
+      .eq('user_id', id)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  // ── Update display name in app_roles ────────────────────────────────────────
+  if (body.full_name !== undefined) {
+    if (!caller.can('can_manage_users'))
+      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+
+    const { error } = await sessionClient
+      .schema('shared' as any)
+      .from('app_roles')
+      .update({ full_name: body.full_name })
       .eq('user_id', id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -60,8 +98,8 @@ export async function PATCH(
     if (!caller.can('can_edit_permissions'))
       return NextResponse.json({ error: 'Permission denied — cannot edit permissions' }, { status: 403 })
 
-    const { error } = await admin
-      .schema('production' as any)
+    const { error } = await sessionClient
+      .schema('shared' as any)
       .from('app_roles')
       .update({ permissions: body.permissions })
       .eq('user_id', id)
@@ -69,7 +107,7 @@ export async function PATCH(
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // ── Update display name ──────────────────────────────────────────────────────
+  // ── Update display name in auth.users metadata ───────────────────────────────
   if (body.fullName !== undefined) {
     if (!caller.can('can_manage_users'))
       return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
@@ -118,7 +156,6 @@ export async function PATCH(
 }
 
 // ─── DELETE — remove a user ───────────────────────────────────────────────────
-// IT only — managers cannot delete users
 
 export async function DELETE(
   _req: NextRequest,
@@ -131,8 +168,10 @@ export async function DELETE(
   if (id === caller.userId)
     return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 })
 
-  const admin = getAdminClient()
-  await admin.schema('production' as any).from('app_roles').delete().eq('user_id', id)
+  const sessionClient = await getSessionClient()
+  const admin         = getAdminClient()
+
+  await sessionClient.schema('shared' as any).from('app_roles').delete().eq('user_id', id)
   const { error } = await admin.auth.admin.deleteUser(id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

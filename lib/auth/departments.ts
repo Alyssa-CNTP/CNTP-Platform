@@ -1,0 +1,86 @@
+export const DEPARTMENT_META = {
+  IT: {
+    label: 'IT',
+    description: 'Technology, infrastructure & development',
+    color: 'bg-violet-500',
+    roles: [
+      { value: 'senior_developer', label: 'Senior Developer', isDefault: true },
+      { value: 'developer',        label: 'Developer' },
+      { value: 'admin',            label: 'Admin' },
+    ],
+    defaultRoute: '/dashboard',
+  },
+  Production: {
+    label: 'Production',
+    description: 'Operations, morning count, floor production',
+    color: 'bg-orange-500',
+    roles: [
+      { value: 'production_supervisor', label: 'Production Supervisor', isDefault: true },
+      { value: 'warehouse_supervisor',  label: 'Warehouse Supervisor' },
+      { value: 'stock_controller',      label: 'Stock Controller' },
+      { value: 'operator',              label: 'Operator' },
+      { value: 'section_operator',      label: 'Section Operator', requiresSection: true },
+    ],
+    sections: ['sieving','refining1','refining2','granule','blender','pasteuriser'],
+    defaultRoute: '/production',
+  },
+  Quality: {
+    label: 'Quality',
+    description: 'QMS, lab results, sieving, pasteuriser, granule',
+    color: 'bg-teal-500',
+    roles: [
+      { value: 'qms_manager',     label: 'QMS Manager',     isDefault: true },
+      { value: 'lab_technician',  label: 'Lab Technician' },
+      { value: 'quality_auditor', label: 'Quality Auditor' },
+    ],
+    defaultRoute: '/quality/sieving',
+  },
+  Sales: {
+    label: 'Sales',
+    description: 'Sales module & research engine',
+    color: 'bg-blue-500',
+    roles: [
+      { value: 'sales_manager', label: 'Sales Manager', isDefault: true },
+      { value: 'sales_rep',     label: 'Sales Rep' },
+    ],
+    defaultRoute: '/sales',
+  },
+  Marketing: {
+    label: 'Marketing',
+    description: 'Marketing module',
+    color: 'bg-pink-500',
+    roles: [
+      { value: 'marketing_manager', label: 'Marketing Manager', isDefault: true },
+      { value: 'content_creator',   label: 'Content Creator' },
+    ],
+    defaultRoute: '/marketing',
+  },
+  Management: {
+    label: 'Management',
+    description: 'Directors, analysts — read-only across platform',
+    color: 'bg-stone-500',
+    roles: [
+      { value: 'management', label: 'Management', isDefault: true },
+      { value: 'director',   label: 'Director' },
+      { value: 'analyst',    label: 'Analyst' },
+    ],
+    defaultRoute: '/dashboard',
+  },
+} as const
+
+export type Department = keyof typeof DEPARTMENT_META
+
+// Factory/production supervisors land in their hub. Warehouse supervisors (and
+// everyone else) follow the normal department default. 'supervisor' is accepted
+// as a legacy alias for 'production_supervisor' (pre-rename accounts).
+export function isProductionSupervisor(role?: string | null): boolean {
+  return role === 'production_supervisor' || role === 'supervisor'
+}
+
+export function getDefaultRoute(department: string, role?: string | null): string {
+  if (department === 'Production' && isProductionSupervisor(role)) return '/supervisor'
+  // Warehouse supervisor + stock controller do the counts — land them there until a
+  // dedicated warehouse dashboard exists.
+  if (department === 'Production' && (role === 'warehouse_supervisor' || role === 'stock_controller')) return '/count'
+  return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/dashboard'
+}

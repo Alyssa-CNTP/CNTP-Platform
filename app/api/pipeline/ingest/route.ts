@@ -5,6 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import { createClient }  from '@supabase/supabase-js'
+import crypto             from 'crypto'
 
 // Service role client — bypasses RLS so n8n can write signals.
 // This key never goes to the browser. Only used here, server-side.
@@ -107,9 +108,17 @@ async function maybeCreateAlert(signalId: string, payload: IngestPayload) {
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
-  // 1. Validate secret header — reject anything without it immediately
+  // 1. Validate secret header — constant-time compare prevents timing attacks
   const secret = req.headers.get('x-pipeline-secret')
-  if (!secret || secret !== PIPELINE_SECRET) {
+  const secretValid = !!secret && !!PIPELINE_SECRET && (() => {
+    try {
+      // Buffers must be same length for timingSafeEqual — pad to avoid length leak
+      const a = Buffer.alloc(64); Buffer.from(secret).copy(a)
+      const b = Buffer.alloc(64); Buffer.from(PIPELINE_SECRET).copy(b)
+      return crypto.timingSafeEqual(a, b) && secret.length === PIPELINE_SECRET.length
+    } catch { return false }
+  })()
+  if (!secretValid) {
     return NextResponse.json({ error: 'Unauthorised' }, { status: 401 })
   }
 

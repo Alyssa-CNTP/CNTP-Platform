@@ -5,21 +5,28 @@
 // Tabs: Overview · Customers · Products · OKRs · Intelligence
 // Data: seeded from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx
 
-import React, { useState } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   TrendingUp, TrendingDown, Users, Package,
   BarChart3, Target, ChevronRight, Search,
-  Cpu, AlertTriangle, CheckCircle2, Clock,
-  ArrowUpRight, ArrowDownRight, Layers,
+  AlertTriangle, CheckCircle2, Clock,
+  ArrowUpRight, ArrowDownRight, Layers, Globe2,
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie,
+  CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
+import SignalCard   from '@/components/intelligence/SignalCard'
+import SignalDrawer from '@/components/intelligence/SignalDrawer'
+import type { Signal } from '@/components/intelligence/types'
+import type { SalesActuals, SalesCategory } from '@/lib/acumatica/sales-actuals'
 
-// ─── Real data from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx ─────────────────
+// ─── Planning / forecast data from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx ──
+// Live ACTUALS now come from GET /api/dashboard/sales. These constants are kept
+// for (a) planning fields not in the live source (targets, tiers, OKRs) and
+// (b) fallback display if the live fetch fails.
 
-const KPI = {
+const FALLBACK_KPI = {
   totalRevenue:  70525831,
   totalCost:     48042495,
   grossMargin:   24472707,
@@ -35,14 +42,14 @@ const KPI = {
   margin2025:    0.398,
 }
 
-const MONTHLY_DATA = [
+const PLAN_MONTHLY = [
   { month: 'Jan', actualRev: 14405912, targetRev: 18665279, actualVol: 231150, targetVol: 286563, gp: 5309616 },
   { month: 'Feb', actualRev: 9590923,  targetRev: 18665279, actualVol: 179045, targetVol: 286563, gp: 3566423 },
   { month: 'Mar', actualRev: 21611865, targetRev: 21153983, actualVol: 317199, targetVol: 324771, gp: 7359716 },
   { month: 'Apr', actualRev: 24917130, targetRev: 19909631, actualVol: 356945, targetVol: 305667, gp: 8236952 },
 ]
 
-const CUSTOMERS = [
+const PLAN_CUSTOMERS = [
   { name: 'Kunitaro Co. Ltd',                    tier: 'T1', action: 'MAINTAIN', region: 'Japan',        seg: 'Bulk', ytdRev: 31256639, ytdCost: 23426465, ytdVol: 373788, ytdGP: 0.314, gp25: 0.344, gpTgt: 0.35  },
   { name: 'National Brands Limited',             tier: 'T1', action: 'MAINTAIN', region: 'South Africa', seg: 'Bulk', ytdRev: 24121865, ytdCost: 15291786, ytdVol: 448726, ytdGP: 0.366, gp25: 0.331, gpTgt: 0.34  },
   { name: 'Lipton Teas & Infusions',             tier: 'T1', action: 'MAINTAIN', region: 'South Africa', seg: 'Bulk', ytdRev: 2820096,  ytdCost: 1964730,  ytdVol: 57600,  ytdGP: 0.303, gp25: 0.252, gpTgt: 0.26  },
@@ -69,7 +76,7 @@ const CUSTOMERS = [
   { name: 'Gold Crown (Kenya)',              tier: 'T3', action: 'REPRICE',  region: 'Kenya',         seg: 'Bulk', ytdRev: 0,        ytdCost: 0,        ytdVol: 0,      ytdGP: null,  gp25: 0.128, gpTgt: 0.35  },
 ]
 
-const PRODUCTS = [
+const FALLBACK_PRODUCTS = [
   { sku: 'Super Grade',                       jan: 93400,  feb: 148845, mar: 154984, apr: 117812, ytd: 515041, pct: 0.4750 },
   { sku: 'Super Fine Cut - Conventional',     jan: 54000,  feb: 0,      mar: 72000,  apr: 90000,  ytd: 216000, pct: 0.1992 },
   { sku: 'SFC Bold - RA Conventional',        jan: 18000,  feb: 0,      mar: 0,      apr: 72000,  ytd: 90000,  pct: 0.0830 },
@@ -171,51 +178,156 @@ function Tab({ label, active, onClick }: { label: string; active: boolean; onCli
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-type TabKey = 'overview' | 'customers' | 'products' | 'okrs' | 'intelligence'
+type TabKey = 'overview' | 'customers' | 'products' | 'okrs'
+
+// Category toggle chips → live API `include` scope.
+const CATEGORY_CHIPS: { key: SalesCategory; label: string }[] = [
+  { key: 'product',  label: 'Tea Product'         },
+  { key: 'contract', label: 'Contract Processing' },
+  { key: 'freight',  label: 'Freight'             },
+  { key: 'other',    label: 'Other'               },
+]
 
 export default function SalesPage() {
   const [tab, setTab]             = useState<TabKey>('overview')
   const [search, setSearch]       = useState('')
   const [tierFilter, setTier]     = useState('ALL')
-  const [intelQuery, setQuery]    = useState('')
-  const [intelResp, setResp]      = useState('')
-  const [intelLoading, setLoad]   = useState(false)
+
+  // Live sales actuals — fetched on mount + when year/scope changes.
+  const [year]                    = useState(2026)
+  const [include, setInclude]     = useState<SalesCategory[]>(['product'])
+  const [data, setData]           = useState<SalesActuals | null>(null)
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    fetch(`/api/dashboard/sales?year=${year}&include=${include.join(',')}`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then((d: SalesActuals) => { if (!cancelled) setData(d) })
+      .catch(() => { if (!cancelled) setError('Live data unavailable — showing last known figures') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [year, include])
+
+  const toggleCategory = (key: SalesCategory) =>
+    setInclude(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      return next.length ? next : ['product']  // never empty — API defaults to product
+    })
+
+  // ── Merge: live actuals + planning overlay (fall back to constants) ─────────
+  const kpi = data?.kpi ?? null
+
+  // Monthly chart: live actuals keyed by month, plan targets joined by name.
+  const monthlyData = useMemo(() => {
+    const planByMonth = new Map(PLAN_MONTHLY.map(p => [p.month, p]))
+    if (data?.monthly) {
+      return data.monthly.map(m => {
+        const plan = planByMonth.get(m.month)
+        return {
+          month:     m.month,
+          actualRev: m.actualRev,
+          actualVol: m.actualVol,
+          gp:        m.gp,
+          targetRev: plan?.targetRev ?? 0,
+          targetVol: plan?.targetVol ?? 0,
+        }
+      })
+    }
+    return PLAN_MONTHLY
+  }, [data])
+
+  // Customers: live actuals joined onto plan for tier/action/seg/targets.
+  const customers = useMemo(() => {
+    const planByName = new Map(PLAN_CUSTOMERS.map(p => [p.name, p]))
+    if (data?.customers) {
+      return data.customers.map(c => {
+        const plan = planByName.get(c.name)
+        return {
+          name:    c.name,
+          region:  c.region,
+          seg:     plan?.seg    ?? 'Bulk',
+          tier:    plan?.tier   ?? 'T3',
+          action:  plan?.action ?? 'MAINTAIN',
+          gpTgt:   plan?.gpTgt  ?? 0,
+          gp25:    plan?.gp25   ?? 0,
+          ytdRev:  c.ytdRev,
+          ytdCost: c.ytdCost,
+          ytdVol:  c.ytdVol,
+          ytdGP:   c.ytdGP,
+        }
+      })
+    }
+    return PLAN_CUSTOMERS
+  }, [data])
+
+  // Products: live monthly record + ytd + pct (fall back to seeded jan..apr shape).
+  const products = useMemo(() => {
+    if (data?.products) {
+      return data.products.map(p => ({
+        sku:     p.sku,
+        monthly: p.monthly,
+        ytd:     p.ytd,
+        pct:     p.pct,
+      }))
+    }
+    return FALLBACK_PRODUCTS.map(p => ({
+      sku:     p.sku,
+      monthly: { Jan: p.jan, Feb: p.feb, Mar: p.mar, Apr: p.apr } as Record<string, number>,
+      ytd:     p.ytd,
+      pct:     p.pct,
+    }))
+  }, [data])
+
+  const categoryRev = useMemo(() => {
+    const map = new Map<SalesCategory, number>()
+    data?.categories?.forEach(c => map.set(c.category, c.revenue))
+    return map
+  }, [data])
+
+  // Market Pulse — signal data
+  const [signals,        setSignals]        = useState<Signal[]>([])
+  const [signalsLoading, setSignalsLoading] = useState(true)
+  const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null)
+
+  useEffect(() => {
+    fetch('/api/signals?limit=200')
+      .then(r => r.json())
+      .then(d => setSignals(d.signals ?? []))
+      .catch(() => {})
+      .finally(() => setSignalsLoading(false))
+  }, [])
+
+  const regionData = useMemo(() => {
+    const counts = new Map<string, number>()
+    signals.forEach(s => { if (s.region) counts.set(s.region, (counts.get(s.region) ?? 0) + 1) })
+    return Array.from(counts.entries())
+      .map(([region, count]) => ({ region, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+  }, [signals])
+
+  const opportunities = useMemo(() => signals.filter(s => s.classification === 'opportunity').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
+  const competitors   = useMemo(() => signals.filter(s => s.classification === 'competitor').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
+  const tradeSignals  = useMemo(() => signals.filter(s => s.keyword_group === 'trade').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
 
   const TABS: { key: TabKey; label: string }[] = [
-    { key: 'overview',      label: 'Overview'      },
-    { key: 'customers',     label: 'Customers'     },
-    { key: 'products',      label: 'Product Mix'   },
-    { key: 'okrs',          label: 'OKRs'          },
-    { key: 'intelligence',  label: 'Intelligence'  },
+    { key: 'overview',  label: 'Overview'    },
+    { key: 'customers', label: 'Customers'   },
+    { key: 'products',  label: 'Product Mix' },
+    { key: 'okrs',      label: 'OKRs'        },
   ]
 
-  const filteredCustomers = CUSTOMERS.filter(c => {
+  const filteredCustomers = customers.filter(c => {
     const s = search.toLowerCase()
     return (
       (c.name.toLowerCase().includes(s) || c.region.toLowerCase().includes(s)) &&
       (tierFilter === 'ALL' || c.tier === tierFilter)
     )
   })
-
-  const runIntel = async (q: string) => {
-    if (!q.trim()) return
-    setLoad(true)
-    setResp('')
-    try {
-      const context = `CNTP YTD Jan-Apr 2026: Revenue R70.5M (vs R229.9M 2025, -69.3% YoY — volume shift not pricing loss). Gross margin R24.5M at 34.7% (2025: 39.8%). Volume 1,092,439kg (-73.4% YoY). Avg Rev/kg R64.55 (+15.3% pricing improvement). Bulk R69.5M (98.6%), VA R982k (1.4%). Super Grade SKU = 47.1% of volume. Top 3 SKUs = 76% of volume. 31 active SKUs. Full year target: R248.9M.`
-      const res  = await fetch('/api/sales', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'agent', prompt: q, context }),
-      })
-      const data = await res.json()
-      setResp(data.response ?? 'No response received.')
-    } catch {
-      setResp('Intelligence engine unavailable. Please try again.')
-    } finally {
-      setLoad(false)
-    }
-  }
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -236,18 +348,57 @@ export default function SalesPage() {
           ════════════════════════════════════════════════════════════════ */}
           {tab === 'overview' && (
             <>
+              {/* Category scope chips */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-[10px] tracking-widest uppercase text-text-muted mr-1">Scope</span>
+                {CATEGORY_CHIPS.map(chip => {
+                  const on  = include.includes(chip.key)
+                  const rev = categoryRev.get(chip.key)
+                  return (
+                    <button key={chip.key} onClick={() => toggleCategory(chip.key)}
+                      className={`px-3 py-1.5 text-[12px] rounded-full border transition-colors ${
+                        on
+                          ? 'bg-brand text-white border-brand'
+                          : 'bg-surface-card border-surface-rule text-text-muted hover:text-text'
+                      }`}>
+                      {chip.label}
+                      {rev !== undefined && rev > 0 && (
+                        <span className={`ml-1.5 font-mono text-[10px] ${on ? 'text-white/70' : 'text-text-faint'}`}>{fR(rev)}</span>
+                      )}
+                    </button>
+                  )
+                })}
+                {loading && <span className="text-[11px] text-text-faint ml-1">Loading…</span>}
+              </div>
+
+              {/* Live-data fallback notice */}
+              {error && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-status-warnBg border border-surface-rule text-[12px] text-status-warn">
+                  <AlertTriangle size={13} className="shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
               {/* KPI row */}
               <div>
                 <SectionLabel text="Financial performance · YTD Jan–Apr 2026" />
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <KPICard label="Total revenue"  value={fR(KPI.totalRevenue)} sub={`vs ${fR(KPI.rev2025)} 2025`} up={false} />
-                  <KPICard label="Gross margin"   value={fR(KPI.grossMargin)}  sub="R24.5M YTD" />
-                  <KPICard label="Margin %"       value={fP(KPI.marginPct)}    sub={`2025: ${fP(KPI.margin2025)} · −5.1pp`} up={false} />
-                  <KPICard label="Volume (kg)"    value={fK(KPI.volumeKg)}     sub={`vs ${fK(KPI.vol2025)} 2025`} up={false} />
-                  <KPICard label="Avg rev / kg"   value={`R${KPI.avgRevPerKg.toFixed(2)}`} sub="+15.3% pricing uplift" up />
-                  <KPICard label="Bulk revenue"   value={fR(KPI.bulkRevenue)}  sub="98.6% of total" />
-                  <KPICard label="VA revenue"     value={`R${(KPI.vaRevenue/1000).toFixed(0)}k`} sub="1.4% — grow target" />
-                  <KPICard label="Super Grade mix" value={fP(KPI.superGradeMix)} sub="515k kg · concentration risk" />
+                  <KPICard label="Total revenue"  value={fR(kpi?.totalRevenue ?? FALLBACK_KPI.totalRevenue)} sub={`vs ${fR(FALLBACK_KPI.rev2025)} 2025`} up={false} />
+                  <KPICard label="Gross margin"   value={fR(kpi?.grossMargin ?? FALLBACK_KPI.grossMargin)}  sub={`${fR(kpi?.grossMargin ?? FALLBACK_KPI.grossMargin)} YTD`} />
+                  <KPICard label="Margin %"       value={fP(kpi?.marginPct ?? FALLBACK_KPI.marginPct)}    sub={`2025: ${fP(FALLBACK_KPI.margin2025)} · −5.1pp`} up={false} />
+                  <KPICard label="Volume (kg)"    value={fK(kpi?.volumeKg ?? FALLBACK_KPI.volumeKg)}     sub={`vs ${fK(FALLBACK_KPI.vol2025)} 2025`} up={false} />
+                  <KPICard label="Avg rev / kg"   value={`R${(kpi?.avgRevPerKg ?? FALLBACK_KPI.avgRevPerKg).toFixed(2)}`} sub="+15.3% pricing uplift" up />
+                  {kpi
+                    ? <>
+                        <KPICard label="Export revenue" value={fR(kpi.exportRevenue)} sub={`${fP(kpi.totalRevenue > 0 ? kpi.exportRevenue / kpi.totalRevenue : 0)} of total`} />
+                        <KPICard label="Local revenue"  value={fR(kpi.localRevenue)}  sub={`${fP(kpi.totalRevenue > 0 ? kpi.localRevenue / kpi.totalRevenue : 0)} of total`} />
+                      </>
+                    : <>
+                        <KPICard label="Bulk revenue"   value={fR(FALLBACK_KPI.bulkRevenue)}  sub="98.6% of total" />
+                        <KPICard label="VA revenue"     value={`R${(FALLBACK_KPI.vaRevenue/1000).toFixed(0)}k`} sub="1.4% — grow target" />
+                      </>
+                  }
+                  <KPICard label="Active SKUs"    value={`${kpi?.activeSkus ?? FALLBACK_KPI.activeSkus}`} sub="distinct grades dispatched" />
                 </div>
               </div>
 
@@ -258,7 +409,7 @@ export default function SalesPage() {
                   <SectionLabel text="Monthly revenue vs target (R)" />
                   <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={MONTHLY_DATA} barGap={6} barCategoryGap="30%">
+                      <BarChart data={monthlyData} barGap={6} barCategoryGap="30%">
                         <CartesianGrid strokeDasharray="2 4" stroke="#f3f4f6" vertical={false} />
                         <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false}
@@ -269,8 +420,8 @@ export default function SalesPage() {
                         />
                         <Bar dataKey="targetRev" fill="#f3f4f6" radius={[3,3,0,0]} name="Target" />
                         <Bar dataKey="actualRev" radius={[3,3,0,0]} name="Actual">
-                          {MONTHLY_DATA.map((d, i) => (
-                            <Cell key={i} fill={d.actualRev >= d.targetRev ? '#16a34a' : '#2563eb'} />
+                          {monthlyData.map((d, i) => (
+                            <Cell key={i} fill={d.targetRev > 0 && d.actualRev >= d.targetRev ? '#16a34a' : '#2563eb'} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -288,7 +439,7 @@ export default function SalesPage() {
                   <SectionLabel text="Volume dispatched (kg) vs target" />
                   <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={MONTHLY_DATA}>
+                      <AreaChart data={monthlyData}>
                         <defs>
                           <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%"  stopColor="var(--color-brand)" stopOpacity={0.15}/>
@@ -354,13 +505,80 @@ export default function SalesPage() {
                 </p>
               </div>
 
+              {/* Market Pulse */}
+              <div className="space-y-4">
+                <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <SectionLabel text="Market Pulse · Signal volume by region" />
+                      <p className="text-[11px] text-text-muted -mt-2">Live signals from n8n · updated daily at 06:00</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-status-ok" style={{ boxShadow: '0 0 6px var(--color-status-ok)' }} />
+                      <span className="font-mono text-[9px] text-text-faint uppercase tracking-wider">Live</span>
+                    </div>
+                  </div>
+                  {signalsLoading ? (
+                    <div className="h-[160px] flex items-center justify-center text-text-faint text-[12px]">Loading…</div>
+                  ) : regionData.length === 0 ? (
+                    <div className="h-[160px] flex items-center justify-center text-text-faint text-[12px]">No regional data yet — signals will appear once n8n is live</div>
+                  ) : (
+                    <div className="h-[160px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={regionData} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-surface-rule)" vertical={false} />
+                          <XAxis dataKey="region" tick={{ fontSize: 11, fill: 'var(--color-text-muted)' }} axisLine={{ stroke: 'var(--color-surface-rule)' }} tickLine={false} />
+                          <YAxis tick={{ fontSize: 11, fill: 'var(--color-text-muted)' }} axisLine={false} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ background: 'var(--color-surface-card)', border: '1px solid var(--color-surface-rule)', borderRadius: 8, fontSize: 12 }}
+                            cursor={{ fill: 'var(--color-surface)' }}
+                          />
+                          <Bar dataKey="count" fill="var(--color-brand)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {[
+                    { title: 'Opportunities', icon: TrendingUp, items: opportunities, accent: 'var(--color-status-ok)' },
+                    { title: 'Competitor Activity', icon: Globe2, items: competitors, accent: 'var(--color-status-danger)' },
+                    { title: 'Trade Signals', icon: BarChart3, items: tradeSignals, accent: 'var(--color-brand)' },
+                  ].map(col => (
+                    <section key={col.title} className="bg-surface-card rounded-xl border border-surface-rule flex flex-col max-h-[480px]">
+                      <header className="flex items-center justify-between px-4 py-3 border-b border-surface-rule">
+                        <div className="flex items-center gap-2">
+                          <col.icon size={13} style={{ color: col.accent }} />
+                          <h3 className="font-display font-semibold text-[13px] text-text">{col.title}</h3>
+                        </div>
+                        <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-surface-rule text-text-muted bg-surface">{col.items.length}</span>
+                      </header>
+                      <div className="flex-1 overflow-y-auto p-3 grid gap-2">
+                        {signalsLoading ? (
+                          <p className="text-center text-text-faint text-[12px] py-4">Loading…</p>
+                        ) : col.items.length === 0 ? (
+                          <p className="text-center text-text-faint text-[12px] py-4">No signals yet</p>
+                        ) : (
+                          col.items.slice(0, 12).map(s => (
+                            <SignalCard key={s.id} signal={s} compact onClick={setSelectedSignal} />
+                          ))
+                        )}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </div>
+
+              <SignalDrawer signal={selectedSignal} onClose={() => setSelectedSignal(null)} />
+
               {/* Engine mix */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
                   <SectionLabel text="Revenue engine mix · YTD" />
                   {[
-                    { label: 'Bulk Engine',      value: KPI.bulkRevenue, color: '#2563eb', pct: 0.986 },
-                    { label: 'Value-Add Engine', value: KPI.vaRevenue,   color: '#7c3aed', pct: 0.014 },
+                    { label: 'Bulk Engine',      value: FALLBACK_KPI.bulkRevenue, color: '#2563eb', pct: 0.986 },
+                    { label: 'Value-Add Engine', value: FALLBACK_KPI.vaRevenue,   color: '#7c3aed', pct: 0.014 },
                   ].map(e => (
                     <div key={e.label} className="mb-5 last:mb-0">
                       <div className="flex justify-between items-baseline mb-1.5">
@@ -435,11 +653,11 @@ export default function SalesPage() {
               {/* Summary chips */}
               <div className="flex gap-3 flex-wrap">
                 {[
-                  { label: 'T1 accounts', value: CUSTOMERS.filter(c=>c.tier==='T1').length, color: 'blue' },
-                  { label: 'T2 accounts', value: CUSTOMERS.filter(c=>c.tier==='T2').length, color: 'gray' },
-                  { label: 'T3 / exit',   value: CUSTOMERS.filter(c=>c.tier==='T3').length, color: 'red'  },
-                  { label: 'GP% ≥ 35%',  value: CUSTOMERS.filter(c=>c.ytdGP!==null&&c.ytdGP>=0.35).length, color: 'green' },
-                  { label: 'Below target',value: CUSTOMERS.filter(c=>c.ytdGP!==null&&c.ytdGP<c.gpTgt).length, color: 'amber' },
+                  { label: 'T1 accounts', value: customers.filter(c=>c.tier==='T1').length, color: 'blue' },
+                  { label: 'T2 accounts', value: customers.filter(c=>c.tier==='T2').length, color: 'gray' },
+                  { label: 'T3 / exit',   value: customers.filter(c=>c.tier==='T3').length, color: 'red'  },
+                  { label: 'GP% ≥ 35%',  value: customers.filter(c=>c.ytdGP!==null&&c.ytdGP>=0.35).length, color: 'green' },
+                  { label: 'Below target',value: customers.filter(c=>c.ytdGP!==null&&c.ytdGP<c.gpTgt).length, color: 'amber' },
                 ].map((s, i) => (
                   <div key={i} className="bg-surface-card border border-surface-rule rounded-lg px-3 py-2 text-center min-w-[90px]">
                     <div className="font-display font-bold text-lg text-text">{s.value}</div>
@@ -517,7 +735,7 @@ export default function SalesPage() {
                 </div>
                 <div className="h-64 mb-6">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={PRODUCTS} layout="vertical" barCategoryGap="25%">
+                    <BarChart data={products} layout="vertical" barCategoryGap="25%">
                       <CartesianGrid strokeDasharray="2 4" stroke="#f3f4f6" horizontal={false} />
                       <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false}
                         tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
@@ -527,7 +745,7 @@ export default function SalesPage() {
                         formatter={(v: any) => [`${((v as number)/1000).toFixed(0)}k kg`, 'YTD Volume'] as [string, string]}
                       />
                       <Bar dataKey="ytd" radius={[0,3,3,0]}>
-                        {PRODUCTS.map((_, i) => (
+                        {products.map((_, i) => (
                           <Cell key={i} fill={i === 0 ? '#2563eb' : i < 3 ? '#60a5fa' : '#bfdbfe'} />
                         ))}
                       </Bar>
@@ -546,13 +764,13 @@ export default function SalesPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-surface-rule">
-                      {PRODUCTS.map((p, i) => (
+                      {products.map((p, i) => (
                         <tr key={i} className={`hover:bg-surface ${i < 3 ? 'font-semibold' : ''}`}>
                           <td className="py-2 px-3 text-text text-[12px]">{p.sku}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.jan > 0 ? p.jan.toLocaleString() : '—'}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.feb > 0 ? p.feb.toLocaleString() : '—'}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.mar > 0 ? p.mar.toLocaleString() : '—'}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-text-muted">{p.apr > 0 ? p.apr.toLocaleString() : '—'}</td>
+                          {['Jan','Feb','Mar','Apr'].map(mo => {
+                            const v = p.monthly[mo] ?? 0
+                            return <td key={mo} className="py-2 px-3 font-mono text-[11px] text-text-muted">{v > 0 ? v.toLocaleString() : '—'}</td>
+                          })}
                           <td className="py-2 px-3 font-mono text-[11px] text-text font-bold">{p.ytd.toLocaleString()}</td>
                           <td className="py-2 px-3">
                             <div className="flex items-center gap-2">
@@ -632,96 +850,6 @@ export default function SalesPage() {
                 </div>
               ))}
             </>
-          )}
-
-          {/* ════════════════════════════════════════════════════════════════
-              INTELLIGENCE
-          ════════════════════════════════════════════════════════════════ */}
-          {tab === 'intelligence' && (
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 min-h-[600px]">
-              {/* Left: query cards */}
-              <div className="space-y-6">
-                <div>
-                  <SectionLabel text="Market intelligence · CNTP data loaded as context" />
-                  <p className="text-[13px] text-text-muted leading-relaxed">
-                    The engine has your current CNTP YTD numbers loaded. Ask it to compare against market benchmarks, 
-                    suggest account actions, or scout new markets. Your raw customer data never leaves your server — only 
-                    aggregated metrics are used as context.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {[
-                    { tag: 'Pricing',        q: 'How does our R64.55/kg avg pricing compare to global bulk rooibos market benchmarks?' },
-                    { tag: 'Market entry',   q: 'What is the demand outlook for rooibos in Germany and Poland? We have two T2 accounts there.' },
-                    { tag: 'VA strategy',    q: 'Our VA revenue is only 1.4% of total. What realistic target should we set and how do we grow it?' },
-                    { tag: 'Volume recovery',q: 'Which markets should we target to recover the 73% YoY volume decline?' },
-                    { tag: 'Rosehip synergy',q: 'What is the current rosehip market outlook and how does it complement our rooibos VA engine?' },
-                    { tag: 'Account risk',   q: 'Analyse T3 accounts with <15% GP and recommend exit or reprice approach with talking points.' },
-                    { tag: 'Japan relationship', q: 'How do we protect and grow our Japan relationship while diversifying into new markets?' },
-                    { tag: 'Competitor scan',q: 'Who are the main competing bulk rooibos exporters and what are their pricing and positioning strategies?' },
-                  ].map((s, i) => (
-                    <button key={i} onClick={() => { setQuery(s.q); runIntel(s.q) }}
-                      className="text-left p-4 bg-surface-card border border-surface-rule rounded-xl hover:border-brand hover:shadow-card transition-all group">
-                      <div className="font-mono text-[9px] uppercase tracking-wider text-brand mb-2 font-bold">{s.tag}</div>
-                      <p className="text-[12px] text-text-muted leading-relaxed group-hover:text-text transition-colors">{s.q}</p>
-                      <div className="mt-3 text-[11px] text-brand flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        Run query <ChevronRight size={11}/>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Right: terminal */}
-              <div className="bg-surface-card border border-surface-rule rounded-xl flex flex-col lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-180px)]">
-                <div className="px-4 py-3 border-b border-surface-rule flex items-center gap-2">
-                  <Cpu size={13} className="text-brand" />
-                  <span className="font-mono text-[11px] font-bold text-text uppercase tracking-wider">Intelligence Engine</span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${intelLoading ? 'bg-amber-400 animate-pulse' : 'bg-green-500'}`} />
-                    <span className="font-mono text-[10px] text-text-muted">{intelLoading ? 'PROCESSING' : 'READY'}</span>
-                  </div>
-                </div>
-
-                <div className="flex-1 p-4 overflow-y-auto text-[12px] leading-relaxed text-text font-mono min-h-[300px]">
-                  {intelLoading ? (
-                    <div className="h-full flex flex-col items-center justify-center gap-3 text-text-muted">
-                      <div className="w-8 h-8 border-2 border-surface-rule border-t-brand rounded-full animate-spin" />
-                      <span className="animate-pulse text-[11px]">Synthesising intelligence…</span>
-                    </div>
-                  ) : intelResp ? (
-                    <div className="whitespace-pre-wrap">{intelResp}</div>
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-center text-text-muted gap-3">
-                      <Cpu size={32} className="text-surface-rule" />
-                      <div>
-                        <p className="text-[12px] font-medium">Select a query card</p>
-                        <p className="text-[11px] mt-1">or type your own question below</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="p-3 border-t border-surface-rule">
-                  <div className="relative">
-                    <textarea
-                      value={intelQuery}
-                      onChange={e => setQuery(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runIntel(intelQuery) }}}
-                      placeholder="Ask about market conditions, account strategy, pricing…"
-                      rows={3}
-                      className="w-full text-[12px] bg-surface border border-surface-rule rounded-lg p-2.5 pr-10 text-text placeholder:text-text-muted focus:outline-none focus:border-brand resize-none"
-                    />
-                    <button onClick={() => runIntel(intelQuery)}
-                      className="absolute bottom-3 right-2 w-7 h-7 bg-brand rounded-md flex items-center justify-center text-white hover:opacity-90">
-                      <ChevronRight size={13}/>
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-text-muted mt-1.5 font-mono">Enter ↵ to send · Shift+Enter for new line</p>
-                </div>
-              </div>
-            </div>
           )}
 
         </div>

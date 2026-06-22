@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { data: appRole } = await supabase
-    .schema('production')
+    .schema('shared' as any)
     .from('app_roles')
     .select('role')
     .eq('user_id', user.id)
