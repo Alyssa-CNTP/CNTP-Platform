@@ -166,27 +166,43 @@ jobs:
           retention-days: 14
 
       # ----- APPLY (reconcile/apply only, double-gated) -----
-      - name: Guard — require confirmed apply script
+      # Backups already ran above. This phase rebuilds production's qms to match
+      # staging's redesigned qms (structure + authoritative data), atomically.
+      # Production's public.* quality data is NOT touched here (merged in a later phase).
+      - name: Guard — require confirmation marker
         if: github.ref_name == 'reconcile/apply'
         run: |
           test -f supabase/reconcile/CONFIRMED || { echo "::error::supabase/reconcile/CONFIRMED missing — refusing to apply"; exit 1; }
-          test -f supabase/reconcile/apply_prod.sql || { echo "::error::supabase/reconcile/apply_prod.sql missing"; exit 1; }
+          echo "Confirmed phase: $(cat supabase/reconcile/CONFIRMED)"
 
-      - name: Apply reconciliation to PRODUCTION
+      - name: "Phase 1 — rebuild production qms from staging (atomic)"
         if: github.ref_name == 'reconcile/apply'
         env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
           PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: |
           set -euo pipefail
-          psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 -f supabase/reconcile/apply_prod.sql
+          # Build the migration: drop prod's qms, recreate from staging DDL, load staging data.
+          # Whole thing runs in ONE transaction (--single-transaction): any error => full rollback,
+          # production's qms is left exactly as it was.
+          {
+            echo "DROP SCHEMA IF EXISTS qms CASCADE;"
+            pg_dump --schema-only --no-owner --no-privileges -n qms "$STAGING_DB_URL"
+            pg_dump --data-only   --no-owner --no-privileges -n qms "$STAGING_DB_URL"
+          } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
 
-      - name: Verify production structure
+      - name: Verify — prod qms now matches staging qms (row counts)
         if: github.ref_name == 'reconcile/apply'
         env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
           PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: |
-          psql "$PROD_DB_URL" -P pager=off -c "
-            SELECT n.nspname AS schema, count(*) AS tables
-            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-            WHERE c.relkind='r' AND n.nspname IN ('public','qms','acumatica')
-            GROUP BY 1 ORDER BY 1;"
+          set -euo pipefail
+          Q="SELECT c.relname AS table, COALESCE(s.n_live_tup,0) AS rows
+             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             LEFT JOIN pg_stat_user_tables s ON s.relid=c.oid
+             WHERE c.relkind='r' AND n.nspname='qms' ORDER BY 1;"
+          echo "===== STAGING qms ====="; psql "$STAGING_DB_URL" -P pager=off -c "$Q"
+          echo "===== PRODUCTION qms (after rebuild) ====="; psql "$PROD_DB_URL" -P pager=off -c "$Q"
+          echo "prod public.* quality tables left intact:"
+          psql "$PROD_DB_URL" -t -A -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"
