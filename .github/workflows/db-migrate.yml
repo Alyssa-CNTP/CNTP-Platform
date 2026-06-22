@@ -12,13 +12,13 @@ name: DB Migrate
 #
 # Passwords live here as encrypted GitHub secrets — never in the repo, never in chat.
 
+# NOTE: auto-push on branch pushes is DISABLED for now. The repo migrations are stale
+# relative to the live databases (the schema was reconciled directly), and there is no
+# migration baseline yet — so an automatic `supabase db push` could harm a database.
+# Re-enable the push triggers only after establishing a baseline + `supabase migration repair`
+# (see docs/db-reconciliation-runbook.md). Until then this runs manually only.
 on:
-  push:
-    branches: [staging, main]
-    paths:
-      - "supabase/migrations/**"
-      - "supabase/config.toml"
-  workflow_dispatch: {} # allow a manual run from the Actions tab
+  workflow_dispatch: {} # manual run only, from the Actions tab
 
 concurrency:
   # never let two migration runs hit the same database at once
