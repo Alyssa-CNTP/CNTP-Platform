@@ -169,40 +169,52 @@ jobs:
       # Backups already ran above. This phase rebuilds production's qms to match
       # staging's redesigned qms (structure + authoritative data), atomically.
       # Production's public.* quality data is NOT touched here (merged in a later phase).
-      - name: Guard — require confirmation marker
+      # Phase is read from supabase/reconcile/CONFIRMED. Supported "drop+recreate from
+      # staging" phases (each rebuilds whole schemas to match staging exactly):
+      #   phase1-qms-rebuild       -> qms
+      #   bucket1-maint-acumatica  -> maintenance, acumatica  (prod has neither: purely additive)
+      - name: Guard + resolve phase
+        id: phase
         if: github.ref_name == 'reconcile/apply'
         run: |
           test -f supabase/reconcile/CONFIRMED || { echo "::error::supabase/reconcile/CONFIRMED missing — refusing to apply"; exit 1; }
-          echo "Confirmed phase: $(cat supabase/reconcile/CONFIRMED)"
+          P="$(tr -d '[:space:]' < supabase/reconcile/CONFIRMED)"
+          echo "phase=$P" >> "$GITHUB_OUTPUT"
+          echo "Resolved phase: $P"
 
-      - name: "Phase 1 — rebuild production qms from staging (atomic)"
+      - name: Apply phase to PRODUCTION (atomic)
         if: github.ref_name == 'reconcile/apply'
         env:
           STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
           PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: |
           set -euo pipefail
-          # Build the migration: drop prod's qms, recreate from staging DDL, load staging data.
-          # Whole thing runs in ONE transaction (--single-transaction): any error => full rollback,
-          # production's qms is left exactly as it was.
+          case "${{ steps.phase.outputs.phase }}" in
+            phase1-qms-rebuild)      SCHEMAS="qms" ;;
+            bucket1-maint-acumatica) SCHEMAS="maintenance acumatica" ;;
+            *) echo "::error::unknown phase '${{ steps.phase.outputs.phase }}'"; exit 1 ;;
+          esac
+          echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
+          NFLAGS=""; for s in $SCHEMAS; do NFLAGS="$NFLAGS -n $s"; done
+          # one atomic transaction: any error => full rollback, prod left as-is
           {
-            echo "DROP SCHEMA IF EXISTS qms CASCADE;"
-            pg_dump --schema-only --no-owner --no-privileges -n qms "$STAGING_DB_URL"
-            pg_dump --data-only   --no-owner --no-privileges -n qms "$STAGING_DB_URL"
+            for s in $SCHEMAS; do echo "DROP SCHEMA IF EXISTS $s CASCADE;"; done
+            pg_dump --schema-only --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+            pg_dump --data-only   --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
           } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
 
-      - name: Verify — prod qms now matches staging qms (row counts)
+      - name: Verify (staging vs prod row counts for touched schemas)
         if: github.ref_name == 'reconcile/apply'
         env:
           STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
           PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: |
           set -euo pipefail
-          Q="SELECT c.relname AS table, COALESCE(s.n_live_tup,0) AS rows
-             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             LEFT JOIN pg_stat_user_tables s ON s.relid=c.oid
-             WHERE c.relkind='r' AND n.nspname='qms' ORDER BY 1;"
-          echo "===== STAGING qms ====="; psql "$STAGING_DB_URL" -P pager=off -c "$Q"
-          echo "===== PRODUCTION qms (after rebuild) ====="; psql "$PROD_DB_URL" -P pager=off -c "$Q"
-          echo "prod public.* quality tables left intact:"
-          psql "$PROD_DB_URL" -t -A -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"
+          for s in $SCHEMAS; do
+            Q="SELECT c.relname AS table, COALESCE(x.n_live_tup,0) AS rows
+               FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+               LEFT JOIN pg_stat_user_tables x ON x.relid=c.oid
+               WHERE c.relkind='r' AND n.nspname='$s' ORDER BY 1;"
+            echo "===== STAGING $s ====="; psql "$STAGING_DB_URL" -P pager=off -c "$Q"
+            echo "===== PRODUCTION $s ====="; psql "$PROD_DB_URL" -P pager=off -c "$Q"
+          done
