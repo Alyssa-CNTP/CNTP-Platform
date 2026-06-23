@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (tsconfig: include .next-build types for zero-downtime deploy)
+
+**Files changed:**
+- `tsconfig.json` (added `.next-build/types` + `.next-build/dev/types` to `include`)
+
+**Changes:**
+- The zero-downtime staging deploy (`scripts/staging-deploy.sh`, #149) builds into a side dir via `NEXT_DIST_DIR=.next-build`, so Next emits its route-type validator under `.next-build/types`. `tsconfig.json` only included `.next/types`, so the side-dir build's generated types weren't covered. Added the `.next-build/*` include globs (harmless no-ops for normal `.next` builds). Previously applied as an untracked manual edit on the VPS; now tracked so it survives `git pull`.
+
+---
+
 ## 2026-06-23 — Alyssa (Workforce sub-nav + drop tablet-login messaging)
 
 **Files changed:**
