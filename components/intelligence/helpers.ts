@@ -47,6 +47,39 @@ export function classificationStyle(c: Classification | string): PalettePair {
   }
 }
 
+// ─── Urgency styling ──────────────────────────────────────────────────────────
+// Maps the pipeline's low|medium|high urgency band to the same CSS-var palette
+// used elsewhere. Unknown / null values fall through to the muted default.
+
+export function urgencyStyle(urgency: string | null | undefined): PalettePair {
+  switch ((urgency ?? '').toLowerCase()) {
+    case 'high':
+      return {
+        bg:     'var(--color-err-bg)',
+        fg:     'var(--color-err)',
+        border: 'rgba(185,28,28,0.22)',
+      }
+    case 'medium':
+      return {
+        bg:     'var(--color-warn-bg)',
+        fg:     'var(--color-warn)',
+        border: 'rgba(194,65,12,0.22)',
+      }
+    case 'low':
+      return {
+        bg:     'var(--color-ok-bg)',
+        fg:     'var(--color-ok)',
+        border: 'rgba(21,128,61,0.22)',
+      }
+    default:
+      return {
+        bg:     'var(--color-surface)',
+        fg:     'var(--color-text-muted)',
+        border: 'var(--color-surface-rule)',
+      }
+  }
+}
+
 export function relevanceStyle(score: number): PalettePair {
   if (score >= 7) {
     return {

@@ -56,7 +56,10 @@ function CaptureScreen() {
   const [activeIdx, setActiveIdx]     = useState(0)
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
-  const [tab, setTab]             = useState<Tab>('production')
+  const [tab, setTab]             = useState<Tab>(() => {
+    const t = sp.get('tab')
+    return (['production', 'checks', 'cleaning', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
+  })
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
   const [submitting, setSubmitting] = useState(false)

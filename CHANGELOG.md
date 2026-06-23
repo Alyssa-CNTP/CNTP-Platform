@@ -95,6 +95,33 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Supervisor Hub: redesigned Overview into a command-centre dashboard)
+
+**Files changed:**
+- `app/(app)/supervisor/page.tsx` — full Overview redesign: KPI strip, live shift-lines panel, sign-off queue, 7-day trend charts
+- `components/supervisor/HubTabs.tsx` — dropped the Analytics tab; added a shared `HubHeader`
+- `app/(app)/supervisor/{timesheets,productions,messages,analytics}/page.tsx` — adopt `HubHeader`
+- `app/(app)/supervisor/calendar/page.tsx` — rebuilt on the Day/Night shift model + a click-to-open day review
+- `app/(app)/production/capture/[section]/page.tsx` — capture screen now honours a `?tab=` deep-link
+
+**Changes:**
+- The Overview was just a few snapshot tiles + module links — it showed neither *what needs action* nor *what's happening right now*, and looked nothing like the app's Analytics tab. Rebuilt it as a proper at-a-glance dashboard using the same recharts / `ChartCard` / design-token vocabulary as `supervisor/analytics`.
+- **KPI strip (7 metrics):** Pending sign-off, Operators on shift, Productions today, kg out today, Hours logged, Open breakdowns, Tech on duty. All derived from a single 7-day data pull (sessions + mass balance + confirmed timesheets) plus today's roster.
+- **Lines this shift** panel: live status of every section rostered for the current shift — colour badge, operators, kg out so far, and a status pill (Not started / In progress / Awaiting sign-off / Signed off), with an `X/Y signed off` header counter. Each row links into the section; submitted ones deep-link to the Sign-off tab. Empty state links to Assign sections.
+- **Needs your sign-off** queue (alongside the lines panel): every `prod_sessions` row in `submitted` status (not date-bound, so older hand-overs can't slip past), oldest first, each a one-tap row deep-linking to the section's Sign-off tab. Count badge in the header; calm "All caught up" state when empty.
+- **Last 7 days** trends: kg-bagged-out area chart + hours-worked bar chart (gaps filled with zeros), with a "Full analytics →" link to the Analytics tab.
+- To make the sign-off deep-links land correctly, the capture `[section]` page now reads an optional `tab` query param (validated against the known tabs) to set its initial tab — previously it always opened on Production. The signature-based approval flow itself is unchanged.
+
+**Hub tab cleanup (same session):**
+- **Removed the Analytics tab** from the hub sub-nav — its kg/day + hours/day trends now live on the Overview. The deeper breakdowns (by-operator, by-section, custom date range) stay on the `/supervisor/analytics` page, reachable via the Overview's "Full analytics →" link, so nothing is lost.
+- **Consolidated the per-tab header.** Every tab page previously re-implemented the `Supervisor Hub` title + subtitle + `<HubTabs />` block slightly differently. Extracted a single **`HubHeader`** component (title, contextual subtitle, optional right-aligned action) and adopted it across Overview, Timesheets, Productions, Calendar, Messages, and Analytics — so all tabs are visually identical at the top and easy to follow.
+
+**Calendar redesign (same session):**
+- The week grid showed cramped, unreadable chips (`M GA`, `M AL AM AK` — shift letter + operator initials) and clicking a cell jumped straight into the editor. Rebuilt it to be **reviewable**: each day (header or cell) opens a **Day Review modal** showing the full roster — Day/Night shift groups, each section with full operator names and variant/lot, plus the technician on duty — with a per-shift "Edit" button that deep-links to Assign sections. Closes on backdrop click or Escape.
+- **Standardised on the Shift Roster's Day/Night model** for cross-app consistency. The calendar previously displayed capture's three sub-shifts (Morning/Afternoon/Night) with bespoke amber/sky/indigo dots that appeared nowhere else. It now folds morning + afternoon → **Day Shift** (07h00–16h00, Sun) and night → **Night Shift** (16h00–01h00, Moon), matching `/production/roster`'s `ROSTER_SHIFTS` and Sun/Moon language. Week-grid cells now show a clean Sun/Moon chip with a head-count per shift instead of initials; the Day view lists each shift's roster in full. Editing still opens the capture Assign screen (which keeps its finer 3-shift control).
+
+---
+
 ## 2026-06-23 — Alyssa (Auth reconcile: align prod users & roles to the staging model)
 
 **Files changed:**
@@ -131,9 +158,11 @@ Format: date · developer · files changed · description of code changes.
 - **Throttle node** (`max new/run`, enabled, 25) caps items per run — protects against floods and bounds Gemini spend; tune upward as proven safe.
 - **Per-workflow timezone** `Africa/Johannesburg` + trigger at **03:00 SAST** (n8n instance clock was New York).
 - `raw_content` capped at 2k chars on both save paths.
+- **Fixed the real "nothing saves" cause:** `sales.signals.classification` has a CHECK constraint (`signals_classification_check`) allowing only opportunity/threat/competitor/regulation/relationship/neutral, but Tier 1 was writing the richer `intelligence_type` vocabulary (loophole/market_gap/switching_signal/…) → every insert rejected. Both save paths now map `intelligence_type` → an allowed `classification` and preserve the fine-grained type in `intel`.
+- **Fixed all-false-branch:** old Tier-1 parser couldn't read the Gemini node's output nesting → every item scored 0. Replaced with a deep-scan extractor (also applied to the Tier-2 parser); added a `_raw` debug field.
 
 **Changes (database):**
-- `20260622_003_signals_dedup.sql` — generated `dedup_key` column + unique index so the DB rejects exact-duplicate signals at any table size (backstop for the in-memory dedup, which doesn't scale past its row-fetch cap).
+- `20260622_003_signals_dedup.sql` — dedup is already enforced by the pre-existing `signals_source_url_unique` constraint; the earlier draft's unique title index was redundant and fails on real data (distinct articles sharing a title prefix), so it is NOT created.
 
 **VPS:**
 - Found n8n already runs persistently as user `ubuntu` (25-day uptime) — it does **not** die when PuTTY closes; PuTTY only provides the tunnel to the editor. The `pm2`-under-`cntpdev` attempt would have spun up a broken empty duplicate on a clashing port; cleaned up, `cntpdev` pm2 now runs only the two apps.

@@ -1620,7 +1620,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <tr key={`${b.id}-exp`}>
                               <td colSpan={99} className="bg-info/3 border-b-2 border-b-brand p-0">
                                 <div className="p-5 space-y-3">
-                                  <div className="flex items-center gap-3 flex-wrap">
+                                  <div className="flex items-center gap-3 flex-wrap sticky left-0 w-fit">
                                     <span className="font-mono font-bold text-[13px] text-text">{b.batch_number}</span>
                                     {b.qc_name && <span className="text-[11px] text-text-muted">QC: {b.qc_name}</span>}
                                     {b.final_reason && <span className="text-[10px] text-warn bg-warn/8 px-2 py-0.5 rounded-lg italic">💬 {b.final_reason}</span>}

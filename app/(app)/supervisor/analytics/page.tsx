@@ -8,7 +8,7 @@ import {
 import { Clock, Scale, Factory, AlertTriangle, Users, Loader2, TrendingUp } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import { HubTabs } from '@/components/supervisor/HubTabs'
+import { HubHeader } from '@/components/supervisor/HubTabs'
 
 const todayStr = () => format(new Date(), 'yyyy-MM-dd')
 const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
@@ -107,11 +107,7 @@ export default function SupervisorAnalytics() {
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5">
-      <div>
-        <h1 className="font-display font-bold text-[22px] text-text">Supervisor Hub</h1>
-        <p className="text-[12px] text-stone-400 mt-0.5">Trends — hours, output and balance over time</p>
-      </div>
-      <HubTabs />
+      <HubHeader subtitle="Full analytics — hours, output and balance over time" />
 
       {/* Range */}
       <div className="flex items-center gap-2 flex-wrap">

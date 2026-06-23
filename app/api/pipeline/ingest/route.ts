@@ -35,7 +35,14 @@ interface IngestPayload {
   region?:          string | null
   media_url?:       string | null
   raw_content?:     string | null
+  // Alara intelligence fields (optional)
+  sales_angle?:     string | null
+  urgency?:         string | null
+  tier?:            number | null
+  intel?:           Record<string, unknown> | null
 }
+
+const VALID_URGENCIES = ['low', 'medium', 'high']
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
@@ -66,6 +73,12 @@ function sanitise(payload: IngestPayload): IngestPayload {
     region:          payload.region          ?? null,
     media_url:       payload.media_url       ?? null,
     raw_content:     payload.raw_content     ? payload.raw_content.trim().slice(0, 5000) : null,
+    sales_angle:     payload.sales_angle     ? payload.sales_angle.trim().slice(0, 1000) : null,
+    urgency:         VALID_URGENCIES.includes((payload.urgency ?? '').toLowerCase())
+                       ? payload.urgency!.toLowerCase()
+                       : null,
+    tier:            typeof payload.tier === 'number' ? payload.tier : null,
+    intel:           payload.intel && typeof payload.intel === 'object' ? payload.intel : {},
   }
 }
 
