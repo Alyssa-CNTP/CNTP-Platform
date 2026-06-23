@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
+import { WorkforceTabs } from '@/components/production/WorkforceTabs'
 import { ROSTER_CATEGORIES, SKILL_TAGS, categoryMeta, tagLabel } from '@/lib/production/roster-config'
 
 interface Employee {
@@ -119,6 +120,8 @@ export default function StaffDirectoryPage() {
           <Plus size={14} /> Add person
         </button>
       </div>
+
+      <WorkforceTabs />
 
       {!dbReady && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">

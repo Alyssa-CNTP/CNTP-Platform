@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
+import { WorkforceTabs } from '@/components/production/WorkforceTabs'
 import {
   ROSTER_SHIFTS, ROSTER_CATEGORIES, ROSTER_ROLE_SEED, SKILL_TAGS,
   categoryMeta, tagLabel,
@@ -184,6 +185,7 @@ export default function RosterPage() {
         <h1 className="font-display font-bold text-[22px] text-text">Shift Roster</h1>
         <p className="text-[12px] text-stone-400 mt-0.5">The whole-site shift layout — every role and shift across all departments, with the people rostered onto each.</p>
       </div>
+      <WorkforceTabs />
 
       {!dbReady && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">

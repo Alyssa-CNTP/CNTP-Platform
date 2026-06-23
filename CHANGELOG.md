@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Workforce sub-nav + drop tablet-login messaging)
+
+**Files changed:**
+- `components/production/WorkforceTabs.tsx` (new — shared sub-nav)
+- `app/(app)/production/roster/page.tsx`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/capture/assign/page.tsx` (render the tabs; autofill copy cleanup)
+
+**Changes:**
+- **Easy navigation** — added a shared **Workforce** tab bar (Shift Roster · Staff Directory · Assign Sections) across all three pages, so the people/roster screens are one click apart (mirrors the Supervisor Hub tabs).
+- **Dropped the "tablet login" friction** from the autofill — "Fill from roster" no longer mentions PINs/tablet logins or counts "skipped" people; it simply reports how many it filled. Assign subtitle reworded to point at the Fill-from-roster shortcut.
+
+---
+
 ## 2026-06-23 — Alyssa (Roster → Capture autofill + department colour-coding)
 
 **Files changed:**
