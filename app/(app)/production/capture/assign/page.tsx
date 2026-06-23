@@ -48,6 +48,7 @@ function AssignScreen() {
   const [savingSection, setSavingSection] = useState<string | null>(null)
   const [savedSection, setSavedSection]   = useState<string | null>(null)
   const [error, setError]         = useState<string | null>(null)
+  const [onLeaveOps, setOnLeaveOps] = useState<Set<string>>(new Set())
 
   // Load operators once
   useEffect(() => {
@@ -77,6 +78,17 @@ function AssignScreen() {
         setLoading(false)
       })
   }, [date, shift])
+
+  // Who's on leave for the selected date — flagged in the operator picker so a
+  // stand-in can be rostered instead. (Best-effort; ignores if the view is absent.)
+  useEffect(() => {
+    getDb().schema('production').from('employee_leave_active')
+      .select('operator_id').lte('start_date', date).gte('end_date', date)
+      .then(({ data }: any) => {
+        const ids = ((data as any[]) ?? []).map(r => r.operator_id).filter(Boolean)
+        setOnLeaveOps(new Set(ids))
+      }, () => setOnLeaveOps(new Set()))
+  }, [date])
 
   function toggleProdOrder(sectionId: string, code: string) {
     setDrafts(d => {
@@ -208,6 +220,7 @@ function AssignScreen() {
                         operators={ops}
                         selectedIds={draft.operatorIds}
                         onToggle={opId => toggleOperator(sectionId, opId)}
+                        onLeaveIds={onLeaveOps}
                       />
                     </div>
                   )}

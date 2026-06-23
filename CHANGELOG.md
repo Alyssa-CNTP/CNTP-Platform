@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Staff Directory admin + leave/availability across roster & capture)
+
+**Files changed:**
+- `supabase/migrations/20260623_003_employee_leave.sql` (new — `employee_leave` table + `employee_leave_active` view)
+- `app/(app)/production/staff/page.tsx` (new — Staff Directory admin)
+- `components/layout/Sidebar.tsx` (added "Staff Directory" nav)
+- `app/(app)/production/roster/page.tsx` (leave-aware picker + on-duty flags)
+- `app/(app)/production/capture/assign/page.tsx` + `components/production/capture/OperatorPicker.tsx` (leave-aware operator picker)
+
+**Changes:**
+- **Staff Directory** (`/production/staff`) — the shared `production.employees` list is now fully editable and filterable in-app, persisting on save: search by name/job-title, filter by department, add/edit a person (name, display name, department, job title, skills, phone, active), and manage **leave/availability** (date-ranged periods: leave/sick/training/other).
+- **Leave-aware allocation** — both the Shift Roster picker and the Capture "Assign sections" picker now flag people who are on leave for the relevant date(s) (amber "on leave" markers), so a stand-in can be allocated instead. Roster's "On duty" view also strikes through anyone on leave.
+- This is additive — Capture/Maintenance save logic is unchanged; the pickers just surface availability.
+- **Run order on the DB:** `20260623_003_employee_leave.sql` (after the `001` directory migration).
+- **Next (Phase 3 cont.):** roster → Capture/Maintenance auto-fill; AI suggester + approve + send (PDF/WhatsApp).
+
+---
+
 ## 2026-06-23 — Alyssa (Shared staff directory + cross-department roster + "who's on when")
 
 **Files changed:**

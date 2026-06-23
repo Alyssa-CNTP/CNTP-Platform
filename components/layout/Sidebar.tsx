@@ -37,6 +37,7 @@ const NAV: NavItem[] = [
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/dashboard',       label: 'Production Dashboard',       icon: LayoutDashboard, group: 'Operations', departments: ['Production','Management'] },
   { href: '/production/roster',          label: 'Shift Roster',               icon: CalendarRange,   group: 'Operations', departments: ['Production','Management'] },
+  { href: '/production/staff',           label: 'Staff Directory',            icon: Users,           group: 'Operations', departments: ['Production','Management'] },
   // Supervisor hub — a single entry; module nav (Timesheets, Productions, Calendar,
   // Messages, Analytics) lives in the in-page tabs to keep the sidebar lean.
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Operations', departments: ['Production','Management'] },

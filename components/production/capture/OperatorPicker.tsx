@@ -9,13 +9,16 @@ import type { Operator } from '@/lib/supabase/database.types'
  * the employee import) — the supervisor types a name to find someone and taps
  * to roster them. Selected operators show as removable chips above the search.
  */
-export function OperatorPicker({ operators, selectedIds, onToggle }: {
+export function OperatorPicker({ operators, selectedIds, onToggle, onLeaveIds }: {
   operators: Operator[]
   selectedIds: string[]
   onToggle: (id: string) => void
+  /** Operator ids who are on leave for the selected date — flagged in the list. */
+  onLeaveIds?: Set<string>
 }) {
   const [query, setQuery]     = useState('')
   const [focused, setFocused] = useState(false)
+  const onLeave = (id: string) => onLeaveIds?.has(id) ?? false
 
   const selected = operators.filter(op => selectedIds.includes(op.id))
   const q = query.trim().toLowerCase()
@@ -31,9 +34,10 @@ export function OperatorPicker({ operators, selectedIds, onToggle }: {
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {selected.map(op => (
-            <span key={op.id} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-brand text-white text-[13px] font-medium">
+            <span key={op.id} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-medium ${onLeave(op.id) ? 'bg-amber-500 text-white' : 'bg-brand text-white'}`}>
               <CheckCircle2 size={13} />
               {label(op)}
+              {onLeave(op.id) && <span className="opacity-80">· on leave</span>}
               {op.role === 'production_supervisor' && <span className="opacity-60">· Sup</span>}
               <button onClick={() => onToggle(op.id)} className="ml-0.5 opacity-70 hover:opacity-100"><X size={14} /></button>
             </span>
@@ -62,6 +66,7 @@ export function OperatorPicker({ operators, selectedIds, onToggle }: {
               >
                 <Plus size={14} className="text-stone-400 shrink-0" />
                 <span className="flex-1">{label(op)}</span>
+                {onLeave(op.id) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">on leave</span>}
                 {op.role === 'production_supervisor' && <span className="text-[11px] text-text-muted">Sup</span>}
               </button>
             ))}
