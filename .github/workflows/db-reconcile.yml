@@ -280,7 +280,7 @@ jobs:
               # This keeps the cross-DB copy aligned without assuming identical schemas.
               colcols() {
                 local sch="$1" tbl="$2" pcols scols
-                pcols=$(psql "$PROD_DB_URL"    -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl' ORDER BY ordinal_position")
+                pcols=$(psql "$PROD_DB_URL"    -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl' AND is_generated='NEVER' AND is_identity='NO' ORDER BY ordinal_position")
                 scols=$(psql "$STAGING_DB_URL" -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl'")
                 awk -v s="$scols" 'BEGIN{n=split(s,a,"\n"); for(i=1;i<=n;i++) m[a[i]]=1} ($0 in m){printf (c++?",":"") "%s",$0}' <<< "$pcols"
               }
