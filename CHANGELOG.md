@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Shared staff directory + cross-department roster + "who's on when")
+
+**Files changed:**
+- `supabase/migrations/20260623_001_staff_directory.sql` (new — `production.employees` canonical registry)
+- `supabase/migrations/20260623_002_roster_june2026.sql` (new — reconcile 75 June people into the directory + prefill all four June weeks)
+- `app/(app)/production/roster/page.tsx` (picker now uses the staff directory; added the "On duty" view)
+
+**Changes:**
+- Added **`production.employees`** — one company-wide staff directory (name, department, job title, skills/certs, phone, active) that all modules can reference. It's additive: Capture (`production.operators`) and Maintenance (`maintenance.duty_roster`) are unchanged. Every existing operator is backfilled as an employee; `roster_entries` gains an `employee_id` link.
+- The June 2026 Shift Layout workbook is imported: **75 distinct people** reconciled into the directory across all departments (37 production, 13 store, 11 QC, 9 cleaning, 4 maintenance, 1 H&S), and **all four June weeks (281 entries)** prefilled, each linked to its employee + operator and tagged with the certs from the sheet.
+- The roster page now picks people from the shared directory (search by name or job title; selecting a person auto-fills their known certs), and shows a date-aware **"On duty"** card: for today (SAST) it lists who's on the Day/Night shift grouped by department, with a Day/Night toggle and a "now" marker.
+- **Run order on the DB:** `20260623_001_staff_directory.sql` first, then `20260623_002_roster_june2026.sql`.
+- **Next (Phase 3):** roster → Capture section assignments and roster → Maintenance duty roster auto-fill; then AI suggester + approve + send (PDF/WhatsApp) + leave tool.
+
+---
+
 ## 2026-06-23 — Alyssa (Shift Roster moved into Production area + linked to employees)
 
 **Files changed:**
