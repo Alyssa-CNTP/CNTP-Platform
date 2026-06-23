@@ -13,6 +13,23 @@ function dl(wb: XLSX.WorkBook, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+// Build a sheet from row objects, then make it sort/filter-friendly on open:
+// an AutoFilter dropdown across the header + sensible column widths. This is the
+// flat, tidy shape Excel needs for Insert ▸ PivotTable.
+function addSheet(wb: XLSX.WorkBook, rows: any[], name: string) {
+  const data = rows && rows.length ? rows : [{ Note: 'No data' }]
+  const ws = XLSX.utils.json_to_sheet(data)
+  if (ws['!ref']) {
+    ws['!autofilter'] = { ref: ws['!ref'] }
+    const keys = Object.keys(data[0])
+    ws['!cols'] = keys.map(k => {
+      const maxLen = Math.max(k.length, ...data.map(r => String(r[k] ?? '').length))
+      return { wch: Math.min(Math.max(maxLen + 2, 9), 28) }
+    })
+  }
+  XLSX.utils.book_append_sheet(wb, ws, name)
+}
+
 function n(v: any): number | null {
   const x = parseFloat(v)
   return isNaN(x) ? null : x
@@ -41,6 +58,14 @@ export function exportPasteuriserBatch(batch: any) {
   // ── Sheet 1: Raw Data ─────────────────────────────────────────────────────
   const rawRows = samples.map((s: any, i: number) => {
     const row: any = {
+      // identity / dimension columns — repeated per row so the sheet pivots cleanly
+      'Batch Number': batch.batch_number || '',
+      'Production Date': batch.production_date || '',
+      'Product': batch.type_grade || batch.product_family || '',
+      'Grade': batch.grade || '',
+      'Variant': batch.variant || '',
+      'Customer': batch.customer || '',
+      'Final Result': batch.final_result || '',
       'Sample #': i + 1,
       'Date': s.date || '',
       'Time': s.time || '',
@@ -71,7 +96,7 @@ export function exportPasteuriserBatch(batch: any) {
     row['Comment'] = s.comment || ''
     return row
   })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows), 'Raw Data')
+  addSheet(wb, rawRows, 'Raw Data')
 
   // ── Sheet 2: Daily Averages ───────────────────────────────────────────────
   const byDate: Record<string, any[]> = {}
@@ -94,7 +119,7 @@ export function exportPasteuriserBatch(batch: any) {
       row['Sensorial Reject'] = ss.filter((s: any) => s.sensorial_pass === 'Reject').length
       return row
     })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows.length ? dailyRows : [{ 'Note': 'No samples recorded' }]), 'Daily Averages')
+  addSheet(wb, dailyRows, 'Daily Averages')
 
   // ── Sheet 3: Batch Summary ────────────────────────────────────────────────
   const sieveSamples = samples.filter((s: any) => s.has_sieve)
@@ -127,7 +152,7 @@ export function exportPasteuriserBatch(batch: any) {
     { Field: 'Avg Moisture %',   Value: fmtAvg(avg(mbSamples.map((s: any) => s.moisture)), '%') },
     { Field: 'Avg BD (cc/100g)', Value: fmtAvg(avg(mbSamples.map((s: any) => s.untapped_bd))) },
   ]
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Batch Summary')
+  addSheet(wb, summaryRows, 'Batch Summary')
 
   const date = batch.production_date || new Date().toISOString().slice(0, 10)
   dl(wb, `Pasteuriser_${batch.batch_number}_${date}.xlsx`)
@@ -144,7 +169,10 @@ export function exportPasteuriserBatches(batches: any[], filename: string) {
     (b.samples || []).forEach((s: any, i: number) => {
       const row: any = {
         'Batch Number': b.batch_number || '',
+        'Production Date': b.production_date || '',
         'Product': b.type_grade || b.product_family || '',
+        'Grade': b.grade || '',
+        'Variant': b.variant || '',
         'Customer': b.customer || '',
         'Final Result': b.final_result || '',
         'Sample #': i + 1,
@@ -168,7 +196,7 @@ export function exportPasteuriserBatches(batches: any[], filename: string) {
       rawRows.push(row)
     })
   })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows.length ? rawRows : [{ Note: 'No samples' }]), 'All Raw Samples')
+  addSheet(wb, rawRows, 'All Raw Samples')
 
   // ── Sheet 2: Batch Summary (one row per batch with averages) ──────────────
   const summaryRows = batches.map((b: any) => {
@@ -190,7 +218,7 @@ export function exportPasteuriserBatches(batches: any[], filename: string) {
     row['Avg BD (cc/100g)'] = avg(mbSamples.map((s: any) => s.untapped_bd))
     return row
   })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows.length ? summaryRows : [{ Note: 'No batches' }]), 'Batch Summary')
+  addSheet(wb, summaryRows, 'Batch Summary')
 
   dl(wb, filename)
 }
@@ -241,7 +269,7 @@ export function exportGranuleRun(
     row['Violations'] = Array.isArray(s.violations) ? s.violations.join('; ') : ''
     return row
   })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows.length ? rawRows : [{ Note: 'No samples' }]), 'Raw Data')
+  addSheet(wb, rawRows, 'Raw Data')
 
   // ── Sheet 2: Daily Averages ───────────────────────────────────────────────
   const byDate: Record<string, any[]> = {}
@@ -265,7 +293,7 @@ export function exportGranuleRun(
       })
       return row
     })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows.length ? dailyRows : [{ Note: 'No samples' }]), 'Daily Averages')
+  addSheet(wb, dailyRows, 'Daily Averages')
 
   // ── Sheet 3: Run Summary ──────────────────────────────────────────────────
   const summaryRows: any[] = [
@@ -290,7 +318,7 @@ export function exportGranuleRun(
       Value: fmtAvg(avg(sieveSamples.map((s: any) => n(s.sieve_pct?.[sv.key]))), '%')
     })),
   ]
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Run Summary')
+  addSheet(wb, summaryRows, 'Run Summary')
 
   const date = run.production_date || new Date().toISOString().slice(0, 10)
   dl(wb, `GranuleLine_${run.batch_number}_${date}.xlsx`)
@@ -327,7 +355,7 @@ export function exportSievingRuns(
     row['Comment'] = r.comment || ''
     return row
   })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows.length ? rawRows : [{ Note: 'No runs' }]), 'Raw Data')
+  addSheet(wb, rawRows, 'Raw Data')
 
   // ── Sheet 2: Daily Averages ───────────────────────────────────────────────
   const byDate: Record<string, any[]> = {}
@@ -349,7 +377,7 @@ export function exportSievingRuns(
       row['Fail Count'] = rs.filter((r: any) => r.passStatus === 'Fail').length
       return row
     })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows.length ? dailyRows : [{ Note: 'No runs' }]), 'Daily Averages')
+  addSheet(wb, dailyRows, 'Daily Averages')
 
   // ── Sheet 3: Summary by Grade/Variant ────────────────────────────────────
   const byGV: Record<string, any[]> = {}
@@ -370,7 +398,7 @@ export function exportSievingRuns(
       })
       return row
     })
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(gradeRows.length ? gradeRows : [{ Note: 'No data' }]), 'By Grade')
+  addSheet(wb, gradeRows, 'By Grade')
 
   const date = new Date().toISOString().slice(0, 10)
   dl(wb, `Sieving_${product.replace(/ /g, '_')}_${date}.xlsx`)
