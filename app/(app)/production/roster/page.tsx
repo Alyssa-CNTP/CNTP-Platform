@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
-  ChevronDown, AlertTriangle, Sun, Moon, Search,
+  ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -13,7 +13,6 @@ import {
   categoryMeta, tagLabel,
   type RosterRole, type RosterShift,
 } from '@/lib/production/roster-config'
-import type { Operator } from '@/lib/supabase/database.types'
 
 interface Period {
   id: string; name: string; start_date: string; end_date: string
@@ -21,17 +20,30 @@ interface Period {
 }
 interface Entry {
   id: string; period_id: string; role_key: string; shift: RosterShift
-  operator_id: string | null; person_name: string; tags: string[]; sort_order: number
+  employee_id: string | null; person_name: string; tags: string[]; sort_order: number
+}
+interface Employee {
+  id: string; name: string; display_name: string | null
+  department: string; job_title: string | null; skills: string[]
 }
 
 const db = () => getDb().schema('production')
 const fmtRange = (p: Period) =>
   `${format(parseISO(p.start_date + 'T12:00:00'), 'd MMM')} – ${format(parseISO(p.end_date + 'T12:00:00'), 'd MMM yyyy')}`
 
+// Today + current shift in SAST (Africa/Johannesburg), independent of browser TZ.
+function sastNow() {
+  const now = new Date()
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now)
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', hour12: false }).format(now))
+  const shift: RosterShift = hour >= 7 && hour < 16 ? 'day' : 'night'
+  return { date, shift }
+}
+
 export default function RosterPage() {
   const { user } = useAuth()
   const [roles, setRoles]     = useState<RosterRole[]>([])
-  const [operators, setOperators] = useState<Operator[]>([])
+  const [employees, setEmployees] = useState<Employee[]>([])
   const [periods, setPeriods] = useState<Period[]>([])
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
@@ -43,12 +55,13 @@ export default function RosterPage() {
 
   const period = periods.find(p => p.id === periodId) ?? null
 
-  // ── Load roles + operators + periods once ───────────────────────────────────
+  // ── Load roles + employees + periods once ───────────────────────────────────
   useEffect(() => {
     (async () => {
-      // Operators (the employee list) — drives the person picker.
-      db().from('operators').select('*').eq('active', true).order('name')
-        .then(({ data }: any) => setOperators((data as Operator[]) ?? []))
+      // Shared staff directory — drives the person picker.
+      db().from('employees').select('id,name,display_name,department,job_title,skills')
+        .eq('active', true).order('name')
+        .then(({ data }: any) => setEmployees((data as Employee[]) ?? []))
 
       // Roles — fall back to the static seed if the table isn't there yet.
       try {
@@ -71,7 +84,10 @@ export default function RosterPage() {
         if (error) throw error
         const rows = (data as Period[]) ?? []
         setPeriods(rows)
-        if (rows.length) setPeriodId(rows[0].id)
+        // Default to the period covering today (SAST), else the most recent.
+        const { date } = sastNow()
+        const current = rows.find(p => p.start_date <= date && date <= p.end_date)
+        setPeriodId((current ?? rows[0])?.id ?? null)
       } catch {
         setDbReady(false)
       }
@@ -83,7 +99,7 @@ export default function RosterPage() {
   useEffect(() => {
     if (!periodId) { setEntries([]); return }
     db().from('roster_entries')
-      .select('id,period_id,role_key,shift,operator_id,person_name,tags,sort_order')
+      .select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order')
       .eq('period_id', periodId).order('sort_order')
       .then(({ data }: any) => setEntries((data as Entry[]) ?? []))
   }, [periodId])
@@ -96,6 +112,13 @@ export default function RosterPage() {
       .filter(g => g.items.length)
   }, [roles])
 
+  // role_key → category, for grouping the "On duty" view by department.
+  const roleCategory = useMemo(() => {
+    const m = new Map<string, string>()
+    roles.forEach(r => m.set(r.key, r.category))
+    return m
+  }, [roles])
+
   function cellEntries(roleKey: string, shift: RosterShift) {
     return entries
       .filter(e => e.role_key === roleKey && e.shift === shift)
@@ -103,20 +126,20 @@ export default function RosterPage() {
   }
 
   // ── Entry CRUD ──────────────────────────────────────────────────────────────
-  async function addEntry(roleKey: string, shift: RosterShift, operatorId: string | null, name: string, tags: string[]) {
+  async function addEntry(roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) {
     if (!periodId || !name.trim()) return
     const sort = cellEntries(roleKey, shift).length
     const { data } = await db().from('roster_entries').insert({
       period_id: periodId, role_key: roleKey, shift,
-      operator_id: operatorId, person_name: name.trim(), tags, sort_order: sort,
-    } as any).select('id,period_id,role_key,shift,operator_id,person_name,tags,sort_order').single()
+      employee_id: employeeId, person_name: name.trim(), tags, sort_order: sort,
+    } as any).select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order').single()
     if (data) setEntries(es => [...es, data as Entry])
     setEditing(null)
   }
-  async function updateEntry(id: string, operatorId: string | null, name: string, tags: string[]) {
+  async function updateEntry(id: string, employeeId: string | null, name: string, tags: string[]) {
     if (!name.trim()) return
-    await db().from('roster_entries').update({ operator_id: operatorId, person_name: name.trim(), tags } as any).eq('id', id)
-    setEntries(es => es.map(e => e.id === id ? { ...e, operator_id: operatorId, person_name: name.trim(), tags } : e))
+    await db().from('roster_entries').update({ employee_id: employeeId, person_name: name.trim(), tags } as any).eq('id', id)
+    setEntries(es => es.map(e => e.id === id ? { ...e, employee_id: employeeId, person_name: name.trim(), tags } : e))
     setEditing(null)
   }
   async function deleteEntry(id: string) {
@@ -147,13 +170,13 @@ export default function RosterPage() {
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
       <div>
         <h1 className="font-display font-bold text-[22px] text-text">Shift Roster</h1>
-        <p className="text-[12px] text-stone-400 mt-0.5">The whole-site monthly shift layout — every role and shift, with the people rostered onto each.</p>
+        <p className="text-[12px] text-stone-400 mt-0.5">The whole-site shift layout — every role and shift across all departments, with the people rostered onto each.</p>
       </div>
 
       {!dbReady && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
           <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-          <span>Roster tables aren&apos;t set up yet. Run <code className="font-mono">supabase/migrations/20260622_001_roster.sql</code> on the database, then reload. The role list below is the seed preview.</span>
+          <span>Roster tables aren&apos;t set up yet. Run the roster migrations on the database, then reload. The role list below is the seed preview.</span>
         </div>
       )}
 
@@ -194,14 +217,17 @@ export default function RosterPage() {
       ) : !period ? (
         <EmptyState canCreate={dbReady} onCreate={() => setShowNew(true)} />
       ) : (
-        <RosterGrid
-          period={period}
-          rolesByCategory={rolesByCategory}
-          operators={operators}
-          cellEntries={cellEntries}
-          editing={editing} setEditing={setEditing}
-          onAdd={addEntry} onUpdate={updateEntry} onDelete={deleteEntry}
-        />
+        <>
+          <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} />
+          <RosterGrid
+            period={period}
+            rolesByCategory={rolesByCategory}
+            employees={employees}
+            cellEntries={cellEntries}
+            editing={editing} setEditing={setEditing}
+            onAdd={addEntry} onUpdate={updateEntry} onDelete={deleteEntry}
+          />
+        </>
       )}
 
       {/* Legend */}
@@ -222,18 +248,97 @@ export default function RosterPage() {
   )
 }
 
+// ── "Who's on when": today's on-duty roster, grouped by department ────────────
+function OnDutyCard({ period, entries, roleCategory }: {
+  period: Period; entries: Entry[]; roleCategory: Map<string, string>
+}) {
+  const { date, shift: currentShift } = sastNow()
+  const coversToday = period.start_date <= date && date <= period.end_date
+  const [shift, setShift] = useState<RosterShift>(currentShift)
+
+  // Only meaningful when the selected period actually covers today.
+  if (!coversToday) return null
+
+  const onShift = entries.filter(e => e.shift === shift)
+  const byDept = ROSTER_CATEGORIES
+    .map(c => ({
+      cat: c,
+      people: onShift
+        .filter(e => roleCategory.get(e.role_key) === c.key)
+        .sort((a, b) => a.sort_order - b.sort_order),
+    }))
+    .filter(g => g.people.length)
+
+  const todayLabel = format(parseISO(date + 'T12:00:00'), 'EEE d MMM')
+  const shiftMeta = ROSTER_SHIFTS.find(s => s.key === shift)!
+
+  return (
+    <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Users size={16} className="text-brand" />
+          <span className="font-display font-bold text-[14px] text-text">On duty</span>
+          <span className="text-[12px] text-text-muted">· {todayLabel}</span>
+        </div>
+        {/* Day / Night toggle */}
+        <div className="ml-auto inline-flex rounded-lg border border-stone-200 overflow-hidden">
+          {ROSTER_SHIFTS.map(s => {
+            const on = s.key === shift
+            const isNow = s.key === currentShift
+            return (
+              <button key={s.key} onClick={() => setShift(s.key)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium transition-colors ${on ? 'bg-brand text-white' : 'bg-white text-stone-500 hover:text-text'}`}>
+                {s.key === 'day' ? <Sun size={12} /> : <Moon size={12} />}
+                {s.label.replace(' Shift', '')}
+                {isNow && <span className={`text-[8px] font-semibold px-1 py-0.5 rounded-full ${on ? 'bg-white/25' : 'bg-ok/15 text-ok'}`}>now</span>}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className="font-mono text-[10px] text-text-muted">{shiftMeta.label} · {shift === 'day' ? period.day_label : period.night_label} · {onShift.length} people</div>
+
+      {byDept.length === 0 ? (
+        <p className="text-[12px] text-text-muted py-2">Nobody rostered for this shift yet.</p>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {byDept.map(({ cat, people }) => (
+            <div key={cat.key} className="rounded-xl border border-surface-rule bg-surface p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex }} />
+                <span className="font-mono text-[10px] uppercase tracking-wide" style={{ color: cat.colorHex }}>{cat.label}</span>
+                <span className="text-[10px] text-stone-400">{people.length}</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {people.map(e => (
+                  <span key={e.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-stone-200 text-[11px] text-text">
+                    {e.person_name}
+                    {e.tags.map(code => (
+                      <span key={code} title={tagLabel(code)} className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand">{code}</span>
+                    ))}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── The grid: categories → role rows × Day/Night columns ──────────────────────
 function RosterGrid({
-  period, rolesByCategory, operators, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete,
+  period, rolesByCategory, employees, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete,
 }: {
   period: Period
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
-  operators: Operator[]
+  employees: Employee[]
   cellEntries: (roleKey: string, shift: RosterShift) => Entry[]
   editing: string | null
   setEditing: (v: string | null) => void
-  onAdd: (roleKey: string, shift: RosterShift, operatorId: string | null, name: string, tags: string[]) => void
-  onUpdate: (id: string, operatorId: string | null, name: string, tags: string[]) => void
+  onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
+  onUpdate: (id: string, employeeId: string | null, name: string, tags: string[]) => void
   onDelete: (id: string) => void
 }) {
   const shiftLabel = (s: RosterShift) => s === 'day' ? period.day_label : period.night_label
@@ -256,7 +361,7 @@ function RosterGrid({
         </thead>
         <tbody>
           {rolesByCategory.map(({ cat, items }) => (
-            <CategoryGroup key={cat.key} cat={cat} items={items} operators={operators}
+            <CategoryGroup key={cat.key} cat={cat} items={items} employees={employees}
               cellEntries={cellEntries} editing={editing} setEditing={setEditing}
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete} />
           ))}
@@ -266,7 +371,7 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, operators, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete }: any) {
+function CategoryGroup({ cat, items, employees, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete }: any) {
   return (
     <>
       <tr>
@@ -282,7 +387,7 @@ function CategoryGroup({ cat, items, operators, cellEntries, editing, setEditing
             <span className="font-body font-medium text-[13px] text-text leading-tight">{role.name}</span>
           </td>
           {ROSTER_SHIFTS.map((s: { key: RosterShift }) => (
-            <RosterCell key={s.key} roleKey={role.key} shift={s.key} operators={operators}
+            <RosterCell key={s.key} roleKey={role.key} shift={s.key} employees={employees}
               entries={cellEntries(role.key, s.key)}
               editing={editing} setEditing={setEditing}
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete} />
@@ -293,31 +398,31 @@ function CategoryGroup({ cat, items, operators, cellEntries, editing, setEditing
   )
 }
 
-function RosterCell({ roleKey, shift, operators, entries, editing, setEditing, onAdd, onUpdate, onDelete }: {
-  roleKey: string; shift: RosterShift; operators: Operator[]; entries: Entry[]
+function RosterCell({ roleKey, shift, employees, entries, editing, setEditing, onAdd, onUpdate, onDelete }: {
+  roleKey: string; shift: RosterShift; employees: Employee[]; entries: Entry[]
   editing: string | null; setEditing: (v: string | null) => void
-  onAdd: (roleKey: string, shift: RosterShift, operatorId: string | null, name: string, tags: string[]) => void
-  onUpdate: (id: string, operatorId: string | null, name: string, tags: string[]) => void
+  onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
+  onUpdate: (id: string, employeeId: string | null, name: string, tags: string[]) => void
   onDelete: (id: string) => void
 }) {
   const addKey = `add:${roleKey}:${shift}`
-  // Names already rostered into THIS cell — hide them from the picker.
-  const takenIds = entries.map(e => e.operator_id).filter(Boolean) as string[]
+  // People already in THIS cell — hide them from the picker.
+  const takenIds = entries.map(e => e.employee_id).filter(Boolean) as string[]
   return (
     <td className="px-3 py-2 align-top">
       <div className="flex flex-col gap-1.5">
         {entries.map(e => editing === e.id ? (
-          <PersonEditor key={e.id} operators={operators} excludeIds={takenIds.filter(id => id !== e.operator_id)}
-            initialOperatorId={e.operator_id} initialName={e.person_name} initialTags={e.tags}
-            onSave={(opId, n, t) => onUpdate(e.id, opId, n, t)} onCancel={() => setEditing(null)}
+          <PersonEditor key={e.id} employees={employees} excludeIds={takenIds.filter(id => id !== e.employee_id)}
+            initialEmployeeId={e.employee_id} initialName={e.person_name} initialTags={e.tags}
+            onSave={(empId, n, t) => onUpdate(e.id, empId, n, t)} onCancel={() => setEditing(null)}
             onDelete={() => onDelete(e.id)} />
         ) : (
           <PersonChip key={e.id} entry={e} onEdit={() => setEditing(e.id)} />
         ))}
 
         {editing === addKey ? (
-          <PersonEditor operators={operators} excludeIds={takenIds}
-            onSave={(opId, n, t) => onAdd(roleKey, shift, opId, n, t)} onCancel={() => setEditing(null)} />
+          <PersonEditor employees={employees} excludeIds={takenIds}
+            onSave={(empId, n, t) => onAdd(roleKey, shift, empId, n, t)} onCancel={() => setEditing(null)} />
         ) : (
           <button onClick={() => setEditing(addKey)}
             className="self-start inline-flex items-center gap-1 text-[11px] text-stone-300 hover:text-brand transition-colors py-0.5">
@@ -343,32 +448,34 @@ function PersonChip({ entry, onEdit }: { entry: Entry; onEdit: () => void }) {
   )
 }
 
-function PersonEditor({ operators, excludeIds = [], initialOperatorId = null, initialName = '', initialTags = [], onSave, onCancel, onDelete }: {
-  operators: Operator[]; excludeIds?: string[]
-  initialOperatorId?: string | null; initialName?: string; initialTags?: string[]
-  onSave: (operatorId: string | null, name: string, tags: string[]) => void; onCancel: () => void; onDelete?: () => void
+function PersonEditor({ employees, excludeIds = [], initialEmployeeId = null, initialName = '', initialTags = [], onSave, onCancel, onDelete }: {
+  employees: Employee[]; excludeIds?: string[]
+  initialEmployeeId?: string | null; initialName?: string; initialTags?: string[]
+  onSave: (employeeId: string | null, name: string, tags: string[]) => void; onCancel: () => void; onDelete?: () => void
 }) {
-  const [operatorId, setOperatorId] = useState<string | null>(initialOperatorId)
+  const [employeeId, setEmployeeId] = useState<string | null>(initialEmployeeId)
   const [name, setName] = useState(initialName)
   const [tags, setTags] = useState<string[]>(initialTags)
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(!initialName)   // start open when adding a new person
   const toggle = (c: string) => setTags(t => t.includes(c) ? t.filter(x => x !== c) : [...t, c])
-  const opLabel = (op: Operator) => op.display_name || op.name
+  const empLabel = (e: Employee) => e.display_name || e.name
 
   const q = query.trim().toLowerCase()
-  const matches = operators
-    .filter(op => !excludeIds.includes(op.id))
-    .filter(op => q === '' || opLabel(op).toLowerCase().includes(q))
+  const matches = employees
+    .filter(e => !excludeIds.includes(e.id))
+    .filter(e => q === '' || empLabel(e).toLowerCase().includes(q) || (e.job_title ?? '').toLowerCase().includes(q))
     .slice(0, 8)
 
-  function pick(op: Operator) {
-    setOperatorId(op.id); setName(opLabel(op)); setQuery(''); setOpen(false)
+  function pick(e: Employee) {
+    setEmployeeId(e.id); setName(empLabel(e)); setQuery(''); setOpen(false)
+    // Pre-fill their known certs when this is a fresh entry with no tags yet.
+    if (tags.length === 0 && e.skills?.length) setTags(e.skills)
   }
 
   return (
     <div className="rounded-xl border border-brand/40 bg-white p-2.5 shadow-sm space-y-2 w-[240px] max-w-full">
-      {/* Selected person — or the searchable employee picker */}
+      {/* Selected person — or the searchable directory picker */}
       {name && !open ? (
         <button type="button" onClick={() => setOpen(true)}
           className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border border-stone-200 bg-stone-50 text-left">
@@ -382,18 +489,18 @@ function PersonEditor({ operators, excludeIds = [], initialOperatorId = null, in
             <input
               autoFocus value={query} onChange={e => setQuery(e.target.value)}
               onKeyDown={e => { if (e.key === 'Escape') onCancel() }}
-              placeholder="Search employee…"
+              placeholder="Search staff…"
               className="flex-1 py-1.5 text-[12px] text-text outline-none bg-transparent"
             />
           </div>
           {matches.length > 0 && (
             <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-52 overflow-y-auto divide-y divide-stone-100">
-              {matches.map(op => (
-                <button key={op.id} type="button" onMouseDown={e => { e.preventDefault(); pick(op) }}
+              {matches.map(e => (
+                <button key={e.id} type="button" onMouseDown={ev => { ev.preventDefault(); pick(e) }}
                   className="w-full flex items-center gap-2 px-2.5 py-2 text-left text-[12px] text-text hover:bg-brand/5">
                   <Plus size={12} className="text-stone-400 shrink-0" />
-                  <span className="flex-1 truncate">{opLabel(op)}</span>
-                  {op.role === 'production_supervisor' && <span className="text-[10px] text-text-muted">Sup</span>}
+                  <span className="flex-1 truncate">{empLabel(e)}</span>
+                  <span className="text-[10px] text-text-muted capitalize">{e.department}</span>
                 </button>
               ))}
             </div>
@@ -413,7 +520,7 @@ function PersonEditor({ operators, excludeIds = [], initialOperatorId = null, in
         })}
       </div>
       <div className="flex items-center gap-1.5">
-        <button onClick={() => name.trim() && onSave(operatorId, name, tags)} disabled={!name.trim()}
+        <button onClick={() => name.trim() && onSave(employeeId, name, tags)} disabled={!name.trim()}
           className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-brand text-white text-[11px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
           <Check size={12} /> Save
         </button>
