@@ -154,7 +154,8 @@ export default function StaffDirectoryPage() {
             const meta = categoryMeta(e.department)
             return (
               <button key={e.id} onClick={() => setEditing(e)}
-                className="w-full flex items-center gap-3 px-4 py-3 border-b border-surface-rule last:border-0 hover:bg-surface text-left transition-colors">
+                className="w-full flex items-center gap-3 px-4 py-3 border-b border-surface-rule last:border-0 hover:bg-surface text-left transition-colors"
+                style={{ borderLeft: `3px solid ${meta.colorHex}` }}>
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.colorHex }} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">

@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Roster → Capture autofill + department colour-coding)
+
+**Files changed:**
+- `app/(app)/production/capture/assign/page.tsx` (Fill-from-roster + section colour accent)
+- `app/(app)/production/roster/page.tsx` (department colour-coded grid)
+- `app/(app)/production/staff/page.tsx` (department colour accent on rows)
+
+**Changes:**
+- **Roster → Capture autofill** — the "Assign sections" screen has a **Fill from roster** button: it finds the roster period covering the selected date, maps each capture section to its roster role(s) (sieving→Sieving Tower, granule→Granule Operator/Granule, etc.) and capture's 3 shifts onto the roster's 2 (morning+afternoon→day, night→night), and pre-fills each section with the rostered people — resolving each to their Capture operator login (directly or via their employee record). People with no tablet login are skipped and counted. The supervisor reviews and Saves as normal.
+- **Department colour-coding** (mirrors the Shift Layout workbook) — the roster grid now shows each department as a coloured band with a colour-matched left accent on its role rows; capture section cards and staff-directory rows carry the same department/section colour accent, so people can distinguish areas at a glance.
+
+---
+
 ## 2026-06-23 — Alyssa (Pasteuriser Quality: per-day averages, pivot-ready export, sortable history)
 
 **Files changed:**
