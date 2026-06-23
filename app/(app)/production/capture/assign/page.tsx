@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
+import { WorkforceTabs } from '@/components/production/WorkforceTabs'
 import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
@@ -134,9 +135,8 @@ function AssignScreen() {
   // Each capture section is fed by one or more roster roles; capture's three
   // shifts collapse onto the roster's two (day 07–16 covers morning+afternoon,
   // night 16–01). We pull the people rostered to those roles for the date and
-  // resolve them to a Capture operator login (directly, or via their employee
-  // record). People with no operator login can't sign on a tablet, so they're
-  // skipped and counted.
+  // resolve them to their Capture operator record (directly, or via their
+  // employee link), then pre-fill each section.
   async function fillFromRoster() {
     setFilling(true); setFillNote(null); setError(null)
     try {
@@ -164,7 +164,7 @@ function AssignScreen() {
       }
       const opFor = (e: any): string | null => e.operator_id ?? (e.employee_id ? (empOp.get(e.employee_id) ?? null) : null)
 
-      let filled = 0, skipped = 0
+      let filled = 0
       setDrafts(prev => {
         const next = { ...prev }
         SECTION_ORDER.forEach(sectionId => {
@@ -172,8 +172,7 @@ function AssignScreen() {
           const ids: string[] = []
           entries.filter(e => roleKeys.includes(e.role_key)).forEach(e => {
             const opId = opFor(e)
-            if (opId) { if (!ids.includes(opId)) ids.push(opId) }
-            else skipped++
+            if (opId && !ids.includes(opId)) ids.push(opId)
           })
           if (ids.length) {
             next[sectionId] = { ...(next[sectionId] ?? emptyDraft()), operatorIds: ids }
@@ -182,9 +181,7 @@ function AssignScreen() {
         })
         return next
       })
-      setFillNote(`Filled ${filled} operator${filled === 1 ? '' : 's'} from the “${period.name}” roster (${rShift} shift).` +
-        (skipped ? ` ${skipped} rostered ${skipped === 1 ? 'person has' : 'people have'} no tablet login yet, so ${skipped === 1 ? 'was' : 'were'} skipped.` : '') +
-        ' Review each section and Save.')
+      setFillNote(`Filled ${filled} ${filled === 1 ? 'person' : 'people'} from the “${period.name}” roster (${rShift} shift). Review each section and Save.`)
     } catch (e: any) {
       setError(e.message)
     }
@@ -230,9 +227,11 @@ function AssignScreen() {
         </button>
         <div className="flex-1">
           <h1 className="font-semibold text-[22px] text-text leading-tight">Assign sections</h1>
-          <p className="text-[12px] text-text-muted mt-0.5">Roster operators onto each section. They confirm with their PIN on the tablet.</p>
+          <p className="text-[12px] text-text-muted mt-0.5">Roster operators onto each section for the shift, or fill them straight from the Shift Roster.</p>
         </div>
       </div>
+
+      <WorkforceTabs />
 
       {/* Date + shift */}
       <div className="flex flex-wrap items-center gap-3 bg-white border border-stone-200 rounded-2xl p-4">
