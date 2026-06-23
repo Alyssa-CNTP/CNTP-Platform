@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Shift Roster moved into Production area + linked to employees)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx` (new — relocated from `app/(app)/supervisor/roster/`)
+- `lib/production/roster-config.ts` (new — roster roles, categories, skill tags)
+- `supabase/migrations/20260622_001_roster.sql` (new — `roster_roles` / `roster_periods` / `roster_entries`, now with `operator_id` FK to `production.operators`)
+- `components/layout/Sidebar.tsx` (added "Shift Roster" nav under Operations, Production+Management)
+
+**Changes:**
+- The whole-site monthly Shift Roster now lives in the **Production area** (`/production/roster`, manager-owned) instead of the Supervisor Hub, and has its own sidebar entry.
+- Roster people are now **linked to real employees** — the person picker searches `production.operators` (the 77-name employee list) and stores `operator_id` alongside the denormalised display name, instead of free-typed names. This is the foundation for the planned AI-suggested roster.
+- Migration is additive and idempotent; nothing touches the production-capture `shift_assignments` flow.
+- **Next phases (planned, not in this change):** AI-suggested month-ahead roster → manager approve → send out via printable PDF + WhatsApp/SMS; a simple leave/availability tool to feed the AI; offline-resilient capture (IndexedDB queue) + trimming autosave round-trips.
+
+---
+
 ## 2026-06-21 — Alyssa (DB promotion flow: staging→prod migrations + nightly data refresh)
 
 **Files changed:**
