@@ -105,6 +105,117 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Supervisor Hub: redesigned Overview into a command-centre dashboard)
+
+**Files changed:**
+- `app/(app)/supervisor/page.tsx` — full Overview redesign: KPI strip, live shift-lines panel, sign-off queue, 7-day trend charts
+- `components/supervisor/HubTabs.tsx` — dropped the Analytics tab; added a shared `HubHeader`
+- `app/(app)/supervisor/{timesheets,productions,messages,analytics}/page.tsx` — adopt `HubHeader`
+- `app/(app)/supervisor/calendar/page.tsx` — rebuilt on the Day/Night shift model + a click-to-open day review
+- `app/(app)/production/capture/[section]/page.tsx` — capture screen now honours a `?tab=` deep-link
+
+**Changes:**
+- The Overview was just a few snapshot tiles + module links — it showed neither *what needs action* nor *what's happening right now*, and looked nothing like the app's Analytics tab. Rebuilt it as a proper at-a-glance dashboard using the same recharts / `ChartCard` / design-token vocabulary as `supervisor/analytics`.
+- **KPI strip (7 metrics):** Pending sign-off, Operators on shift, Productions today, kg out today, Hours logged, Open breakdowns, Tech on duty. All derived from a single 7-day data pull (sessions + mass balance + confirmed timesheets) plus today's roster.
+- **Lines this shift** panel: live status of every section rostered for the current shift — colour badge, operators, kg out so far, and a status pill (Not started / In progress / Awaiting sign-off / Signed off), with an `X/Y signed off` header counter. Each row links into the section; submitted ones deep-link to the Sign-off tab. Empty state links to Assign sections.
+- **Needs your sign-off** queue (alongside the lines panel): every `prod_sessions` row in `submitted` status (not date-bound, so older hand-overs can't slip past), oldest first, each a one-tap row deep-linking to the section's Sign-off tab. Count badge in the header; calm "All caught up" state when empty.
+- **Last 7 days** trends: kg-bagged-out area chart + hours-worked bar chart (gaps filled with zeros), with a "Full analytics →" link to the Analytics tab.
+- To make the sign-off deep-links land correctly, the capture `[section]` page now reads an optional `tab` query param (validated against the known tabs) to set its initial tab — previously it always opened on Production. The signature-based approval flow itself is unchanged.
+
+**Hub tab cleanup (same session):**
+- **Removed the Analytics tab** from the hub sub-nav — its kg/day + hours/day trends now live on the Overview. The deeper breakdowns (by-operator, by-section, custom date range) stay on the `/supervisor/analytics` page, reachable via the Overview's "Full analytics →" link, so nothing is lost.
+- **Consolidated the per-tab header.** Every tab page previously re-implemented the `Supervisor Hub` title + subtitle + `<HubTabs />` block slightly differently. Extracted a single **`HubHeader`** component (title, contextual subtitle, optional right-aligned action) and adopted it across Overview, Timesheets, Productions, Calendar, Messages, and Analytics — so all tabs are visually identical at the top and easy to follow.
+
+**Calendar redesign (same session):**
+- The week grid showed cramped, unreadable chips (`M GA`, `M AL AM AK` — shift letter + operator initials) and clicking a cell jumped straight into the editor. Rebuilt it to be **reviewable**: each day (header or cell) opens a **Day Review modal** showing the full roster — Day/Night shift groups, each section with full operator names and variant/lot, plus the technician on duty — with a per-shift "Edit" button that deep-links to Assign sections. Closes on backdrop click or Escape.
+- **Standardised on the Shift Roster's Day/Night model** for cross-app consistency. The calendar previously displayed capture's three sub-shifts (Morning/Afternoon/Night) with bespoke amber/sky/indigo dots that appeared nowhere else. It now folds morning + afternoon → **Day Shift** (07h00–16h00, Sun) and night → **Night Shift** (16h00–01h00, Moon), matching `/production/roster`'s `ROSTER_SHIFTS` and Sun/Moon language. Week-grid cells now show a clean Sun/Moon chip with a head-count per shift instead of initials; the Day view lists each shift's roster in full. Editing still opens the capture Assign screen (which keeps its finer 3-shift control).
+
+---
+
+## 2026-06-23 — Alyssa (Auth reconcile: align prod users & roles to the staging model)
+
+**Files changed:**
+- `.github/workflows/db-reconcile.yml` — two new reconcile phases + a read-only auth preview
+- `supabase/reconcile/auth_prune_cntp_local.sql` (new) — FK-checked prune of `@cntp.local` placeholders
+- `supabase/reconcile/AUTH_RECONCILE_RUNBOOK.md` (new) — run sequence + rollback
+- `supabase/reconcile/CONFIRMED` — set to `auth-add-staff`
+
+**Changes:**
+- Production auth had only 3 real staff (Alyssa/Gustav/Jan) plus 8 placeholder `@cntp.local` operator/supervisor accounts; staging is the model we want — real staff on Azure work-account SSO (`@rooibostea.co.za`) each with a `shared.app_roles` role, plus `@floor` PIN operators.
+- **`auth-add-staff`** (new `MODE=authstaff`): additively copies real-staff `auth.users` + their `auth.identities` (so Azure SSO matches the same account) + their `shared.app_roles` rows from staging → prod, `ON CONFLICT DO NOTHING`. UUIDs preserved so roles bind correctly; the 3 existing accounts are skipped; `@floor` operators untouched. Column lists derived from prod so any auth-schema drift aborts cleanly instead of misaligning.
+- **`auth-prune-cntp-local`** (new, via `MODE=sqlfile`): deletes `@cntp.local` accounts only when no real data table references them; referenced accounts are kept and logged. Prints a KEEP/DELETE report before any delete. Single transaction.
+- Read-only **Auth reconcile preview** step on `reconcile/diff` lists the staff to be copied and the `@cntp.local` accounts + their references, for review before applying.
+- Both phases run through the existing backup-first, double-gated DB Reconcile action. Azure provider already enabled on the prod project (prerequisite).
+
+**Result (applied to prod 2026-06-23):**
+- Phase A: **12 staff added** (15 staging staff minus the 3 already present), 12 Azure identities, 10 app_roles rows. Prod now has all 15 `@rooibostea.co.za` staff with their staging roles. (Jan kept his existing prod role `co_developer` rather than staging's `bis_manager` — additive copy does not overwrite existing accounts.)
+- Phase B: of the 8 `@cntp.local` placeholders, **7 deleted** (no production data), **1 kept** (`blender@cntp.local`, referenced by `production.scan_events`). Final prod auth = 16 users.
+- Two iterations were needed on the copy logic: (1) prod's `shared.app_roles` has `updated_at` (bucket2) that staging lacks → switched to the staging/prod column **intersection**; (2) `auth.users.confirmed_at` is a **generated** column → excluded generated/identity columns. All failures rolled back cleanly (atomic txn) — no partial writes.
+- Discovered a **second roles table** `production.app_roles` (separate from `shared.app_roles`); the prune treats both as the account's own record.
+
+---
+
+## 2026-06-22 — Alyssa (Alara Signal Engine: Gemini multi-model conversion + scraper hardening)
+
+**Files changed:**
+- `research-engine/n8n/cntp-signal-engine.json` — corrected + re-architected workflow
+- `supabase/migrations/20260622_003_signals_dedup.sql` (new) — DB-enforced dedup backstop
+
+**Changes (n8n workflow):**
+- **Removed the remote-PC dependency.** Tier 1 was Ollama (`alara-engine`) on a remote PC over Tailscale; a full run fired ~940 inferences at it and twice froze the machine (RDP `0x204`). Tier 1 now runs on **`gemini-2.5-flash-lite`** (cloud) via the existing CNTP Gemini credential — same Alara persona/scoring prompt, parse node updated to read Gemini's response shape. The engine is now VPS + cloud only; nothing local to crash.
+- **Multi-model tiering, deliberately off `2.5-flash`** (which the app uses heavily — separate per-model quota buckets avoid contention): Tier 1 = `gemini-2.5-flash-lite` (cheap bulk, all new items), Tier 2 deep = `gemini-2.0-flash`. Future: Tier 3 `gemini-2.5-pro`, vision `gemini-3.1-flash-lite`, dedup `gemini-embedding-001`. A separate API key/GCP project for the scraper is the recommended next isolation step.
+- **Loophole-aware escalation:** Score Filter now escalates to the Tier-2 deep pass on `relevance_score >= 7` **OR** `intelligence_type` in (loophole, switching_signal, competitor_intel, threat) — moderate-score competitor/loophole signals still get full analysis. All scores are still saved (no relevance gate — low scores are leads).
+- **Throttle node** (`max new/run`, enabled, 25) caps items per run — protects against floods and bounds Gemini spend; tune upward as proven safe.
+- **Per-workflow timezone** `Africa/Johannesburg` + trigger at **03:00 SAST** (n8n instance clock was New York).
+- `raw_content` capped at 2k chars on both save paths.
+- **Fixed the real "nothing saves" cause:** `sales.signals.classification` has a CHECK constraint (`signals_classification_check`) allowing only opportunity/threat/competitor/regulation/relationship/neutral, but Tier 1 was writing the richer `intelligence_type` vocabulary (loophole/market_gap/switching_signal/…) → every insert rejected. Both save paths now map `intelligence_type` → an allowed `classification` and preserve the fine-grained type in `intel`.
+- **Fixed all-false-branch:** old Tier-1 parser couldn't read the Gemini node's output nesting → every item scored 0. Replaced with a deep-scan extractor (also applied to the Tier-2 parser); added a `_raw` debug field.
+
+**Changes (database):**
+- `20260622_003_signals_dedup.sql` — dedup is already enforced by the pre-existing `signals_source_url_unique` constraint; the earlier draft's unique title index was redundant and fails on real data (distinct articles sharing a title prefix), so it is NOT created.
+
+**VPS:**
+- Found n8n already runs persistently as user `ubuntu` (25-day uptime) — it does **not** die when PuTTY closes; PuTTY only provides the tunnel to the editor. The `pm2`-under-`cntpdev` attempt would have spun up a broken empty duplicate on a clashing port; cleaned up, `cntpdev` pm2 now runs only the two apps.
+
+---
+
+## 2026-06-22 — Alyssa (Alara Signal Engine: structured-intelligence columns)
+
+**Files changed:**
+- `supabase/migrations/20260622_002_signals_intel_columns.sql` (new) — adds `sales_angle`, `urgency`, `tier`, `intel jsonb` to `sales.signals`
+- `components/intelligence/types.ts` — `Signal` gains `sales_angle`/`urgency`/`tier`/`intel`; new `Urgency` type
+- `components/intelligence/helpers.ts` — new `urgencyStyle()` palette helper
+- `app/api/signals/route.ts` — GET select now returns the new columns
+- `app/api/pipeline/ingest/route.ts` — `IngestPayload` accepts + sanitises the new fields (urgency whitelisted, intel object-guarded)
+- `components/intelligence/SignalCard.tsx` — urgency badge + recommended-action line
+- `components/intelligence/SignalDrawer.tsx` — urgency badge, Tier chip, "Recommended action" section
+
+**Changes:**
+- The live Alara pipeline ("CNTP Signal Engine" — Ollama Tier 1 → Gemini Tier 2) was writing `sales_angle`/`urgency`/`tier` as top-level columns that did not exist on `sales.signals` (insert failed: *"Could not find the 'sales_angle' column … in the schema cache"*), and overloading `sections` (the app's `text[]` tab tags) with a JSON object. Added the missing columns plus a catch-all `intel jsonb`; `sections` is left to the app and the pipeline now writes its structured extras (target_segment, competitor_mentioned, full Tier-2 analysis) to `intel`.
+- Surfaced `sales_angle` ("one concrete action for CNTP") and `urgency` in the Signal feed + drawer so the per-signal next action is visible.
+- DB note: `sales` is a prod-only schema; the ALTER is run manually in the Supabase SQL editor on the project the pipeline writes to (not via `db-migrate.yml`). Additive + nullable only.
+
+---
+
+## 2026-06-22 — Alyssa (DB reconcile Phase 1: rebuild production qms to match staging)
+
+**Files changed:**
+- `.github/workflows/db-reconcile.yml` (new) — one-time, push-triggered (`reconcile/diff` / `reconcile/apply`), gated
+- `supabase/reconcile/CONFIRMED` (new) — apply confirmation marker
+
+**Changes (production database):**
+- Discovery via read-only diff: staging and production had **diverged in different directions** (staging ahead on qms/maintenance/acumatica; production ahead on fields ~1.38M rows/sales/logistics/marketing/public). The `qms` module was *redesigned* on staging (split sieve columns, `id` integer→bigint, `created_by` uuid→text, no FKs). So "make prod match staging" wholesale was rejected as destructive; scoped to a surgical, module-by-module reconciliation starting with qms.
+- **Phase 1 applied to production**: rebuilt prod `qms` to staging's design — `DROP SCHEMA qms CASCADE` + staging qms DDL + staging qms data, in one `--single-transaction`. Production backed up to the VPS first (`/home/cntpdev/apps/backups`). Verified prod `qms` == staging `qms` (39 tables, identical row counts). Production `public.*` quality data left intact; the dropped prod qms was only the redundant old service-role copy (also in backup).
+- Ran entirely via gated GitHub Actions; DB passwords live only in GitHub secrets.
+- **Bucket 1 applied to production**: added `maintenance` (24 tables) and `acumatica` (3 tables) from staging — purely additive (prod had neither schema), counts match staging, no existing prod data touched. Backed up first; atomic.
+- Decisions for remaining work: prod's `production`/`axis`/`shared` data is real → align those **additively only** (preserve prod data); prod-only `fields`/`sales`/`logistics`/`marketing` left as-is; the old `public.*` JSON-blob quality data will be retired (not merged — blob format breaks the Acumatica push).
+- **Bucket 2 applied to production** (additive, atomic): created 15 missing `production` tables + `shared.dashboard_layouts` (structure only) and added 50 staging-only columns across existing tables (`shared.app_roles`, `axis.tickets`, `production.prod_sessions`/`bag_tags`/`inventory_items`/etc.) — all nullable, `IF NOT EXISTS`. Also created `production.set_updated_at()` trigger fn (absent in prod). Existing prod data fully preserved (verified: inventory_items 554, prod_sessions 25, scan_events 125, sc_entries 210, shared.audit_log 776). SQL: `supabase/reconcile/bucket2_add_columns.sql`.
+- **Database structure alignment now complete** (qms, maintenance, acumatica, production, axis, shared, workspace).
+- **Production app deployed (internal)**: cloned repo to `/home/cntpdev/apps/production/app/cntp-ops`, created prod `.env.local` (→ production Supabase), built, and started under pm2 as `cntp-production` on port 3001. Local health check HTTP 200. Docs: `docs/production-deploy.md`.
+- **Remaining to go live**: Compunique must repoint the `cntpplatform` nginx site from static-file serving to `proxy_pass http://localhost:3001` (needs root; SSL already configured). Plus: fast-forward `main` to `staging` to make `main` the production branch (deferred — must neutralize the not-yet-ready `db-migrate.yml` auto-push first). Deferred: retire old `public.*` blob quality tables.
+
+---
+
 ## 2026-06-21 — Alyssa (DB promotion flow: staging→prod migrations + nightly data refresh)
 
 **Files changed:**

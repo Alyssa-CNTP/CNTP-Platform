@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { exportTableXlsx } from '@/lib/utils/exportExcel'
 import { RefreshCw, History, AlertTriangle, X } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -640,18 +641,21 @@ export default function LabResultsPage() {
           <button onClick={()=>load(activeTab)} style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:11, cursor:'pointer' }}>
             ↻ Refresh
           </button>
-          {/* CSV Export */}
+          {/* Excel Export — formatted, AutoFilter, empty columns dropped */}
           {current.length > 0 && (
             <button
               onClick={() => {
                 const cols2 = COLS[activeTab] ?? []
-                const hdrs = ['Batch',...cols2.map(([,l])=>l),'Date']
-                const rows2 = allRows.map((r:any)=>[r.batch_no??'',...cols2.map(([k])=>r[k]??''),r.created_at?new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}):''])
-                const csv = [hdrs,...rows2].map(row=>row.map((v:any)=>{const s=String(v??'');return s.includes(',')||s.includes('"')?`"${s.replace(/"/g,'""')}"`:`${s}`}).join(',')).join('\n')
-                const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,%EF%BB%BF'+encodeURIComponent(csv);a.download=`lab_${activeTab}_${new Date().toISOString().slice(0,10)}.csv`;a.click()
+                const rows = allRows.map((r:any) => {
+                  const o: Record<string, any> = { Batch: r.batch_no ?? '' }
+                  cols2.forEach(([k,l]: any) => { o[l] = r[k] ?? '' })
+                  o['Date'] = r.created_at ? new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}) : ''
+                  return o
+                })
+                exportTableXlsx(rows, `lab_${activeTab}_${new Date().toISOString().slice(0,10)}.xlsx`, activeTab)
               }}
               style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:11, cursor:'pointer' }}>
-              ⬇ Export CSV
+              ⬇ Export Excel
             </button>
           )}
           {/* CSV Import */}

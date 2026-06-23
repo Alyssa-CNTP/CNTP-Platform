@@ -13,7 +13,7 @@ import { sectionMeta, SECTION_ORDER } from '@/lib/production/capture-config'
 import { SHIFT_LABEL } from '@/lib/production/shifts'
 import type { TimesheetBreak } from '@/lib/production/timesheet'
 import { downloadCsv } from '@/lib/utils/csv-export'
-import { HubTabs } from '@/components/supervisor/HubTabs'
+import { HubHeader } from '@/components/supervisor/HubTabs'
 
 interface Row {
   id:             string
@@ -146,11 +146,7 @@ export default function SupervisorTimesheets() {
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5">
-      <div>
-        <h1 className="font-display font-bold text-[22px] text-text">Supervisor Hub</h1>
-        <p className="text-[12px] text-stone-400 mt-0.5">Operator hours, derived from capture activity</p>
-      </div>
-      <HubTabs />
+      <HubHeader subtitle="Operator hours, derived from capture activity" />
 
       {/* Date range + presets */}
       <div className="flex items-center gap-2 flex-wrap">

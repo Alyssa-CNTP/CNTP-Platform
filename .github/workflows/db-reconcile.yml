@@ -1,0 +1,332 @@
+name: DB Reconcile (one-time)
+
+# One-time job to align PRODUCTION to STAGING (source of truth).
+# Isolated on its own trigger branches so it never runs from main/staging.
+#
+#   push to `reconcile/diff`   -> back up BOTH dbs to the VPS, then print a read-only diff
+#   push to `reconcile/apply`  -> back up prod again, then run supabase/reconcile/apply_prod.sql
+#                                 (only if that file AND supabase/reconcile/CONFIRMED exist)
+#
+# Required GitHub repo secrets — use the **Session Pooler** URIs (GitHub runners are
+# IPv4-only; Supabase "Direct connection" is IPv6-only without an add-on):
+#   STAGING_DB_URL      postgresql://postgres.qjqkpockmujecjgmdple:PW@aws-0-<region>.pooler.supabase.com:5432/postgres
+#   PRODUCTION_DB_URL   postgresql://postgres.sxzjjcyuzyfneesnsjna:PW@aws-0-<region>.pooler.supabase.com:5432/postgres
+#   VPS_SSH_KEY         (already set) — used to copy backups to the VPS
+#
+# Connection strings are never printed; GitHub also masks secret values in logs.
+
+on:
+  push:
+    branches:
+      - reconcile/diff
+      - reconcile/apply
+
+concurrency:
+  group: db-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Postgres 17 client
+        run: |
+          set -euo pipefail
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          # ensure the v17 binaries take precedence over the runner's preinstalled v16
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
+      # ----- BACKUPS (run in both modes, before anything else) -----
+      - name: Back up both databases
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%d_%H%M%S)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          pg_dump -Fc --no-owner --no-privileges "$PROD_DB_URL"    -f "prod_full_${STAMP}.dump"
+          pg_dump -Fc --no-owner --no-privileges "$STAGING_DB_URL" -f "staging_full_${STAMP}.dump"
+          ls -lh ./*.dump
+
+      - name: Copy backups to VPS (/home/cntpdev/apps/backups)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 154.65.97.200
+          username: cntpdev
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 2022
+          source: "*.dump"
+          target: "/home/cntpdev/apps/backups"
+
+      # ----- DIFF (reconcile/diff only) -----
+      - name: Diff staging vs production (read-only)
+        if: github.ref_name == 'reconcile/diff'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p reconcile_out
+          # all non-system schemas, with table count + approx total rows
+          CEN="SELECT n.nspname AS schema,
+                      count(*) FILTER (WHERE c.relkind='r') AS tables,
+                      COALESCE(sum(s.n_live_tup),0) AS approx_rows
+               FROM pg_namespace n
+               LEFT JOIN pg_class c ON c.relnamespace=n.oid AND c.relkind='r'
+               LEFT JOIN pg_stat_user_tables s ON s.relid=c.oid
+               WHERE n.nspname NOT IN ('pg_catalog','information_schema','pg_toast',
+                     'auth','storage','realtime','vault','extensions','graphql','graphql_public',
+                     'supabase_functions','supabase_migrations','net','pgbouncer','cron','_realtime')
+                 AND n.nspname NOT LIKE 'pg_%'
+               GROUP BY 1 ORDER BY 1;"
+          # every app table across all schemas
+          Q="SELECT n.nspname AS schema, c.relname AS table,
+                    COALESCE(s.n_live_tup,0) AS rows
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+             WHERE c.relkind='r'
+               AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast',
+                   'auth','storage','realtime','vault','extensions','graphql','graphql_public',
+                   'supabase_functions','supabase_migrations','net','pgbouncer','cron','_realtime')
+               AND n.nspname NOT LIKE 'pg_%'
+             ORDER BY 1,2;"
+          {
+            echo "################# SCHEMA CENSUS — STAGING #################"
+            psql "$STAGING_DB_URL" -P pager=off -c "$CEN"
+            echo "################# SCHEMA CENSUS — PRODUCTION #############"
+            psql "$PROD_DB_URL" -P pager=off -c "$CEN"
+            echo "################# ALL TABLES — STAGING ###################"
+            psql "$STAGING_DB_URL" -P pager=off -c "$Q"
+            echo "################# ALL TABLES — PRODUCTION ################"
+            psql "$PROD_DB_URL" -P pager=off -c "$Q"
+            echo "################# auth.users counts ######################"
+            echo -n "staging users: "; psql "$STAGING_DB_URL" -t -A -c "SELECT count(*) FROM auth.users;"
+            echo -n "prod users:    "; psql "$PROD_DB_URL"    -t -A -c "SELECT count(*) FROM auth.users;"
+          } | tee reconcile_out/diff.txt
+
+      - name: Auth reconcile preview (read-only)
+        if: github.ref_name == 'reconcile/diff'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p reconcile_out
+          FILTER="email LIKE '%@rooibostea.co.za' AND email NOT LIKE '%@floor.%' AND email NOT LIKE '%@cntp.local'"
+          {
+            echo "##### auth-add-staff would COPY these staging staff -> prod (skips ones already in prod) #####"
+            psql "$STAGING_DB_URL" -P pager=off -c \
+              "SELECT u.email, u.raw_user_meta_data->>'full_name' AS name, r.role, r.department,
+                      (SELECT string_agg(i.provider,',') FROM auth.identities i WHERE i.user_id=u.id) AS providers
+               FROM auth.users u LEFT JOIN shared.app_roles r ON r.user_id=u.id
+               WHERE $FILTER ORDER BY 1;"
+            echo "##### of those, already present in PROD (will be skipped) #####"
+            psql "$PROD_DB_URL" -P pager=off -c \
+              "SELECT email FROM auth.users WHERE email LIKE '%@rooibostea.co.za' ORDER BY 1;"
+            echo "##### auth-prune-cntp-local: prod @cntp.local accounts + blocking data references #####"
+            psql "$PROD_DB_URL" -P pager=off -c "
+              WITH cntp AS (SELECT id, email FROM auth.users WHERE email LIKE '%@cntp.local'),
+              fks AS (
+                SELECT n.nspname AS sch, c.relname AS tbl, att.attname AS col
+                FROM pg_constraint con
+                JOIN pg_class c ON c.oid=con.conrelid
+                JOIN pg_namespace n ON n.oid=c.relnamespace
+                JOIN unnest(con.conkey)  WITH ORDINALITY k(attnum,ord)  ON true
+                JOIN unnest(con.confkey) WITH ORDINALITY fk(attnum,ord) ON fk.ord=k.ord
+                JOIN pg_attribute att  ON att.attrelid=con.conrelid  AND att.attnum=k.attnum
+                JOIN pg_attribute ratt ON ratt.attrelid=con.confrelid AND ratt.attnum=fk.attnum
+                WHERE con.contype='f' AND con.confrelid='auth.users'::regclass AND ratt.attname='id'
+                  AND n.nspname<>'auth'
+                  AND NOT (n.nspname='shared' AND c.relname='app_roles')
+                  AND NOT (n.nspname='production' AND c.relname='operators'))
+              SELECT email, 'see fks below' AS note FROM cntp ORDER BY 1;"
+            echo "(prune deletes a @cntp.local account only if NO data table references it; referenced ones are kept)"
+          } | tee reconcile_out/auth_preview.txt
+
+      - name: Dump full schema DDL + user-reference report (read-only)
+        if: github.ref_name == 'reconcile/diff'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p reconcile_out
+          # canonical target structure (all app schemas) + current prod structure.
+          # Exclude only Supabase-managed schemas so this works regardless of which app schemas exist.
+          EXC="-N auth -N storage -N realtime -N vault -N extensions -N graphql -N graphql_public -N supabase_functions -N supabase_migrations -N net -N pgbouncer -N cron -N _realtime -N pg_*"
+          pg_dump --schema-only --no-owner --no-privileges $EXC "$STAGING_DB_URL" -f reconcile_out/staging_schema.sql
+          pg_dump --schema-only --no-owner --no-privileges $EXC "$PROD_DB_URL"    -f reconcile_out/prod_schema.sql
+          # every column across all app schemas (for table -> table column mapping)
+          COLQ="SELECT table_schema, table_name, ordinal_position AS pos, column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('pg_catalog','information_schema','auth','storage','realtime','vault','extensions','graphql','graphql_public','supabase_functions','supabase_migrations','net','pgbouncer','cron','_realtime')
+                  AND table_schema NOT LIKE 'pg_%'
+                ORDER BY 1,2,3;"
+          psql "$STAGING_DB_URL" -P pager=off -o reconcile_out/staging_columns.txt -c "$COLQ"
+          psql "$PROD_DB_URL"    -P pager=off -o reconcile_out/prod_columns.txt    -c "$COLQ"
+          # --- qms module (Phase 1 source artifacts) ---
+          # canonical structure: staging qms schema only (DDL) — used to rebuild prod's qms
+          pg_dump --schema-only --no-owner --no-privileges -n qms "$STAGING_DB_URL" -f reconcile_out/staging_qms_schema.sql
+          # authoritative data: staging qms (clean copy to load into prod)
+          pg_dump --data-only   --no-owner --no-privileges -n qms "$STAGING_DB_URL" -f reconcile_out/staging_qms_data.sql
+          # prod's OLD quality data (public design) + partial qms — for the ETL/merge design
+          pg_dump --schema-only --no-owner --no-privileges -n public -n qms "$PROD_DB_URL" -f reconcile_out/prod_public_qms_schema.sql
+          # FK constraints that reference any *users* table, in prod
+          psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_user_fks.txt -c "
+            SELECT conrelid::regclass AS child_table, conname,
+                   confrelid::regclass AS references_table,
+                   pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint
+            WHERE contype='f' AND confrelid::regclass::text ~ 'users'
+            ORDER BY 1;"
+          # uuid columns in prod that look like user references (may have no FK)
+          psql "$PROD_DB_URL" -P pager=off -o reconcile_out/prod_user_like_cols.txt -c "
+            SELECT table_schema, table_name, column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema IN ('public','qms')
+              AND (column_name ~ '(user|_by|owner|created_by|updated_by|operator)')
+            ORDER BY 1,2,3;"
+          ls -lh reconcile_out
+
+      - name: Upload analysis report
+        if: github.ref_name == 'reconcile/diff'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconcile-diff
+          path: reconcile_out/
+          retention-days: 14
+
+      # ----- APPLY (reconcile/apply only, double-gated) -----
+      # Backups already ran above. This phase rebuilds production's qms to match
+      # staging's redesigned qms (structure + authoritative data), atomically.
+      # Production's public.* quality data is NOT touched here (merged in a later phase).
+      # Phase is read from supabase/reconcile/CONFIRMED. Supported "drop+recreate from
+      # staging" phases (each rebuilds whole schemas to match staging exactly):
+      #   phase1-qms-rebuild       -> qms
+      #   bucket1-maint-acumatica  -> maintenance, acumatica  (prod has neither: purely additive)
+      - name: Guard + resolve phase
+        id: phase
+        if: github.ref_name == 'reconcile/apply'
+        run: |
+          test -f supabase/reconcile/CONFIRMED || { echo "::error::supabase/reconcile/CONFIRMED missing — refusing to apply"; exit 1; }
+          P="$(tr -d '[:space:]' < supabase/reconcile/CONFIRMED)"
+          echo "phase=$P" >> "$GITHUB_OUTPUT"
+          echo "Resolved phase: $P"
+
+      - name: Apply phase to PRODUCTION (atomic)
+        if: github.ref_name == 'reconcile/apply'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          P="${{ steps.phase.outputs.phase }}"
+          case "$P" in
+            phase1-qms-rebuild)       MODE=rebuild; SCHEMAS="qms" ;;
+            bucket1-maint-acumatica)  MODE=rebuild; SCHEMAS="maintenance acumatica" ;;
+            bucket2-prod-axis-shared) MODE=bucket2; SCHEMAS="production axis shared workspace" ;;
+            grant-app-schemas)        MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/grant_app_schemas.sql ;;
+            fix-operators-nullable)   MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/fix_operators_nullable.sql ;;
+            auth-add-staff)           MODE=authstaff; SCHEMAS="" ;;
+            auth-prune-cntp-local)    MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/auth_prune_cntp_local.sql ;;
+            *) echo "::error::unknown phase '$P'"; exit 1 ;;
+          esac
+          echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
+
+          case "$MODE" in
+            rebuild)
+              # drop + recreate whole schemas from staging (structure + data), one atomic txn
+              NFLAGS=""; for s in $SCHEMAS; do NFLAGS="$NFLAGS -n $s"; done
+              {
+                for s in $SCHEMAS; do echo "DROP SCHEMA IF EXISTS $s CASCADE;"; done
+                pg_dump --schema-only --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+                pg_dump --data-only   --no-owner --no-privileges $NFLAGS "$STAGING_DB_URL"
+              } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction ;;
+            bucket2)
+              # additive — never drops, never overwrites existing prod data
+              MISSING="-t production.capture_activity -t production.check_events -t production.check_records \
+                       -t production.check_specs -t production.cleaning_logs -t production.cleaning_records \
+                       -t production.cleaning_stations -t production.cleaning_task_state -t production.line_messages \
+                       -t production.mc_entries -t production.mc_reviews -t production.mc_sessions \
+                       -t production.prod_timesheets -t production.session_signatures -t production.shift_assignments \
+                       -t shared.dashboard_layouts"
+              {
+                echo 'CREATE OR REPLACE FUNCTION production.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;'
+                pg_dump --schema-only --no-owner --no-privileges $MISSING "$STAGING_DB_URL"
+                cat supabase/reconcile/bucket2_add_columns.sql
+              } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction ;;
+            sqlfile)
+              # run a committed SQL file against prod (e.g. grants), one atomic txn
+              psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$SQLFILE" ;;
+            authstaff)
+              # Additively copy real-staff auth accounts (+ their Azure identities)
+              # and their shared.app_roles rows from STAGING into PROD.
+              #   Staff = @rooibostea.co.za logins, excluding @floor.* and @cntp.local.
+              #   ON CONFLICT DO NOTHING -> never overwrites, never deletes. Accounts
+              #   already present in prod with the same UUID (Alyssa/Gustav/Jan) are
+              #   skipped. UUIDs are preserved so app_roles binds to the right user.
+              FILTER="email LIKE '%@rooibostea.co.za' AND email NOT LIKE '%@floor.%' AND email NOT LIKE '%@cntp.local'"
+              # Column list = INTERSECTION of columns present in BOTH staging and prod,
+              # in prod's column order. Prod-only columns (e.g. shared.app_roles.updated_at
+              # added in bucket2) are left to their default; staging-only columns are skipped.
+              # This keeps the cross-DB copy aligned without assuming identical schemas.
+              colcols() {
+                local sch="$1" tbl="$2" pcols scols
+                pcols=$(psql "$PROD_DB_URL"    -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl' AND is_generated='NEVER' AND is_identity='NO' ORDER BY ordinal_position")
+                scols=$(psql "$STAGING_DB_URL" -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl'")
+                awk -v s="$scols" 'BEGIN{n=split(s,a,"\n"); for(i=1;i<=n;i++) m[a[i]]=1} ($0 in m){printf (c++?",":"") "%s",$0}' <<< "$pcols"
+              }
+              UCOLS=$(colcols auth users)
+              ICOLS=$(colcols auth identities)
+              RCOLS=$(colcols shared app_roles)
+              test -n "$UCOLS" && test -n "$ICOLS" && test -n "$RCOLS" || { echo "::error::could not resolve column lists"; exit 1; }
+              echo "cols -> users:[$UCOLS]"; echo "         idents:[$ICOLS]"; echo "         roles:[$RCOLS]"
+              # 1) extract matching rows from STAGING as CSV (prod's column order)
+              psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
+                "\copy (SELECT $UCOLS FROM auth.users WHERE $FILTER) TO 'au_users.csv' WITH (FORMAT csv)"
+              psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
+                "\copy (SELECT $ICOLS FROM auth.identities WHERE user_id IN (SELECT id FROM auth.users WHERE $FILTER)) TO 'au_idents.csv' WITH (FORMAT csv)"
+              psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
+                "\copy (SELECT $RCOLS FROM shared.app_roles WHERE user_id IN (SELECT id FROM auth.users WHERE $FILTER)) TO 'au_roles.csv' WITH (FORMAT csv)"
+              echo "staff to copy: $(wc -l < au_users.csv) user(s), $(wc -l < au_idents.csv) identitie(s), $(wc -l < au_roles.csv) role row(s)"
+              # 2) load into PROD via temp tables, additively, in one transaction.
+              # Piped (not heredoc) to stay YAML-safe; printf keeps the \copy backslash intact.
+              {
+                printf '%s\n' "CREATE TEMP TABLE _iu (LIKE auth.users      INCLUDING DEFAULTS) ON COMMIT DROP;"
+                printf '%s\n' "CREATE TEMP TABLE _ii (LIKE auth.identities  INCLUDING DEFAULTS) ON COMMIT DROP;"
+                printf '%s\n' "CREATE TEMP TABLE _ir (LIKE shared.app_roles INCLUDING DEFAULTS) ON COMMIT DROP;"
+                printf '%s\n' "\copy _iu ($UCOLS) FROM 'au_users.csv'  WITH (FORMAT csv)"
+                printf '%s\n' "\copy _ii ($ICOLS) FROM 'au_idents.csv' WITH (FORMAT csv)"
+                printf '%s\n' "\copy _ir ($RCOLS) FROM 'au_roles.csv'  WITH (FORMAT csv)"
+                printf '%s\n' "INSERT INTO auth.users       ($UCOLS) SELECT $UCOLS FROM _iu ON CONFLICT DO NOTHING;"
+                printf '%s\n' "INSERT INTO auth.identities  ($ICOLS) SELECT $ICOLS FROM _ii WHERE user_id IN (SELECT id FROM auth.users) ON CONFLICT DO NOTHING;"
+                printf '%s\n' "INSERT INTO shared.app_roles ($RCOLS) SELECT $RCOLS FROM _ir WHERE user_id IN (SELECT id FROM auth.users) ON CONFLICT DO NOTHING;"
+              } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
+              echo "=== PROD @rooibostea.co.za staff after copy ==="
+              psql "$PROD_DB_URL" -P pager=off -c \
+                "SELECT u.email, r.role, r.department FROM auth.users u LEFT JOIN shared.app_roles r ON r.user_id=u.id WHERE u.email LIKE '%@rooibostea.co.za' ORDER BY 1" ;;
+          esac
+
+      - name: Verify (staging vs prod row counts for touched schemas)
+        if: github.ref_name == 'reconcile/apply'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          for s in $SCHEMAS; do
+            Q="SELECT c.relname AS table, COALESCE(x.n_live_tup,0) AS rows
+               FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+               LEFT JOIN pg_stat_user_tables x ON x.relid=c.oid
+               WHERE c.relkind='r' AND n.nspname='$s' ORDER BY 1;"
+            echo "===== STAGING $s ====="; psql "$STAGING_DB_URL" -P pager=off -c "$Q"
+            echo "===== PRODUCTION $s ====="; psql "$PROD_DB_URL" -P pager=off -c "$Q"
+          done

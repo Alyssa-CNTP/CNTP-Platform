@@ -30,6 +30,14 @@ function addSheet(wb: XLSX.WorkBook, rows: any[], name: string) {
   XLSX.utils.book_append_sheet(wb, ws, name)
 }
 
+// Generic one-sheet export for plain row objects (e.g. the lab-results tables).
+// Inherits the AutoFilter + column widths from addSheet.
+export function exportTableXlsx(rows: Record<string, any>[], filename: string, sheetName = 'Data') {
+  const wb = XLSX.utils.book_new()
+  addSheet(wb, rows, sheetName)
+  dl(wb, filename)
+}
+
 function n(v: any): number | null {
   const x = parseFloat(v)
   return isNaN(x) ? null : x

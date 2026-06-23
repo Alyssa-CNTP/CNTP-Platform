@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect } from 'react'
-import { X, ExternalLink, Calendar, Globe, Tag, Languages } from 'lucide-react'
+import { X, ExternalLink, Calendar, Globe, Tag, Languages, Target } from 'lucide-react'
 import type { Signal } from './types'
 import {
   classificationStyle,
   relevanceStyle,
+  urgencyStyle,
   regionFlag,
   formatDateTime,
 } from './helpers'
@@ -37,6 +38,7 @@ export default function SignalDrawer({ signal, onClose }: SignalDrawerProps) {
 
   const cls = classificationStyle(signal.classification)
   const rel = relevanceStyle(signal.relevance_score)
+  const urg = signal.urgency ? urgencyStyle(signal.urgency) : null
 
   return (
     <div
@@ -66,9 +68,22 @@ export default function SignalDrawer({ signal, onClose }: SignalDrawerProps) {
             >
               {signal.relevance_score}/10
             </span>
+            {urg && (
+              <span
+                className="font-mono text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded-md border"
+                style={{ background: urg.bg, color: urg.fg, borderColor: urg.border }}
+              >
+                {signal.urgency} urgency
+              </span>
+            )}
             <span className="font-mono text-[10px] text-text-muted bg-surface px-2 py-0.5 rounded-md border border-surface-rule">
               {signal.source_type}
             </span>
+            {signal.tier != null && (
+              <span className="font-mono text-[10px] text-text-muted bg-surface px-2 py-0.5 rounded-md border border-surface-rule">
+                Tier {signal.tier}
+              </span>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -132,6 +147,22 @@ export default function SignalDrawer({ signal, onClose }: SignalDrawerProps) {
               <h3 className="font-mono text-[10px] uppercase tracking-wider text-text-muted mb-2">Summary</h3>
               <p className="text-[14px] text-text leading-relaxed whitespace-pre-wrap">
                 {signal.summary_en}
+              </p>
+            </section>
+          )}
+
+          {/* Recommended action — the pipeline's concrete next step for CNTP */}
+          {signal.sales_angle && (
+            <section className="mt-6">
+              <h3 className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-text-muted mb-2">
+                <Target size={12} />
+                Recommended action
+              </h3>
+              <p
+                className="text-[14px] text-text leading-relaxed whitespace-pre-wrap rounded-lg border border-surface-rule bg-surface p-3"
+                style={{ borderLeft: '3px solid var(--color-accent)' }}
+              >
+                {signal.sales_angle}
               </p>
             </section>
           )}

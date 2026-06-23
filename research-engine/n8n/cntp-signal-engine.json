@@ -1,0 +1,1604 @@
+{
+  "name": "CNTP Signal Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash-lite",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash-lite"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are Alara, the sales-intelligence engine for Cape Natural Tea Products (CNTP), a South African rooibos exporter. Hunt for: competitor failures/loopholes, market gaps, buyer switching signals, emerging formats, relationship signals (buyer names/titles/companies, trade-show activity), and competitor intel on Martin Bauer, Rooibos Ltd, Carmien Tea. CNTP strengths: Cederberg appellation, Red Espresso, organic, caffeine-free, aspalathin antioxidant. Target channels: bubble tea, specialty coffee, wellness brands, private label/OEM, skincare ingredients, clinical. Content may be in any language — translate to English in the summary.\n\nTITLE: {{ $json.title }}\nCONTENT: {{ $json.clean_description }}\n\nRespond with ONLY a JSON object, no markdown: {\"summary\":\"2 sentences on the signal and the opportunity\",\"intelligence_type\":\"loophole|market_gap|switching_signal|emerging_trend|relationship_signal|competitor_intel|threat|neutral\",\"sales_angle\":\"one concrete action for CNTP\",\"relevance_score\":1-10 integer,\"urgency\":\"low|medium|high\",\"region\":\"ISO country code or GLOBAL\",\"target_segment\":\"retail|foodservice|private_label|bulk|skincare|clinical|unknown\",\"competitor_mentioned\":null or string,\"keyword_group\":\"core_product|competitor|wellness|trade|consumer_trend|general\"} Scoring: 10=act this week, 8-9=strong, 6-7=track, 1-5=low. Even low scores matter — we hunt loopholes, so classify accurately rather than defaulting to neutral."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        5568,
+        -416
+      ],
+      "id": "b1604338-4e54-4752-b9a1-4dcd404209c4",
+      "name": "Gemini Tier 1 (flash-lite)",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "7qriNgm5Sw027dLO",
+          "name": "CNTP Gemini"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Tier 1 (Gemini) — Run Once for EACH Item\n// Robust against the googleGemini node's varying output nesting.\nconst _extractJson = (raw) => {\n  if (raw == null) return null;\n  let s = raw.toString().trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();\n  const a = s.indexOf('{'), b = s.lastIndexOf('}');\n  if (a === -1 || b === -1 || b < a) return null;\n  const c = s.slice(a, b + 1);\n  try { return JSON.parse(c); }\n  catch (e) { try { return JSON.parse(c.replace(/,\\s*([}\\]])/g,'$1')); } catch (e2) { return null; } }\n};\n// Deep-scan the node output for the first string that looks like JSON.\nconst _findText = (o, d = 0) => {\n  if (o == null || d > 6) return null;\n  if (typeof o === 'string') return o.includes('{') ? o : null;\n  if (Array.isArray(o)) { for (const v of o) { const r = _findText(v, d+1); if (r) return r; } return null; }\n  if (typeof o === 'object') {\n    for (const k of ['text','output_text','content','response']) {\n      if (typeof o[k] === 'string' && o[k].includes('{')) return o[k];\n    }\n    for (const k in o) { const r = _findText(o[k], d+1); if (r) return r; }\n  }\n  return null;\n};\nconst g = $json;\nconst base = $('Dedup Check').item.json;          // original article (paired)\nconst text = _findText(g) || '';\nconst p = _extractJson(text) || {};\nreturn { json: {\n  title: base.title || '',\n  link: base.link || '',\n  description: base.description || '',\n  clean_description: base.clean_description || '',\n  source: base.source || {},\n  ollama_summary: p.summary || '',\n  ollama_intelligence_type: p.intelligence_type || 'neutral',\n  ollama_sales_angle: p.sales_angle || '',\n  ollama_relevance_score: Number(p.relevance_score) || 0,\n  ollama_urgency: p.urgency || 'low',\n  ollama_region: p.region || 'GLOBAL',\n  ollama_segment: p.target_segment || 'unknown',\n  ollama_competitor: p.competitor_mentioned || null,\n  ollama_keyword_group: p.keyword_group || 'general',\n  _raw: (text || JSON.stringify(g)).slice(0, 400),   // debug: what Gemini returned\n} };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5792,
+        -416
+      ],
+      "id": "7b6729ec-127a-428b-8e25-cab49d915f27",
+      "name": "Parse Tier 1 Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "score-check",
+              "leftValue": "={{ $json.ollama_relevance_score }}",
+              "rightValue": 7,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "type-loophole",
+              "leftValue": "={{ $json.ollama_intelligence_type }}",
+              "rightValue": "loophole",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "type-switching_signal",
+              "leftValue": "={{ $json.ollama_intelligence_type }}",
+              "rightValue": "switching_signal",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "type-competitor_intel",
+              "leftValue": "={{ $json.ollama_intelligence_type }}",
+              "rightValue": "competitor_intel",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "type-threat",
+              "leftValue": "={{ $json.ollama_intelligence_type }}",
+              "rightValue": "threat",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6000,
+        -624
+      ],
+      "id": "d3f55580-a253-4bf5-a2f8-f327c0be9b43",
+      "name": "Score Filter"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.0-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.0-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are a senior market intelligence analyst for Cape Natural Tea Products (CNTP), a South African rooibos tea exporter. A first-pass AI has identified this as a high-relevance signal (score: {{ $json.ollama_relevance_score }}/10).\n\nProvide deep strategic analysis.\n\nTitle: {{ $json.title }}\nInitial classification: {{ $json.ollama_intelligence_type }}\nInitial sales angle: {{ $json.ollama_sales_angle }}\nRegion: {{ $json.ollama_region }}\nContent: {{ $json.clean_description }}\n\nRespond ONLY with valid JSON, no markdown:\n{\n  \"summary_en\": \"2-3 sentences: what this means strategically for CNTP and what action it suggests\",\n  \"classification\": \"opportunity|threat|competitor|regulation|relationship|neutral\",\n  \"relevance_score\": 1,\n  \"region\": \"ISO country code or GLOBAL\",\n  \"language\": \"2-letter language code\",\n  \"keyword_group\": \"core_product|competitor|negative_signal|wellness|trade|creative|general\",\n  \"sales_angle\": \"Specific recommended action for the CNTP sales team\",\n  \"urgency\": \"low|medium|high\"\n}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        6224,
+        -496
+      ],
+      "id": "3da1791a-2ffe-4da6-ad74-fab9645e19e6",
+      "name": "Gemini Tier 2",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "executeOnce": false,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "7qriNgm5Sw027dLO",
+          "name": "CNTP Gemini"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Gemini Response (Tier 2) — Run Once for EACH Item\nconst _extractJson = (raw) => {\n  if (raw == null) return null;\n  let s = raw.toString().trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();\n  const a = s.indexOf('{'), b = s.lastIndexOf('}');\n  if (a === -1 || b === -1 || b < a) return null;\n  const c = s.slice(a, b + 1);\n  try { return JSON.parse(c); }\n  catch (e) { try { return JSON.parse(c.replace(/,\\s*([}\\]])/g,'$1')); } catch (e2) { return null; } }\n};\nconst _findText = (o, d = 0) => {\n  if (o == null || d > 6) return null;\n  if (typeof o === 'string') return o.includes('{') ? o : null;\n  if (Array.isArray(o)) { for (const v of o) { const r = _findText(v, d+1); if (r) return r; } return null; }\n  if (typeof o === 'object') {\n    for (const k of ['text','output_text','content','response']) {\n      if (typeof o[k] === 'string' && o[k].includes('{')) return o[k];\n    }\n    for (const k in o) { const r = _findText(o[k], d+1); if (r) return r; }\n  }\n  return null;\n};\nconst ALLOWED = ['opportunity','threat','competitor','regulation','relationship','neutral'];\nconst CLASS_MAP = { loophole:'opportunity', market_gap:'opportunity', switching_signal:'opportunity',\n  emerging_trend:'opportunity', relationship_signal:'relationship', competitor_intel:'competitor',\n  competitor:'competitor', threat:'threat', neutral:'neutral' };\nconst toClass = (t, fallback) => ALLOWED.includes(t) ? t : (CLASS_MAP[t] || CLASS_MAP[fallback] || 'neutral');\nconst g = $json;\nconst base = $('Score Filter').item.json;\nconst p = _extractJson(_findText(g) || '') || {};\nreturn { json: {\n  title: base.title || '',\n  source_domain: base.source?.url ?? '',\n  source_url: base.link || '',\n  source_type: 'news',\n  raw_content: (base.description || '').slice(0, 2000),\n  language: p.language || 'en',\n  region: p.region || base.ollama_region || 'GLOBAL',\n  classification: toClass(p.classification, base.ollama_intelligence_type),\n  relevance_score: Number(p.relevance_score ?? base.ollama_relevance_score) || 0,\n  summary_en: p.summary_en || base.ollama_summary || '',\n  keyword_group: p.keyword_group || base.ollama_keyword_group || 'general',\n  sales_angle: p.sales_angle || base.ollama_sales_angle || '',\n  urgency: p.urgency || base.ollama_urgency || 'low',\n  tier: 2,\n  sections: [],\n  intel: { ...p, intelligence_type: base.ollama_intelligence_type || p.classification || 'neutral' },\n} };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6576,
+        -496
+      ],
+      "id": "4238df1a-c24a-4745-b6cf-66419ec9bf14",
+      "name": "Parse Gemini Response"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Format Tier 1 Result — Run Once for EACH Item\nconst j = $json;\nconst ALLOWED = ['opportunity','threat','competitor','regulation','relationship','neutral'];\nconst CLASS_MAP = { loophole:'opportunity', market_gap:'opportunity', switching_signal:'opportunity',\n  emerging_trend:'opportunity', relationship_signal:'relationship', competitor_intel:'competitor',\n  competitor:'competitor', threat:'threat', neutral:'neutral' };\nconst toClass = (t, fallback) => ALLOWED.includes(t) ? t : (CLASS_MAP[t] || CLASS_MAP[fallback] || 'neutral');\nreturn { json: {\n  title: j.title || '',\n  source_domain: j.source?.url ?? '',\n  source_url: j.link || '',\n  source_type: 'news',\n  raw_content: (j.description || '').slice(0, 2000),\n  language: 'en',\n  region: j.ollama_region || 'GLOBAL',\n  classification: toClass(j.ollama_intelligence_type),\n  relevance_score: j.ollama_relevance_score || 0,\n  summary_en: j.ollama_summary || '',\n  keyword_group: j.ollama_keyword_group || 'general',\n  sales_angle: j.ollama_sales_angle || '',\n  urgency: j.ollama_urgency || 'low',\n  tier: 1,\n  sections: [],\n  intel: { intelligence_type: j.ollama_intelligence_type || 'neutral',\n           target_segment: j.ollama_segment || 'unknown',\n           competitor_mentioned: j.ollama_competitor || null },\n} };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6224,
+        -336
+      ],
+      "id": "eb84cf00-bd44-4e5b-ad95-a369bedc28ac",
+      "name": "Format Tier 1 Result"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "sales",
+        "tableId": "signals",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "source_type",
+              "fieldValue": "={{ $json.source_type }}"
+            },
+            {
+              "fieldId": "source_url",
+              "fieldValue": "={{ $json.source_url }}"
+            },
+            {
+              "fieldId": "source_domain",
+              "fieldValue": "={{ $json.source_domain }}"
+            },
+            {
+              "fieldId": "language",
+              "fieldValue": "={{ $json.language }}"
+            },
+            {
+              "fieldId": "region",
+              "fieldValue": "={{ $json.region }}"
+            },
+            {
+              "fieldId": "classification",
+              "fieldValue": "={{ $json.classification }}"
+            },
+            {
+              "fieldId": "relevance_score",
+              "fieldValue": "={{ $json.relevance_score }}"
+            },
+            {
+              "fieldId": "summary_en",
+              "fieldValue": "={{ $json.summary_en }}"
+            },
+            {
+              "fieldId": "keyword_group",
+              "fieldValue": "={{ $json.keyword_group }}"
+            },
+            {
+              "fieldId": "raw_content",
+              "fieldValue": "={{ $json.raw_content }}"
+            },
+            {
+              "fieldId": "sections",
+              "fieldValue": "={{ $json.sections }}"
+            },
+            {
+              "fieldId": "intel",
+              "fieldValue": "={{ $json.intel }}"
+            },
+            {
+              "fieldId": "sales_angle",
+              "fieldValue": "={{ $json.sales_angle }}"
+            },
+            {
+              "fieldId": "urgency",
+              "fieldValue": "={{ $json.urgency }}"
+            },
+            {
+              "fieldId": "tier",
+              "fieldValue": "={{ $json.tier }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        6800,
+        -496
+      ],
+      "id": "1f092a17-96e4-4384-a61c-749a62452216",
+      "name": "Save Tier 2 to Supabase",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "39SXEBXpJFrIJagq",
+          "name": "CNTP Supabase"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "sales",
+        "tableId": "signals",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "source_type",
+              "fieldValue": "={{ $json.source_type }}"
+            },
+            {
+              "fieldId": "source_url",
+              "fieldValue": "={{ $json.source_url }}"
+            },
+            {
+              "fieldId": "source_domain",
+              "fieldValue": "={{ $json.source_domain }}"
+            },
+            {
+              "fieldId": "language",
+              "fieldValue": "={{ $json.language }}"
+            },
+            {
+              "fieldId": "region",
+              "fieldValue": "={{ $json.region }}"
+            },
+            {
+              "fieldId": "classification",
+              "fieldValue": "={{ $json.classification }}"
+            },
+            {
+              "fieldId": "relevance_score",
+              "fieldValue": "={{ $json.relevance_score }}"
+            },
+            {
+              "fieldId": "summary_en",
+              "fieldValue": "={{ $json.summary_en }}"
+            },
+            {
+              "fieldId": "keyword_group",
+              "fieldValue": "={{ $json.keyword_group }}"
+            },
+            {
+              "fieldId": "raw_content",
+              "fieldValue": "={{ $json.raw_content }}"
+            },
+            {
+              "fieldId": "sections",
+              "fieldValue": "={{ $json.sections }}"
+            },
+            {
+              "fieldId": "intel",
+              "fieldValue": "={{ $json.intel }}"
+            },
+            {
+              "fieldId": "sales_angle",
+              "fieldValue": "={{ $json.sales_angle }}"
+            },
+            {
+              "fieldId": "urgency",
+              "fieldValue": "={{ $json.urgency }}"
+            },
+            {
+              "fieldId": "tier",
+              "fieldValue": "={{ $json.tier }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        6448,
+        -336
+      ],
+      "id": "8861367f-8eee-431c-bf24-63f17c8c419b",
+      "name": "Save Tier 1 to Supabase",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "39SXEBXpJFrIJagq",
+          "name": "CNTP Supabase"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 3
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        3344,
+        -416
+      ],
+      "id": "6feb8c42-4040-4195-8b15-8ab2e094c6f8",
+      "name": "Schedule Trigger1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -416
+      ],
+      "id": "aa457f55-1eb5-439b-a66b-6438d97994a6",
+      "name": "XML16"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tea&hl=en-ZA&gl=ZA&ceid=ZA:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -416
+      ],
+      "id": "eb9760ac-9a82-40f0-aa46-8dcb8c525f02",
+      "name": "News ZA English1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tea&hl=en-GB&gl=GB&ceid=GB:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -240
+      ],
+      "id": "ad9c476a-4bda-42e9-a08e-7385e965571d",
+      "name": "News UK English1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tea&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -80
+      ],
+      "id": "01a8ecf1-115c-412c-afa1-3d1101323a6a",
+      "name": "News USA English1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tee&hl=de&gl=DE&ceid=DE:de",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        96
+      ],
+      "id": "a70dbb84-2abe-4708-aef8-d45aa7e1e5aa",
+      "name": "News Germany1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=ルイボスティー&hl=ja&gl=JP&ceid=JP:ja",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        272
+      ],
+      "id": "17f3893b-399c-46d0-b300-5eae6d444374",
+      "name": "News Japan1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=루이보스+차&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -576
+      ],
+      "id": "ade39a2d-9f4d-4a97-bcd0-32364abb1d5c",
+      "name": "News Korea1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+thee&hl=nl&gl=NL&ceid=NL:nl",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -736
+      ],
+      "id": "f42bf291-f691-4921-ac42-f3149a382802",
+      "name": "News Netherlands1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=路易波士茶&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -896
+      ],
+      "id": "7bee7288-6121-48a0-8a6f-220240c5c178",
+      "name": "News China1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tea&hl=en-AU&gl=AU&ceid=AU:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -1056
+      ],
+      "id": "b930844b-292c-44f0-afee-20946ed64f1b",
+      "name": "News Australia1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+tea+OR+herbal+tea+export&hl=en-IN&gl=IN&ceid=IN:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        464
+      ],
+      "id": "4cba89f1-7e74-43f2-a835-d84bc8d4c7d2",
+      "name": "News India1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=chá+rooibos&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        640
+      ],
+      "id": "71647cc6-2b7c-47b6-81bd-22bb11566480",
+      "name": "News Brazil1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=red+espresso+OR+rooibos+latte+OR+rooibos+cappuccino&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -1216
+      ],
+      "id": "986af4c3-25b3-485f-8a5f-7ef47b6dea1c",
+      "name": "Red Espresso Global1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=bubble+tea+ingredient+supplier+OR+herbal+tea+OEM&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        832
+      ],
+      "id": "1f05d7df-f52f-443e-b4ed-c8c3176e4006",
+      "name": "Bubble Tea Ingredients1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rooibos+shortage+OR+rooibos+recall+OR+Martin+Bauer+rooibos+OR+Carmien+tea&hl=en-ZA&gl=ZA&ceid=ZA:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        1040
+      ],
+      "id": "0abe7008-1225-42e8-942d-33d49c3105bd",
+      "name": "Competitor Signals1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=herbal+tea+recall+OR+tea+contamination+OR+rooibos+price+drop&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        -1376
+      ],
+      "id": "2f7c54ea-756e-454b-81a2-7c5af274a3ac",
+      "name": "Negative Signals1"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=caffeine+free+espresso+OR+functional+tea+latte+OR+adaptogen+tea&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3584,
+        1232
+      ],
+      "id": "8b71fb7a-73e2-4653-ad27-82ec3738921f",
+      "name": "Wellness Trends1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -1376
+      ],
+      "id": "eb42d82a-bf80-493d-8f90-79aebda63392",
+      "name": "XML17"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -1216
+      ],
+      "id": "2ed12483-56d4-47f3-b68e-1d88b401cd97",
+      "name": "XML18"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -1056
+      ],
+      "id": "9030b2e9-2485-4237-b2eb-de100836841d",
+      "name": "XML19"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -896
+      ],
+      "id": "d2e70ba8-a813-4701-8f0d-359d3fc31814",
+      "name": "XML20"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -736
+      ],
+      "id": "9aaa2113-e90e-4d24-b2bb-e7fb80af9fe7",
+      "name": "XML21"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -576
+      ],
+      "id": "bcdc6cd9-173c-45a6-8e3c-30e574ca8cfb",
+      "name": "XML22"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -240
+      ],
+      "id": "4d5b5fc8-c610-4ac7-9193-3ea1f8d340a4",
+      "name": "XML23"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        -80
+      ],
+      "id": "a3d508a6-38d9-409a-84bc-5be45ed5a414",
+      "name": "XML24"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        96
+      ],
+      "id": "67b7f959-a96a-42ad-90c3-98ace4449a2a",
+      "name": "XML25"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        272
+      ],
+      "id": "fd8bb83f-00d8-4d8a-916d-755e798f1275",
+      "name": "XML26"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        464
+      ],
+      "id": "660670e5-517f-4460-bc59-3955b4077ae7",
+      "name": "XML27"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        640
+      ],
+      "id": "fee2eb3e-4b65-4836-abe8-d9ecfb9e22c8",
+      "name": "XML28"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        832
+      ],
+      "id": "a1dc62f6-9e0b-4a63-a53a-944ea6505189",
+      "name": "XML29"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        1040
+      ],
+      "id": "195503e2-0401-4389-b866-002697c91dcc",
+      "name": "XML30"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        3792,
+        1232
+      ],
+      "id": "edf65acc-42dd-4d1e-8d63-e20fdddfffcf",
+      "name": "XML31"
+    },
+    {
+      "parameters": {
+        "numberInputs": 10
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4128,
+        -896
+      ],
+      "id": "01e7f2ce-e79a-4241-9695-d39aac33b62b",
+      "name": "Merge Batch "
+    },
+    {
+      "parameters": {
+        "numberInputs": 6
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4128,
+        160
+      ],
+      "id": "478746a6-fb4f-4522-84e1-a13e79545c4e",
+      "name": "Merge Batch 3"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4592,
+        -416
+      ],
+      "id": "840e03e5-e9f1-4e23-a751-b1c1d36952a4",
+      "name": "Final Merge1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "rss.channel.item",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        4800,
+        -416
+      ],
+      "id": "c0bcdc83-30b4-4c21-82a0-65067efab19d",
+      "name": "Split Out1"
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4976,
+        -416
+      ],
+      "id": "e6c6c161-c2b4-4d4b-b246-b1260e4d5502",
+      "name": "Wait1",
+      "webhookId": "31efd4f7-1d32-40c0-bd59-9c0e62afe4c0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\n\nfor (const item of $input.all()) {\n  const cleanDesc = (item.json.description || '')\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 400);\n\n  items.push({\n    json: {\n      ...item.json,\n      clean_description: cleanDesc\n    }\n  });\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5152,
+        -416
+      ],
+      "id": "85d2ec98-f03b-4aa4-bfb6-fa064a9bcb06",
+      "name": "Pre-Processing1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dedup Check — Run Once for All Items\n// Input = existing rows from \"Get Existing Titles\"; articles pulled from Pre-Processing1.\nconst norm = (t) => (t || '').toString().slice(0, 100).trim().toLowerCase();\n\nconst existing = new Set();\nfor (const r of $input.all()) {\n  const k = norm(r.json.title);\n  if (k) existing.add(k);\n}\n\nconst seen = new Set();\nconst out = [];\nfor (const item of $('Pre-Processing1').all()) {\n  const key = norm(item.json.title);\n  if (!key) continue;                  // no title\n  if (existing.has(key)) continue;     // already stored\n  if (seen.has(key)) continue;         // duplicate within this run\n  seen.add(key);\n  out.push({ json: item.json });\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5456,
+        -416
+      ],
+      "id": "4b1fd0f6-567f-46ea-97cb-be8a093acabd",
+      "name": "Dedup Check"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "sales",
+        "operation": "getAll",
+        "tableId": "signals",
+        "limit": 5000
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        5296,
+        -576
+      ],
+      "id": "8b5c5005-c913-40bb-807b-7f964709db4a",
+      "name": "Get Existing Titles",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "39SXEBXpJFrIJagq",
+          "name": "CNTP Supabase"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "maxItems": 25
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        5512,
+        -300
+      ],
+      "id": "a1b2c3d4-limit-test-0000-000000000001",
+      "name": "Throttle (max new/run)",
+      "disabled": false,
+      "notes": "Caps NEW items sent to Ollama per run so the remote PC can't be overwhelmed. Tune upward (25 -> 50 -> 100) over a few nights to find the PC's safe ceiling. The Dedup step already shrinks steady-state runs; this only bites while clearing a backlog.",
+      "notesInFlow": true
+    }
+  ],
+  "pinData": {
+    "Schedule Trigger1": [
+      {
+        "json": {
+          "timestamp": "2026-06-22T08:05:26.995-04:00",
+          "Readable date": "June 22nd 2026, 8:05:26 am",
+          "Readable time": "8:05:26 am",
+          "Day of week": "Monday",
+          "Year": "2026",
+          "Month": "June",
+          "Day of month": "22",
+          "Hour": "08",
+          "Minute": "05",
+          "Second": "26",
+          "Timezone": "America/New_York (UTC-04:00)"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Schedule Trigger1": {
+      "main": [
+        [
+          {
+            "node": "News ZA English1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News UK English1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News USA English1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News Germany1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News Japan1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News Korea1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News Netherlands1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News China1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News Australia1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News India1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News Brazil1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Red Espresso Global1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Bubble Tea Ingredients1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Competitor Signals1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Negative Signals1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wellness Trends1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News ZA English1": {
+      "main": [
+        [
+          {
+            "node": "XML16",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News UK English1": {
+      "main": [
+        [
+          {
+            "node": "XML23",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News USA English1": {
+      "main": [
+        [
+          {
+            "node": "XML24",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Germany1": {
+      "main": [
+        [
+          {
+            "node": "XML25",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Japan1": {
+      "main": [
+        [
+          {
+            "node": "XML26",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Korea1": {
+      "main": [
+        [
+          {
+            "node": "XML22",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Netherlands1": {
+      "main": [
+        [
+          {
+            "node": "XML21",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News China1": {
+      "main": [
+        [
+          {
+            "node": "XML20",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Australia1": {
+      "main": [
+        [
+          {
+            "node": "XML19",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News India1": {
+      "main": [
+        [
+          {
+            "node": "XML27",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Brazil1": {
+      "main": [
+        [
+          {
+            "node": "XML28",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Red Espresso Global1": {
+      "main": [
+        [
+          {
+            "node": "XML18",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bubble Tea Ingredients1": {
+      "main": [
+        [
+          {
+            "node": "XML29",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Competitor Signals1": {
+      "main": [
+        [
+          {
+            "node": "XML30",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Negative Signals1": {
+      "main": [
+        [
+          {
+            "node": "XML17",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wellness Trends1": {
+      "main": [
+        [
+          {
+            "node": "XML31",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML16": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML23": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "XML24": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "XML25": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "XML26": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "XML22": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "XML21": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "XML20": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 7
+          }
+        ]
+      ]
+    },
+    "XML19": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 8
+          }
+        ]
+      ]
+    },
+    "XML27": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch ",
+            "type": "main",
+            "index": 9
+          }
+        ]
+      ]
+    },
+    "XML28": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XML18": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch 3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "XML29": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch 3",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "XML30": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch 3",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "XML17": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch 3",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "XML31": {
+      "main": [
+        [
+          {
+            "node": "Merge Batch 3",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Merge Batch ": {
+      "main": [
+        [
+          {
+            "node": "Final Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Batch 3": {
+      "main": [
+        [
+          {
+            "node": "Final Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Final Merge1": {
+      "main": [
+        [
+          {
+            "node": "Split Out1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out1": {
+      "main": [
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "Pre-Processing1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-Processing1": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Titles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Titles": {
+      "main": [
+        [
+          {
+            "node": "Dedup Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Check": {
+      "main": [
+        [
+          {
+            "node": "Throttle (max new/run)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Filter": {
+      "main": [
+        [
+          {
+            "node": "Gemini Tier 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Tier 1 Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Tier 2": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Response": {
+      "main": [
+        [
+          {
+            "node": "Save Tier 2 to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Tier 1 Result": {
+      "main": [
+        [
+          {
+            "node": "Save Tier 1 to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Throttle (max new/run)": {
+      "main": [
+        [
+          {
+            "node": "Gemini Tier 1 (flash-lite)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Tier 1 (flash-lite)": {
+      "main": [
+        [
+          {
+            "node": "Parse Tier 1 Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Tier 1 Response": {
+      "main": [
+        [
+          {
+            "node": "Score Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timezone": "Africa/Johannesburg"
+  },
+  "versionId": "e9e9600e-b69b-4cb6-8012-1f2fd2e7cde8",
+  "meta": {
+    "instanceId": "c623da59c905739cf6dee231535d386a7debf132adcbfde5693ef8ee3679d193"
+  },
+  "id": "r8vOh2TcGNyEQgSc",
+  "tags": []
+}
