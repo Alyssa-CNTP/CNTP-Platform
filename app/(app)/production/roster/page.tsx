@@ -47,6 +47,7 @@ export default function RosterPage() {
   const [periods, setPeriods] = useState<Period[]>([])
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
+  const [leaveEmpIds, setLeaveEmpIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [dbReady, setDbReady] = useState(true)
   const [showNew,  setShowNew] = useState(false)
@@ -103,6 +104,17 @@ export default function RosterPage() {
       .eq('period_id', periodId).order('sort_order')
       .then(({ data }: any) => setEntries((data as Entry[]) ?? []))
   }, [periodId])
+
+  // Who's on leave during the selected period — flagged in the picker so you can
+  // roster a stand-in. Overlap: leave.start ≤ period.end AND leave.end ≥ period.start.
+  useEffect(() => {
+    const p = periods.find(x => x.id === periodId)
+    if (!p) { setLeaveEmpIds(new Set()); return }
+    db().from('employee_leave').select('employee_id')
+      .lte('start_date', p.end_date).gte('end_date', p.start_date)
+      .then(({ data }: any) => setLeaveEmpIds(new Set(((data as any[]) ?? []).map(r => r.employee_id).filter(Boolean))),
+            () => setLeaveEmpIds(new Set()))
+  }, [periodId, periods])
 
   const rolesByCategory = useMemo(() => {
     const map = new Map<string, RosterRole[]>()
@@ -218,11 +230,12 @@ export default function RosterPage() {
         <EmptyState canCreate={dbReady} onCreate={() => setShowNew(true)} />
       ) : (
         <>
-          <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} />
+          <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} leaveEmpIds={leaveEmpIds} />
           <RosterGrid
             period={period}
             rolesByCategory={rolesByCategory}
             employees={employees}
+            leaveEmpIds={leaveEmpIds}
             cellEntries={cellEntries}
             editing={editing} setEditing={setEditing}
             onAdd={addEntry} onUpdate={updateEntry} onDelete={deleteEntry}
@@ -249,8 +262,8 @@ export default function RosterPage() {
 }
 
 // ── "Who's on when": today's on-duty roster, grouped by department ────────────
-function OnDutyCard({ period, entries, roleCategory }: {
-  period: Period; entries: Entry[]; roleCategory: Map<string, string>
+function OnDutyCard({ period, entries, roleCategory, leaveEmpIds }: {
+  period: Period; entries: Entry[]; roleCategory: Map<string, string>; leaveEmpIds: Set<string>
 }) {
   const { date, shift: currentShift } = sastNow()
   const coversToday = period.start_date <= date && date <= period.end_date
@@ -310,14 +323,18 @@ function OnDutyCard({ period, entries, roleCategory }: {
                 <span className="text-[10px] text-stone-400">{people.length}</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {people.map(e => (
-                  <span key={e.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-stone-200 text-[11px] text-text">
-                    {e.person_name}
-                    {e.tags.map(code => (
-                      <span key={code} title={tagLabel(code)} className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand">{code}</span>
-                    ))}
-                  </span>
-                ))}
+                {people.map(e => {
+                  const away = !!e.employee_id && leaveEmpIds.has(e.employee_id)
+                  return (
+                    <span key={e.id} title={away ? 'On leave this period' : undefined}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] ${away ? 'bg-amber-50 border-amber-200 text-amber-700 line-through' : 'bg-white border-stone-200 text-text'}`}>
+                      {e.person_name}
+                      {e.tags.map(code => (
+                        <span key={code} title={tagLabel(code)} className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand">{code}</span>
+                      ))}
+                    </span>
+                  )
+                })}
               </div>
             </div>
           ))}
@@ -329,11 +346,12 @@ function OnDutyCard({ period, entries, roleCategory }: {
 
 // ── The grid: categories → role rows × Day/Night columns ──────────────────────
 function RosterGrid({
-  period, rolesByCategory, employees, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete,
+  period, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete,
 }: {
   period: Period
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
   employees: Employee[]
+  leaveEmpIds: Set<string>
   cellEntries: (roleKey: string, shift: RosterShift) => Entry[]
   editing: string | null
   setEditing: (v: string | null) => void
@@ -361,7 +379,7 @@ function RosterGrid({
         </thead>
         <tbody>
           {rolesByCategory.map(({ cat, items }) => (
-            <CategoryGroup key={cat.key} cat={cat} items={items} employees={employees}
+            <CategoryGroup key={cat.key} cat={cat} items={items} employees={employees} leaveEmpIds={leaveEmpIds}
               cellEntries={cellEntries} editing={editing} setEditing={setEditing}
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete} />
           ))}
@@ -371,7 +389,7 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, employees, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete }: any) {
+function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete }: any) {
   return (
     <>
       <tr>
@@ -387,7 +405,7 @@ function CategoryGroup({ cat, items, employees, cellEntries, editing, setEditing
             <span className="font-body font-medium text-[13px] text-text leading-tight">{role.name}</span>
           </td>
           {ROSTER_SHIFTS.map((s: { key: RosterShift }) => (
-            <RosterCell key={s.key} roleKey={role.key} shift={s.key} employees={employees}
+            <RosterCell key={s.key} roleKey={role.key} shift={s.key} employees={employees} leaveEmpIds={leaveEmpIds}
               entries={cellEntries(role.key, s.key)}
               editing={editing} setEditing={setEditing}
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete} />
@@ -398,8 +416,8 @@ function CategoryGroup({ cat, items, employees, cellEntries, editing, setEditing
   )
 }
 
-function RosterCell({ roleKey, shift, employees, entries, editing, setEditing, onAdd, onUpdate, onDelete }: {
-  roleKey: string; shift: RosterShift; employees: Employee[]; entries: Entry[]
+function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete }: {
+  roleKey: string; shift: RosterShift; employees: Employee[]; leaveEmpIds: Set<string>; entries: Entry[]
   editing: string | null; setEditing: (v: string | null) => void
   onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
   onUpdate: (id: string, employeeId: string | null, name: string, tags: string[]) => void
@@ -412,16 +430,16 @@ function RosterCell({ roleKey, shift, employees, entries, editing, setEditing, o
     <td className="px-3 py-2 align-top">
       <div className="flex flex-col gap-1.5">
         {entries.map(e => editing === e.id ? (
-          <PersonEditor key={e.id} employees={employees} excludeIds={takenIds.filter(id => id !== e.employee_id)}
+          <PersonEditor key={e.id} employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds.filter(id => id !== e.employee_id)}
             initialEmployeeId={e.employee_id} initialName={e.person_name} initialTags={e.tags}
             onSave={(empId, n, t) => onUpdate(e.id, empId, n, t)} onCancel={() => setEditing(null)}
             onDelete={() => onDelete(e.id)} />
         ) : (
-          <PersonChip key={e.id} entry={e} onEdit={() => setEditing(e.id)} />
+          <PersonChip key={e.id} entry={e} away={!!e.employee_id && leaveEmpIds.has(e.employee_id)} onEdit={() => setEditing(e.id)} />
         ))}
 
         {editing === addKey ? (
-          <PersonEditor employees={employees} excludeIds={takenIds}
+          <PersonEditor employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds}
             onSave={(empId, n, t) => onAdd(roleKey, shift, empId, n, t)} onCancel={() => setEditing(null)} />
         ) : (
           <button onClick={() => setEditing(addKey)}
@@ -434,11 +452,12 @@ function RosterCell({ roleKey, shift, employees, entries, editing, setEditing, o
   )
 }
 
-function PersonChip({ entry, onEdit }: { entry: Entry; onEdit: () => void }) {
+function PersonChip({ entry, away, onEdit }: { entry: Entry; away?: boolean; onEdit: () => void }) {
   return (
-    <button onClick={onEdit}
-      className="group inline-flex items-center gap-1.5 self-start max-w-full px-2.5 py-1.5 rounded-lg bg-stone-50 border border-stone-200 hover:border-brand/40 hover:bg-white transition-colors text-left">
-      <span className="text-[12px] font-medium text-text truncate">{entry.person_name}</span>
+    <button onClick={onEdit} title={away ? 'On leave this period — consider a stand-in' : undefined}
+      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-2.5 py-1.5 rounded-lg border transition-colors text-left ${away ? 'bg-amber-50 border-amber-200 hover:border-amber-300' : 'bg-stone-50 border-stone-200 hover:border-brand/40 hover:bg-white'}`}>
+      {away && <span title="On leave" className="text-amber-600 shrink-0">✈</span>}
+      <span className={`text-[12px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
       {entry.tags.map(code => (
         <span key={code} title={tagLabel(code)}
           className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
@@ -448,8 +467,8 @@ function PersonChip({ entry, onEdit }: { entry: Entry; onEdit: () => void }) {
   )
 }
 
-function PersonEditor({ employees, excludeIds = [], initialEmployeeId = null, initialName = '', initialTags = [], onSave, onCancel, onDelete }: {
-  employees: Employee[]; excludeIds?: string[]
+function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployeeId = null, initialName = '', initialTags = [], onSave, onCancel, onDelete }: {
+  employees: Employee[]; leaveEmpIds?: Set<string>; excludeIds?: string[]
   initialEmployeeId?: string | null; initialName?: string; initialTags?: string[]
   onSave: (employeeId: string | null, name: string, tags: string[]) => void; onCancel: () => void; onDelete?: () => void
 }) {
@@ -500,6 +519,7 @@ function PersonEditor({ employees, excludeIds = [], initialEmployeeId = null, in
                   className="w-full flex items-center gap-2 px-2.5 py-2 text-left text-[12px] text-text hover:bg-brand/5">
                   <Plus size={12} className="text-stone-400 shrink-0" />
                   <span className="flex-1 truncate">{empLabel(e)}</span>
+                  {leaveEmpIds?.has(e.id) && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full bg-amber-100 text-amber-700">leave</span>}
                   <span className="text-[10px] text-text-muted capitalize">{e.department}</span>
                 </button>
               ))}
