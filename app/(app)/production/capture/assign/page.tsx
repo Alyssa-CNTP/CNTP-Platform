@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { format } from 'date-fns'
 import {
-  ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar,
+  ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar, Sparkles,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -25,6 +25,18 @@ interface SectionDraft {
 }
 
 const emptyDraft = (): SectionDraft => ({ operatorIds: [], lotNumber: '', variant: '', prodOrders: [] })
+
+// Capture's 3 shifts collapse onto the roster's 2 (day 07–16 / night 16–01).
+const ROSTER_SHIFT: Record<Shift, 'day' | 'night'> = { morning: 'day', afternoon: 'day', night: 'night' }
+// Which roster role(s) feed each capture section, for autofill.
+const SECTION_ROLES: Record<string, string[]> = {
+  sieving:     ['sieving_tower'],
+  refining1:   ['refining_1'],
+  refining2:   ['refining_2'],
+  granule:     ['granule_operator', 'granule'],
+  blender:     ['blender'],
+  pasteuriser: ['pasteuriser_op'],
+}
 
 function AssignScreen() {
   const router = useRouter()
@@ -49,6 +61,8 @@ function AssignScreen() {
   const [savedSection, setSavedSection]   = useState<string | null>(null)
   const [error, setError]         = useState<string | null>(null)
   const [onLeaveOps, setOnLeaveOps] = useState<Set<string>>(new Set())
+  const [filling, setFilling]     = useState(false)
+  const [fillNote, setFillNote]   = useState<string | null>(null)
 
   // Load operators once
   useEffect(() => {
@@ -116,6 +130,67 @@ function AssignScreen() {
     setDrafts(d => ({ ...d, [sectionId]: { ...(d[sectionId] ?? emptyDraft()), [key]: value } }))
   }
 
+  // ── Autofill from the Shift Roster ──────────────────────────────────────────
+  // Each capture section is fed by one or more roster roles; capture's three
+  // shifts collapse onto the roster's two (day 07–16 covers morning+afternoon,
+  // night 16–01). We pull the people rostered to those roles for the date and
+  // resolve them to a Capture operator login (directly, or via their employee
+  // record). People with no operator login can't sign on a tablet, so they're
+  // skipped and counted.
+  async function fillFromRoster() {
+    setFilling(true); setFillNote(null); setError(null)
+    try {
+      const pdb = getDb().schema('production')
+      const { data: ps } = await pdb.from('roster_periods')
+        .select('id,name').lte('start_date', date).gte('end_date', date)
+        .order('start_date', { ascending: false }).limit(1)
+      const period = ((ps as any[]) ?? [])[0]
+      if (!period) {
+        setFillNote('No roster period covers this date yet — set up the Shift Roster first.')
+        setFilling(false); return
+      }
+      const rShift = ROSTER_SHIFT[shift]
+      const { data: rows } = await pdb.from('roster_entries')
+        .select('role_key,operator_id,employee_id,person_name')
+        .eq('period_id', period.id).eq('shift', rShift)
+      const entries = (rows as any[]) ?? []
+
+      // Resolve operator ids for entries that only carry an employee link.
+      const empIds = [...new Set(entries.filter(e => !e.operator_id && e.employee_id).map(e => e.employee_id))]
+      const empOp = new Map<string, string | null>()
+      if (empIds.length) {
+        const { data: emps } = await pdb.from('employees').select('id,operator_id').in('id', empIds)
+        ;(emps as any[] ?? []).forEach(e => empOp.set(e.id, e.operator_id))
+      }
+      const opFor = (e: any): string | null => e.operator_id ?? (e.employee_id ? (empOp.get(e.employee_id) ?? null) : null)
+
+      let filled = 0, skipped = 0
+      setDrafts(prev => {
+        const next = { ...prev }
+        SECTION_ORDER.forEach(sectionId => {
+          const roleKeys = SECTION_ROLES[sectionId] ?? []
+          const ids: string[] = []
+          entries.filter(e => roleKeys.includes(e.role_key)).forEach(e => {
+            const opId = opFor(e)
+            if (opId) { if (!ids.includes(opId)) ids.push(opId) }
+            else skipped++
+          })
+          if (ids.length) {
+            next[sectionId] = { ...(next[sectionId] ?? emptyDraft()), operatorIds: ids }
+            filled += ids.length
+          }
+        })
+        return next
+      })
+      setFillNote(`Filled ${filled} operator${filled === 1 ? '' : 's'} from the “${period.name}” roster (${rShift} shift).` +
+        (skipped ? ` ${skipped} rostered ${skipped === 1 ? 'person has' : 'people have'} no tablet login yet, so ${skipped === 1 ? 'was' : 'were'} skipped.` : '') +
+        ' Review each section and Save.')
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setFilling(false)
+  }
+
   async function saveSection(sectionId: string) {
     const draft = drafts[sectionId] ?? emptyDraft()
     setError(null)
@@ -178,7 +253,22 @@ function AssignScreen() {
             </button>
           ))}
         </div>
+        <button
+          onClick={fillFromRoster} disabled={filling}
+          title="Pre-fill every section with the people rostered for this date & shift"
+          className="ml-auto flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand/10 text-brand border border-brand/20 text-[13px] font-medium hover:bg-brand/15 disabled:opacity-50 transition-colors"
+        >
+          {filling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          Fill from roster
+        </button>
       </div>
+
+      {fillNote && (
+        <div className="flex items-start gap-2.5 px-4 py-3 bg-brand/5 border border-brand/20 rounded-xl text-[12px] text-brand-mid">
+          <Sparkles size={14} className="shrink-0 mt-0.5" />
+          <span>{fillNote}</span>
+        </div>
+      )}
 
       {error && <p className="text-[12px] text-err px-1">{error}</p>}
 
@@ -194,7 +284,8 @@ function AssignScreen() {
             const saved  = savedSection === sectionId
 
             return (
-              <div key={sectionId} className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
+              <div key={sectionId} className="bg-white border border-stone-200 rounded-2xl overflow-hidden"
+                style={{ borderLeft: `4px solid ${meta.colorHex}` }}>
                 <div className="flex items-center gap-3 px-4 py-3 border-b border-stone-100">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: meta.colorHex }}>
                     <span className="font-mono font-bold text-[10px] text-white">{meta.code}</span>

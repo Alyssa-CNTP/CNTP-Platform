@@ -393,15 +393,17 @@ function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editin
   return (
     <>
       <tr>
-        <td colSpan={3} className="px-4 py-1.5 bg-surface-dim border-y border-surface-rule sticky left-0 z-10">
-          <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide" style={{ color: cat.colorHex }}>
+        <td colSpan={3} className="px-4 py-1.5 border-y border-surface-rule sticky left-0 z-10"
+          style={{ background: cat.colorHex + '14', borderLeft: `3px solid ${cat.colorHex}` }}>
+          <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide font-semibold" style={{ color: cat.colorHex }}>
             <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex }} /> {cat.label}
           </span>
         </td>
       </tr>
       {items.map((role: RosterRole) => (
         <tr key={role.key} className="border-b border-surface-rule last:border-0 align-top">
-          <td className="px-4 py-2.5 sticky left-0 bg-surface-card z-10 border-r border-surface-rule">
+          <td className="px-4 py-2.5 sticky left-0 bg-surface-card z-10 border-r border-surface-rule"
+            style={{ borderLeft: `3px solid ${cat.colorHex}` }}>
             <span className="font-body font-medium text-[13px] text-text leading-tight">{role.name}</span>
           </td>
           {ROSTER_SHIFTS.map((s: { key: RosterShift }) => (
