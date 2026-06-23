@@ -5,6 +5,63 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Auth reconcile: align prod users & roles to the staging model)
+
+**Files changed:**
+- `.github/workflows/db-reconcile.yml` — two new reconcile phases + a read-only auth preview
+- `supabase/reconcile/auth_prune_cntp_local.sql` (new) — FK-checked prune of `@cntp.local` placeholders
+- `supabase/reconcile/AUTH_RECONCILE_RUNBOOK.md` (new) — run sequence + rollback
+- `supabase/reconcile/CONFIRMED` — set to `auth-add-staff`
+
+**Changes:**
+- Production auth had only 3 real staff (Alyssa/Gustav/Jan) plus 8 placeholder `@cntp.local` operator/supervisor accounts; staging is the model we want — real staff on Azure work-account SSO (`@rooibostea.co.za`) each with a `shared.app_roles` role, plus `@floor` PIN operators.
+- **`auth-add-staff`** (new `MODE=authstaff`): additively copies real-staff `auth.users` + their `auth.identities` (so Azure SSO matches the same account) + their `shared.app_roles` rows from staging → prod, `ON CONFLICT DO NOTHING`. UUIDs preserved so roles bind correctly; the 3 existing accounts are skipped; `@floor` operators untouched. Column lists derived from prod so any auth-schema drift aborts cleanly instead of misaligning.
+- **`auth-prune-cntp-local`** (new, via `MODE=sqlfile`): deletes `@cntp.local` accounts only when no real data table references them; referenced accounts are kept and logged. Prints a KEEP/DELETE report before any delete. Single transaction.
+- Read-only **Auth reconcile preview** step on `reconcile/diff` lists the staff to be copied and the `@cntp.local` accounts + their references, for review before applying.
+- Both phases run through the existing backup-first, double-gated DB Reconcile action. Azure provider already enabled on the prod project (prerequisite).
+
+---
+
+## 2026-06-22 — Alyssa (Alara Signal Engine: Gemini multi-model conversion + scraper hardening)
+
+**Files changed:**
+- `research-engine/n8n/cntp-signal-engine.json` — corrected + re-architected workflow
+- `supabase/migrations/20260622_003_signals_dedup.sql` (new) — DB-enforced dedup backstop
+
+**Changes (n8n workflow):**
+- **Removed the remote-PC dependency.** Tier 1 was Ollama (`alara-engine`) on a remote PC over Tailscale; a full run fired ~940 inferences at it and twice froze the machine (RDP `0x204`). Tier 1 now runs on **`gemini-2.5-flash-lite`** (cloud) via the existing CNTP Gemini credential — same Alara persona/scoring prompt, parse node updated to read Gemini's response shape. The engine is now VPS + cloud only; nothing local to crash.
+- **Multi-model tiering, deliberately off `2.5-flash`** (which the app uses heavily — separate per-model quota buckets avoid contention): Tier 1 = `gemini-2.5-flash-lite` (cheap bulk, all new items), Tier 2 deep = `gemini-2.0-flash`. Future: Tier 3 `gemini-2.5-pro`, vision `gemini-3.1-flash-lite`, dedup `gemini-embedding-001`. A separate API key/GCP project for the scraper is the recommended next isolation step.
+- **Loophole-aware escalation:** Score Filter now escalates to the Tier-2 deep pass on `relevance_score >= 7` **OR** `intelligence_type` in (loophole, switching_signal, competitor_intel, threat) — moderate-score competitor/loophole signals still get full analysis. All scores are still saved (no relevance gate — low scores are leads).
+- **Throttle node** (`max new/run`, enabled, 25) caps items per run — protects against floods and bounds Gemini spend; tune upward as proven safe.
+- **Per-workflow timezone** `Africa/Johannesburg` + trigger at **03:00 SAST** (n8n instance clock was New York).
+- `raw_content` capped at 2k chars on both save paths.
+
+**Changes (database):**
+- `20260622_003_signals_dedup.sql` — generated `dedup_key` column + unique index so the DB rejects exact-duplicate signals at any table size (backstop for the in-memory dedup, which doesn't scale past its row-fetch cap).
+
+**VPS:**
+- Found n8n already runs persistently as user `ubuntu` (25-day uptime) — it does **not** die when PuTTY closes; PuTTY only provides the tunnel to the editor. The `pm2`-under-`cntpdev` attempt would have spun up a broken empty duplicate on a clashing port; cleaned up, `cntpdev` pm2 now runs only the two apps.
+
+---
+
+## 2026-06-22 — Alyssa (Alara Signal Engine: structured-intelligence columns)
+
+**Files changed:**
+- `supabase/migrations/20260622_002_signals_intel_columns.sql` (new) — adds `sales_angle`, `urgency`, `tier`, `intel jsonb` to `sales.signals`
+- `components/intelligence/types.ts` — `Signal` gains `sales_angle`/`urgency`/`tier`/`intel`; new `Urgency` type
+- `components/intelligence/helpers.ts` — new `urgencyStyle()` palette helper
+- `app/api/signals/route.ts` — GET select now returns the new columns
+- `app/api/pipeline/ingest/route.ts` — `IngestPayload` accepts + sanitises the new fields (urgency whitelisted, intel object-guarded)
+- `components/intelligence/SignalCard.tsx` — urgency badge + recommended-action line
+- `components/intelligence/SignalDrawer.tsx` — urgency badge, Tier chip, "Recommended action" section
+
+**Changes:**
+- The live Alara pipeline ("CNTP Signal Engine" — Ollama Tier 1 → Gemini Tier 2) was writing `sales_angle`/`urgency`/`tier` as top-level columns that did not exist on `sales.signals` (insert failed: *"Could not find the 'sales_angle' column … in the schema cache"*), and overloading `sections` (the app's `text[]` tab tags) with a JSON object. Added the missing columns plus a catch-all `intel jsonb`; `sections` is left to the app and the pipeline now writes its structured extras (target_segment, competitor_mentioned, full Tier-2 analysis) to `intel`.
+- Surfaced `sales_angle` ("one concrete action for CNTP") and `urgency` in the Signal feed + drawer so the per-signal next action is visible.
+- DB note: `sales` is a prod-only schema; the ALTER is run manually in the Supabase SQL editor on the project the pipeline writes to (not via `db-migrate.yml`). Additive + nullable only.
+
+---
+
 ## 2026-06-22 — Alyssa (DB reconcile Phase 1: rebuild production qms to match staging)
 
 **Files changed:**
