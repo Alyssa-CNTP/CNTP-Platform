@@ -112,6 +112,45 @@ jobs:
             echo -n "prod users:    "; psql "$PROD_DB_URL"    -t -A -c "SELECT count(*) FROM auth.users;"
           } | tee reconcile_out/diff.txt
 
+      - name: Auth reconcile preview (read-only)
+        if: github.ref_name == 'reconcile/diff'
+        env:
+          STAGING_DB_URL: ${{ secrets.STAGING_DB_URL }}
+          PROD_DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p reconcile_out
+          FILTER="email LIKE '%@rooibostea.co.za' AND email NOT LIKE '%@floor.%' AND email NOT LIKE '%@cntp.local'"
+          {
+            echo "##### auth-add-staff would COPY these staging staff -> prod (skips ones already in prod) #####"
+            psql "$STAGING_DB_URL" -P pager=off -c \
+              "SELECT u.email, u.raw_user_meta_data->>'full_name' AS name, r.role, r.department,
+                      (SELECT string_agg(i.provider,',') FROM auth.identities i WHERE i.user_id=u.id) AS providers
+               FROM auth.users u LEFT JOIN shared.app_roles r ON r.user_id=u.id
+               WHERE $FILTER ORDER BY 1;"
+            echo "##### of those, already present in PROD (will be skipped) #####"
+            psql "$PROD_DB_URL" -P pager=off -c \
+              "SELECT email FROM auth.users WHERE email LIKE '%@rooibostea.co.za' ORDER BY 1;"
+            echo "##### auth-prune-cntp-local: prod @cntp.local accounts + blocking data references #####"
+            psql "$PROD_DB_URL" -P pager=off -c "
+              WITH cntp AS (SELECT id, email FROM auth.users WHERE email LIKE '%@cntp.local'),
+              fks AS (
+                SELECT n.nspname AS sch, c.relname AS tbl, att.attname AS col
+                FROM pg_constraint con
+                JOIN pg_class c ON c.oid=con.conrelid
+                JOIN pg_namespace n ON n.oid=c.relnamespace
+                JOIN unnest(con.conkey)  WITH ORDINALITY k(attnum,ord)  ON true
+                JOIN unnest(con.confkey) WITH ORDINALITY fk(attnum,ord) ON fk.ord=k.ord
+                JOIN pg_attribute att  ON att.attrelid=con.conrelid  AND att.attnum=k.attnum
+                JOIN pg_attribute ratt ON ratt.attrelid=con.confrelid AND ratt.attnum=fk.attnum
+                WHERE con.contype='f' AND con.confrelid='auth.users'::regclass AND ratt.attname='id'
+                  AND n.nspname<>'auth'
+                  AND NOT (n.nspname='shared' AND c.relname='app_roles')
+                  AND NOT (n.nspname='production' AND c.relname='operators'))
+              SELECT email, 'see fks below' AS note FROM cntp ORDER BY 1;"
+            echo "(prune deletes a @cntp.local account only if NO data table references it; referenced ones are kept)"
+          } | tee reconcile_out/auth_preview.txt
+
       - name: Dump full schema DDL + user-reference report (read-only)
         if: github.ref_name == 'reconcile/diff'
         env:
@@ -196,6 +235,8 @@ jobs:
             bucket2-prod-axis-shared) MODE=bucket2; SCHEMAS="production axis shared workspace" ;;
             grant-app-schemas)        MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/grant_app_schemas.sql ;;
             fix-operators-nullable)   MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/fix_operators_nullable.sql ;;
+            auth-add-staff)           MODE=authstaff; SCHEMAS="" ;;
+            auth-prune-cntp-local)    MODE=sqlfile; SCHEMAS=""; SQLFILE=supabase/reconcile/auth_prune_cntp_local.sql ;;
             *) echo "::error::unknown phase '$P'"; exit 1 ;;
           esac
           echo "SCHEMAS=$SCHEMAS" >> "$GITHUB_ENV"
@@ -225,6 +266,44 @@ jobs:
             sqlfile)
               # run a committed SQL file against prod (e.g. grants), one atomic txn
               psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$SQLFILE" ;;
+            authstaff)
+              # Additively copy real-staff auth accounts (+ their Azure identities)
+              # and their shared.app_roles rows from STAGING into PROD.
+              #   Staff = @rooibostea.co.za logins, excluding @floor.* and @cntp.local.
+              #   ON CONFLICT DO NOTHING -> never overwrites, never deletes. Accounts
+              #   already present in prod with the same UUID (Alyssa/Gustav/Jan) are
+              #   skipped. UUIDs are preserved so app_roles binds to the right user.
+              FILTER="email LIKE '%@rooibostea.co.za' AND email NOT LIKE '%@floor.%' AND email NOT LIKE '%@cntp.local'"
+              # Derive column lists from PROD so any auth-schema drift aborts cleanly
+              # (a missing column makes the staging SELECT fail) instead of misaligning.
+              UCOLS=$(psql "$PROD_DB_URL" -At -c "SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='auth'   AND table_name='users'")
+              ICOLS=$(psql "$PROD_DB_URL" -At -c "SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='auth'   AND table_name='identities'")
+              RCOLS=$(psql "$PROD_DB_URL" -At -c "SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='shared' AND table_name='app_roles'")
+              test -n "$UCOLS" && test -n "$ICOLS" && test -n "$RCOLS" || { echo "::error::could not resolve column lists from prod"; exit 1; }
+              # 1) extract matching rows from STAGING as CSV (prod's column order)
+              psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
+                "\copy (SELECT $UCOLS FROM auth.users WHERE $FILTER) TO 'au_users.csv' WITH (FORMAT csv)"
+              psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
+                "\copy (SELECT $ICOLS FROM auth.identities WHERE user_id IN (SELECT id FROM auth.users WHERE $FILTER)) TO 'au_idents.csv' WITH (FORMAT csv)"
+              psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
+                "\copy (SELECT $RCOLS FROM shared.app_roles WHERE user_id IN (SELECT id FROM auth.users WHERE $FILTER)) TO 'au_roles.csv' WITH (FORMAT csv)"
+              echo "staff to copy: $(wc -l < au_users.csv) user(s), $(wc -l < au_idents.csv) identitie(s), $(wc -l < au_roles.csv) role row(s)"
+              # 2) load into PROD via temp tables, additively, in one transaction.
+              # Piped (not heredoc) to stay YAML-safe; printf keeps the \copy backslash intact.
+              {
+                printf '%s\n' "CREATE TEMP TABLE _iu (LIKE auth.users      INCLUDING DEFAULTS) ON COMMIT DROP;"
+                printf '%s\n' "CREATE TEMP TABLE _ii (LIKE auth.identities  INCLUDING DEFAULTS) ON COMMIT DROP;"
+                printf '%s\n' "CREATE TEMP TABLE _ir (LIKE shared.app_roles INCLUDING DEFAULTS) ON COMMIT DROP;"
+                printf '%s\n' "\copy _iu ($UCOLS) FROM 'au_users.csv'  WITH (FORMAT csv)"
+                printf '%s\n' "\copy _ii ($ICOLS) FROM 'au_idents.csv' WITH (FORMAT csv)"
+                printf '%s\n' "\copy _ir ($RCOLS) FROM 'au_roles.csv'  WITH (FORMAT csv)"
+                printf '%s\n' "INSERT INTO auth.users       ($UCOLS) SELECT $UCOLS FROM _iu ON CONFLICT DO NOTHING;"
+                printf '%s\n' "INSERT INTO auth.identities  ($ICOLS) SELECT $ICOLS FROM _ii WHERE user_id IN (SELECT id FROM auth.users) ON CONFLICT DO NOTHING;"
+                printf '%s\n' "INSERT INTO shared.app_roles ($RCOLS) SELECT $RCOLS FROM _ir WHERE user_id IN (SELECT id FROM auth.users) ON CONFLICT DO NOTHING;"
+              } | psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 --single-transaction
+              echo "=== PROD @rooibostea.co.za staff after copy ==="
+              psql "$PROD_DB_URL" -P pager=off -c \
+                "SELECT u.email, r.role, r.department FROM auth.users u LEFT JOIN shared.app_roles r ON r.user_id=u.id WHERE u.email LIKE '%@rooibostea.co.za' ORDER BY 1" ;;
           esac
 
       - name: Verify (staging vs prod row counts for touched schemas)
