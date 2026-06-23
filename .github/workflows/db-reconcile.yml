@@ -274,12 +274,21 @@ jobs:
               #   already present in prod with the same UUID (Alyssa/Gustav/Jan) are
               #   skipped. UUIDs are preserved so app_roles binds to the right user.
               FILTER="email LIKE '%@rooibostea.co.za' AND email NOT LIKE '%@floor.%' AND email NOT LIKE '%@cntp.local'"
-              # Derive column lists from PROD so any auth-schema drift aborts cleanly
-              # (a missing column makes the staging SELECT fail) instead of misaligning.
-              UCOLS=$(psql "$PROD_DB_URL" -At -c "SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='auth'   AND table_name='users'")
-              ICOLS=$(psql "$PROD_DB_URL" -At -c "SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='auth'   AND table_name='identities'")
-              RCOLS=$(psql "$PROD_DB_URL" -At -c "SELECT string_agg(quote_ident(column_name),',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='shared' AND table_name='app_roles'")
-              test -n "$UCOLS" && test -n "$ICOLS" && test -n "$RCOLS" || { echo "::error::could not resolve column lists from prod"; exit 1; }
+              # Column list = INTERSECTION of columns present in BOTH staging and prod,
+              # in prod's column order. Prod-only columns (e.g. shared.app_roles.updated_at
+              # added in bucket2) are left to their default; staging-only columns are skipped.
+              # This keeps the cross-DB copy aligned without assuming identical schemas.
+              colcols() {
+                local sch="$1" tbl="$2" pcols scols
+                pcols=$(psql "$PROD_DB_URL"    -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl' ORDER BY ordinal_position")
+                scols=$(psql "$STAGING_DB_URL" -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='$sch' AND table_name='$tbl'")
+                awk -v s="$scols" 'BEGIN{n=split(s,a,"\n"); for(i=1;i<=n;i++) m[a[i]]=1} ($0 in m){printf (c++?",":"") "%s",$0}' <<< "$pcols"
+              }
+              UCOLS=$(colcols auth users)
+              ICOLS=$(colcols auth identities)
+              RCOLS=$(colcols shared app_roles)
+              test -n "$UCOLS" && test -n "$ICOLS" && test -n "$RCOLS" || { echo "::error::could not resolve column lists"; exit 1; }
+              echo "cols -> users:[$UCOLS]"; echo "         idents:[$ICOLS]"; echo "         roles:[$RCOLS]"
               # 1) extract matching rows from STAGING as CSV (prod's column order)
               psql "$STAGING_DB_URL" -v ON_ERROR_STOP=1 -c \
                 "\copy (SELECT $UCOLS FROM auth.users WHERE $FILTER) TO 'au_users.csv' WITH (FORMAT csv)"
