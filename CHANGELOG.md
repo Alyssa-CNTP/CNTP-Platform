@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-23 — Alyssa (Pasteuriser Quality: per-day averages, pivot-ready export, sortable history)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx` (per-production-date average view + sortable History columns + Gap-A fix)
+- `lib/utils/exportExcel.ts` (dimension columns + AutoFilter/column widths on every QC export sheet)
+
+**Changes:**
+- **Per-production-date averages back on screen** — each expanded batch in the History view has a `Samples | 📅 Per-day avg` toggle. The per-day view groups the batch's samples by production date and shows avg temp / moisture / BD / each sieve fraction + MB/Full counts. Re-requested by Cyril; it had existed in the legacy HerbalQMS UI but only survived in the Excel export. Reuses the **same** reducer as the export's "Daily Averages" sheet, so screen and spreadsheet match exactly. No capture/calculation logic changed.
+- **Pivot-ready Excel export** — every raw sheet now carries Batch / Production Date / Product / Grade / Variant / Customer / Result on each sample row (a tidy, flat table for Insert ▸ PivotTable), and a new `addSheet` helper applies an AutoFilter + auto-sized columns to every sheet across pasteuriser, granule and sieving exports.
+- **Sortable History table** — History column headers (Batch, Date, Customer, Product, Variant, Samples, Avg Moisture, Avg BD, Result) are now click-to-sort with ▲/▼ indicators.
+- **Gap-A fix (records pulling)** — legacy `public`-schema records lacking an inner `data_json.id` are no longer dropped by `parseRec`; they fall back to the DB row id / batch number and now appear in the History table. (Production audit: 44 of 85 legacy pasteuriser records were affected — the legacy PDF lab COAs.)
+- **Note:** SheetJS community build can't embed a live PivotTable or freeze panes; the flat raw sheet is the pivot *source* (user clicks Insert ▸ PivotTable once).
+
+---
+
 ## 2026-06-23 — Alyssa (Staff Directory admin + leave/availability across roster & capture)
 
 **Files changed:**
