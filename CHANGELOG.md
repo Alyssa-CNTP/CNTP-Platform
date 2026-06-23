@@ -110,6 +110,12 @@ Format: date · developer · files changed · description of code changes.
 - Read-only **Auth reconcile preview** step on `reconcile/diff` lists the staff to be copied and the `@cntp.local` accounts + their references, for review before applying.
 - Both phases run through the existing backup-first, double-gated DB Reconcile action. Azure provider already enabled on the prod project (prerequisite).
 
+**Result (applied to prod 2026-06-23):**
+- Phase A: **12 staff added** (15 staging staff minus the 3 already present), 12 Azure identities, 10 app_roles rows. Prod now has all 15 `@rooibostea.co.za` staff with their staging roles. (Jan kept his existing prod role `co_developer` rather than staging's `bis_manager` — additive copy does not overwrite existing accounts.)
+- Phase B: of the 8 `@cntp.local` placeholders, **7 deleted** (no production data), **1 kept** (`blender@cntp.local`, referenced by `production.scan_events`). Final prod auth = 16 users.
+- Two iterations were needed on the copy logic: (1) prod's `shared.app_roles` has `updated_at` (bucket2) that staging lacks → switched to the staging/prod column **intersection**; (2) `auth.users.confirmed_at` is a **generated** column → excluded generated/identity columns. All failures rolled back cleanly (atomic txn) — no partial writes.
+- Discovered a **second roles table** `production.app_roles` (separate from `shared.app_roles`); the prune treats both as the account's own record.
+
 ---
 
 ## 2026-06-22 — Alyssa (Alara Signal Engine: Gemini multi-model conversion + scraper hardening)
