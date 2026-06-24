@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Alyssa (Capture screen reframed as a process + Overview step)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` — flat tabs replaced by a clickable numbered stepper; Messages moved to a header icon; added the Overview step
+- `components/production/capture/CaptureOverview.tsx` (new) — post-capture overview (formerly "Acumatica summary"), rebuilt from the live capture model
+
+**Changes:**
+- **Process stepper.** The capture screen's flat tab row (Production · Checks · Cleaning · Sign-off · Messages) now reads as the real-world process the operators follow: **1 Checks → 2 Capture → 3 Cleaning → 4 Overview → 5 Sign-off.** Steps are numbered, the current one is highlighted, earlier ones show a tick, and they stay freely clickable — pure presentation over the existing logic, no behaviour change.
+- **Messages out of the flow.** Line chat is no longer a step; it's a message icon in the header band (it isn't a production step).
+- **Overview step (formerly Acumatica summary).** New read-only overview built from the live `Production[]` / `SievingData` model rather than the old draft shape. Groups bagging outputs by item + lot + variant with serials and totals, lists debagging inputs, and shows the mass balance — with Copy and Print for Acumatica data entry. It reflects exactly what the autosave already writes (`prod_debagging` / `prod_bagging` / `prod_mass_balance`); no new persistence was added.
+
+---
+
 ## 2026-06-24 — Alyssa (Navigation IA cleanup, capture consolidation, Home landing)
 
 **Files changed:**
