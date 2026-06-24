@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Gustav (maintenance: per-raiser tabs on Job Cards — IT + manager only)
+
+**Files changed:**
+- app/(app)/maintenance/job-cards/page.tsx
+
+**Changes:**
+- Added a **"By raiser"** panel to the Job Cards view: a tab for each person who has raised job cards (plus an **All** tab with counts). Selecting a tab shows that raiser's summary tiles (Outstanding / Needs input / In progress / Completed) and their cards
+- Visible **only to IT (admin view) and the maintenance manager** (`isAdminView || role === 'maintenance_manager'`). Regular raisers still see only their own cards
+- Maintenance managers see the panel on their board (above "Awaiting allocation"); IT reaches it via the existing **"view as → Raiser"** switcher
+
+---
+
 ## 2026-06-24 — Alyssa (Production Dashboard becomes a hub: Analytics + Planning as tabs)
 
 **Files changed:**

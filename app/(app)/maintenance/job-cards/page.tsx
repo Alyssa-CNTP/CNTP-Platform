@@ -7,9 +7,9 @@
 // qc_check queue; raiser (default) sees their own cards + summary tiles. Each
 // card row links to job-cards/[cardId].
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { Plus, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { Plus, AlertTriangle, ChevronDown, ChevronRight, Users } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import BottomSheet from '@/components/ui/BottomSheet'
 import { useMaintenanceContext } from '../layout'
@@ -48,6 +48,9 @@ export default function JobCardsPage() {
   const [openPrio, setOpenPrio] = useState<Record<Priority, boolean>>({ high: true, medium: true, low: false })
   const canRaiseBreakdown = auth.isProduction || auth.p('can_raise_breakdown')
   const openRaise = (mode: 'breakdown' | 'planned') => { setRaiseMode(mode); setRaiseOpen(true) }
+  // IT (admin view) and the maintenance manager may browse every raiser's cards;
+  // everyone else only ever sees their own.
+  const canSeeAllRaisers = baseRole.isAdminView || auth.role === 'maintenance_manager'
 
   const cardRoles = { canManage: role.canManage, isTech: role.isTech, isQc: role.isQc, isRaiser: role.isRaiser }
   const cardHref = (j: JobCard) => `/maintenance/job-cards/${j.id}`
@@ -114,6 +117,8 @@ export default function JobCardsPage() {
       {role.canManage && (
         <div>
           <ShiftSummary jcs={jcs} completions={data.completions} cardHref={cardHref} />
+
+          {canSeeAllRaisers && <RaisersPanel jcs={jcs} cardRoles={cardRoles} />}
 
           {newCards.length > 0 && (
             <div className="mb-6">
@@ -211,7 +216,7 @@ export default function JobCardsPage() {
 
       {/* ── RAISER DASHBOARD (default) ── */}
       {!role.canManage && !role.isTech && !role.isQc && (
-        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} />
+        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} canSeeAll={canSeeAllRaisers} />
       )}
 
       <BottomSheet open={raiseOpen} onClose={() => setRaiseOpen(false)} center={false}>
@@ -289,7 +294,83 @@ function Chip({ active, onClick, label, count }: { active: boolean; onClick: () 
   )
 }
 
-function RaiserView({ actor, jcs, cardRoles }: { actor: string; jcs: JobCard[]; cardRoles: { canManage: boolean; isTech: boolean; isQc: boolean; isRaiser: boolean } }) {
+type CardRoles = { canManage: boolean; isTech: boolean; isQc: boolean; isRaiser: boolean }
+
+// Summary tiles for a set of cards (re-used by the personal raiser view and the
+// per-raiser tabs).
+function RaiserTiles({ cards }: { cards: JobCard[] }) {
+  const tiles = [
+    { label: 'Outstanding', value: cards.filter(j => j.status !== 'complete').length },
+    { label: 'Needs input', value: cards.filter(j => j.status === 'clarify' || j.status === 'verify').length },
+    { label: 'In progress', value: cards.filter(j => ['assigned', 'in_progress', 'qc_check'].includes(j.status)).length },
+    { label: 'Completed', value: cards.filter(j => j.status === 'complete').length },
+  ]
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {tiles.map(t => (
+        <div key={t.label} className="card p-3 text-center">
+          <div className="text-2xl font-semibold text-text tabular-nums">{t.value}</div>
+          <div className="text-[10px] text-text-muted uppercase tracking-wide mt-1">{t.label}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// IT / maintenance-manager view: a tab per person who has raised job cards, plus
+// an "All" tab. Selecting a tab shows that raiser's summary tiles + their cards.
+function RaisersPanel({ jcs, cardRoles }: { jcs: JobCard[]; cardRoles: CardRoles }) {
+  const raisers = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const j of jcs) {
+      const r = (j.raised_by ?? '').trim()
+      if (r) counts.set(r, (counts.get(r) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }))
+  }, [jcs])
+
+  const [sel, setSel] = useState<string>('__all__')
+  const withRaiser = jcs.filter(j => (j.raised_by ?? '').trim())
+  const cards = (sel === '__all__' ? withRaiser : jcs.filter(j => (j.raised_by ?? '').trim() === sel))
+    .slice()
+    .sort((a, b) => b.raised_at.localeCompare(a.raised_at))
+
+  return (
+    <div className="card p-4 mb-6">
+      <div className="flex items-center gap-2 mb-3">
+        <Users size={16} className="text-text-muted" />
+        <h2 className="text-sm font-semibold text-text">By raiser</h2>
+        <span className="text-[11px] text-text-muted">{raisers.length} {raisers.length === 1 ? 'person' : 'people'}</span>
+      </div>
+
+      {raisers.length === 0 ? (
+        <div className="text-[12px] text-text-faint">No job cards have been raised yet.</div>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-1.5 mb-4">
+            <button onClick={() => setSel('__all__')} className={SEG(sel === '__all__')}>
+              All <span className="opacity-70 tabular-nums">{withRaiser.length}</span>
+            </button>
+            {raisers.map(r => (
+              <button key={r.name} onClick={() => setSel(r.name)} className={SEG(sel === r.name)}>
+                {r.name} <span className="opacity-70 tabular-nums">{r.count}</span>
+              </button>
+            ))}
+          </div>
+          <RaiserTiles cards={cards} />
+          <div className="stagger">{cards.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function RaiserView({ actor, jcs, cardRoles, canSeeAll }: { actor: string; jcs: JobCard[]; cardRoles: CardRoles; canSeeAll: boolean }) {
+  // IT / maintenance manager browse everyone via the per-raiser tabs.
+  if (canSeeAll) return <RaisersPanel jcs={jcs} cardRoles={cardRoles} />
+
   const mine = jcs.filter(j => j.raised_by === actor)
   const tiles: { label: string; value: number }[] = [
     { label: 'Outstanding', value: mine.filter(j => j.status !== 'complete').length },
