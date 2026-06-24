@@ -9,7 +9,8 @@
 //   HA_ENTITY_SOLAR_POWER, HA_ENTITY_GRID_POWER, HA_ENTITY_LOAD_POWER
 
 import { NextResponse } from 'next/server'
-import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
+import { upsertEnergyDaily } from '@/lib/maintenance/energy'
 
 const HA_URL = 'https://capenaturalteaproducts.invertermon.com'
 
@@ -128,6 +129,26 @@ export async function GET() {
     const solarKwh = parseFloat(solarS.state) || 0
     const gridKwh  = parseFloat(gridS.state)  || 0
     const totalKwh = parseFloat(totalS.state) || 0
+
+    // Persist today's snapshot for the History view — keyed by SAST calendar day,
+    // upserted on each read so the row fills in through the day and finalises at
+    // the last read. Best-effort: a DB failure must never break the live widget.
+    try {
+      const db = await getSessionClient()
+      await upsertEnergyDaily(db, {
+        day:                   new Date(dayStartMs + SAST_OFFSET).toISOString().slice(0, 10),
+        solar_kwh:             +solarKwh.toFixed(2),
+        grid_import_kwh:       +gridKwh.toFixed(2),
+        grid_export_kwh:       +exportKwh.toFixed(2),
+        generator_kwh:         +generatorKwh.toFixed(2),
+        battery_charge_kwh:    +batChargeKwh.toFixed(2),
+        battery_discharge_kwh: +batDischargeKwh.toFixed(2),
+        total_kwh:             +totalKwh.toFixed(2),
+        unit,
+      })
+    } catch (e) {
+      console.error('[api/maintenance/energy] daily snapshot upsert failed', e)
+    }
 
     return NextResponse.json({
       ok: true,

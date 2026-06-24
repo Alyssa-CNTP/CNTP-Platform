@@ -5,6 +5,27 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Gustav (maintenance: energy History view + daily Supabase capture + scheduled cron)
+
+**Files changed:**
+- components/maintenance/EnergyWidget.tsx
+- components/maintenance/EnergyHistory.tsx (new)
+- app/api/maintenance/energy/route.ts
+- app/api/maintenance/energy/history/route.ts (new)
+- app/api/maintenance/energy/capture/route.ts (new)
+- lib/maintenance/energy.ts (new)
+- supabase/migrations/20260619_001_energy_daily.sql (new)
+- .github/workflows/energy-capture.yml (new)
+
+**Changes:**
+- Energy widget gains a **Today / History** toggle. History shows period totals + daily **Electricity Usage** and **Solar Usage** charts (7/30/90-day) from `maintenance.energy_daily`
+- New **`maintenance.energy_daily`** table (one row per SAST day; RLS enabled). Migration applied to the staging Supabase project
+- `/api/maintenance/energy` now **upserts today's snapshot** on each load (best-effort) via the shared `lib/maintenance/energy.ts`
+- New **`/api/maintenance/energy/history`** (read last N days) and **`/api/maintenance/energy/capture`** (unattended, `Bearer CRON_SECRET`, service-role write) routes
+- New scheduled workflow pings capture daily at **23:50 SAST** so usage is logged even when nobody opens the dashboard. Needs a `CRON_SECRET` (GitHub Actions secret + matching server env var); the cron only fires once the workflow is on the default branch
+
+---
+
 ## 2026-06-24 — Alyssa (Navigation IA cleanup, capture consolidation, Home landing)
 
 **Files changed:**
