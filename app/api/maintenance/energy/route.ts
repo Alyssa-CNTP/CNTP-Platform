@@ -10,6 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
+import { upsertEnergyDaily } from '@/lib/maintenance/energy'
 
 const HA_URL = 'https://capenaturalteaproducts.invertermon.com'
 
@@ -133,10 +134,9 @@ export async function GET() {
     // upserted on each read so the row fills in through the day and finalises at
     // the last read. Best-effort: a DB failure must never break the live widget.
     try {
-      const sastDay = new Date(dayStartMs + SAST_OFFSET).toISOString().slice(0, 10)
       const db = await getSessionClient()
-      await db.schema('maintenance' as any).from('energy_daily').upsert({
-        day:                   sastDay,
+      await upsertEnergyDaily(db, {
+        day:                   new Date(dayStartMs + SAST_OFFSET).toISOString().slice(0, 10),
         solar_kwh:             +solarKwh.toFixed(2),
         grid_import_kwh:       +gridKwh.toFixed(2),
         grid_export_kwh:       +exportKwh.toFixed(2),
@@ -145,8 +145,7 @@ export async function GET() {
         battery_discharge_kwh: +batDischargeKwh.toFixed(2),
         total_kwh:             +totalKwh.toFixed(2),
         unit,
-        updated_at:            new Date().toISOString(),
-      }, { onConflict: 'day' })
+      })
     } catch (e) {
       console.error('[api/maintenance/energy] daily snapshot upsert failed', e)
     }
