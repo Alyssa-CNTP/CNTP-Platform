@@ -935,47 +935,35 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [histRowView,   setHistRowView]    = useState<'samples'|'daily'>('samples')
   const prevBatchIdRef = useRef<string|null>(null)
 
-  // Load batches from DB
+  // Load batches from qms (single source — legacy public consolidated 2026-06-24)
   useEffect(() => {
     setDbLoading(true)
-    Promise.all([
-      db.schema('qms').from('quality_records').select('*')
-        .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
-        .order('created_at',{ascending:false}),
-      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()).then(j => ({ data: j.pasteuriser_runs ?? [] })),
-    ]).then(([{ data: qmsData }, { data: legacyData }]) => {
-      const parseRec = (r: any, isLegacy = false): any => {
-        let d: any = {}
-        try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
-        // Legacy public records may have no inner data_json.id — fall back to the
-        // DB row id / batch number instead of dropping the record entirely.
-        if (!d.id) d.id = r.id || r.batch_number || `legacy-${Math.random().toString(36).slice(2)}`
-        const b = { ...d, _db_id: isLegacy ? undefined : r.id }
-        return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
-          const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
-          return da < db2 ? -1 : da > db2 ? 1 : 0
-        })}
-      }
-      const fromQms    = (qmsData    || []).map((r: any) => parseRec(r, false)).filter(Boolean)
-      const fromLegacy = (legacyData || []).map((r: any) => parseRec(r, true)).filter(Boolean)
-      const seen = new Set(fromQms.map((b: any) => b.id))
-      const all  = [...fromQms, ...fromLegacy.filter((b: any) => !seen.has(b.id))]
-      setBatches(all as any)
-      if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
-    }).finally(() => setDbLoading(false))
+    db.schema('qms').from('quality_records').select('*')
+      .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
+      .order('created_at',{ascending:false})
+      .then(({ data: qmsData }: { data: any }) => {
+        const parseRec = (r: any): any => {
+          let d: any = {}
+          try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+          if (!d.id) d.id = r.id || r.batch_number || `rec-${Math.random().toString(36).slice(2)}`
+          const b = { ...d, _db_id: r.id }
+          return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
+            const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
+            return da < db2 ? -1 : da > db2 ? 1 : 0
+          })}
+        }
+        const fromQms = (qmsData || []).map((r: any) => parseRec(r)).filter(Boolean)
+        setBatches(fromQms as any)
+        if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
+      }).then(undefined, () => {}).finally(() => setDbLoading(false))
   }, [])
 
-  // Load historical batches from public schema (read-only reference, never modified)
+  // "Historical" view — now a qms read (public schema retired)
   const loadPubHistory = useCallback(async () => {
     setPubLoading(true)
-    const [legacyRes, { data: current }] = await Promise.all([
-      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()),
-      db.schema('qms').from('quality_records').select('*')
-        .eq('workcenter', 'pasteuriser').order('created_at', { ascending: false }).limit(200),
-    ])
-    const merged = [...(current ?? []), ...(legacyRes.quality_records ?? [])]
-      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    setPubBatches(merged)
+    const { data } = await db.schema('qms').from('quality_records').select('*')
+      .eq('workcenter', 'pasteuriser').order('created_at', { ascending: false }).limit(500)
+    setPubBatches((data ?? []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
     setPubLoading(false)
   }, [db])
 

@@ -5,7 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-24 — Alyssa (Branded Excel exports for all Quality workcenters — ExcelJS)
+## 2026-06-24 — Alyssa (Quality: retire the public dual-read — qms is the single source)
+
+**Files changed:**
+- `app/(app)/quality/{pasteuriser,sieving,granule,lab-results,raw-material,customer-specs}/page.tsx`
+- removed `app/api/quality/legacy-pasteuriser/route.ts`, `app/api/quality/legacy-public/route.ts`
+
+**Changes:**
+- After the 2026-06-24 production consolidation (all `public` + staging records now in `qms`), every Quality page now reads **`qms` only** — the runtime merge with the `public` schema and the two `legacy-*` service-role routes are removed. No capture/calc logic changed.
+- **Sieving** now paginates `qms.sd_runs` (it exceeds the 1000-row default page — 2054 rows) so nothing is silently truncated.
+- **Pasteuriser** 📜 Historical toggle is now a qms read instead of a public-schema read.
+- **Raw Material** records render correctly now that `qms.quality_records.data_json` is `jsonb` (previously the qms rows had string `data_json` and showed blank; only legacy rendered).
+- Depends on the production data work being complete (it is) + the `data_json → jsonb` ALTER (done). Verified: all six pages compile and serve 200; tsc clean.
 
 **Files changed:**
 - `lib/utils/exportExcel.ts` (replaced the SheetJS/`xlsx` writer with a lazy-loaded ExcelJS engine)
