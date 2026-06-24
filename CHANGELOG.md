@@ -5,6 +5,284 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Gustav (maintenance: energy History view + daily Supabase capture + scheduled cron)
+
+**Files changed:**
+- components/maintenance/EnergyWidget.tsx
+- components/maintenance/EnergyHistory.tsx (new)
+- app/api/maintenance/energy/route.ts
+- app/api/maintenance/energy/history/route.ts (new)
+- app/api/maintenance/energy/capture/route.ts (new)
+- lib/maintenance/energy.ts (new)
+- supabase/migrations/20260619_001_energy_daily.sql (new)
+- .github/workflows/energy-capture.yml (new)
+
+**Changes:**
+- Energy widget gains a **Today / History** toggle. History shows period totals + daily **Electricity Usage** and **Solar Usage** charts (7/30/90-day) from `maintenance.energy_daily`
+- New **`maintenance.energy_daily`** table (one row per SAST day; RLS enabled). Migration applied to the staging Supabase project
+- `/api/maintenance/energy` now **upserts today's snapshot** on each load (best-effort) via the shared `lib/maintenance/energy.ts`
+- New **`/api/maintenance/energy/history`** (read last N days) and **`/api/maintenance/energy/capture`** (unattended, `Bearer CRON_SECRET`, service-role write) routes
+- New scheduled workflow pings capture daily at **23:50 SAST** so usage is logged even when nobody opens the dashboard. Needs a `CRON_SECRET` (GitHub Actions secret + matching server env var); the cron only fires once the workflow is on the default branch
+
+---
+
+## 2026-06-24 — Alyssa (Navigation IA cleanup, capture consolidation, Home landing)
+
+**Files changed:**
+- `components/layout/Sidebar.tsx` — regrouped nav; Home/Command Centre; renamed Production Control → Analytics; gated Staff Directory
+- `app/(app)/home/page.tsx` (new) — general-information / company landing (placeholder)
+- `app/(app)/layout.tsx` — `/home` always-open + route title; `/dashboard` titled "Command Centre"
+- `app/(app)/production/{section,flow,refining}/page.tsx` — retired → redirect to `/production/capture`
+- `app/(app)/production/operations/page.tsx` — renamed heading to "Analytics"; "Testing" badge on Live Capture tab
+- `app/(app)/production/live/page.tsx` — "Testing" badge on Live Production header
+- `components/supervisor/HubTabs.tsx` — added "Assign" tab (deep-links to section assignment)
+
+**Changes:**
+- **Sidebar information architecture.** The Operations group was a flat pile with two identical dashboard icons. Split into three role-gated groups: **Operations** (Home, Command Centre, Bag Tracking), **Production** (Production Dashboard, Capture, Stock Count, Supervisor Hub), and **Planning & Analytics** (Shift Roster, Analytics, Staff Directory). Distinct icons throughout.
+- **Home → general information.** New `/home` company-facing landing (greeting, announcements, quick links, resources) as a designed-later placeholder; the sidebar's Home now points here. The old multi-department dashboard (`/dashboard`) is retained and relabelled **Command Centre**. Login-landing routing is unchanged for now (still Command Centre).
+- **Capture consolidation.** The legacy capture pages `/production/section`, `/production/flow`, and `/production/refining` are retired and now **redirect to `/production/capture`** — the single capture surface. (Note: the new capture page currently implements Sieving; the other sections show "coming soon" there until rebuilt.)
+- **Production Control → Analytics.** Renamed and moved into the Planning & Analytics group. Its barcode **Live Capture** tab — and the `/production/live` Live Production page — now carry a clear **"Testing"** badge (Phase 2, in testing).
+- **Assign in the hub.** Added an **Assign** tab to the Supervisor Hub that deep-links to the section-assignment tool; the capture page's own Assign button is unchanged.
+- **Staff Directory** is now reachable by department **or** the `can_view_ops_dashboard` permission (permission-gated index).
+
+---
+
+## 2026-06-24 — Alyssa (Quality: retire the public dual-read — qms is the single source)
+
+**Files changed:**
+- `app/(app)/quality/{pasteuriser,sieving,granule,lab-results,raw-material,customer-specs}/page.tsx`
+- removed `app/api/quality/legacy-pasteuriser/route.ts`, `app/api/quality/legacy-public/route.ts`
+
+**Changes:**
+- After the 2026-06-24 production consolidation (all `public` + staging records now in `qms`), every Quality page now reads **`qms` only** — the runtime merge with the `public` schema and the two `legacy-*` service-role routes are removed. No capture/calc logic changed.
+- **Sieving** now paginates `qms.sd_runs` (it exceeds the 1000-row default page — 2054 rows) so nothing is silently truncated.
+- **Pasteuriser** 📜 Historical toggle is now a qms read instead of a public-schema read.
+- **Raw Material** records render correctly now that `qms.quality_records.data_json` is `jsonb` (previously the qms rows had string `data_json` and showed blank; only legacy rendered).
+- Depends on the production data work being complete (it is) + the `data_json → jsonb` ALTER (done). Verified: all six pages compile and serve 200; tsc clean.
+
+**Files changed:**
+- `lib/utils/exportExcel.ts` (replaced the SheetJS/`xlsx` writer with a lazy-loaded ExcelJS engine)
+
+**Changes:**
+- All five Quality exports — pasteuriser batch, pasteuriser archive, granule run, sieving runs, and the lab-results tables — now produce **branded, styled workbooks** instead of plain sheets. Each sheet has: a title block (embedded `logo.png` + "Cape Natural — Operations Platform" + a context subtitle + "Generated … (SAST)"), a brand-green frozen header row with **AutoFilter**, banded rows, borders, real number formats (moisture `0.00%`, sieves `0.0%`, BD `0`), and **spec-aware conditional fills** (moisture > 8.5% → red; Pass/Fail/Concession → green/red/amber; violations → red).
+- Empty columns (a test that wasn't run for the batch set) are dropped from every sheet; the flat raw sheet stays a clean pivot source.
+- **ExcelJS is lazy-loaded** (`await import('exceljs')`) inside the export path, so it never enters the main bundle — it only downloads when a user clicks Export. The `exceljs` dependency was already in `package.json`.
+- No capture/calculation logic changed — this is presentation only. The previous `xlsx` writer (`addSheet`/`dl`) and its import were removed; `xlsx` is still used elsewhere for reading uploads (`admin/inventory-import`).
+- Builds on the earlier Quality work already on staging (per-day average view, sortable History, lab CSV→Excel, Gap-A record fix).
+
+---
+
+## 2026-06-23 — Alyssa (tsconfig: include .next-build types for zero-downtime deploy)
+
+**Files changed:**
+- `tsconfig.json` (added `.next-build/types` + `.next-build/dev/types` to `include`)
+
+**Changes:**
+- The zero-downtime staging deploy (`scripts/staging-deploy.sh`, #149) builds into a side dir via `NEXT_DIST_DIR=.next-build`, so Next emits its route-type validator under `.next-build/types`. `tsconfig.json` only included `.next/types`, so the side-dir build's generated types weren't covered. Added the `.next-build/*` include globs (harmless no-ops for normal `.next` builds). Previously applied as an untracked manual edit on the VPS; now tracked so it survives `git pull`.
+
+---
+
+## 2026-06-23 — Alyssa (Workforce sub-nav + drop tablet-login messaging)
+
+**Files changed:**
+- `components/production/WorkforceTabs.tsx` (new — shared sub-nav)
+- `app/(app)/production/roster/page.tsx`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/capture/assign/page.tsx` (render the tabs; autofill copy cleanup)
+
+**Changes:**
+- **Easy navigation** — added a shared **Workforce** tab bar (Shift Roster · Staff Directory · Assign Sections) across all three pages, so the people/roster screens are one click apart (mirrors the Supervisor Hub tabs).
+- **Dropped the "tablet login" friction** from the autofill — "Fill from roster" no longer mentions PINs/tablet logins or counts "skipped" people; it simply reports how many it filled. Assign subtitle reworded to point at the Fill-from-roster shortcut.
+
+---
+
+## 2026-06-23 — Alyssa (Roster → Capture autofill + department colour-coding)
+
+**Files changed:**
+- `app/(app)/production/capture/assign/page.tsx` (Fill-from-roster + section colour accent)
+- `app/(app)/production/roster/page.tsx` (department colour-coded grid)
+- `app/(app)/production/staff/page.tsx` (department colour accent on rows)
+
+**Changes:**
+- **Roster → Capture autofill** — the "Assign sections" screen has a **Fill from roster** button: it finds the roster period covering the selected date, maps each capture section to its roster role(s) (sieving→Sieving Tower, granule→Granule Operator/Granule, etc.) and capture's 3 shifts onto the roster's 2 (morning+afternoon→day, night→night), and pre-fills each section with the rostered people — resolving each to their Capture operator login (directly or via their employee record). People with no tablet login are skipped and counted. The supervisor reviews and Saves as normal.
+- **Department colour-coding** (mirrors the Shift Layout workbook) — the roster grid now shows each department as a coloured band with a colour-matched left accent on its role rows; capture section cards and staff-directory rows carry the same department/section colour accent, so people can distinguish areas at a glance.
+
+---
+
+## 2026-06-23 — Alyssa (Pasteuriser Quality: per-day averages, pivot-ready export, sortable history)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx` (per-production-date average view + sortable History columns + Gap-A fix)
+- `lib/utils/exportExcel.ts` (dimension columns + AutoFilter/column widths on every QC export sheet)
+
+**Changes:**
+- **Per-production-date averages back on screen** — each expanded batch in the History view has a `Samples | 📅 Per-day avg` toggle. The per-day view groups the batch's samples by production date and shows avg temp / moisture / BD / each sieve fraction + MB/Full counts. Re-requested by Cyril; it had existed in the legacy HerbalQMS UI but only survived in the Excel export. Reuses the **same** reducer as the export's "Daily Averages" sheet, so screen and spreadsheet match exactly. No capture/calculation logic changed.
+- **Pivot-ready Excel export** — every raw sheet now carries Batch / Production Date / Product / Grade / Variant / Customer / Result on each sample row (a tidy, flat table for Insert ▸ PivotTable), and a new `addSheet` helper applies an AutoFilter + auto-sized columns to every sheet across pasteuriser, granule and sieving exports.
+- **Sortable History table** — History column headers (Batch, Date, Customer, Product, Variant, Samples, Avg Moisture, Avg BD, Result) are now click-to-sort with ▲/▼ indicators.
+- **Gap-A fix (records pulling)** — legacy `public`-schema records lacking an inner `data_json.id` are no longer dropped by `parseRec`; they fall back to the DB row id / batch number and now appear in the History table. (Production audit: 44 of 85 legacy pasteuriser records were affected — the legacy PDF lab COAs.)
+- **Note:** SheetJS community build can't embed a live PivotTable or freeze panes; the flat raw sheet is the pivot *source* (user clicks Insert ▸ PivotTable once).
+
+---
+
+## 2026-06-23 — Alyssa (Staff Directory admin + leave/availability across roster & capture)
+
+**Files changed:**
+- `supabase/migrations/20260623_003_employee_leave.sql` (new — `employee_leave` table + `employee_leave_active` view)
+- `app/(app)/production/staff/page.tsx` (new — Staff Directory admin)
+- `components/layout/Sidebar.tsx` (added "Staff Directory" nav)
+- `app/(app)/production/roster/page.tsx` (leave-aware picker + on-duty flags)
+- `app/(app)/production/capture/assign/page.tsx` + `components/production/capture/OperatorPicker.tsx` (leave-aware operator picker)
+
+**Changes:**
+- **Staff Directory** (`/production/staff`) — the shared `production.employees` list is now fully editable and filterable in-app, persisting on save: search by name/job-title, filter by department, add/edit a person (name, display name, department, job title, skills, phone, active), and manage **leave/availability** (date-ranged periods: leave/sick/training/other).
+- **Leave-aware allocation** — both the Shift Roster picker and the Capture "Assign sections" picker now flag people who are on leave for the relevant date(s) (amber "on leave" markers), so a stand-in can be allocated instead. Roster's "On duty" view also strikes through anyone on leave.
+- This is additive — Capture/Maintenance save logic is unchanged; the pickers just surface availability.
+- **Run order on the DB:** `20260623_003_employee_leave.sql` (after the `001` directory migration).
+- **Next (Phase 3 cont.):** roster → Capture/Maintenance auto-fill; AI suggester + approve + send (PDF/WhatsApp).
+
+---
+
+## 2026-06-23 — Alyssa (Shared staff directory + cross-department roster + "who's on when")
+
+**Files changed:**
+- `supabase/migrations/20260623_001_staff_directory.sql` (new — `production.employees` canonical registry)
+- `supabase/migrations/20260623_002_roster_june2026.sql` (new — reconcile 75 June people into the directory + prefill all four June weeks)
+- `app/(app)/production/roster/page.tsx` (picker now uses the staff directory; added the "On duty" view)
+
+**Changes:**
+- Added **`production.employees`** — one company-wide staff directory (name, department, job title, skills/certs, phone, active) that all modules can reference. It's additive: Capture (`production.operators`) and Maintenance (`maintenance.duty_roster`) are unchanged. Every existing operator is backfilled as an employee; `roster_entries` gains an `employee_id` link.
+- The June 2026 Shift Layout workbook is imported: **75 distinct people** reconciled into the directory across all departments (37 production, 13 store, 11 QC, 9 cleaning, 4 maintenance, 1 H&S), and **all four June weeks (281 entries)** prefilled, each linked to its employee + operator and tagged with the certs from the sheet.
+- The roster page now picks people from the shared directory (search by name or job title; selecting a person auto-fills their known certs), and shows a date-aware **"On duty"** card: for today (SAST) it lists who's on the Day/Night shift grouped by department, with a Day/Night toggle and a "now" marker.
+- **Run order on the DB:** `20260623_001_staff_directory.sql` first, then `20260623_002_roster_june2026.sql`.
+- **Next (Phase 3):** roster → Capture section assignments and roster → Maintenance duty roster auto-fill; then AI suggester + approve + send (PDF/WhatsApp) + leave tool.
+
+---
+
+## 2026-06-23 — Alyssa (Shift Roster moved into Production area + linked to employees)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx` (new — relocated from `app/(app)/supervisor/roster/`)
+- `lib/production/roster-config.ts` (new — roster roles, categories, skill tags)
+- `supabase/migrations/20260622_001_roster.sql` (new — `roster_roles` / `roster_periods` / `roster_entries`, now with `operator_id` FK to `production.operators`)
+- `components/layout/Sidebar.tsx` (added "Shift Roster" nav under Operations, Production+Management)
+
+**Changes:**
+- The whole-site monthly Shift Roster now lives in the **Production area** (`/production/roster`, manager-owned) instead of the Supervisor Hub, and has its own sidebar entry.
+- Roster people are now **linked to real employees** — the person picker searches `production.operators` (the 77-name employee list) and stores `operator_id` alongside the denormalised display name, instead of free-typed names. This is the foundation for the planned AI-suggested roster.
+- Migration is additive and idempotent; nothing touches the production-capture `shift_assignments` flow.
+- **Next phases (planned, not in this change):** AI-suggested month-ahead roster → manager approve → send out via printable PDF + WhatsApp/SMS; a simple leave/availability tool to feed the AI; offline-resilient capture (IndexedDB queue) + trimming autosave round-trips.
+
+---
+
+## 2026-06-23 — Alyssa (Supervisor Hub: redesigned Overview into a command-centre dashboard)
+
+**Files changed:**
+- `app/(app)/supervisor/page.tsx` — full Overview redesign: KPI strip, live shift-lines panel, sign-off queue, 7-day trend charts
+- `components/supervisor/HubTabs.tsx` — dropped the Analytics tab; added a shared `HubHeader`
+- `app/(app)/supervisor/{timesheets,productions,messages,analytics}/page.tsx` — adopt `HubHeader`
+- `app/(app)/supervisor/calendar/page.tsx` — rebuilt on the Day/Night shift model + a click-to-open day review
+- `app/(app)/production/capture/[section]/page.tsx` — capture screen now honours a `?tab=` deep-link
+
+**Changes:**
+- The Overview was just a few snapshot tiles + module links — it showed neither *what needs action* nor *what's happening right now*, and looked nothing like the app's Analytics tab. Rebuilt it as a proper at-a-glance dashboard using the same recharts / `ChartCard` / design-token vocabulary as `supervisor/analytics`.
+- **KPI strip (7 metrics):** Pending sign-off, Operators on shift, Productions today, kg out today, Hours logged, Open breakdowns, Tech on duty. All derived from a single 7-day data pull (sessions + mass balance + confirmed timesheets) plus today's roster.
+- **Lines this shift** panel: live status of every section rostered for the current shift — colour badge, operators, kg out so far, and a status pill (Not started / In progress / Awaiting sign-off / Signed off), with an `X/Y signed off` header counter. Each row links into the section; submitted ones deep-link to the Sign-off tab. Empty state links to Assign sections.
+- **Needs your sign-off** queue (alongside the lines panel): every `prod_sessions` row in `submitted` status (not date-bound, so older hand-overs can't slip past), oldest first, each a one-tap row deep-linking to the section's Sign-off tab. Count badge in the header; calm "All caught up" state when empty.
+- **Last 7 days** trends: kg-bagged-out area chart + hours-worked bar chart (gaps filled with zeros), with a "Full analytics →" link to the Analytics tab.
+- To make the sign-off deep-links land correctly, the capture `[section]` page now reads an optional `tab` query param (validated against the known tabs) to set its initial tab — previously it always opened on Production. The signature-based approval flow itself is unchanged.
+
+**Hub tab cleanup (same session):**
+- **Removed the Analytics tab** from the hub sub-nav — its kg/day + hours/day trends now live on the Overview. The deeper breakdowns (by-operator, by-section, custom date range) stay on the `/supervisor/analytics` page, reachable via the Overview's "Full analytics →" link, so nothing is lost.
+- **Consolidated the per-tab header.** Every tab page previously re-implemented the `Supervisor Hub` title + subtitle + `<HubTabs />` block slightly differently. Extracted a single **`HubHeader`** component (title, contextual subtitle, optional right-aligned action) and adopted it across Overview, Timesheets, Productions, Calendar, Messages, and Analytics — so all tabs are visually identical at the top and easy to follow.
+
+**Calendar redesign (same session):**
+- The week grid showed cramped, unreadable chips (`M GA`, `M AL AM AK` — shift letter + operator initials) and clicking a cell jumped straight into the editor. Rebuilt it to be **reviewable**: each day (header or cell) opens a **Day Review modal** showing the full roster — Day/Night shift groups, each section with full operator names and variant/lot, plus the technician on duty — with a per-shift "Edit" button that deep-links to Assign sections. Closes on backdrop click or Escape.
+- **Standardised on the Shift Roster's Day/Night model** for cross-app consistency. The calendar previously displayed capture's three sub-shifts (Morning/Afternoon/Night) with bespoke amber/sky/indigo dots that appeared nowhere else. It now folds morning + afternoon → **Day Shift** (07h00–16h00, Sun) and night → **Night Shift** (16h00–01h00, Moon), matching `/production/roster`'s `ROSTER_SHIFTS` and Sun/Moon language. Week-grid cells now show a clean Sun/Moon chip with a head-count per shift instead of initials; the Day view lists each shift's roster in full. Editing still opens the capture Assign screen (which keeps its finer 3-shift control).
+
+---
+
+## 2026-06-23 — Alyssa (Auth reconcile: align prod users & roles to the staging model)
+
+**Files changed:**
+- `.github/workflows/db-reconcile.yml` — two new reconcile phases + a read-only auth preview
+- `supabase/reconcile/auth_prune_cntp_local.sql` (new) — FK-checked prune of `@cntp.local` placeholders
+- `supabase/reconcile/AUTH_RECONCILE_RUNBOOK.md` (new) — run sequence + rollback
+- `supabase/reconcile/CONFIRMED` — set to `auth-add-staff`
+
+**Changes:**
+- Production auth had only 3 real staff (Alyssa/Gustav/Jan) plus 8 placeholder `@cntp.local` operator/supervisor accounts; staging is the model we want — real staff on Azure work-account SSO (`@rooibostea.co.za`) each with a `shared.app_roles` role, plus `@floor` PIN operators.
+- **`auth-add-staff`** (new `MODE=authstaff`): additively copies real-staff `auth.users` + their `auth.identities` (so Azure SSO matches the same account) + their `shared.app_roles` rows from staging → prod, `ON CONFLICT DO NOTHING`. UUIDs preserved so roles bind correctly; the 3 existing accounts are skipped; `@floor` operators untouched. Column lists derived from prod so any auth-schema drift aborts cleanly instead of misaligning.
+- **`auth-prune-cntp-local`** (new, via `MODE=sqlfile`): deletes `@cntp.local` accounts only when no real data table references them; referenced accounts are kept and logged. Prints a KEEP/DELETE report before any delete. Single transaction.
+- Read-only **Auth reconcile preview** step on `reconcile/diff` lists the staff to be copied and the `@cntp.local` accounts + their references, for review before applying.
+- Both phases run through the existing backup-first, double-gated DB Reconcile action. Azure provider already enabled on the prod project (prerequisite).
+
+**Result (applied to prod 2026-06-23):**
+- Phase A: **12 staff added** (15 staging staff minus the 3 already present), 12 Azure identities, 10 app_roles rows. Prod now has all 15 `@rooibostea.co.za` staff with their staging roles. (Jan kept his existing prod role `co_developer` rather than staging's `bis_manager` — additive copy does not overwrite existing accounts.)
+- Phase B: of the 8 `@cntp.local` placeholders, **7 deleted** (no production data), **1 kept** (`blender@cntp.local`, referenced by `production.scan_events`). Final prod auth = 16 users.
+- Two iterations were needed on the copy logic: (1) prod's `shared.app_roles` has `updated_at` (bucket2) that staging lacks → switched to the staging/prod column **intersection**; (2) `auth.users.confirmed_at` is a **generated** column → excluded generated/identity columns. All failures rolled back cleanly (atomic txn) — no partial writes.
+- Discovered a **second roles table** `production.app_roles` (separate from `shared.app_roles`); the prune treats both as the account's own record.
+
+---
+
+## 2026-06-22 — Alyssa (Alara Signal Engine: Gemini multi-model conversion + scraper hardening)
+
+**Files changed:**
+- `research-engine/n8n/cntp-signal-engine.json` — corrected + re-architected workflow
+- `supabase/migrations/20260622_003_signals_dedup.sql` (new) — DB-enforced dedup backstop
+
+**Changes (n8n workflow):**
+- **Removed the remote-PC dependency.** Tier 1 was Ollama (`alara-engine`) on a remote PC over Tailscale; a full run fired ~940 inferences at it and twice froze the machine (RDP `0x204`). Tier 1 now runs on **`gemini-2.5-flash-lite`** (cloud) via the existing CNTP Gemini credential — same Alara persona/scoring prompt, parse node updated to read Gemini's response shape. The engine is now VPS + cloud only; nothing local to crash.
+- **Multi-model tiering, deliberately off `2.5-flash`** (which the app uses heavily — separate per-model quota buckets avoid contention): Tier 1 = `gemini-2.5-flash-lite` (cheap bulk, all new items), Tier 2 deep = `gemini-2.0-flash`. Future: Tier 3 `gemini-2.5-pro`, vision `gemini-3.1-flash-lite`, dedup `gemini-embedding-001`. A separate API key/GCP project for the scraper is the recommended next isolation step.
+- **Loophole-aware escalation:** Score Filter now escalates to the Tier-2 deep pass on `relevance_score >= 7` **OR** `intelligence_type` in (loophole, switching_signal, competitor_intel, threat) — moderate-score competitor/loophole signals still get full analysis. All scores are still saved (no relevance gate — low scores are leads).
+- **Throttle node** (`max new/run`, enabled, 25) caps items per run — protects against floods and bounds Gemini spend; tune upward as proven safe.
+- **Per-workflow timezone** `Africa/Johannesburg` + trigger at **03:00 SAST** (n8n instance clock was New York).
+- `raw_content` capped at 2k chars on both save paths.
+- **Fixed the real "nothing saves" cause:** `sales.signals.classification` has a CHECK constraint (`signals_classification_check`) allowing only opportunity/threat/competitor/regulation/relationship/neutral, but Tier 1 was writing the richer `intelligence_type` vocabulary (loophole/market_gap/switching_signal/…) → every insert rejected. Both save paths now map `intelligence_type` → an allowed `classification` and preserve the fine-grained type in `intel`.
+- **Fixed all-false-branch:** old Tier-1 parser couldn't read the Gemini node's output nesting → every item scored 0. Replaced with a deep-scan extractor (also applied to the Tier-2 parser); added a `_raw` debug field.
+
+**Changes (database):**
+- `20260622_003_signals_dedup.sql` — dedup is already enforced by the pre-existing `signals_source_url_unique` constraint; the earlier draft's unique title index was redundant and fails on real data (distinct articles sharing a title prefix), so it is NOT created.
+
+**VPS:**
+- Found n8n already runs persistently as user `ubuntu` (25-day uptime) — it does **not** die when PuTTY closes; PuTTY only provides the tunnel to the editor. The `pm2`-under-`cntpdev` attempt would have spun up a broken empty duplicate on a clashing port; cleaned up, `cntpdev` pm2 now runs only the two apps.
+
+---
+
+## 2026-06-22 — Alyssa (Alara Signal Engine: structured-intelligence columns)
+
+**Files changed:**
+- `supabase/migrations/20260622_002_signals_intel_columns.sql` (new) — adds `sales_angle`, `urgency`, `tier`, `intel jsonb` to `sales.signals`
+- `components/intelligence/types.ts` — `Signal` gains `sales_angle`/`urgency`/`tier`/`intel`; new `Urgency` type
+- `components/intelligence/helpers.ts` — new `urgencyStyle()` palette helper
+- `app/api/signals/route.ts` — GET select now returns the new columns
+- `app/api/pipeline/ingest/route.ts` — `IngestPayload` accepts + sanitises the new fields (urgency whitelisted, intel object-guarded)
+- `components/intelligence/SignalCard.tsx` — urgency badge + recommended-action line
+- `components/intelligence/SignalDrawer.tsx` — urgency badge, Tier chip, "Recommended action" section
+
+**Changes:**
+- The live Alara pipeline ("CNTP Signal Engine" — Ollama Tier 1 → Gemini Tier 2) was writing `sales_angle`/`urgency`/`tier` as top-level columns that did not exist on `sales.signals` (insert failed: *"Could not find the 'sales_angle' column … in the schema cache"*), and overloading `sections` (the app's `text[]` tab tags) with a JSON object. Added the missing columns plus a catch-all `intel jsonb`; `sections` is left to the app and the pipeline now writes its structured extras (target_segment, competitor_mentioned, full Tier-2 analysis) to `intel`.
+- Surfaced `sales_angle` ("one concrete action for CNTP") and `urgency` in the Signal feed + drawer so the per-signal next action is visible.
+- DB note: `sales` is a prod-only schema; the ALTER is run manually in the Supabase SQL editor on the project the pipeline writes to (not via `db-migrate.yml`). Additive + nullable only.
+
+---
+
+## 2026-06-22 — Alyssa (DB reconcile Phase 1: rebuild production qms to match staging)
+
+**Files changed:**
+- `.github/workflows/db-reconcile.yml` (new) — one-time, push-triggered (`reconcile/diff` / `reconcile/apply`), gated
+- `supabase/reconcile/CONFIRMED` (new) — apply confirmation marker
+
+**Changes (production database):**
+- Discovery via read-only diff: staging and production had **diverged in different directions** (staging ahead on qms/maintenance/acumatica; production ahead on fields ~1.38M rows/sales/logistics/marketing/public). The `qms` module was *redesigned* on staging (split sieve columns, `id` integer→bigint, `created_by` uuid→text, no FKs). So "make prod match staging" wholesale was rejected as destructive; scoped to a surgical, module-by-module reconciliation starting with qms.
+- **Phase 1 applied to production**: rebuilt prod `qms` to staging's design — `DROP SCHEMA qms CASCADE` + staging qms DDL + staging qms data, in one `--single-transaction`. Production backed up to the VPS first (`/home/cntpdev/apps/backups`). Verified prod `qms` == staging `qms` (39 tables, identical row counts). Production `public.*` quality data left intact; the dropped prod qms was only the redundant old service-role copy (also in backup).
+- Ran entirely via gated GitHub Actions; DB passwords live only in GitHub secrets.
+- **Bucket 1 applied to production**: added `maintenance` (24 tables) and `acumatica` (3 tables) from staging — purely additive (prod had neither schema), counts match staging, no existing prod data touched. Backed up first; atomic.
+- Decisions for remaining work: prod's `production`/`axis`/`shared` data is real → align those **additively only** (preserve prod data); prod-only `fields`/`sales`/`logistics`/`marketing` left as-is; the old `public.*` JSON-blob quality data will be retired (not merged — blob format breaks the Acumatica push).
+- **Bucket 2 applied to production** (additive, atomic): created 15 missing `production` tables + `shared.dashboard_layouts` (structure only) and added 50 staging-only columns across existing tables (`shared.app_roles`, `axis.tickets`, `production.prod_sessions`/`bag_tags`/`inventory_items`/etc.) — all nullable, `IF NOT EXISTS`. Also created `production.set_updated_at()` trigger fn (absent in prod). Existing prod data fully preserved (verified: inventory_items 554, prod_sessions 25, scan_events 125, sc_entries 210, shared.audit_log 776). SQL: `supabase/reconcile/bucket2_add_columns.sql`.
+- **Database structure alignment now complete** (qms, maintenance, acumatica, production, axis, shared, workspace).
+- **Production app deployed (internal)**: cloned repo to `/home/cntpdev/apps/production/app/cntp-ops`, created prod `.env.local` (→ production Supabase), built, and started under pm2 as `cntp-production` on port 3001. Local health check HTTP 200. Docs: `docs/production-deploy.md`.
+- **Remaining to go live**: Compunique must repoint the `cntpplatform` nginx site from static-file serving to `proxy_pass http://localhost:3001` (needs root; SSL already configured). Plus: fast-forward `main` to `staging` to make `main` the production branch (deferred — must neutralize the not-yet-ready `db-migrate.yml` auto-push first). Deferred: retire old `public.*` blob quality tables.
+
+---
+
 ## 2026-06-21 — Alyssa (DB promotion flow: staging→prod migrations + nightly data refresh)
 
 **Files changed:**

@@ -931,47 +931,39 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [pubBatches,    setPubBatches]     = useState<any[]>([])
   const [pubLoading,    setPubLoading]     = useState(false)
   const [showPubHistory,setShowPubHistory] = useState(false)
+  const [histSort,      setHistSort]       = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
+  const [histRowView,   setHistRowView]    = useState<'samples'|'daily'>('samples')
   const prevBatchIdRef = useRef<string|null>(null)
 
-  // Load batches from DB
+  // Load batches from qms (single source — legacy public consolidated 2026-06-24)
   useEffect(() => {
     setDbLoading(true)
-    Promise.all([
-      db.schema('qms').from('quality_records').select('*')
-        .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
-        .order('created_at',{ascending:false}),
-      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()).then(j => ({ data: j.pasteuriser_runs ?? [] })),
-    ]).then(([{ data: qmsData }, { data: legacyData }]) => {
-      const parseRec = (r: any, isLegacy = false): any => {
-        let d: any = {}
-        try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
-        if (!d.id) return null
-        const b = { ...d, _db_id: isLegacy ? undefined : r.id }
-        return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
-          const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
-          return da < db2 ? -1 : da > db2 ? 1 : 0
-        })}
-      }
-      const fromQms    = (qmsData    || []).map((r: any) => parseRec(r, false)).filter(Boolean)
-      const fromLegacy = (legacyData || []).map((r: any) => parseRec(r, true)).filter(Boolean)
-      const seen = new Set(fromQms.map((b: any) => b.id))
-      const all  = [...fromQms, ...fromLegacy.filter((b: any) => !seen.has(b.id))]
-      setBatches(all as any)
-      if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
-    }).finally(() => setDbLoading(false))
+    db.schema('qms').from('quality_records').select('*')
+      .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
+      .order('created_at',{ascending:false})
+      .then(({ data: qmsData }: { data: any }) => {
+        const parseRec = (r: any): any => {
+          let d: any = {}
+          try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+          if (!d.id) d.id = r.id || r.batch_number || `rec-${Math.random().toString(36).slice(2)}`
+          const b = { ...d, _db_id: r.id }
+          return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
+            const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
+            return da < db2 ? -1 : da > db2 ? 1 : 0
+          })}
+        }
+        const fromQms = (qmsData || []).map((r: any) => parseRec(r)).filter(Boolean)
+        setBatches(fromQms as any)
+        if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
+      }).then(undefined, () => {}).finally(() => setDbLoading(false))
   }, [])
 
-  // Load historical batches from public schema (read-only reference, never modified)
+  // "Historical" view — now a qms read (public schema retired)
   const loadPubHistory = useCallback(async () => {
     setPubLoading(true)
-    const [legacyRes, { data: current }] = await Promise.all([
-      fetch('/api/quality/legacy-pasteuriser').then(r => r.json()),
-      db.schema('qms').from('quality_records').select('*')
-        .eq('workcenter', 'pasteuriser').order('created_at', { ascending: false }).limit(200),
-    ])
-    const merged = [...(current ?? []), ...(legacyRes.quality_records ?? [])]
-      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    setPubBatches(merged)
+    const { data } = await db.schema('qms').from('quality_records').select('*')
+      .eq('workcenter', 'pasteuriser').order('created_at', { ascending: false }).limit(500)
+    setPubBatches((data ?? []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
     setPubLoading(false)
   }, [db])
 
@@ -1131,6 +1123,40 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     })
     return merged
   })()
+
+  // ── History table sorting ───────────────────────────────────────────────────
+  const meanOf = (b: Batch, field: keyof BatchSample, onlyMb = true) => {
+    const ss = (b.samples||[]).filter(s => onlyMb ? s.has_mb : true)
+    const vals = ss.map(s => parseFloat(s[field] as string)).filter(n => !isNaN(n))
+    return vals.length ? vals.reduce((a,v)=>a+v,0)/vals.length : NaN
+  }
+  const earliestDate = (b: Batch) => {
+    const ds = [...new Set((b.samples||[]).map(s=>s.date).filter(Boolean))].sort()
+    return ds[0] || b.production_date || ''
+  }
+  const sortKeyVal = (b: Batch, key: string): string|number => {
+    switch (key) {
+      case 'batch':    return (b.batch_number||'').toLowerCase()
+      case 'date':     return earliestDate(b)
+      case 'customer': return (b.customer||'').toLowerCase()
+      case 'product':  return `${b.product_family||b.type_grade||''} ${b.grade||''}`.toLowerCase()
+      case 'variant':  return (b.variant||'').toLowerCase()
+      case 'samples':  return (b.samples||[]).length
+      case 'moisture': { const v = meanOf(b,'moisture'); return isNaN(v) ? -Infinity : v }
+      case 'bd':       { const v = meanOf(b,'untapped_bd'); return isNaN(v) ? -Infinity : v }
+      case 'result':   return (b.final_result||'').toLowerCase()
+      default:         return ''
+    }
+  }
+  const toggleHistSort = (key: string) =>
+    setHistSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
+  const histSorted = [...completedBatches]
+    .filter(b => !historySearch || b.batch_number.toLowerCase().includes(historySearch.toLowerCase()))
+    .sort((a,b) => {
+      const va = sortKeyVal(a, histSort.key), vb = sortKeyVal(b, histSort.key)
+      const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
+      return histSort.dir === 'asc' ? cmp : -cmp
+    })
 
   if (dbLoading) return <div className="text-center py-16 text-text-muted text-[12px] animate-pulse">Loading batches…</div>
 
@@ -1515,13 +1541,17 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-surface border-b border-surface-rule">
-                      {['Batch No.','Date','Customer','Product','Variant','Samples','Avg Moisture','Avg BD',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}`),'Sieve Fails','Result','Export'].map(h => (
-                        <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
+                      {([['Batch No.','batch'],['Date','date'],['Customer','customer'],['Product','product'],['Variant','variant'],['Samples','samples'],['Avg Moisture','moisture'],['Avg BD','bd'],...PAST_SIEVE_COLS.map(c=>[`Avg ${c.label}`,null] as [string,null]),['Sieve Fails',null],['Result','result'],['Export',null]] as [string,string|null][]).map(([h,key]) => (
+                        <th key={h}
+                          onClick={key ? () => toggleHistSort(key) : undefined}
+                          className={`px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide whitespace-nowrap ${key?'cursor-pointer select-none hover:text-text':''} ${key && histSort.key===key ? 'text-brand' : 'text-text-muted'}`}>
+                          {h}{key && histSort.key===key ? (histSort.dir==='asc'?' ▲':' ▼') : ''}
+                        </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-rule">
-                    {completedBatches.filter(b => !historySearch || b.batch_number.toLowerCase().includes(historySearch.toLowerCase())).map((b, ri) => {
+                    {histSorted.map((b, ri) => {
                       const samples = b.samples||[]
                       const sieveSamples = samples.filter(s => s.has_sieve)
                       const mbSamples    = samples.filter(s => s.has_mb)
@@ -1578,16 +1608,61 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <tr key={`${b.id}-exp`}>
                               <td colSpan={99} className="bg-info/3 border-b-2 border-b-brand p-0">
                                 <div className="p-5 space-y-3">
-                                  <div className="flex items-center gap-3 flex-wrap">
+                                  <div className="flex items-center gap-3 flex-wrap sticky left-0 w-fit">
                                     <span className="font-mono font-bold text-[13px] text-text">{b.batch_number}</span>
                                     {b.qc_name && <span className="text-[11px] text-text-muted">QC: {b.qc_name}</span>}
                                     {b.final_reason && <span className="text-[10px] text-warn bg-warn/8 px-2 py-0.5 rounded-lg italic">💬 {b.final_reason}</span>}
+                                    <div className="ml-auto flex border border-surface-rule rounded-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+                                      {([['samples','Samples'],['daily','📅 Per-day avg']] as const).map(([v,l],i) => (
+                                        <button key={v} onClick={() => setHistRowView(v)}
+                                          className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${i>0?'border-l border-surface-rule':''} ${histRowView===v?'bg-brand text-white':'bg-surface-card text-text-muted hover:text-text'}`}>{l}</button>
+                                      ))}
+                                    </div>
                                     <button onClick={e => { e.stopPropagation(); setActiveBatchId(b.id); setDashView('active') }}
-                                      className="ml-auto px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
+                                      className="px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
                                     <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
                                       className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
                                   </div>
-                                  {samples.length > 0 && (
+                                  {samples.length > 0 && histRowView === 'daily' && (() => {
+                                    const byDate: Record<string, BatchSample[]> = {}
+                                    samples.forEach(s => { const d = s.date || 'Unknown'; (byDate[d] = byDate[d] || []).push(s) })
+                                    const mean = (ss: BatchSample[], field: keyof BatchSample, filt: (s:BatchSample)=>boolean = ()=>true) => {
+                                      const vals = ss.filter(filt).map(s => parseFloat(s[field] as string)).filter(n => !isNaN(n))
+                                      return vals.length ? vals.reduce((a,v)=>a+v,0)/vals.length : NaN
+                                    }
+                                    const dates = Object.keys(byDate).sort()
+                                    return (
+                                      <div className="overflow-x-auto rounded-xl border border-surface-rule">
+                                        <table className="w-full text-left text-[10px]">
+                                          <thead>
+                                            <tr className="bg-brand text-white">
+                                              {['Production Date','Samples','Avg Temp','Avg Moisture%','Avg BD (cc)',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}%`),'MB','Full'].map(h => <th key={h} className="px-3 py-2 font-semibold whitespace-nowrap">{h}</th>)}
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-surface-rule">
+                                            {dates.map((d, di) => {
+                                              const ss = byDate[d]
+                                              const mb = ss.filter(s => s.has_mb), sv = ss.filter(s => s.has_sieve)
+                                              const am = mean(mb,'moisture'), abd = mean(mb,'untapped_bd'), at = mean(ss,'hourly_temp')
+                                              return (
+                                                <tr key={d} className={`hover:bg-surface ${di%2===1?'bg-surface/50':'bg-surface-card'}`}>
+                                                  <td className="px-3 py-2 font-mono font-bold text-text whitespace-nowrap">{d!=='Unknown' ? format(new Date(d+'T12:00'),'dd MMM yyyy') : '—'}</td>
+                                                  <td className="px-3 py-2 text-center font-mono text-text-muted">{ss.length}</td>
+                                                  <td className="px-3 py-2 text-center font-mono">{isNaN(at)?'—':at.toFixed(1)}</td>
+                                                  <td className="px-3 py-2 text-center font-mono font-bold" style={{ color:am>8.5?'var(--color-err)':'var(--color-ok)' }}>{isNaN(am)?'—':am.toFixed(2)+'%'}</td>
+                                                  <td className="px-3 py-2 text-center font-mono">{isNaN(abd)?'—':abd.toFixed(0)}</td>
+                                                  {PAST_SIEVE_COLS.map(c => { const v = mean(sv, c.key as keyof BatchSample); return <td key={c.key} className="px-2 py-2 text-center font-mono">{isNaN(v)?'—':v.toFixed(1)+'%'}</td> })}
+                                                  <td className="px-3 py-2 text-center font-mono text-text-muted">{mb.length}</td>
+                                                  <td className="px-3 py-2 text-center font-mono text-text-muted">{sv.length}</td>
+                                                </tr>
+                                              )
+                                            })}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )
+                                  })()}
+                                  {samples.length > 0 && histRowView === 'samples' && (
                                     <div className="overflow-x-auto rounded-xl border border-surface-rule">
                                       <table className="w-full text-left text-[10px]">
                                         <thead>

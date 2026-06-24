@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { exportTableXlsx } from '@/lib/utils/exportExcel'
 import { RefreshCw, History, AlertTriangle, X } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -559,16 +560,11 @@ export default function LabResultsPage() {
 
   const load = useCallback(async (tab: TestType) => {
     setLoading(true); setError('')
-    const [{ data: qmsData, error: err }, legacyRes] = await Promise.all([
-      db.schema('qms').from('lab_results')
-        .select('*').eq('test_type', tab).order('created_at', { ascending:false }),
-      fetch('/api/quality/legacy-public?table=lab_results').then(r => r.json()).catch(() => ({ data: [] })),
-    ])
+    // qms is the single source (legacy public.lab_results consolidated 2026-06-24)
+    const { data: qmsData, error: err } = await db.schema('qms').from('lab_results')
+      .select('*').eq('test_type', tab).order('created_at', { ascending:false })
     if (err) { setError(err.message); setLoading(false); return }
-    const legacy = (legacyRes.data ?? []).filter((r: any) => r.test_type === tab)
-    const qmsIds = new Set((qmsData ?? []).map((r: any) => r.batch_no + '|' + r.test_type))
-    const uniqueLegacy = legacy.filter((r: any) => !qmsIds.has(r.batch_no + '|' + r.test_type))
-    const merged = [...(qmsData ?? []), ...uniqueLegacy]
+    const merged = (qmsData ?? [])
       .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     setRecords(p=>({...p,[tab]: merged as LabResult[]}))
     setLoading(false)
@@ -577,10 +573,10 @@ export default function LabResultsPage() {
   useEffect(() => { load(activeTab) }, [activeTab, load])
 
   const loadHistory = useCallback(async () => {
-    const res = await fetch('/api/quality/legacy-public?table=lab_results&limit=500')
-    const json = await res.json()
-    setHistoryRecs(json.data ?? [])
-  }, [])
+    const { data } = await db.schema('qms').from('lab_results').select('*')
+      .order('created_at', { ascending: false }).limit(500)
+    setHistoryRecs(data ?? [])
+  }, [db])
 
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
 
@@ -640,18 +636,21 @@ export default function LabResultsPage() {
           <button onClick={()=>load(activeTab)} style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:11, cursor:'pointer' }}>
             ↻ Refresh
           </button>
-          {/* CSV Export */}
+          {/* Excel Export — formatted, AutoFilter, empty columns dropped */}
           {current.length > 0 && (
             <button
               onClick={() => {
                 const cols2 = COLS[activeTab] ?? []
-                const hdrs = ['Batch',...cols2.map(([,l])=>l),'Date']
-                const rows2 = allRows.map((r:any)=>[r.batch_no??'',...cols2.map(([k])=>r[k]??''),r.created_at?new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}):''])
-                const csv = [hdrs,...rows2].map(row=>row.map((v:any)=>{const s=String(v??'');return s.includes(',')||s.includes('"')?`"${s.replace(/"/g,'""')}"`:`${s}`}).join(',')).join('\n')
-                const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,%EF%BB%BF'+encodeURIComponent(csv);a.download=`lab_${activeTab}_${new Date().toISOString().slice(0,10)}.csv`;a.click()
+                const rows = allRows.map((r:any) => {
+                  const o: Record<string, any> = { Batch: r.batch_no ?? '' }
+                  cols2.forEach(([k,l]: any) => { o[l] = r[k] ?? '' })
+                  o['Date'] = r.created_at ? new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}) : ''
+                  return o
+                })
+                exportTableXlsx(rows, `lab_${activeTab}_${new Date().toISOString().slice(0,10)}.xlsx`, activeTab)
               }}
               style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:11, cursor:'pointer' }}>
-              ⬇ Export CSV
+              ⬇ Export Excel
             </button>
           )}
           {/* CSV Import */}

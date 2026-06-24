@@ -61,7 +61,7 @@ export async function GET(req: Request) {
 
   let q = salesDb
     .from('signals')
-    .select('id, source_type, title, summary_en, classification, relevance_score, region, media_url, source_url, source_domain, keyword_group, sections, created_at')
+    .select('id, source_type, title, summary_en, classification, relevance_score, region, media_url, source_url, source_domain, keyword_group, sections, sales_angle, urgency, tier, intel, created_at')
     .order('created_at', { ascending: false })
     .limit(limit)
 

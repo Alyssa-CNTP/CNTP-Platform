@@ -2,21 +2,20 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare, TrendingUp } from 'lucide-react'
+import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare, UserPlus } from 'lucide-react'
 
-// Sub-nav for the Supervisor Hub. Calendar + Messages are shown as disabled
-// "soon" placeholders until phases 2/3 land — matching the tab styling used on
-// the Management page (border-b-2 brand on active).
+// Sub-nav for the Supervisor Hub. Analytics was folded into the Overview
+// (KPI strip + 7-day trends), so it no longer needs its own tab — the deeper
+// breakdowns stay reachable via the Overview's "Full analytics" link.
+// "Assign" deep-links to the section-assignment tool (lives outside /supervisor).
 const TABS = [
-  { href: '/supervisor',             label: 'Overview',    icon: LayoutDashboard },
-  { href: '/supervisor/timesheets',  label: 'Timesheets',  icon: Clock },
-  { href: '/supervisor/productions', label: 'Productions', icon: Factory },
-  { href: '/supervisor/calendar',    label: 'Calendar',    icon: CalendarDays },
-  { href: '/supervisor/messages',    label: 'Messages',    icon: MessageSquare },
-  { href: '/supervisor/analytics',   label: 'Analytics',   icon: TrendingUp },
+  { href: '/supervisor',                  label: 'Overview',    icon: LayoutDashboard },
+  { href: '/supervisor/timesheets',       label: 'Timesheets',  icon: Clock },
+  { href: '/supervisor/productions',      label: 'Productions', icon: Factory },
+  { href: '/supervisor/calendar',         label: 'Calendar',    icon: CalendarDays },
+  { href: '/supervisor/messages',         label: 'Messages',    icon: MessageSquare },
+  { href: '/production/capture/assign',   label: 'Assign',      icon: UserPlus },
 ] as const
-
-const SOON: { label: string; icon: typeof MessageSquare }[] = []
 
 export function HubTabs() {
   const pathname = usePathname()
@@ -31,13 +30,24 @@ export function HubTabs() {
           </Link>
         )
       })}
-      {SOON.map(s => (
-        <span key={s.label} title="Coming soon"
-          className="flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 border-transparent text-stone-300 whitespace-nowrap cursor-default">
-          <s.icon size={14} /> {s.label}
-          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-400">soon</span>
-        </span>
-      ))}
     </div>
+  )
+}
+
+// Shared page header for every Hub tab: a consistent title + contextual
+// subtitle + the tab bar, with an optional right-aligned action (e.g. Refresh).
+// Keeps all tabs visually identical at the top so the hub is easy to follow.
+export function HubHeader({ subtitle, action }: { subtitle?: string; action?: React.ReactNode }) {
+  return (
+    <>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display font-bold text-[22px] text-text">Supervisor Hub</h1>
+          {subtitle && <p className="text-[12px] text-stone-400 mt-0.5">{subtitle}</p>}
+        </div>
+        {action && <div className="mt-1 shrink-0">{action}</div>}
+      </div>
+      <HubTabs />
+    </>
   )
 }

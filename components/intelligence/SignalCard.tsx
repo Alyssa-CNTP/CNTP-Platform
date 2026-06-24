@@ -1,11 +1,12 @@
 'use client'
 
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, Target, Zap } from 'lucide-react'
 import clsx from 'clsx'
 import type { Signal } from './types'
 import {
   classificationStyle,
   relevanceStyle,
+  urgencyStyle,
   regionFlag,
   timeAgo,
 } from './helpers'
@@ -19,44 +20,65 @@ interface SignalCardProps {
 export default function SignalCard({ signal, compact = false, onClick }: SignalCardProps) {
   const cls = classificationStyle(signal.classification)
   const rel = relevanceStyle(signal.relevance_score)
+  const urg = signal.urgency ? urgencyStyle(signal.urgency) : null
+
+  // Fine-grained pipeline type (loophole / market_gap / …) preserved in intel.
+  const rawType =
+    signal.intel && typeof signal.intel === 'object'
+      ? ((signal.intel as Record<string, unknown>).intelligence_type as string | undefined)
+      : undefined
+  const showRawType = rawType && rawType !== signal.classification
 
   const handleClick = () => onClick?.(signal)
 
   return (
-    <div
+    <article
       onClick={handleClick}
       className={clsx(
-        'group relative bg-surface-card rounded-xl border border-surface-rule shadow-card transition-all',
+        'group relative bg-surface-card rounded-xl border border-surface-rule shadow-card transition-all overflow-hidden',
         'hover:border-text-faint/40 hover:shadow-md',
         onClick && 'cursor-pointer',
-        compact ? 'p-3' : 'p-4'
+        compact ? 'p-3 pl-4' : 'p-4 pl-5'
       )}
     >
-      {/* Top row — badges */}
+      {/* Classification accent rail */}
+      <span
+        aria-hidden
+        className="absolute left-0 top-0 bottom-0 w-[3px]"
+        style={{ background: cls.fg }}
+      />
+
+      {/* Badge row */}
       <div className="flex items-center gap-1.5 flex-wrap mb-2">
         <span
           className="font-mono text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded-md border"
-          style={{
-            background:   cls.bg,
-            color:        cls.fg,
-            borderColor:  cls.border,
-          }}
+          style={{ background: cls.bg, color: cls.fg, borderColor: cls.border }}
         >
           {signal.classification}
         </span>
         <span
           className="font-mono text-[10px] font-medium px-2 py-0.5 rounded-md border"
-          style={{
-            background:   rel.bg,
-            color:        rel.fg,
-            borderColor:  rel.border,
-          }}
+          style={{ background: rel.bg, color: rel.fg, borderColor: rel.border }}
         >
           {signal.relevance_score}/10
         </span>
-        {signal.keyword_group && (
+        {urg && (
+          <span
+            className="inline-flex items-center gap-0.5 font-mono text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded-md border"
+            style={{ background: urg.bg, color: urg.fg, borderColor: urg.border }}
+          >
+            {signal.urgency === 'high' && <Zap size={9} />}
+            {signal.urgency}
+          </span>
+        )}
+        {showRawType && (
           <span className="font-mono text-[10px] text-text-muted bg-surface px-2 py-0.5 rounded-md border border-surface-rule">
-            {signal.keyword_group}
+            {rawType!.replace(/_/g, ' ')}
+          </span>
+        )}
+        {signal.tier === 2 && (
+          <span className="font-mono text-[10px] text-text-faint px-1.5 py-0.5 rounded-md border border-surface-rule">
+            deep
           </span>
         )}
         <span className="ml-auto font-mono text-[10px] text-text-faint">
@@ -76,21 +98,26 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
 
       {/* Summary */}
       {signal.summary_en && !compact && (
-        <p
-          className="text-[13px] text-text-muted mt-1.5 leading-relaxed"
-          style={{
-            display:           '-webkit-box',
-            WebkitLineClamp:   2,
-            WebkitBoxOrient:   'vertical',
-            overflow:          'hidden',
-          }}
-        >
+        <p className="text-[13px] text-text-muted mt-1.5 leading-relaxed line-clamp-2">
           {signal.summary_en}
         </p>
       )}
 
-      {/* Footer */}
-      <div className="flex items-center gap-2.5 mt-2.5 text-[11px] text-text-faint font-mono">
+      {/* Recommended action — the hero of the card */}
+      {signal.sales_angle && !compact && (
+        <div
+          className="mt-2.5 flex items-start gap-2 rounded-lg px-3 py-2"
+          style={{ background: 'rgba(90,138,42,0.10)' }}
+        >
+          <Target size={13} className="mt-[3px] shrink-0" style={{ color: 'var(--color-accent)' }} />
+          <p className="text-[12px] leading-relaxed text-text line-clamp-2">
+            {signal.sales_angle}
+          </p>
+        </div>
+      )}
+
+      {/* Footer meta */}
+      <div className="flex items-center gap-2.5 mt-3 text-[11px] text-text-faint font-mono">
         {signal.region && (
           <span className="inline-flex items-center gap-1">
             <span className="text-[13px] leading-none">{regionFlag(signal.region)}</span>
@@ -100,7 +127,15 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
         {signal.source_domain && (
           <>
             <span className="text-text-faint/50">·</span>
-            <span className="truncate max-w-[180px]">{signal.source_domain}</span>
+            <span className="truncate max-w-[160px]">
+              {signal.source_domain.replace(/^https?:\/\/(www\.)?/, '')}
+            </span>
+          </>
+        )}
+        {signal.keyword_group && (
+          <>
+            <span className="text-text-faint/50">·</span>
+            <span className="truncate">{signal.keyword_group}</span>
           </>
         )}
         {signal.source_url && (
@@ -109,13 +144,13 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            className="ml-auto text-text-muted hover:text-accent transition-colors"
+            className="ml-auto inline-flex items-center text-text-muted hover:text-accent transition-colors"
             aria-label="Open source in new tab"
           >
             <ExternalLink size={12} />
           </a>
         )}
       </div>
-    </div>
+    </article>
   )
 }

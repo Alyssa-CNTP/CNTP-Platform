@@ -127,6 +127,9 @@ export default function IntelligenceHubPage() {
     <div className="px-4 md:px-6 py-6 max-w-[1280px] mx-auto">
       {/* Header row */}
       <header className="flex flex-wrap items-center gap-2 mb-5">
+        <span className="w-full font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted mb-1">
+          Intelligence / Signal Engine
+        </span>
         <h1 className="font-display font-bold text-[24px] text-text">Signal Engine</h1>
         <span className="font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md border border-surface-rule bg-surface text-text-muted">
           {totalCount !== null ? totalCount.toLocaleString() : '—'} total

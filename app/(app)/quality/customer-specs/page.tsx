@@ -108,7 +108,8 @@ export default function CustomerSpecsPage() {
   useEffect(()=>{load()},[load])
   useEffect(()=>{
     if(!showHistory)return;setHistLoading(true)
-    db.schema('public').from('customer_specs').select('*').order('product_family').order('grade')
+    // qms is the single source (legacy public.customer_specs consolidated 2026-06-24)
+    db.schema('qms').from('customer_specs').select('*').order('product_family').order('grade')
       .then(({data}:{data:any[]|null})=>{setHistSpecs(data??[]);setHistLoading(false)})
   },[showHistory,db])
 

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { sectionMeta, SECTION_ORDER } from '@/lib/production/capture-config'
-import { HubTabs } from '@/components/supervisor/HubTabs'
+import { HubHeader } from '@/components/supervisor/HubTabs'
 import {
   GENERAL, loadThread, loadLatestPerChannel, sendMessage, deleteMessage,
   getSeen, markSeen, type LineMessage, type ChannelLatest,
@@ -102,11 +102,7 @@ export default function SupervisorMessages() {
 
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <div>
-        <h1 className="font-display font-bold text-[22px] text-text">Supervisor Hub</h1>
-        <p className="text-[12px] text-stone-400 mt-0.5">Per-line messages between supervisors and the floor</p>
-      </div>
-      <HubTabs />
+      <HubHeader subtitle="Per-line messages between supervisors and the floor" />
 
       <div className="flex gap-4 h-[calc(100vh-280px)] min-h-[440px]">
         {/* Channel list */}

@@ -6,6 +6,8 @@ export type Classification =
   | 'relationship'
   | 'neutral'
 
+export type Urgency = 'low' | 'medium' | 'high'
+
 export interface Signal {
   id:              string
   created_at:      string
@@ -22,4 +24,9 @@ export interface Signal {
   region:          string | null
   media_url:       string | null
   raw_content:     string | null
+  // Alara pipeline intelligence fields (nullable — older rows predate them).
+  sales_angle:     string | null
+  urgency:         Urgency | string | null
+  tier:            number | null
+  intel:           Record<string, unknown> | null
 }

@@ -71,6 +71,29 @@ Update `CHANGELOG.md` with date, developer name, files changed, and description 
 
 ---
 
+## Deploying — Claude Code on the web (read this; don't re-ask the developer)
+
+A Claude Code web/cloud session **cannot deploy via SSH**: the container has no `ssh`
+client or VPS key, and the network egress allowlist blocks the VPS host *and* the
+staging URL. So the manual SSH step above is **not runnable from a web session** — do
+not ask the developer to run it, and do not ask which deploy method to use.
+
+**Deploy = merge to `staging`.** A push/merge to `staging` triggers
+`.github/workflows/deploy-staging.yml`, which SSHes to the VPS (using the `VPS_SSH_KEY`
+secret) and runs pull → `npm run build` → `pm2 restart cntp-staging`. **That merge is
+the deploy.** Feature branches and `voice-jobcard-v2` are **not** auto-deployed — only
+`staging` is. To ship a feature: get its commits onto `staging` (PR→merge, or push the
+branch's commits to `staging`), then the workflow does the rest. Verify via the repo's
+**Actions** tab.
+
+Notes:
+- Supabase migrations: apply to the **staging** project (`qjqkpockmujecjgmdple`); the
+  production project needs them separately when promoted.
+- GitHub writes from a web session may go via a token directly to `github.com` if the
+  agent proxy gates `api.github.com`.
+
+---
+
 ## Changelog Rule
 At the end of every session update `CHANGELOG.md` with:
 - **Date**
