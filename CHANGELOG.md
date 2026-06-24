@@ -5,6 +5,25 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Alyssa (Energy: history view + daily capture, scheduled by VPS cron)
+
+**Files changed:**
+- `app/api/maintenance/energy/route.ts` — live energy route now also upserts the day's totals into `maintenance.energy_daily` on read
+- `app/api/maintenance/energy/history/route.ts` (new) — returns stored daily snapshots for the History view
+- `app/api/maintenance/energy/capture/route.ts` (new) — secret-guarded, sessionless endpoint that records the day's totals unattended; `Authorization: Bearer <CRON_SECRET>`
+- `components/maintenance/EnergyWidget.tsx` — adds the History tab/view
+- `components/maintenance/EnergyHistory.tsx` (new) — historical daily grid/solar usage chart
+- `lib/maintenance/energy.ts` (new) — shared Home Assistant fetch + `energy_daily` upsert helpers
+- `supabase/migrations/20260619_001_energy_daily.sql` (new) — `maintenance.energy_daily` table (one row per SAST day), idempotent
+
+**Changes:**
+- **Energy history.** The maintenance Energy widget gains a History view backed by a new `maintenance.energy_daily` table — one row per SAST calendar day of solar / grid / generator / battery kWh, upserted as the live widget is read so it fills through the day.
+- **Unattended daily capture.** New `/api/maintenance/energy/capture` endpoint records the day's totals even when nobody opens the dashboard. It takes no user session — it authenticates with a `CRON_SECRET` bearer token and writes via the service-role client.
+- **Scheduled by VPS cron, not GitHub Actions.** Gustav's original branch scheduled this with a `.github/workflows/energy-capture.yml` Action, but pushing that file requires the `workflow` OAuth scope (which the deploy token lacks), so the push kept getting rejected. Dropped the workflow file; scheduling is now a VPS crontab entry on the staging host POSTing to the capture endpoint at 23:50 SAST.
+- **Deploy notes:** run `20260619_001_energy_daily.sql` in the staging Supabase SQL editor; ensure `CRON_SECRET` and `HOMEASSISTANT_TOKEN` are set in `.env.local` on the VPS.
+
+---
+
 ## 2026-06-24 — Alyssa (Declutter the Capture step — clearer Debagging/Bagging split)
 
 **Files changed:**
