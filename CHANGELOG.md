@@ -5,6 +5,27 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Alyssa (Navigation IA cleanup, capture consolidation, Home landing)
+
+**Files changed:**
+- `components/layout/Sidebar.tsx` — regrouped nav; Home/Command Centre; renamed Production Control → Analytics; gated Staff Directory
+- `app/(app)/home/page.tsx` (new) — general-information / company landing (placeholder)
+- `app/(app)/layout.tsx` — `/home` always-open + route title; `/dashboard` titled "Command Centre"
+- `app/(app)/production/{section,flow,refining}/page.tsx` — retired → redirect to `/production/capture`
+- `app/(app)/production/operations/page.tsx` — renamed heading to "Analytics"; "Testing" badge on Live Capture tab
+- `app/(app)/production/live/page.tsx` — "Testing" badge on Live Production header
+- `components/supervisor/HubTabs.tsx` — added "Assign" tab (deep-links to section assignment)
+
+**Changes:**
+- **Sidebar information architecture.** The Operations group was a flat pile with two identical dashboard icons. Split into three role-gated groups: **Operations** (Home, Command Centre, Bag Tracking), **Production** (Production Dashboard, Capture, Stock Count, Supervisor Hub), and **Planning & Analytics** (Shift Roster, Analytics, Staff Directory). Distinct icons throughout.
+- **Home → general information.** New `/home` company-facing landing (greeting, announcements, quick links, resources) as a designed-later placeholder; the sidebar's Home now points here. The old multi-department dashboard (`/dashboard`) is retained and relabelled **Command Centre**. Login-landing routing is unchanged for now (still Command Centre).
+- **Capture consolidation.** The legacy capture pages `/production/section`, `/production/flow`, and `/production/refining` are retired and now **redirect to `/production/capture`** — the single capture surface. (Note: the new capture page currently implements Sieving; the other sections show "coming soon" there until rebuilt.)
+- **Production Control → Analytics.** Renamed and moved into the Planning & Analytics group. Its barcode **Live Capture** tab — and the `/production/live` Live Production page — now carry a clear **"Testing"** badge (Phase 2, in testing).
+- **Assign in the hub.** Added an **Assign** tab to the Supervisor Hub that deep-links to the section-assignment tool; the capture page's own Assign button is unchanged.
+- **Staff Directory** is now reachable by department **or** the `can_view_ops_dashboard` permission (permission-gated index).
+
+---
+
 ## 2026-06-24 — Alyssa (Quality: retire the public dual-read — qms is the single source)
 
 **Files changed:**
