@@ -89,7 +89,8 @@ const ROUTE_META: Record<string, {
   variant: 'default' | 'research' | 'sales' | 'management'
   chips?:  Array<{ label: string; color: 'green' | 'amber' | 'gray' | 'blue' | 'red' | 'purple' }>
 }> = {
-  '/dashboard':              { title: 'Dashboard',              variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
+  '/home':                   { title: 'Home',                   variant: 'default' },
+  '/dashboard':              { title: 'Command Centre',         variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
   '/count':                  { title: 'Stock Count',            variant: 'default',    chips: [{ label: 'BHW · Blackheath', color: 'gray' }] },
   '/production':             { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
   '/production/live':        { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
@@ -227,6 +228,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     // Always-open routes
     if (
+      pathname === '/home'      ||
       pathname === '/dashboard' ||
       pathname === '/settings'  ||
       pathname === '/suggest'   ||
