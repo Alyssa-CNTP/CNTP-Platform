@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Alyssa (Production Dashboard becomes a hub: Analytics + Planning as tabs)
+
+**Files changed:**
+- `components/production/ProductionTabs.tsx` (new) — hub tab bar: Dashboard · Analytics · Planning
+- `components/production/WorkforceTabs.tsx` — trimmed to Shift Roster + Staff Directory (Assign moved to Supervisor Hub)
+- `app/(app)/production/{dashboard,operations,roster,staff}/page.tsx` — render `ProductionTabs` at the top
+- `components/layout/Sidebar.tsx` — removed the "Planning & Analytics" sidebar group
+
+**Changes:**
+- The sidebar's **"Planning & Analytics" section is gone**. The Production Dashboard is now a **hub** with three tabs (`ProductionTabs`): **Dashboard** (the editable widgets), **Analytics** (the former "Production Control" / `/production/operations`, management-only), and **Planning** (Shift Roster + Staff Directory).
+- **Analytics + Production Control now live inside the Production Dashboard** — reachable as the Analytics tab — since that's the dashboard's purpose.
+- **Planning** is a single tab holding only the Shift Roster and Staff Directory; `WorkforceTabs` is its Roster/Staff sub-nav (Assign Sections was removed from it — assignment now lives in the Supervisor Hub).
+- Sidebar **Production** group is now just: Production Dashboard · Capture · Stock Count · Supervisor Hub. No routes or permissions changed — Analytics stays management-gated; everything else reachable via the hub tabs.
+
+---
+
 ## 2026-06-24 — Alyssa (Energy: history view + daily capture, scheduled by VPS cron)
 
 **Files changed:**
