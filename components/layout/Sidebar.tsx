@@ -6,7 +6,7 @@ import Link            from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth }     from '@/lib/auth/context'
 import {
-  LayoutDashboard, ClipboardList, Factory, BarChart2,
+  LayoutDashboard, ClipboardList, Factory, BarChart2, Home,
   Users, Radio, Info, Tag, LogOut, Beaker,
   TrendingUp, Globe, FlaskConical,
   Microscope, FileText, BookOpen, Layers, Settings,
@@ -32,18 +32,25 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { href: '/dashboard',                 label: 'Dashboard',                  icon: LayoutDashboard, group: 'Operations' },
+  // Everyday, cross-role entries.
+  { href: '/home',                      label: 'Home',                       icon: Home,            group: 'Operations' },
+  { href: '/dashboard',                 label: 'Command Centre',             icon: LayoutDashboard, group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production'] },
-  { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Operations', departments: ['Production'], permission: 'can_submit_count' },
-  { href: '/production/dashboard',       label: 'Production Dashboard',       icon: LayoutDashboard, group: 'Operations', departments: ['Production','Management'] },
-  { href: '/production/roster',          label: 'Shift Roster',               icon: CalendarRange,   group: 'Operations', departments: ['Production','Management'] },
-  { href: '/production/staff',           label: 'Staff Directory',            icon: Users,           group: 'Operations', departments: ['Production','Management'] },
-  // Supervisor hub — a single entry; module nav (Timesheets, Productions, Calendar,
-  // Messages, Analytics) lives in the in-page tabs to keep the sidebar lean.
-  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Operations', departments: ['Production','Management'] },
-  // Live Capture (barcode scanning) is the Phase-2 entry — hidden from nav until scanning goes live.
-  { href: '/production/operations',     label: 'Production Control',         icon: BarChart2,       group: 'Operations', departments: ['Management'] },
-  { href: '/count',                     label: 'Stock Count',                icon: ClipboardList,   group: 'Operations', departments: ['Production'], permission: 'can_submit_count' },
+
+  // Production — capture work & oversight.
+  { href: '/production/dashboard',       label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
+  { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
+  // Supervisor hub — module nav (Timesheets, Productions, Calendar, Messages,
+  // Assign) lives in the in-page tabs to keep the sidebar lean.
+  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
+
+  // Planning & Analytics — rosters, analytics, and the staff index.
+  { href: '/production/roster',          label: 'Shift Roster',               icon: CalendarRange,   group: 'Planning & Analytics', departments: ['Production','Management'] },
+  // "Analytics" (was Production Control). Live Capture (barcode scanning) is the
+  // Phase-2 entry inside it, currently in testing.
+  { href: '/production/operations',     label: 'Analytics',                  icon: BarChart2,       group: 'Planning & Analytics', departments: ['Management'] },
+  { href: '/production/staff',           label: 'Staff Directory',            icon: Users,           group: 'Planning & Analytics', departments: ['Production','Management'], permission: 'can_view_ops_dashboard', orPermission: true },
 
   { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'] },
   { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'] },
@@ -104,7 +111,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
   ]
 
   const visibleNav = isFloorOperator ? FLOOR_NAV : NAV.filter(item => {
-    if (item.href === '/dashboard' || item.href === '/settings') return true
+    if (item.href === '/home' || item.href === '/dashboard' || item.href === '/settings') return true
     if (item.href === '/suggest') return true
     if (item.itOnly && !isIT && !isFullAdmin) return false
     if (item.href === '/axis/request') return true

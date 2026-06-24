@@ -46,8 +46,8 @@ export default function ProductionOperationsPage() {
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div className="px-6 pt-6 pb-0 border-b border-surface-rule bg-surface-card">
         <div className="max-w-6xl">
-          <h2 className="font-display font-extrabold text-2xl text-text tracking-tight">Production Control</h2>
-          <p className="text-[12px] text-text-muted mt-0.5">Blackheath · Order maintenance &amp; operational analytics</p>
+          <h2 className="font-display font-extrabold text-2xl text-text tracking-tight">Analytics</h2>
+          <p className="text-[12px] text-text-muted mt-0.5">Blackheath · Production analytics, order maintenance &amp; operational trends</p>
         </div>
 
         {/* Module tabs */}
@@ -64,6 +64,9 @@ export default function ProductionOperationsPage() {
               ].join(' ')}
             >
               {t.label}
+              {t.key === 'live' && (
+                <span className="ml-1.5 align-middle text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Testing</span>
+              )}
             </button>
           ))}
         </div>

@@ -2,17 +2,19 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare } from 'lucide-react'
+import { LayoutDashboard, Clock, Factory, CalendarDays, MessageSquare, UserPlus } from 'lucide-react'
 
 // Sub-nav for the Supervisor Hub. Analytics was folded into the Overview
 // (KPI strip + 7-day trends), so it no longer needs its own tab — the deeper
 // breakdowns stay reachable via the Overview's "Full analytics" link.
+// "Assign" deep-links to the section-assignment tool (lives outside /supervisor).
 const TABS = [
-  { href: '/supervisor',             label: 'Overview',    icon: LayoutDashboard },
-  { href: '/supervisor/timesheets',  label: 'Timesheets',  icon: Clock },
-  { href: '/supervisor/productions', label: 'Productions', icon: Factory },
-  { href: '/supervisor/calendar',    label: 'Calendar',    icon: CalendarDays },
-  { href: '/supervisor/messages',    label: 'Messages',    icon: MessageSquare },
+  { href: '/supervisor',                  label: 'Overview',    icon: LayoutDashboard },
+  { href: '/supervisor/timesheets',       label: 'Timesheets',  icon: Clock },
+  { href: '/supervisor/productions',      label: 'Productions', icon: Factory },
+  { href: '/supervisor/calendar',         label: 'Calendar',    icon: CalendarDays },
+  { href: '/supervisor/messages',         label: 'Messages',    icon: MessageSquare },
+  { href: '/production/capture/assign',   label: 'Assign',      icon: UserPlus },
 ] as const
 
 export function HubTabs() {

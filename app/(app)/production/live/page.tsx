@@ -43,8 +43,11 @@ export default function LiveProductionPage() {
       <div className="max-w-3xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="font-semibold text-[22px] text-text leading-tight">Live Production</h1>
-          <p className="text-[13px] text-text-muted mt-1">{today} · Select a section to start a capture session</p>
+          <div className="flex items-center gap-2">
+            <h1 className="font-semibold text-[22px] text-text leading-tight">Live Production</h1>
+            <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Testing</span>
+          </div>
+          <p className="text-[13px] text-text-muted mt-1">{today} · Barcode scanning (Phase 2) — in testing. Select a section to start a capture session.</p>
         </div>
 
         {/* Section grid */}
