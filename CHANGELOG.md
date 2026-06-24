@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Alyssa (Declutter the Capture step — clearer Debagging/Bagging split)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` — removed the standalone "Debagging = … / Bagging = …" explainer banner from the Capture step
+- `components/production/capture/SievingCapture.tsx` — replaced the thin Debagging/Bagging toggle with two prominent cards (live bag count + kg per side) and a context hint that changes with the active side
+
+**Changes:**
+- **Less stacked noise.** The Capture step previously stacked four full-width blocks (handover note, a blue Debagging/Bagging explainer, the checks nudge, the variant selectors) before the actual capture controls. Removed the blue explainer — its content now lives as a one-line contextual hint under the toggle, so there's one less block competing for attention.
+- **In-vs-out reads as two clear jobs.** The quiet segmented toggle became two cards. Each shows its live progress — `2 bags · 480.0 kg` — so the split between what goes in and what comes out is the obvious anchor of the step, and operators can see at a glance how much they've logged on each side. The hint reads "What goes into the machine — weigh in each bulk bag." / "What comes out — every bag prints a barcode label." Presentation only; capture logic unchanged.
+
+---
+
 ## 2026-06-24 — Alyssa (Capture screen reframed as a process + Overview step)
 
 **Files changed:**

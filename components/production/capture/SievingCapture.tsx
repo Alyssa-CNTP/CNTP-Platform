@@ -139,16 +139,41 @@ export function SievingCapture({
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
 
+  // Live counts so the in/out split reads as two clear jobs with visible progress.
+  const debagCount = value.debag.filter(r => n(r.nett) > 0).length
+  const bagCount   = value.outputs.length
+
   return (
     <div className="space-y-4">
-      <div className="flex gap-1 p-1 bg-stone-100 rounded-xl">
-        {([['debag', 'Debagging (in)', Package], ['bag', 'Bagging (out)', PackageCheck]] as const).map(([id, label, Icon]) => (
-          <button key={id} onClick={() => setTab(id)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg font-medium text-[13px] transition-colors ${tab === id ? 'bg-white text-brand shadow-sm' : 'text-stone-500'}`}>
-            <Icon size={14} /> {label}
-          </button>
-        ))}
+      {/* The two jobs of capture, side by side — each shows how much is logged so far. */}
+      <div className="grid grid-cols-2 gap-2.5">
+        {([
+          { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: debagCount, kg: totalIn },
+          { id: 'bag',   label: 'Bagging',   dir: 'out', Icon: PackageCheck,  count: bagCount,   kg: totalOut },
+        ] as const).map(t => {
+          const on = tab === t.id
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`flex flex-col gap-1.5 p-3.5 rounded-2xl border-2 text-left transition-all ${on ? 'border-brand bg-brand/5 shadow-sm' : 'border-stone-200 bg-white hover:border-stone-300'}`}>
+              <div className="flex items-center gap-1.5">
+                <t.Icon size={16} className={on ? 'text-brand' : 'text-stone-400'} />
+                <span className={`font-semibold text-[14px] ${on ? 'text-brand' : 'text-stone-700'}`}>{t.label}</span>
+                <span className="text-[11px] text-stone-400">({t.dir})</span>
+              </div>
+              <div className="text-[12px] text-stone-500">
+                <span className="font-mono font-bold text-[14px] text-text">{t.count}</span> bag{t.count !== 1 ? 's' : ''}
+                <span className="text-stone-300 mx-1.5">·</span>
+                <span className="font-mono">{t.kg.toFixed(1)} kg</span>
+              </div>
+            </button>
+          )
+        })}
       </div>
+      <p className="text-[12px] text-stone-500 px-1 -mt-1">
+        {tab === 'debag'
+          ? 'What goes into the machine — weigh in each bulk bag.'
+          : 'What comes out — every bag prints a barcode label.'}
+      </p>
 
       {tab === 'debag' && (
         <>

@@ -552,7 +552,7 @@ function CaptureScreen() {
           )}
           {tab === 'production' && active && (
             <>
-              {locked ? (
+              {locked && (
                 <div className="bg-ok/5 border border-ok/30 rounded-2xl p-4 space-y-3">
                   <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
                   <p className="text-[12px] text-text-muted">To capture a different variant or grade on this line, create a <strong>new batch record</strong> — same steps as before. The locked record above stays saved.</p>
@@ -560,11 +560,6 @@ function CaptureScreen() {
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
                     <Plus size={16} /> Create new batch record
                   </button>
-                </div>
-              ) : (
-                <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
-                  <Info size={14} className="shrink-0 mt-0.5" />
-                  <span><strong>Debagging</strong> = what goes in. <strong>Bagging</strong> = what comes out (each bag prints a barcode). Totals add up for you.</span>
                 </div>
               )}
 
