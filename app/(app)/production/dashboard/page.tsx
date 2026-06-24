@@ -6,12 +6,16 @@
 // code-defined default for anyone who hasn't customized.
 
 import EditableDashboard from '@/components/dashboard/editable/EditableDashboard'
+import { ProductionTabs } from '@/components/production/ProductionTabs'
 
 export default function ProductionDashboardPage() {
   return (
-    <EditableDashboard
-      dashboardKey="production"
-      title="Production Dashboard"
-    />
+    <div>
+      <div className="px-4 pt-5 max-w-[1400px]"><ProductionTabs /></div>
+      <EditableDashboard
+        dashboardKey="production"
+        title="Production Dashboard"
+      />
+    </div>
   )
 }

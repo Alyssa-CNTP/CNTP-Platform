@@ -6,6 +6,7 @@ import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
+  FileText, Check,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -18,14 +19,26 @@ import {
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
+import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
 import { ensureCheckRecord, appendCheckEvent } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 
-type Tab = 'production' | 'checks' | 'cleaning' | 'signoff' | 'messages'
+type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
 const n = (v: string) => parseFloat(v) || 0
+
+// The capture screen reads as the real-world process the operators follow:
+// machine checks → capture (debag/bag) → cleaning → overview → sign-off.
+// Messages sits outside the flow (header icon) since it isn't a production step.
+const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
+  { id: 'checks',     label: 'Checks',   icon: Gauge },
+  { id: 'production', label: 'Capture',  icon: ClipboardList },
+  { id: 'cleaning',   label: 'Cleaning', icon: Sparkles },
+  { id: 'overview',   label: 'Overview', icon: FileText },
+  { id: 'signoff',    label: 'Sign-off', icon: PenLine },
+]
 
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData }
@@ -58,7 +71,7 @@ function CaptureScreen() {
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   const [tab, setTab]             = useState<Tab>(() => {
     const t = sp.get('tab')
-    return (['production', 'checks', 'cleaning', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
+    return (['production', 'checks', 'cleaning', 'overview', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
   })
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
@@ -462,6 +475,10 @@ function CaptureScreen() {
             {opNames.length ? <> · {opNames.join(', ')}</> : null}
           </p>
         </div>
+        <button onClick={() => setTab('messages')} title="Line messages"
+          className={`p-2 rounded-lg shrink-0 transition-colors ${tab === 'messages' ? 'bg-brand/10 text-brand' : 'text-stone-400 hover:bg-black/5 hover:text-stone-600'}`}>
+          <MessageSquare size={18} />
+        </button>
         <span className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 ${statusColor}`}>{statusLabel}</span>
       </div>
 
@@ -489,14 +506,36 @@ function CaptureScreen() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex border-b border-stone-200 px-4 flex-shrink-0 bg-white">
-        {([['production', 'Production', ClipboardList], ['checks', 'Checks', Gauge], ['cleaning', 'Cleaning', Sparkles], ['signoff', 'Sign-off', PenLine], ['messages', 'Messages', MessageSquare]] as const).map(([id, label, Icon]) => (
-          <button key={id} onClick={() => setTab(id)}
-            className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors ${tab === id ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
-            <Icon size={14} /> {label}
-          </button>
-        ))}
+      {/* Process stepper — the steps the operators actually work through, in order.
+          Clickable so they can jump around; current step is highlighted, earlier
+          steps read as done. Messages lives in the header, not the flow. */}
+      <div className="flex items-center px-3 sm:px-4 py-3 flex-shrink-0 bg-white border-b border-stone-200 overflow-x-auto">
+        {STEPS.map((s, i) => {
+          const activeIdxStep = STEPS.findIndex(x => x.id === tab)
+          const isActive = tab === s.id
+          const isDone   = activeIdxStep > i
+          const Icon = s.icon
+          return (
+            <div key={s.id} className="flex items-center shrink-0">
+              <button onClick={() => setTab(s.id)} className="flex items-center gap-2 group">
+                <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-semibold border transition-colors
+                  ${isActive ? 'bg-brand text-white border-brand'
+                    : isDone ? 'bg-brand/10 text-brand border-brand/30'
+                    : 'bg-white text-stone-400 border-stone-300 group-hover:border-stone-400'}`}>
+                  {isDone ? <Check size={14} /> : i + 1}
+                </span>
+                <span className={`text-[13px] font-medium hidden sm:inline transition-colors
+                  ${isActive ? 'text-brand' : isDone ? 'text-stone-600' : 'text-stone-400 group-hover:text-stone-600'}`}>
+                  {s.label}
+                </span>
+                <Icon size={14} className={`sm:hidden ${isActive ? 'text-brand' : isDone ? 'text-stone-600' : 'text-stone-400'}`} />
+              </button>
+              {i < STEPS.length - 1 && (
+                <div className={`w-6 sm:w-10 h-px mx-1.5 sm:mx-2.5 ${activeIdxStep > i ? 'bg-brand/40' : 'bg-stone-200'}`} />
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {/* Content */}
@@ -513,7 +552,7 @@ function CaptureScreen() {
           )}
           {tab === 'production' && active && (
             <>
-              {locked ? (
+              {locked && (
                 <div className="bg-ok/5 border border-ok/30 rounded-2xl p-4 space-y-3">
                   <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
                   <p className="text-[12px] text-text-muted">To capture a different variant or grade on this line, create a <strong>new batch record</strong> — same steps as before. The locked record above stays saved.</p>
@@ -521,11 +560,6 @@ function CaptureScreen() {
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
                     <Plus size={16} /> Create new batch record
                   </button>
-                </div>
-              ) : (
-                <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
-                  <Info size={14} className="shrink-0 mt-0.5" />
-                  <span><strong>Debagging</strong> = what goes in. <strong>Bagging</strong> = what comes out (each bag prints a barcode). Totals add up for you.</span>
                 </div>
               )}
 
@@ -584,6 +618,22 @@ function CaptureScreen() {
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
               operators={candidateOps}
             />
+          )}
+
+          {tab === 'overview' && (
+            <>
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
+                <Info size={14} className="shrink-0 mt-0.5" />
+                <span>This is your captured total, grouped and ready for Acumatica. It updates live and is saved automatically — copy or print it for data entry.</span>
+              </div>
+              <CaptureOverview
+                productions={productions}
+                sectionName={meta.name}
+                sectionColor={meta.colorHex}
+                date={dateParam}
+                shift={shift}
+              />
+            </>
           )}
 
           {tab === 'signoff' && (
