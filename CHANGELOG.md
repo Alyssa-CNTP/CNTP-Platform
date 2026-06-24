@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-24 — Alyssa (Branded Excel exports for all Quality workcenters — ExcelJS)
+
+**Files changed:**
+- `lib/utils/exportExcel.ts` (replaced the SheetJS/`xlsx` writer with a lazy-loaded ExcelJS engine)
+
+**Changes:**
+- All five Quality exports — pasteuriser batch, pasteuriser archive, granule run, sieving runs, and the lab-results tables — now produce **branded, styled workbooks** instead of plain sheets. Each sheet has: a title block (embedded `logo.png` + "Cape Natural — Operations Platform" + a context subtitle + "Generated … (SAST)"), a brand-green frozen header row with **AutoFilter**, banded rows, borders, real number formats (moisture `0.00%`, sieves `0.0%`, BD `0`), and **spec-aware conditional fills** (moisture > 8.5% → red; Pass/Fail/Concession → green/red/amber; violations → red).
+- Empty columns (a test that wasn't run for the batch set) are dropped from every sheet; the flat raw sheet stays a clean pivot source.
+- **ExcelJS is lazy-loaded** (`await import('exceljs')`) inside the export path, so it never enters the main bundle — it only downloads when a user clicks Export. The `exceljs` dependency was already in `package.json`.
+- No capture/calculation logic changed — this is presentation only. The previous `xlsx` writer (`addSheet`/`dl`) and its import were removed; `xlsx` is still used elsewhere for reading uploads (`admin/inventory-import`).
+- Builds on the earlier Quality work already on staging (per-day average view, sortable History, lab CSV→Excel, Gap-A record fix).
+
+---
+
 ## 2026-06-23 — Alyssa (tsconfig: include .next-build types for zero-downtime deploy)
 
 **Files changed:**

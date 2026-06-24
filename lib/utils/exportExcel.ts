@@ -1,41 +1,25 @@
-// lib/utils/exportExcel.ts — Excel export helpers for QC workcenters
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import * as XLSX from 'xlsx'
+// lib/utils/exportExcel.ts — branded Excel export helpers for QC workcenters.
+// All exports go through the ExcelJS engine (buildStyledWorkbook) below.
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function dl(wb: XLSX.WorkBook, filename: string) {
-  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-  const blob = new Blob([buf], { type: 'application/octet-stream' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
-}
-
-// Build a sheet from row objects, then make it sort/filter-friendly on open:
-// an AutoFilter dropdown across the header + sensible column widths. This is the
-// flat, tidy shape Excel needs for Insert ▸ PivotTable.
-function addSheet(wb: XLSX.WorkBook, rows: any[], name: string) {
-  const data = rows && rows.length ? rows : [{ Note: 'No data' }]
-  const ws = XLSX.utils.json_to_sheet(data)
-  if (ws['!ref']) {
-    ws['!autofilter'] = { ref: ws['!ref'] }
-    const keys = Object.keys(data[0])
-    ws['!cols'] = keys.map(k => {
-      const maxLen = Math.max(k.length, ...data.map(r => String(r[k] ?? '').length))
-      return { wch: Math.min(Math.max(maxLen + 2, 9), 28) }
-    })
+// Generic one-sheet branded export for plain row objects (e.g. the lab-results
+// tables). Tones any Pass/Fail status column green/red.
+export async function exportTableXlsx(rows: Record<string, any>[], filename: string, sheetName = 'Data') {
+  const fill = (r: Record<string, any>) => {
+    const key = ['Overall', 'Overall Status', 'Status', 'Result'].find(k => k in r)
+    if (key) {
+      const v = String(r[key])
+      const tone: Tone | undefined = /pass/i.test(v) ? 'ok' : /fail|reject/i.test(v) ? 'err' : undefined
+      if (tone) return { [key]: tone }
+    }
+    return undefined
   }
-  XLSX.utils.book_append_sheet(wb, ws, name)
-}
-
-// Generic one-sheet export for plain row objects (e.g. the lab-results tables).
-// Inherits the AutoFilter + column widths from addSheet.
-export function exportTableXlsx(rows: Record<string, any>[], filename: string, sheetName = 'Data') {
-  const wb = XLSX.utils.book_new()
-  addSheet(wb, rows, sheetName)
-  dl(wb, filename)
+  await buildStyledWorkbook(
+    [{ name: sheetName.slice(0, 31), rows, fill }],
+    { subtitle: `Lab Results — ${sheetName}` },
+    filename,
+  )
 }
 
 function n(v: any): number | null {
@@ -52,6 +36,117 @@ function fmtAvg(v: number | null, unit = '') {
   return v === null ? '—' : `${v}${unit}`
 }
 
+// ── ExcelJS styled engine (branded headers, conditional fills, frozen + filter) ─
+// ExcelJS is lazy-loaded inside buildStyledWorkbook so it never enters the main
+// bundle — it only downloads when a user actually clicks an export button.
+// Colours mirror the app's design tokens (app/globals.css, light theme).
+const XS = {
+  brand:  'FF1A3A0E', headerTx: 'FFFFFFFF', band: 'FFF5F7F4', border: 'FFE5E7EB',
+  muted:  'FF6B7280', faint: 'FF9CA3AF',
+  errBg:  'FFFEF2F2', errTx: 'FFB81C1C',
+  okBg:   'FFEDFAF3', okTx:  'FF1A7A3C',
+  warnBg: 'FFFEF5ED', warnTx:'FFB85C0A',
+}
+type Tone = 'err' | 'ok' | 'warn'
+type StyledSheet = {
+  name: string
+  rows: Record<string, any>[]
+  numFmt?: Record<string, string>
+  fill?: (row: Record<string, any>) => Record<string, Tone> | undefined
+}
+
+async function buildStyledWorkbook(
+  sheets: StyledSheet[],
+  meta: { subtitle?: string },
+  filename: string,
+) {
+  const mod: any = await import('exceljs')
+  const ExcelJS = mod.default ?? mod
+  const wb = new ExcelJS.Workbook()
+
+  // brand logo (top-right of each sheet) — resilient: skip silently if it fails
+  let logoId: number | null = null
+  try {
+    const res = await fetch('/logo.png')
+    if (res.ok) {
+      const bytes = new Uint8Array(await res.arrayBuffer())
+      let bin = ''; bytes.forEach(b => { bin += String.fromCharCode(b) })
+      logoId = wb.addImage({ base64: btoa(bin), extension: 'png' })
+    }
+  } catch { /* no logo — title text still shows */ }
+
+  const thin = { style: 'thin' as const, color: { argb: XS.border } }
+  const BORDER = { top: thin, left: thin, bottom: thin, right: thin }
+  const generated = `Generated ${new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', dateStyle: 'medium', timeStyle: 'short' })} (SAST)`
+
+  for (const spec of sheets) {
+    const ws = wb.addWorksheet(spec.name)
+    let rows = spec.rows
+    const keys0 = rows.length ? Object.keys(rows[0]) : ['Note']
+    const keep = keys0.filter(k => rows.some(r => r[k] !== '' && r[k] != null))
+    const cols = keep.length && keep.length < keys0.length ? keep : keys0
+    rows = rows.map(r => Object.fromEntries(cols.map(k => [k, r[k]])))
+    const ncol = Math.max(cols.length, 1)
+
+    // ── title block (rows 1–3) ──
+    ws.mergeCells(1, 1, 1, ncol)
+    ws.getCell(1, 1).value = 'Cape Natural — Operations Platform'
+    ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: XS.brand } }
+    ws.mergeCells(2, 1, 2, ncol)
+    ws.getCell(2, 1).value = meta.subtitle || ''
+    ws.getCell(2, 1).font = { size: 10, color: { argb: XS.muted } }
+    ws.mergeCells(3, 1, 3, ncol)
+    ws.getCell(3, 1).value = generated
+    ws.getCell(3, 1).font = { size: 9, italic: true, color: { argb: XS.faint } }
+    if (logoId != null) ws.addImage(logoId, { tl: { col: Math.max(ncol - 1.2, 0), row: 0.1 }, ext: { width: 110, height: 36 } })
+
+    // ── header row (row 5) ──
+    const hr = 5
+    cols.forEach((c, i) => {
+      const cell = ws.getCell(hr, i + 1)
+      cell.value = c
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.brand } }
+      cell.font = { bold: true, color: { argb: XS.headerTx }, size: 10 }
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+      cell.border = BORDER
+    })
+    ws.getRow(hr).height = 22
+
+    // ── data rows ──
+    rows.forEach((r, ri) => {
+      const rn = hr + 1 + ri
+      const tones = spec.fill ? spec.fill(r) : undefined
+      cols.forEach((c, ci) => {
+        const cell = ws.getCell(rn, ci + 1)
+        const v = r[c]
+        cell.value = v === '' || v == null ? null : v
+        const fmt = spec.numFmt?.[c]
+        if (fmt && typeof cell.value === 'number') cell.numFmt = fmt
+        cell.border = BORDER
+        cell.alignment = { horizontal: typeof cell.value === 'number' ? 'center' : 'left', vertical: 'middle' }
+        const tone = tones?.[c]
+        if (tone === 'err')       { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.errBg } };  cell.font = { color: { argb: XS.errTx }, bold: true } }
+        else if (tone === 'ok')   { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.okBg } };   cell.font = { color: { argb: XS.okTx } } }
+        else if (tone === 'warn') { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.warnBg } }; cell.font = { color: { argb: XS.warnTx }, bold: true } }
+        else if (ri % 2 === 1)    { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.band } } }
+      })
+    })
+
+    ws.views = [{ state: 'frozen', ySplit: hr }]
+    if (rows.length) ws.autoFilter = { from: { row: hr, column: 1 }, to: { row: hr, column: ncol } }
+    cols.forEach((c, i) => {
+      const maxLen = Math.max(c.length, ...rows.map(r => String(r[c] ?? '').length))
+      ws.getColumn(i + 1).width = Math.min(Math.max(maxLen + 2, 9), 30)
+    })
+  }
+
+  const buf = await wb.xlsx.writeBuffer()
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+}
+
 // ── Pasteuriser ───────────────────────────────────────────────────────────────
 
 const PAST_SIEVES = ['gt6','gt10','gt12','gt16','gt20','gt60','dust']
@@ -59,8 +154,7 @@ const PAST_SIEVE_LABELS: Record<string,string> = {
   gt6:'>6%', gt10:'>10%', gt12:'>12%', gt16:'>16%', gt20:'>20%', gt60:'>60%', dust:'Dust%'
 }
 
-export function exportPasteuriserBatch(batch: any) {
-  const wb = XLSX.utils.book_new()
+export async function exportPasteuriserBatch(batch: any) {
   const samples: any[] = batch.samples || []
 
   // ── Sheet 1: Raw Data ─────────────────────────────────────────────────────
@@ -104,7 +198,6 @@ export function exportPasteuriserBatch(batch: any) {
     row['Comment'] = s.comment || ''
     return row
   })
-  addSheet(wb, rawRows, 'Raw Data')
 
   // ── Sheet 2: Daily Averages ───────────────────────────────────────────────
   const byDate: Record<string, any[]> = {}
@@ -127,9 +220,8 @@ export function exportPasteuriserBatch(batch: any) {
       row['Sensorial Reject'] = ss.filter((s: any) => s.sensorial_pass === 'Reject').length
       return row
     })
-  addSheet(wb, dailyRows, 'Daily Averages')
 
-  // ── Sheet 3: Batch Summary ────────────────────────────────────────────────
+  // ── Sheet 3: Batch Summary (key/value) ────────────────────────────────────
   const sieveSamples = samples.filter((s: any) => s.has_sieve)
   const mbSamples = samples.filter((s: any) => s.has_mb)
   const summaryRows: any[] = [
@@ -146,12 +238,10 @@ export function exportPasteuriserBatch(batch: any) {
     { Field: 'Final Result',     Value: batch.final_result || 'In Progress' },
     { Field: 'Finalised At',     Value: batch.finalised_at || '' },
     { Field: 'Comments',         Value: batch.comments || '' },
-    { Field: '---',              Value: '' },
     { Field: 'Total Samples',    Value: samples.length },
     { Field: 'Sieve Samples',    Value: sieveSamples.length },
     { Field: 'MB Samples',       Value: mbSamples.length },
     { Field: 'Sensorial Done',   Value: samples.filter((s: any) => s.has_sensorial).length },
-    { Field: '---',              Value: '' },
     { Field: 'Avg Temp (°C)',    Value: fmtAvg(avg(samples.map((s: any) => s.hourly_temp)), '°C') },
     ...PAST_SIEVES.map(k => ({
       Field: `Avg ${PAST_SIEVE_LABELS[k]}`,
@@ -160,17 +250,51 @@ export function exportPasteuriserBatch(batch: any) {
     { Field: 'Avg Moisture %',   Value: fmtAvg(avg(mbSamples.map((s: any) => s.moisture)), '%') },
     { Field: 'Avg BD (cc/100g)', Value: fmtAvg(avg(mbSamples.map((s: any) => s.untapped_bd))) },
   ]
-  addSheet(wb, summaryRows, 'Batch Summary')
+
+  const pct = '0.0"%"'
+  const rawNumFmt: Record<string, string> = { 'Temp (°C)': '0.0', 'Moisture %': '0.00"%"', 'BD (cc/100g)': '0', 'Customer BD': '0', 'Weight 1 (kg)': '0.0', 'Weight 2 (kg)': '0.0', 'Weight 3 (kg)': '0.0', 'Needle Count': '0', 'Aroma': '0', 'Flavour': '0', 'Briskness': '0', 'Strength': '0', 'Cup Colour': '0' }
+  PAST_SIEVES.forEach(k => { rawNumFmt[PAST_SIEVE_LABELS[k]] = pct; rawNumFmt[`${PAST_SIEVE_LABELS[k]} (g)`] = '0' })
+  const dailyNumFmt: Record<string, string> = { 'Avg Temp (°C)': '0.0', 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0' }
+  PAST_SIEVES.forEach(k => { dailyNumFmt[`Avg ${PAST_SIEVE_LABELS[k]}`] = pct })
+
+  const rawFill = (r: any) => {
+    const t: Record<string, Tone> = {}
+    if (typeof r['Moisture %'] === 'number' && r['Moisture %'] > 8.5) t['Moisture %'] = 'err'
+    if (r['Sensorial'] === 'Pass') t['Sensorial'] = 'ok'
+    else if (r['Sensorial'] === 'Reject' || r['Sensorial'] === 'Fail') t['Sensorial'] = 'err'
+    return Object.keys(t).length ? t : undefined
+  }
+  const dailyFill = (r: any) => (typeof r['Avg Moisture %'] === 'number' && r['Avg Moisture %'] > 8.5 ? { 'Avg Moisture %': 'err' as Tone } : undefined)
+  const summaryFill = (r: any) => {
+    if (r.Field === 'Final Result') {
+      const v = String(r.Value)
+      const tone: Tone | undefined = v === 'Pass' ? 'ok' : v === 'Fail' ? 'err' : v === 'Concession' ? 'warn' : undefined
+      if (tone) return { Value: tone }
+    }
+    return undefined
+  }
+
+  const dates = [...new Set(samples.map((s: any) => s.date).filter(Boolean))].sort()
+  const range = dates.length ? (dates.length === 1 ? dates[0] : `${dates[0]} – ${dates[dates.length - 1]}`) : (batch.production_date || '')
+  const product = [batch.product_family || batch.type_grade, batch.grade].filter(Boolean).join(' ')
+  const subtitle = [`Pasteuriser Batch ${batch.batch_number || ''}`, product, range, batch.customer, batch.qc_name ? `QC ${batch.qc_name}` : ''].filter(Boolean).join('  ·  ')
 
   const date = batch.production_date || new Date().toISOString().slice(0, 10)
-  dl(wb, `Pasteuriser_${batch.batch_number}_${date}.xlsx`)
+  try {
+    await buildStyledWorkbook([
+      { name: 'Raw Data',       rows: rawRows,     numFmt: rawNumFmt,   fill: rawFill },
+      { name: 'Daily Averages', rows: dailyRows,   numFmt: dailyNumFmt, fill: dailyFill },
+      { name: 'Batch Summary',  rows: summaryRows,                      fill: summaryFill },
+    ], { subtitle }, `Pasteuriser_${batch.batch_number}_${date}.xlsx`)
+  } catch (e) {
+    console.error('Pasteuriser export failed', e)
+    alert('Export failed — see console for details.')
+  }
 }
 
 // Combined export of many pasteuriser batches (all raw samples in one sheet +
 // a per-batch summary sheet) — used for the historical archive.
-export function exportPasteuriserBatches(batches: any[], filename: string) {
-  const wb = XLSX.utils.book_new()
-
+export async function exportPasteuriserBatches(batches: any[], filename: string) {
   // ── Sheet 1: All Raw Samples (every sample across every batch) ────────────
   const rawRows: any[] = []
   batches.forEach((b: any) => {
@@ -204,8 +328,6 @@ export function exportPasteuriserBatches(batches: any[], filename: string) {
       rawRows.push(row)
     })
   })
-  addSheet(wb, rawRows, 'All Raw Samples')
-
   // ── Sheet 2: Batch Summary (one row per batch with averages) ──────────────
   const summaryRows = batches.map((b: any) => {
     const samples: any[] = b.samples || []
@@ -226,18 +348,39 @@ export function exportPasteuriserBatches(batches: any[], filename: string) {
     row['Avg BD (cc/100g)'] = avg(mbSamples.map((s: any) => s.untapped_bd))
     return row
   })
-  addSheet(wb, summaryRows, 'Batch Summary')
 
-  dl(wb, filename)
+  const pct = '0.0"%"'
+  const rawNumFmt: Record<string, string> = { 'Temp (°C)': '0.0', 'Moisture %': '0.00"%"', 'BD (cc/100g)': '0', 'Aroma': '0', 'Flavour': '0', 'Briskness': '0', 'Strength': '0', 'Cup Colour': '0' }
+  PAST_SIEVES.forEach(k => { rawNumFmt[PAST_SIEVE_LABELS[k]] = pct })
+  const sumNumFmt: Record<string, string> = { 'Avg Temp (°C)': '0.0', 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0', 'Total Samples': '0' }
+  PAST_SIEVES.forEach(k => { sumNumFmt[`Avg ${PAST_SIEVE_LABELS[k]}`] = pct })
+
+  const resultTone = (v: any): Tone | undefined => { const s = String(v); return s === 'Pass' ? 'ok' : s === 'Fail' ? 'err' : s === 'Concession' ? 'warn' : undefined }
+  const rawFill = (r: any) => {
+    const t: Record<string, Tone> = {}
+    if (typeof r['Moisture %'] === 'number' && r['Moisture %'] > 8.5) t['Moisture %'] = 'err'
+    const rt = resultTone(r['Final Result']); if (rt) t['Final Result'] = rt
+    return Object.keys(t).length ? t : undefined
+  }
+  const sumFill = (r: any) => {
+    const t: Record<string, Tone> = {}
+    if (typeof r['Avg Moisture %'] === 'number' && r['Avg Moisture %'] > 8.5) t['Avg Moisture %'] = 'err'
+    const rt = resultTone(r['Final Result']); if (rt) t['Final Result'] = rt
+    return Object.keys(t).length ? t : undefined
+  }
+
+  await buildStyledWorkbook([
+    { name: 'All Raw Samples', rows: rawRows,     numFmt: rawNumFmt, fill: rawFill },
+    { name: 'Batch Summary',   rows: summaryRows, numFmt: sumNumFmt, fill: sumFill },
+  ], { subtitle: `Pasteuriser — ${batches.length} batch${batches.length === 1 ? '' : 'es'}` }, filename)
 }
 
 // ── Granule Line ──────────────────────────────────────────────────────────────
 
-export function exportGranuleRun(
+export async function exportGranuleRun(
   run: any,
   sieves: Array<{ key: string; label: string }>
 ) {
-  const wb = XLSX.utils.book_new()
   const samples: any[] = run.samples || []
 
   // ── Sheet 1: Raw Data ─────────────────────────────────────────────────────
@@ -277,7 +420,6 @@ export function exportGranuleRun(
     row['Violations'] = Array.isArray(s.violations) ? s.violations.join('; ') : ''
     return row
   })
-  addSheet(wb, rawRows, 'Raw Data')
 
   // ── Sheet 2: Daily Averages ───────────────────────────────────────────────
   const byDate: Record<string, any[]> = {}
@@ -301,9 +443,7 @@ export function exportGranuleRun(
       })
       return row
     })
-  addSheet(wb, dailyRows, 'Daily Averages')
-
-  // ── Sheet 3: Run Summary ──────────────────────────────────────────────────
+  // ── Sheet 3: Run Summary (key/value) ──────────────────────────────────────
   const summaryRows: any[] = [
     { Field: 'Batch Number',     Value: run.batch_number || '' },
     { Field: 'Production Date',  Value: run.production_date || '' },
@@ -314,10 +454,8 @@ export function exportGranuleRun(
     { Field: 'CNTP Batch',       Value: run.is_cntp ? 'Yes' : 'No' },
     { Field: 'Final Status',     Value: run.final_status || 'In Progress' },
     { Field: 'Overall Status',   Value: run.overall_status || '' },
-    { Field: '---',              Value: '' },
     { Field: 'Total Samples',    Value: samples.length },
     { Field: 'Sieve Samples',    Value: sieveSamples.length },
-    { Field: '---',              Value: '' },
     { Field: 'Avg Moisture %',   Value: fmtAvg(avg(samples.map((s: any) => s.moisture)), '%') },
     { Field: 'Avg BD (cc/100g)', Value: fmtAvg(avg(samples.map((s: any) => s.bulk_density))) },
     { Field: 'Avg Dryer Temp',   Value: fmtAvg(avg(samples.map((s: any) => s.dryer_temp)), '°C') },
@@ -326,21 +464,45 @@ export function exportGranuleRun(
       Value: fmtAvg(avg(sieveSamples.map((s: any) => n(s.sieve_pct?.[sv.key]))), '%')
     })),
   ]
-  addSheet(wb, summaryRows, 'Run Summary')
+
+  const pct = '0.0"%"'
+  const rawNumFmt: Record<string, string> = { 'Moisture %': '0.00"%"', 'BD (cc/100g)': '0', 'Dryer Temp (°C)': '0.0', 'Weight 1 (kg)': '0.0', 'Weight 2 (kg)': '0.0', 'Weight 3 (kg)': '0.0', 'Dryer 2 Moisture %': '0.00"%"', 'Dryer 2 BD': '0', 'Dryer 2 Temp (°C)': '0.0' }
+  sieves.forEach(sv => { rawNumFmt[`${sv.label}%`] = pct; rawNumFmt[`${sv.label} (g)`] = '0' })
+  const dailyNumFmt: Record<string, string> = { 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0', 'Avg Dryer Temp (°C)': '0.0' }
+  sieves.forEach(sv => { dailyNumFmt[`Avg ${sv.label}%`] = pct })
+
+  const rawFill = (r: any) => {
+    const t: Record<string, Tone> = {}
+    if (typeof r['Moisture %'] === 'number' && r['Moisture %'] > 8.5) t['Moisture %'] = 'err'
+    if (r['Violations']) t['Violations'] = 'err'
+    return Object.keys(t).length ? t : undefined
+  }
+  const dailyFill = (r: any) => (typeof r['Avg Moisture %'] === 'number' && r['Avg Moisture %'] > 8.5 ? { 'Avg Moisture %': 'err' as Tone } : undefined)
+  const sumFill = (r: any) => {
+    if (r.Field === 'Final Status' || r.Field === 'Overall Status') {
+      const v = String(r.Value)
+      const tone: Tone | undefined = /pass|approved/i.test(v) ? 'ok' : /fail|reject/i.test(v) ? 'err' : undefined
+      if (tone) return { Value: tone }
+    }
+    return undefined
+  }
 
   const date = run.production_date || new Date().toISOString().slice(0, 10)
-  dl(wb, `GranuleLine_${run.batch_number}_${date}.xlsx`)
+  const subtitle = [`Granule Line — Batch ${run.batch_number || ''}`, run.type_grade, run.customer, run.qc_name ? `QC ${run.qc_name}` : ''].filter(Boolean).join('  ·  ')
+  await buildStyledWorkbook([
+    { name: 'Raw Data',       rows: rawRows,     numFmt: rawNumFmt,   fill: rawFill },
+    { name: 'Daily Averages', rows: dailyRows,   numFmt: dailyNumFmt, fill: dailyFill },
+    { name: 'Run Summary',    rows: summaryRows,                      fill: sumFill },
+  ], { subtitle }, `GranuleLine_${run.batch_number}_${date}.xlsx`)
 }
 
 // ── Sieving Tower ─────────────────────────────────────────────────────────────
 
-export function exportSievingRuns(
+export async function exportSievingRuns(
   product: string,
   runs: any[],
   meshLabels: string[]   // e.g. ['>6 (%)', '>10 (%)', ...]
 ) {
-  const wb = XLSX.utils.book_new()
-
   // ── Sheet 1: Raw Data ─────────────────────────────────────────────────────
   const rawRows = runs.map((r: any) => {
     const row: any = {
@@ -363,7 +525,6 @@ export function exportSievingRuns(
     row['Comment'] = r.comment || ''
     return row
   })
-  addSheet(wb, rawRows, 'Raw Data')
 
   // ── Sheet 2: Daily Averages ───────────────────────────────────────────────
   const byDate: Record<string, any[]> = {}
@@ -385,8 +546,6 @@ export function exportSievingRuns(
       row['Fail Count'] = rs.filter((r: any) => r.passStatus === 'Fail').length
       return row
     })
-  addSheet(wb, dailyRows, 'Daily Averages')
-
   // ── Sheet 3: Summary by Grade/Variant ────────────────────────────────────
   const byGV: Record<string, any[]> = {}
   runs.forEach((r: any) => {
@@ -406,8 +565,33 @@ export function exportSievingRuns(
       })
       return row
     })
-  addSheet(wb, gradeRows, 'By Grade')
+
+  const pct = '0.0"%"'
+  const meshKey = (m: string) => m.replace(' (%)', '%')
+  const rawNumFmt: Record<string, string> = { 'Bulk Density': '0', 'Leaf Shade': '0', 'Needle Count': '0' }
+  meshLabels.forEach(m => { rawNumFmt[meshKey(m)] = pct })
+  const dailyNumFmt: Record<string, string> = { 'Runs': '0', 'Avg Bulk Density': '0', 'Avg Leaf Shade': '0', 'Pass Count': '0', 'Fail Count': '0' }
+  meshLabels.forEach(m => { dailyNumFmt[`Avg ${meshKey(m)}`] = pct })
+  const gradeNumFmt: Record<string, string> = { 'Runs': '0', 'Pass Rate %': '0"%"', 'Avg Bulk Density': '0', 'Avg Leaf Shade': '0' }
+  meshLabels.forEach(m => { gradeNumFmt[`Avg ${meshKey(m)}`] = pct })
+
+  const rawFill = (r: any) => {
+    const t: Record<string, Tone> = {}
+    if (r['Pass/Fail'] === 'Pass') t['Pass/Fail'] = 'ok'
+    else if (r['Pass/Fail'] === 'Fail') t['Pass/Fail'] = 'err'
+    if (r['Violations']) t['Violations'] = 'err'
+    return Object.keys(t).length ? t : undefined
+  }
+  const dailyFill = (r: any) => (typeof r['Fail Count'] === 'number' && r['Fail Count'] > 0 ? { 'Fail Count': 'err' as Tone } : undefined)
+  const gradeFill = (r: any) => {
+    if (typeof r['Pass Rate %'] === 'number') return { 'Pass Rate %': (r['Pass Rate %'] === 100 ? 'ok' : 'warn') as Tone }
+    return undefined
+  }
 
   const date = new Date().toISOString().slice(0, 10)
-  dl(wb, `Sieving_${product.replace(/ /g, '_')}_${date}.xlsx`)
+  await buildStyledWorkbook([
+    { name: 'Raw Data',       rows: rawRows,   numFmt: rawNumFmt,   fill: rawFill },
+    { name: 'Daily Averages', rows: dailyRows, numFmt: dailyNumFmt, fill: dailyFill },
+    { name: 'By Grade',       rows: gradeRows, numFmt: gradeNumFmt, fill: gradeFill },
+  ], { subtitle: `Sieving — ${product}` }, `Sieving_${product.replace(/ /g, '_')}_${date}.xlsx`)
 }
