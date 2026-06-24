@@ -1864,25 +1864,18 @@ export default function GranulePage() {
   // ── Load runs, samples, tastings, and specs in parallel ──
   const load = useCallback(async () => {
     setLoading(true)
-    const [runsRes, samplesRes, tastingsRes, specsRes,
-           legRunsRes, legSamplesRes, legTastingsRes, legSpecsRes] = await Promise.all([
+    // qms is the single source (legacy public granule_* consolidated 2026-06-24)
+    const [runsRes, samplesRes, tastingsRes, specsRes] = await Promise.all([
       db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }),
       db.schema('qms').from('granule_samples').select('*').order('sample_date', { ascending: true, nullsFirst: false }).order('sample_time', { ascending: true, nullsFirst: false }),
       db.schema('qms').from('granule_tastings').select('*').order('created_at', { ascending: true }),
       db.schema('qms').from('granule_specs').select('*').order('type_grade').order('customer'),
-      fetch('/api/quality/legacy-public?table=granule_runs&limit=500').then(r=>r.json()),
-      fetch('/api/quality/legacy-public?table=granule_samples&limit=2000').then(r=>r.json()),
-      fetch('/api/quality/legacy-public?table=granule_tastings&limit=1000').then(r=>r.json()),
-      fetch('/api/quality/legacy-public?table=granule_specs&limit=200').then(r=>r.json()),
     ])
 
-    const qmsRunIds   = new Set((runsRes.data || []).map((r: any) => r.batch_number))
-    const legRuns     = (legRunsRes.data     || []).filter((r: any) => !qmsRunIds.has(r.batch_number))
-    const allRuns     = [...(runsRes.data || []), ...legRuns]
-    const allSamples  = [...(samplesRes.data || []), ...(legSamplesRes.data || [])]
-    const allTastings = [...(tastingsRes.data || []), ...(legTastingsRes.data || [])]
-    const qmsSpecIds  = new Set((specsRes.data || []).map((s: any) => s.type_grade + '|' + (s.customer||'')))
-    const allSpecs    = [...(specsRes.data || []), ...(legSpecsRes.data || []).filter((s: any) => !qmsSpecIds.has(s.type_grade + '|' + (s.customer||'')))]
+    const allRuns     = runsRes.data || []
+    const allSamples  = samplesRes.data || []
+    const allTastings = tastingsRes.data || []
+    const allSpecs    = specsRes.data || []
 
     const byRun: Record<number, any[]>     = {}
     const tastByRun: Record<number, any[]> = {}
