@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchInput } from '@/components/production/capture/BatchInput'
@@ -85,12 +85,15 @@ export function SievingCapture({
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
+  // Every field on a bulk bag is mandatory before it can be locked.
+  const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && !!r.lot.trim() && n(r.nett) > 0
+
   // ── Auto-secure: completed bulk bags lock themselves (with a timestamp) as
-  // the operator moves on — they never have to remember to tap "secure". A row
-  // counts as completed once it has a nett weight. Edit re-opens any locked row.
+  // the operator moves on — they never have to remember to tap "secure". Only a
+  // fully-completed bag locks. Edit re-opens any locked row.
   const lockCompleted = (rows: DebagRow[]): DebagRow[] => {
     const t = nowISO()
-    return rows.map(r => (!r.secured && n(r.nett) > 0) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
+    return rows.map(r => (!r.secured && debagComplete(r)) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
   }
 
   // ── Debagging ────────────────────────────────────────────────────────────
@@ -164,6 +167,8 @@ export function SievingCapture({
   }
 
   const { totalIn, totalOut } = sievingTotals(value)
+  const variance  = totalIn - totalOut
+  const withinTol = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
@@ -174,7 +179,9 @@ export function SievingCapture({
 
   return (
     <div className="space-y-4">
-      {/* The two jobs of capture, side by side — each shows how much is logged so far. */}
+      {/* The two jobs + the running balance, grouped in one card so the bold
+          blue/amber tiles read as a single block with the mass balance. */}
+      <div className="rounded-2xl border border-stone-200 bg-white p-2.5 space-y-2.5 shadow-sm">
       <div className="grid grid-cols-2 gap-2.5">
         {([
           { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: debagCount, kg: totalIn,  color: '#1d4ed8' },
@@ -201,6 +208,18 @@ export function SievingCapture({
             </button>
           )
         })}
+      </div>
+      {totalIn > 0 && (
+        <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-stone-50 border border-stone-100 text-[12px]">
+          <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance</span>
+          <span className="font-mono text-stone-600">{totalIn.toFixed(1)} in</span>
+          <span className="text-stone-300">·</span>
+          <span className="font-mono text-stone-600">{totalOut.toFixed(1)} out</span>
+          <span className={`ml-auto font-mono font-bold px-2 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
+          </span>
+        </div>
+      )}
       </div>
       <p className="text-[12px] text-stone-500 px-1 -mt-1">
         {tab === 'debag'
@@ -290,12 +309,18 @@ export function SievingCapture({
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
                       </select></div>
                   </div>
-                  {!locked && n(r.nett) > 0 && (
-                    <button onClick={() => setDebagSecured(r.id, true)}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] hover:bg-ok/20 transition-colors">
-                      <Check size={15} /> Done — lock this bag
-                    </button>
-                  )}
+                  {!locked && (() => {
+                    const missing = [!r.bag_no.trim() && 'bag no.', !r.lot.trim() && 'lot', n(r.nett) <= 0 && 'weight'].filter(Boolean).join(', ')
+                    return (
+                      <>
+                        <button onClick={() => setDebagSecured(r.id, true)} disabled={!debagComplete(r)}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
+                          <Check size={15} /> Done — lock this bag
+                        </button>
+                        {missing && <p className="text-[11px] text-stone-400 text-center">All fields required — still need {missing}.</p>}
+                      </>
+                    )
+                  })()}
                 </div>
               )
             })}

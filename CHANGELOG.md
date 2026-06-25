@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture polish: full-screen keypad, grouped balance, bold steps, mandatory fields)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (full-screen + physical-keyboard support)
+- `components/production/capture/SievingCapture.tsx` (balance grouped with the tiles; mandatory bag fields)
+- `app/(app)/production/capture/[section]/page.tsx` (bold stepper; removed the separate balance strip)
+
+**Changes:**
+- **Full-screen keypad** — the capture keypad now fills the screen on tablet/phone with large keys, and is fully usable on a laptop: the **physical keyboard is wired in** (type digits/letters, comma or dot for the decimal, Backspace, Enter/Esc to finish).
+- **Balance grouped with the jobs** — the bold Debagging (blue) / Bagging (orange) tiles and the running mass balance now sit in **one card**, so the in/out/variance reads as a single block. Removed the separate balance strip.
+- **Bold steps** — the process stepper is bolder and larger (the primary focus of the screen).
+- **Mandatory fields** — a bulk bag can't be locked until **bag no., lot and weight** are all filled (it shows what's still missing); output bags already require their fields. Variant and grade are always set per production.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture: on-screen keypad, edit re-lock, focus on steps, operator overview)
 
 **Files changed:**
