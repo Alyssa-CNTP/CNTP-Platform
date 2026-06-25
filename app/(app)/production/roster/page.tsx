@@ -9,7 +9,6 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { WorkforceTabs } from '@/components/production/WorkforceTabs'
-import { ProductionTabs } from '@/components/production/ProductionTabs'
 import {
   ROSTER_SHIFTS, ROSTER_CATEGORIES, ROSTER_ROLE_SEED, SKILL_TAGS,
   categoryMeta, tagLabel,
@@ -182,9 +181,8 @@ export default function RosterPage() {
 
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <ProductionTabs />
       <div>
-        <h1 className="font-display font-bold text-[22px] text-text">Shift Roster</h1>
+        <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
         <p className="text-[12px] text-stone-400 mt-0.5">The whole-site shift layout — every role and shift across all departments, with the people rostered onto each.</p>
       </div>
       <WorkforceTabs />

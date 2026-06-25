@@ -1,7 +1,8 @@
 'use client'
 
-// components/home/FactoryFloorPlan.tsx
-// The smart factory floor plan for the home page. The layout is the REAL
+// components/production/FactoryFloorPlan.tsx
+// The accurate, dimensioned factory floor plan for the Production section (the
+// pretty isometric view lives on the home page). The layout is the REAL
 // warehouse plan (auto-derived from the insurance spreadsheet — see
 // lib/home/floorplan-data.ts), drawn to scale: Rooibos vs Rosehips storage
 // bays with their kg capacities, doors and the Packaging area.
@@ -73,8 +74,8 @@ export function FactoryFloorPlan() {
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
         <div>
-          <h3 className="font-display font-bold text-[15px] text-text flex items-center gap-2"><MapPin size={15} className="text-brand" /> Factory floor</h3>
-          <p className="text-[12px] text-text-muted mt-0.5">Live storage layout · what's happening right now</p>
+          <h3 className="font-display font-bold text-[15px] text-text flex items-center gap-2"><MapPin size={15} className="text-brand" /> Factory floor plan</h3>
+          <p className="text-[12px] text-text-muted mt-0.5">Accurate storage layout · {(FLOOR_W / 100).toFixed(0)} m × {(FLOOR_H / 100).toFixed(0)} m footprint · live activity</p>
         </div>
         <div className="flex items-center gap-3 text-[12px]">
           <span className="inline-flex items-center gap-1.5 text-text-muted"><Activity size={13} className="text-ok" /> {running.length} running</span>

@@ -8,7 +8,7 @@ export const DEPARTMENT_META = {
       { value: 'developer',        label: 'Developer' },
       { value: 'admin',            label: 'Admin' },
     ],
-    defaultRoute: '/dashboard',
+    defaultRoute: '/home',
   },
   Production: {
     label: 'Production',
@@ -64,7 +64,7 @@ export const DEPARTMENT_META = {
       { value: 'director',   label: 'Director' },
       { value: 'analyst',    label: 'Analyst' },
     ],
-    defaultRoute: '/dashboard',
+    defaultRoute: '/home',
   },
 } as const
 
@@ -82,5 +82,5 @@ export function getDefaultRoute(department: string, role?: string | null): strin
   // Warehouse supervisor + stock controller do the counts — land them there until a
   // dedicated warehouse dashboard exists.
   if (department === 'Production' && (role === 'warehouse_supervisor' || role === 'stock_controller')) return '/count'
-  return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/dashboard'
+  return DEPARTMENT_META[department as Department]?.defaultRoute ?? '/home'
 }
