@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Login: SSO-only — remove the email/password form)
+
+**Files changed:**
+- `app/login/page.tsx` — removed the email/password form, the "or sign in with email" divider, the `handleSubmit` password flow, and the now-unused `loading`/`signIn` wiring; updated footer copy to "Sign in with your @rooibostea.co.za Microsoft account"
+
+**Changes:**
+- **Root cause:** users hit `400 (Bad Request)` on `/auth/v1/token?grant_type=password`. `signInWithPassword` only validates a **Supabase-stored** password, but most accounts are SSO-provisioned (Azure-only, via the 2026-06-23 auth reconcile) and have no Supabase password — and Microsoft never exposes its password, so the email/password box can never authenticate a Microsoft user. The form was a dead path producing the errors.
+- **Fix:** `/login` is now **Microsoft SSO only** ("Continue with work account"). This is the existing, working production flow: SSO auto-creates the Supabase account on first sign-in, admins then assign a role in `/users` (`shared.app_roles`). Floor-operator PIN login (`/floor`) is unchanged.
+- **Still to do on production deploy:** fix `NEXT_PUBLIC_SITE_URL` in production `.env.local` (currently points at the staging host) so the new-user role-assignment email links to production.
+
+---
+
 ## 2026-06-25 — Gustav (Lab results: heavy metals Aluminum+Copper, PA tab results, datetime stamps, None detected)
 
 **Files changed:**
