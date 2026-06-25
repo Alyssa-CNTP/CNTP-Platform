@@ -14,16 +14,18 @@ import type { ShiftAssignment } from '@/lib/supabase/database.types'
 export interface SpillageRow { id: string; kg: string }
 export interface DebagRow {
   id: string; bag_no: string; lot: string; gross: string; nett: string
-  delivery_date: string; local_export: string; secured?: boolean
+  delivery_date: string; local_export: string; secured?: boolean; logged_at?: string
 }
 export interface OutBag {
   id: string; serial: string; productType: string; code: string | null
-  weight: string; batch: string; destination: string; printed: boolean; secured?: boolean
+  weight: string; batch: string; destination: string; printed: boolean
+  secured?: boolean; logged_at?: string
 }
 export interface SievingData {
   spillage: SpillageRow[]
   debag:    DebagRow[]
   outputs:  OutBag[]
+  bucketSecured?: boolean      // bucket-elevator spillage locked once finished (per grade)
 }
 
 export function emptySievingData(): SievingData {
@@ -35,6 +37,10 @@ export function emptySievingData(): SievingData {
 }
 
 const n = (v: string) => parseFloat(v) || 0
+const nowISO = () => new Date().toISOString()
+// Display a logged-at timestamp in SAST (Africa/Johannesburg), e.g. "13:42".
+const fmtTime = (iso?: string) =>
+  iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
 
 // Destination letter → raw-material local/export label, kept consistent with the
 // production's destination chosen at the top.
@@ -76,8 +82,17 @@ export function SievingCapture({
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
+  // ── Auto-secure: completed bulk bags lock themselves (with a timestamp) as
+  // the operator moves on — they never have to remember to tap "secure". A row
+  // counts as completed once it has a nett weight. Edit re-opens any locked row.
+  const lockCompleted = (rows: DebagRow[]): DebagRow[] => {
+    const t = nowISO()
+    return rows.map(r => (!r.secured && n(r.nett) > 0) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
+  }
+
   // ── Debagging ────────────────────────────────────────────────────────────
-  const addDebag = () => patch({ debag: [...value.debag, {
+  // Adding the next bulk bag finalises the previous completed one.
+  const addDebag = () => patch({ debag: [...lockCompleted(value.debag), {
     id: crypto.randomUUID(), bag_no: '', lot: assignment.lot_number ?? '',
     gross: '', nett: '', delivery_date: '', local_export: DEST_LABEL[gradeLetter] ?? 'Export',
   }] })
@@ -85,11 +100,19 @@ export function SievingCapture({
     patch({ debag: value.debag.map(r => r.id === id ? { ...r, [k]: v } : r) })
   const removeDebag = (id: string) => patch({ debag: value.debag.filter(r => r.id !== id) })
   const setDebagSecured = (id: string, val: boolean) =>
-    patch({ debag: value.debag.map(r => r.id === id ? { ...r, secured: val } : r) })
+    patch({ debag: value.debag.map(r => r.id === id ? { ...r, secured: val, logged_at: val ? (r.logged_at ?? nowISO()) : r.logged_at } : r) })
   const setOutputSecured = (id: string, val: boolean) =>
     patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, secured: val } : b) })
   const updateSpillage = (id: string, v: string) =>
     patch({ spillage: value.spillage.map(r => r.id === id ? { ...r, kg: v } : r) })
+
+  // Leaving the inbound (debag) step locks the bucket elevator + any finished
+  // bulk bags for this grade. A new grade is a fresh record, so it starts open.
+  function goToTab(next: 'debag' | 'bag') {
+    if (next === 'bag') patch({ debag: lockCompleted(value.debag), bucketSecured: true })
+    setTab(next)
+  }
+  const spillageKg = value.spillage.reduce((s, r) => s + n(r.kg), 0)
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
@@ -117,9 +140,12 @@ export function SievingCapture({
       } as any)
     } catch { /* session save retries */ }
 
+    // An output bag is complete the moment it's added (picked + printed), so it
+    // logs and secures itself right away — no separate "secure" tap needed.
     patch({ outputs: [...value.outputs, {
       id: bag.id, serial, productType: p.productType, code: p.code,
       weight: p.weight, batch: bag.lot_number, destination: grade, printed: true,
+      secured: true, logged_at: now,
     }] })
     setPicking(false)
     printLabel(bag)
@@ -153,7 +179,7 @@ export function SievingCapture({
         ] as const).map(t => {
           const on = tab === t.id
           return (
-            <button key={t.id} onClick={() => setTab(t.id)}
+            <button key={t.id} onClick={() => goToTab(t.id)}
               className={`flex flex-col gap-1.5 p-3.5 rounded-2xl border-2 text-left transition-all ${on ? 'border-brand bg-brand/5 shadow-sm' : 'border-stone-200 bg-white hover:border-stone-300'}`}>
               <div className="flex items-center gap-1.5">
                 <t.Icon size={16} className={on ? 'text-brand' : 'text-stone-400'} />
@@ -177,22 +203,40 @@ export function SievingCapture({
 
       {tab === 'debag' && (
         <>
-          <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <Scale size={14} className="text-amber-700" />
-              <span className="font-semibold text-[13px] text-amber-800">Bucket elevator</span>
-              <span className="text-[11px] text-amber-700/80">excluded from balance</span>
+          {value.bucketSecured ? (
+            // Locked once the operator finishes the inbound step — stays put until
+            // a new grade. Edit re-opens it if a correction is needed.
+            <div className="flex items-center gap-3 bg-ok/5 border border-ok/30 rounded-2xl px-4 py-3">
+              <Lock size={15} className="text-ok shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-medium text-text">Bucket elevator · {spillageKg.toFixed(1)} kg spillage</div>
+                <div className="font-mono text-[11px] text-text-muted">logged · excluded from balance</div>
+              </div>
+              {!locked && (
+                <button onClick={() => patch({ bucketSecured: false })}
+                  className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg">
+                  <Pencil size={13} /> Edit
+                </button>
+              )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {value.spillage.map((r, i) => (
-                <div key={r.id} className="space-y-1">
-                  <label className={LBL}>Spillage {i + 1} (kg)</label>
-                  <input type="number" inputMode="decimal" value={r.kg} disabled={locked}
-                    onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
-                </div>
-              ))}
+          ) : (
+            <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Scale size={14} className="text-amber-700" />
+                <span className="font-semibold text-[13px] text-amber-800">Bucket elevator</span>
+                <span className="text-[11px] text-amber-700/80">excluded from balance</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {value.spillage.map((r, i) => (
+                  <div key={r.id} className="space-y-1">
+                    <label className={LBL}>Spillage {i + 1} (kg)</label>
+                    <input type="number" inputMode="decimal" value={r.kg} disabled={locked}
+                      onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="space-y-3">
             {value.debag.map((r, i) => {
@@ -204,7 +248,7 @@ export function SievingCapture({
                     <Lock size={15} className="text-ok shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="text-[13px] font-medium text-text">Bulk bag {i + 1} · {n(r.nett).toFixed(1)} kg</div>
-                      <div className="font-mono text-[11px] text-text-muted truncate">{[r.bag_no, r.lot, r.local_export].filter(Boolean).join(' · ')}</div>
+                      <div className="font-mono text-[11px] text-text-muted truncate">{[r.bag_no, r.lot, r.local_export].filter(Boolean).join(' · ')}{r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}</div>
                     </div>
                     {!locked && (
                       <button onClick={() => setDebagSecured(r.id, false)}
@@ -233,11 +277,10 @@ export function SievingCapture({
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
                       </select></div>
                   </div>
-                  {!locked && (
-                    <button onClick={() => setDebagSecured(r.id, true)} disabled={n(r.nett) <= 0}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
-                      <Check size={15} /> Secure bag
-                    </button>
+                  {!locked && n(r.nett) > 0 && (
+                    <p className="flex items-center gap-1.5 text-[11px] text-stone-400">
+                      <Check size={13} className="text-ok" /> Locks automatically when you add the next bag or move to Bagging.
+                    </p>
                   )}
                 </div>
               )
@@ -264,7 +307,7 @@ export function SievingCapture({
                 <div key={b.id} className={`flex items-center gap-3 px-4 py-3 ${b.secured ? 'bg-ok/5' : ''}`}>
                   {b.secured && <Lock size={14} className="text-ok shrink-0" />}
                   <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg</div>
+                    <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
                     <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
                   </div>
                   <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
