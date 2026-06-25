@@ -47,7 +47,17 @@ echo "[5/6] atomic swap + restart"
 rm -rf .next-old
 [ -d .next ] && mv .next .next-old
 mv .next-build .next
-$PM2 restart cntp-staging >/dev/null
+# pm2 restart sometimes prints a transient "Process N not found" yet still
+# restarts; and a genuinely-absent process needs a fresh start (npm start, fork
+# mode, from the app dir — how cntp-staging is defined). Tolerate both so the
+# deploy never aborts before the verify/rollback below — the HTTP check is the
+# real gate.
+if $PM2 describe cntp-staging >/dev/null 2>&1; then
+  $PM2 restart cntp-staging --update-env >/dev/null 2>&1 || echo "      (pm2 restart returned an error — verifying anyway)"
+else
+  echo "      cntp-staging not registered — starting it"
+  $PM2 start npm --name cntp-staging -- start >/dev/null 2>&1 || true
+fi
 sleep 4
 
 echo "[6/6] verifying"
@@ -65,7 +75,7 @@ else
   echo "VERIFY FAILED — rolling back to previous build"
   rm -rf .next
   [ -d .next-old ] && mv .next-old .next
-  $PM2 restart cntp-staging >/dev/null
+  $PM2 restart cntp-staging --update-env >/dev/null 2>&1 || $PM2 start npm --name cntp-staging -- start >/dev/null 2>&1 || true
   echo "ROLLED BACK"
   exit 1
 fi
