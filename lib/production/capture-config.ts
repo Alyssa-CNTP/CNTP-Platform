@@ -89,6 +89,12 @@ export function makeSerial(sectionCode: string, dateStr: string, seq: number): s
 
 export const MASS_BALANCE_TOLERANCE_KG = 15
 
+// Label printing is not available on the floor yet (no printer). While this is
+// false, capture does NOT depend on a printer: the output picker reads
+// "Complete bag" (no print round-trip) and each bag shows its serial prominently
+// so it can be hand-written. Flip to true the day a printer is wired up.
+export const LABEL_PRINTING_ENABLED = false
+
 // Which master-inventory product groups a section bags as outputs. The picker
 // shows only items in these groups, matching the production's variant (and, for
 // Leaf, the chosen destination) — so codes/names come straight from the master.
