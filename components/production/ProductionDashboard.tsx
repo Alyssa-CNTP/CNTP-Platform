@@ -17,16 +17,16 @@ import {
   RefreshCw, Package, Scale, Percent, Activity, CheckCircle2, AlertTriangle,
   Wrench, CalendarRange, ClipboardList, Users, ChevronRight, Gauge as GaugeIcon,
 } from 'lucide-react'
-import { format } from 'date-fns'
+import { format, subMonths } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { WeatherTile } from './WeatherTile'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
+import OperationalTrends from '@/components/management/OperationalTrends'
 
 const C = { brand: '#1A3A0E', accent: '#5A8A2A', azure: '#2A7CB8', warn: '#B85C0A', err: '#B81C1C', ok: '#1A7A3C', info: '#2A7CB8', gray: '#96A88A' }
 const PIE = [C.accent, C.azure, C.ok, C.warn, C.err, C.gray]
-const WINDOW_DAYS = 14
 const round1 = (n: number) => Math.round(n * 10) / 10
 
 const SESSION_STATUS: Record<string, { label: string; cls: string }> = {
@@ -49,11 +49,12 @@ export default function ProductionDashboard() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [tab, setTab] = useState<'output' | 'yield' | 'flow'>('output')
+  const [windowDays, setWindowDays] = useState(14)
 
   const load = useCallback(async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true)
     const db = getDb()
-    const start = new Date(); start.setDate(start.getDate() - (WINDOW_DAYS - 1))
+    const start = new Date(); start.setDate(start.getDate() - (windowDays - 1))
     const startStr = format(start, 'yyyy-MM-dd')
     const todayStart = `${today}T00:00:00`
 
@@ -79,7 +80,7 @@ export default function ProductionDashboard() {
     setBagsToday(((bags as any[]) ?? []).map(b => ({ section_id: b.section_id, weight_kg: Number(b.weight_kg) || 0 })))
     setBreakdowns((bd as Breakdown[]) ?? [])
     setLoading(false); setRefreshing(false)
-  }, [today])
+  }, [today, windowDays])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { const t = setInterval(() => load(true), 120_000); return () => clearInterval(t) }, [load])
@@ -90,7 +91,7 @@ export default function ProductionDashboard() {
 
     // Daily trend over the window
     const days: { date: string; label: string; outputKg: number; sessions: number; yieldPct: number }[] = []
-    for (let i = WINDOW_DAYS - 1; i >= 0; i--) {
+    for (let i = windowDays - 1; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i)
       const ds = format(d, 'yyyy-MM-dd')
       const ss = sessions.filter(s => s.date === ds)
@@ -134,15 +135,15 @@ export default function ProductionDashboard() {
     const variBySection = bySection.filter(s => s.outputKg > 0)
 
     return { days, bySection, todayRows, outputToday, yieldToday, running, pending, flags, bagsCount, statusDist, variBySection }
-  }, [sessions, mb, bagsToday, today])
+  }, [sessions, mb, bagsToday, today, windowDays])
 
   const agg = useMemo(() => ({
-    windowDays: WINDOW_DAYS,
+    windowDays: windowDays,
     today: { date: today, outputKg: a.outputToday, bags: a.bagsCount, yieldPct: a.yieldToday, sectionsRunning: a.running, signOffsPending: a.pending, balanceFlags: a.flags },
     dailyTrend: a.days.map(d => ({ date: d.date, outputKg: d.outputKg, sessions: d.sessions, yieldPct: d.yieldPct })),
     yieldBySection: a.bySection.map(s => ({ section: s.name, outputKg: s.outputKg, yieldPct: s.yieldPct })),
     openBreakdowns: breakdowns.map(b => ({ card: b.card_no, area: b.area, machine: b.machine, status: b.status })),
-  }), [a, breakdowns, today])
+  }), [a, breakdowns, today, windowDays])
 
   const kpis = [
     { label: 'Output today', value: a.outputToday.toLocaleString() + ' kg', icon: Scale, tone: 'info' as const },
@@ -177,63 +178,29 @@ export default function ProductionDashboard() {
         {kpis.map(k => <Kpi key={k.label} {...k} loading={loading} />)}
       </div>
 
-      {/* Live section status */}
-      <div className="card overflow-hidden p-0">
-        <div className="px-4 py-3 border-b border-surface-rule"><h3 className="text-sm font-semibold text-text">Section status · today</h3></div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-surface-rule bg-surface-dim text-left">
-                {['Section', 'Status', 'kg in', 'kg out', 'Variance', 'Bags', ''].map((h, i) => (
-                  <th key={i} className="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-surface-rule">
-              {a.todayRows.map(r => {
-                const m = sectionMeta(r.id)
-                const st = SESSION_STATUS[r.status] ?? SESSION_STATUS.none
-                const flag = r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG
-                const href = `/production/capture/${r.id}?date=${today}`
-                return (
-                  <tr key={r.id} className="hover:bg-surface-dim/60 transition-colors cursor-pointer" onClick={() => { window.location.href = href }}>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
-                          <span className="font-mono font-bold text-[8px] text-white">{m.code}</span>
-                        </div>
-                        <span className="font-medium text-[13px] text-text">{m.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3"><span className={`text-[10px] font-medium px-2 py-1 rounded-lg ${st.cls}`}>{st.label}</span></td>
-                    <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{r.kgIn ? r.kgIn.toFixed(1) : '—'}</td>
-                    <td className="px-4 py-3 font-mono text-[12px] text-text">{r.kgOut ? r.kgOut.toFixed(1) : '—'}</td>
-                    <td className={`px-4 py-3 font-mono text-[12px] ${flag ? 'text-warn font-bold' : 'text-text-muted'}`}>
-                      {r.kgIn ? `${r.variance > 0 ? '+' : ''}${r.variance.toFixed(1)}` : '—'}{flag ? ' ⚠' : ''}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-[12px] text-text">{r.bags || '—'}</td>
-                    <td className="px-4 py-3 text-right"><ChevronRight size={15} className="text-text-muted inline" /></td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="px-4 py-2 border-t border-surface-rule text-[10px] text-text-muted">Auto-refreshes every 2 min · {format(new Date(), 'HH:mm')}</div>
-      </div>
-
-      {/* Trends — segmented */}
+      {/* Trends — segmented + window filter */}
       <div className="card p-4">
-        <div className="flex items-center gap-1 mb-4 bg-surface-dim rounded-lg p-1 w-fit">
-          {([['output', 'Output'], ['yield', 'Yield'], ['flow', 'Flow & status']] as ['output' | 'yield' | 'flow', string][]).map(([k, label]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
-          ))}
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit">
+            {([['output', 'Output'], ['yield', 'Yield'], ['flow', 'Flow & status']] as ['output' | 'yield' | 'flow', string][]).map(([k, label]) => (
+              <button key={k} onClick={() => setTab(k)}
+                className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-text-muted">Window</span>
+            <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1">
+              {[7, 14, 30].map(d => (
+                <button key={d} onClick={() => setWindowDays(d)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${windowDays === d ? 'bg-brand text-white' : 'text-text-muted hover:text-text'}`}>{d}d</button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {tab === 'output' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Chart title="Daily output" subtitle={`Kg bagged per day · last ${WINDOW_DAYS} days`}>
+            <Chart title="Daily output" subtitle={`Kg bagged per day · last ${windowDays} days`}>
               <BarChart data={a.days} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
                 <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} /><YAxis tick={{ fontSize: 11 }} /><Tooltip />
@@ -252,7 +219,7 @@ export default function ProductionDashboard() {
 
         {tab === 'yield' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Chart title="Yield by section" subtitle={`Output ÷ input · last ${WINDOW_DAYS} days`}>
+            <Chart title="Yield by section" subtitle={`Output ÷ input · last ${windowDays} days`}>
               <BarChart data={a.bySection} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
                 <XAxis dataKey="code" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" /><Tooltip />
@@ -274,14 +241,14 @@ export default function ProductionDashboard() {
 
         {tab === 'flow' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Chart title="Where sessions sit" subtitle={`By status · last ${WINDOW_DAYS} days`}>
+            <Chart title="Where sessions sit" subtitle={`By status · last ${windowDays} days`}>
               <PieChart>
                 <Pie data={a.statusDist} dataKey="n" nameKey="status" cx="50%" cy="50%" outerRadius={80} label={(e: any) => `${e.status} (${e.n})`} labelLine={false} fontSize={10}>
                   {a.statusDist.map((_, i) => <Cell key={i} fill={PIE[i % PIE.length]} />)}
                 </Pie><Tooltip />
               </PieChart>
             </Chart>
-            <Chart title="Output by section" subtitle={`Kg bagged · last ${WINDOW_DAYS} days`}>
+            <Chart title="Output by section" subtitle={`Kg bagged · last ${windowDays} days`}>
               <BarChart data={a.variBySection} margin={{ top: 8, right: 8, left: -2, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
                 <XAxis dataKey="code" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} /><Tooltip />
@@ -330,6 +297,15 @@ export default function ProductionDashboard() {
         cacheKey="prod-insight"
       />
 
+      {/* Operational trends — folded-in Analytics (yield · reliability · velocity) */}
+      <div className="card p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-text">Operational trends</h3>
+          <p className="text-[11px] text-text-muted">Yield, count reliability &amp; inventory velocity · last 6 months</p>
+        </div>
+        <OperationalTrends dateFrom={format(subMonths(new Date(), 6), 'yyyy-MM-dd')} dateTo={today} />
+      </div>
+
       {/* OEE / downtime / scrap — honest placeholder until capture exists */}
       <div className="card p-4 border-dashed">
         <div className="flex items-center gap-2 mb-1.5">
@@ -343,20 +319,65 @@ export default function ProductionDashboard() {
           stoppage log and scrap field to the capture screens — then these light up here automatically.
         </p>
       </div>
+
+      {/* Section status — at the very bottom */}
+      <div className="card overflow-hidden p-0">
+        <div className="px-4 py-3 border-b border-surface-rule"><h3 className="text-sm font-semibold text-text">Section status · today</h3></div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-surface-rule bg-surface-dim text-left">
+                {['Section', 'Status', 'kg in', 'kg out', 'Variance', 'Bags', ''].map((h, i) => (
+                  <th key={i} className="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-rule">
+              {a.todayRows.map(r => {
+                const m = sectionMeta(r.id)
+                const st = SESSION_STATUS[r.status] ?? SESSION_STATUS.none
+                const flag = r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG
+                const href = `/production/capture/${r.id}?date=${today}`
+                return (
+                  <tr key={r.id} className="hover:bg-surface-dim/60 transition-colors cursor-pointer" onClick={() => { window.location.href = href }}>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
+                          <span className="font-mono font-bold text-[8px] text-white">{m.code}</span>
+                        </div>
+                        <span className="font-medium text-[13px] text-text">{m.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3"><span className={`text-[10px] font-medium px-2 py-1 rounded-lg ${st.cls}`}>{st.label}</span></td>
+                    <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{r.kgIn ? r.kgIn.toFixed(1) : '—'}</td>
+                    <td className="px-4 py-3 font-mono text-[12px] text-text">{r.kgOut ? r.kgOut.toFixed(1) : '—'}</td>
+                    <td className={`px-4 py-3 font-mono text-[12px] ${flag ? 'text-warn font-bold' : 'text-text-muted'}`}>
+                      {r.kgIn ? `${r.variance > 0 ? '+' : ''}${r.variance.toFixed(1)}` : '—'}{flag ? ' ⚠' : ''}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-[12px] text-text">{r.bags || '—'}</td>
+                    <td className="px-4 py-3 text-right"><ChevronRight size={15} className="text-text-muted inline" /></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-4 py-2 border-t border-surface-rule text-[10px] text-text-muted">Auto-refreshes every 2 min · {format(new Date(), 'HH:mm')}</div>
+      </div>
     </div>
   )
 }
 
 function Kpi({ label, value, icon: Icon, tone, loading }: { label: string; value: string; icon: typeof Package; tone: 'ok' | 'warn' | 'err' | 'info'; loading: boolean }) {
-  const dot = { ok: 'bg-ok', warn: 'bg-warn', err: 'bg-err', info: 'bg-info' }[tone]
-  const txt = { ok: 'text-ok', warn: 'text-warn', err: 'text-err', info: 'text-text' }[tone]
+  const accent = { ok: '#1A7A3C', warn: '#B85C0A', err: '#B81C1C', info: '#2A7CB8' }[tone]
+  const tint   = { ok: 'rgba(26,122,60,0.06)', warn: 'rgba(184,92,10,0.06)', err: 'rgba(184,28,28,0.06)', info: 'rgba(42,124,184,0.05)' }[tone]
   return (
-    <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
+    <div className="rounded-xl border border-surface-rule p-4" style={{ borderLeft: `3px solid ${accent}`, background: tint }}>
       <div className="flex items-center justify-between">
-        <Icon size={14} className="text-text-muted" />
-        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+        <Icon size={14} style={{ color: accent }} />
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: accent }} />
       </div>
-      <div className={`text-[22px] leading-none font-semibold mt-2 ${txt}`}>{loading ? '—' : value}</div>
+      <div className="text-[22px] leading-none font-semibold mt-2" style={{ color: accent }}>{loading ? '—' : value}</div>
       <div className="text-[10px] uppercase tracking-wide text-text-muted mt-1">{label}</div>
     </div>
   )

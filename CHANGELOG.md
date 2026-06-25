@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Sidebar overhaul · about-style Home with isometric factory · dashboard filters · floor plan → Production)
+
+**Navigation & access** — `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/departments.ts`, `lib/auth/roleHome.ts`, `app/(app)/dashboard/page.tsx`
+- **Command Centre removed.** `/dashboard` now redirects to `/home`; all post-login defaults and guard fall-throughs point to `/home`.
+- **Sidebar reordered** to Production → Operations → Quality → Maintenance → Sales → Marketing → Logistics → Management → Workspace → AXIS → Admin (Settings, Users & Roles last).
+- **Home** pulled out of Operations into a standalone item at the top.
+- **Shift Rosters** is now its own Operations page (universal/always-open), next to Bag Tracking; **Bag Tracking** opened to Production + Quality.
+- **Floor Plan** added to the Production hub (`ProductionTabs` is now Dashboard + Floor Plan); the old Analytics and Planning hub tabs were removed (Analytics folded into the dashboard; roster moved to Operations).
+
+**Home page** — `app/(app)/home/page.tsx`, `components/home/HomeIsometric.tsx` (new), `public/iso-cargo-bg.avif` (new)
+- Rebuilt as an app-style **about page**: full-page isometric cargo backdrop (low opacity) with frosted-glass cards — greeting, About us, company links (website rich preview + branded Facebook/Instagram), help. Quick links removed.
+- New **pretty isometric drawing of the factory** (`HomeIsometric`), generated from the real bay layout but deliberately showing no numbers/KPIs — just an illustration (with a delivery truck + pallets).
+
+**Floor plan → Production** — `components/production/FactoryFloorPlan.tsx` (moved from `components/home/`), `app/(app)/production/floor-plan/page.tsx` (new)
+- The accurate, **dimensioned** civil floor plan (bays to scale, capacities, live activity, ~126 m × 47 m footprint) now lives under Production → Floor Plan.
+
+**Production dashboard** — `components/production/ProductionDashboard.tsx`, `app/(app)/production/{operations,roster,staff}/page.tsx`
+- **Filterable**: trend window selector (7 / 14 / 30 days). **Colour-coded** KPI cards (accent border + tinted value per tone). **Analytics folded in** via the existing `OperationalTrends` (yield · count reliability · inventory velocity). **Section status moved to the very bottom**, as requested.
+
+**Deferred (next):** links to quality-in-production by batch number (bigger build), and the OEE/downtime/scrap capture.
+
+---
+
 ## 2026-06-25 — Alyssa (Smart factory floor plan on the home page)
 
 **Files changed:**
