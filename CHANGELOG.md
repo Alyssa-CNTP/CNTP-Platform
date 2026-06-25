@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Gustav (Lab results: heavy metals Aluminum+Copper, PA tab results, datetime stamps, None detected)
+
+**Files changed:**
+- `app/(app)/quality/lab-results/page.tsx`
+- `app/api/upload/route.ts`
+
+**Changes:**
+- Heavy metals Gemini extraction prompt: now explicitly extracts ALL metals from the COA including Aluminum and Copper (was only extracting Lead, Cadmium, Mercury, Arsenic). Added instruction for "None detected" on ND values.
+- PA/TA Final Gemini prompt (`pa_final`): completely revised to return results as an `analytes[]` array instead of flat fields, so actual PA values now appear in the table.
+- `lab-results/page.tsx` COLS: added `pa_final` column definition — the PA tab previously had no column definitions so showed an empty table even with data.
+- `expandRecord`: added backwards-compatible handler for existing PA records stored in old flat format (`total_pa_eu`, `total_pa_bfr28`, etc.) — converts them to analyte rows on the fly.
+- `expandRecord`: null/empty analyte results now display as "None detected" instead of a dash.
+- Date columns: all `created_at` timestamps in the lab results tables (main table, export CSV, historical table) now show date **and time** (`dd MMM yyyy HH:mm`) instead of date only.
+
+---
+
 ## 2026-06-25 — Gustav (Pasteuriser: avg customer BD in history table + Excel exports)
 
 **Files changed:**
