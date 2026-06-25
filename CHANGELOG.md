@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: no-printer "Complete bag" + checks-first routine)
+
+**Files changed:**
+- `lib/production/capture-config.ts` (`LABEL_PRINTING_ENABLED` flag, default off)
+- `components/production/capture/OutputPicker.tsx` ("Complete bag" vs "Add & print")
+- `components/production/capture/SievingCapture.tsx` (skip print; prominent serial to hand-write)
+- `app/(app)/production/capture/[section]/page.tsx` (open on Checks; capture gate; stepper tick)
+
+**Changes:**
+- **No printer needed for testing** — capture no longer depends on a label printer. With `LABEL_PRINTING_ENABLED = false`, the output picker reads **"Complete bag"** (no print round-trip — straight back to add the next bag) and each completed bag shows its **serial in bold for hand-writing on the bag**. Flip the flag to `true` when a printer is wired up — no other changes.
+- **The system now guides the routine** — a fresh shift **opens on the Checks tab** (start-up) instead of jumping into Capture. The Capture tab leads with a clear **"Start with your machine checks"** gate (strong but overridable — capture is still available below), and the **Checks step in the stepper ticks green once checks are signed**.
+- **Lost tags** (design): rather than a manual "reissue" step, the system serial stays canonical and re-findable; when sections are linked, downstream input will be **selected from the upstream bag list** (not retyped), so a lost paper tag is harmless and needs nothing extra to remember.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture: guide non-technical operators — checks progress, auto-secure, timestamps, FT-Conventional)
 
 **Files changed:**

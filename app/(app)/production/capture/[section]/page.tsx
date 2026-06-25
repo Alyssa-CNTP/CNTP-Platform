@@ -20,7 +20,7 @@ import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
 import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
-import { ensureCheckRecord, appendCheckEvent } from '@/lib/production/checks-db'
+import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
@@ -76,6 +76,7 @@ function CaptureScreen() {
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
   const [error, setError]         = useState<string | null>(null)
 
   // Serial counter, seeded from existing tags for this section+date
@@ -170,10 +171,33 @@ function CaptureScreen() {
       })
       seqRef.current = maxSeq
 
+      // Guide the routine: a fresh shift opens on Checks (start-up) before
+      // Capture, so the operator does checks first instead of jumping straight in.
+      try {
+        const { record } = await loadCheckRecord(sectionId, dateParam, shift)
+        const signed = !!record && record.status !== 'in_progress'
+        setChecksSigned(signed)
+        const sessStatus = (sess as any)?.status ?? 'new'
+        const hasCapture = !!(
+          ((d?.productions ?? []) as any[]).some(p => (p?.data?.debag?.length || 0) > 0 || (p?.data?.outputs?.length || 0) > 0)
+          || (Array.isArray(d?.outputs) && d.outputs.length > 0)
+        )
+        const fresh = (sessStatus === 'new' || sessStatus === 'draft') && !hasCapture
+        if (!sp.get('tab') && fresh && !signed) setTab('checks')
+      } catch { /* routing is best-effort */ }
+
       setLoading(false)
     }
     load()
   }, [sectionId, dateParam, shift])
+
+  // Keep the checks-done signal fresh as the operator moves between tabs — after
+  // they sign checks (in the Checks tab) the Capture gate and stepper tick update.
+  useEffect(() => {
+    loadCheckRecord(sectionId, dateParam, shift)
+      .then(({ record }) => setChecksSigned(!!record && record.status !== 'in_progress'))
+      .catch(() => {})
+  }, [tab, sectionId, dateParam, shift])
 
   // Reliable save — ensures a session exists (in case the open-time create
   // failed) then persists. Used by the debounce, the hide-flush, and the backstop.
@@ -513,7 +537,9 @@ function CaptureScreen() {
         {STEPS.map((s, i) => {
           const activeIdxStep = STEPS.findIndex(x => x.id === tab)
           const isActive = tab === s.id
-          const isDone   = activeIdxStep > i
+          // Checks reflects real state (signed?) so its tick means "checks done",
+          // not just "we've moved past this tab".
+          const isDone   = s.id === 'checks' ? checksSigned : activeIdxStep > i
           const Icon = s.icon
           return (
             <div key={s.id} className="flex items-center shrink-0">
@@ -563,7 +589,22 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {!locked && (
+              {/* Routine guide: until start-up checks are done, lead with a clear
+                  "do checks first" gate. Strong but not blocking — capture is still
+                  below for the cases where they must proceed. */}
+              {!locked && !checksSigned && (
+                <button onClick={() => setTab('checks')}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 bg-warn/8 border-2 border-warn/30 rounded-2xl text-left hover:bg-warn/12 transition-colors">
+                  <div className="w-9 h-9 rounded-xl bg-warn/15 flex items-center justify-center shrink-0"><Gauge size={18} className="text-warn" /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[14px] font-semibold text-text">Start with your machine checks</div>
+                    <div className="text-[12px] text-text-muted">Step 1 of the shift — tap to do your start-up checks. You can still capture below if you must.</div>
+                  </div>
+                  <span className="text-[12px] font-semibold text-warn shrink-0">Do checks →</span>
+                </button>
+              )}
+
+              {!locked && checksSigned && (
                 <ChecksStatusStrip sectionId={sectionId} date={dateParam} shift={shift}
                   running={totalIn > 0} onOpen={() => setTab('checks')} />
               )}

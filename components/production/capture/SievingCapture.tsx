@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
-import { variantToShort } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchInput } from '@/components/production/capture/BatchInput'
@@ -148,7 +148,7 @@ export function SievingCapture({
       secured: true, logged_at: now,
     }] })
     setPicking(false)
-    printLabel(bag)
+    if (LABEL_PRINTING_ENABLED) printLabel(bag)
   }
 
   function reprint(b: OutBag) {
@@ -308,9 +308,15 @@ export function SievingCapture({
                   {b.secured && <Lock size={14} className="text-ok shrink-0" />}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
-                    <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
+                    {LABEL_PRINTING_ENABLED
+                      ? <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
+                      : <div className="mt-1 inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
+                          {b.serial}<span className="text-[10px] font-sans font-normal text-stone-400 uppercase tracking-wide">write on bag</span>
+                        </div>}
                   </div>
-                  <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
+                  {LABEL_PRINTING_ENABLED && (
+                    <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
+                  )}
                   {!locked && (b.secured
                     ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
                     : <>
