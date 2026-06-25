@@ -90,9 +90,13 @@ export default function HomePage() {
           {/* Website — live OG preview, with a branded fallback */}
           <a href={WEBSITE} target="_blank" rel="noreferrer"
             className="md:col-span-1 group bg-surface-card border border-surface-rule rounded-2xl overflow-hidden hover:border-brand/40 transition-colors flex flex-col">
-            {preview?.image && (
+            {preview?.image ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={preview.image} alt="" className="w-full h-32 object-cover" />
+            ) : (
+              <div className="w-full h-24 flex items-center justify-center" style={{ background: '#1A3A0E' }}>
+                <Leaf size={26} className="text-white/90" />
+              </div>
             )}
             <div className="p-4 flex-1">
               <div className="flex items-center gap-1.5 text-brand mb-1">
@@ -100,7 +104,9 @@ export default function HomePage() {
               </div>
               <div className="font-semibold text-[14px] text-text line-clamp-1">{preview?.title ?? 'Cape Natural Tea Products'}</div>
               <p className="text-[12px] text-text-muted mt-0.5 line-clamp-2">
-                {preview?.description || (pvFailed ? 'Visit our website' : 'Loading preview…')}
+                {preview
+                  ? (preview.description || 'Premium organic rooibos & botanical teas from the Cederberg.')
+                  : (pvFailed ? 'Visit our website' : 'Loading preview…')}
               </p>
               <span className="inline-flex items-center gap-1 text-[11px] text-brand mt-2 group-hover:underline">Open website <ExternalLink size={11} /></span>
             </div>
