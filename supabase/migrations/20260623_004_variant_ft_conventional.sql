@@ -8,6 +8,11 @@
 -- it would be rejected. This widens the CHECK on every table that stores a
 -- variant. Idempotent + name-agnostic: it finds and drops whatever CHECK
 -- currently governs the variant column, then re-adds the widened one.
+--
+-- Added as NOT VALID: some historical rows carry variant values that predate
+-- this list, so a validating ADD would fail ("violated by some row"). NOT VALID
+-- enforces the rule on every new/updated row (including FT-CON) while leaving
+-- legacy rows untouched.
 -- ============================================================
 
 DO $$
@@ -31,7 +36,7 @@ BEGIN
     END LOOP;
 
     EXECUTE format(
-      'ALTER TABLE production.%I ADD CONSTRAINT %I CHECK (variant IN (%L,%L,%L,%L,%L,%L))',
+      'ALTER TABLE production.%I ADD CONSTRAINT %I CHECK (variant IN (%L,%L,%L,%L,%L,%L)) NOT VALID',
       t, t || '_variant_check',
       'Conventional','Organic','RA-Conventional','RA-Organic','FT-ORG','FT-CON'
     );
