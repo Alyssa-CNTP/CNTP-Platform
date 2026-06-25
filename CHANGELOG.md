@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: comma decimals, colour-coded jobs, stale handover note)
+
+**Files changed:**
+- `components/production/capture/SievingCapture.tsx` (comma→decimal; colour-coded Debagging/Bagging)
+- `components/production/capture/OutputPicker.tsx` (weight accepts comma)
+- `app/(app)/production/capture/[section]/page.tsx` (comma→decimal; handover-note recency)
+
+**Changes:**
+1. **Comma decimals captured correctly** — SA operators type the decimal as a comma (`1200,5`). The weight/spillage fields now accept a comma (text input + decimal keypad), and every captured number is normalised comma→period before parsing, so the **database always stores a clean decimal**.
+2. **Debagging vs Bagging colour-coded** — the two job tiles now use two bold, distinct colours (blue = Debagging/in, amber = Bagging/out); the active one fills with its colour, so on a small screen the operator can see at a glance which job they're on.
+3. **Stale handover note removed** — the line handover note only shows when it's from a genuinely recent shift (last 7 days). Old seed/demo notes (e.g. the 15 Mar "DEMO-MONTHLY-SEED") no longer persist.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture: no-printer "Complete bag" + checks-first routine)
 
 **Files changed:**

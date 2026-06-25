@@ -36,7 +36,9 @@ export function emptySievingData(): SievingData {
   }
 }
 
-const n = (v: string) => parseFloat(v) || 0
+// Operators on SA devices type the decimal as a COMMA (1200,5). Normalise comma
+// → period so it always parses and is stored in the DB as a proper decimal.
+const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 const nowISO = () => new Date().toISOString()
 // Display a logged-at timestamp in SAST (Africa/Johannesburg), e.g. "13:42".
 const fmtTime = (iso?: string) =>
@@ -174,21 +176,25 @@ export function SievingCapture({
       {/* The two jobs of capture, side by side — each shows how much is logged so far. */}
       <div className="grid grid-cols-2 gap-2.5">
         {([
-          { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: debagCount, kg: totalIn },
-          { id: 'bag',   label: 'Bagging',   dir: 'out', Icon: PackageCheck,  count: bagCount,   kg: totalOut },
+          { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: debagCount, kg: totalIn,  color: '#1d4ed8' },
+          { id: 'bag',   label: 'Bagging',   dir: 'out', Icon: PackageCheck,  count: bagCount,   kg: totalOut, color: '#d97706' },
         ] as const).map(t => {
           const on = tab === t.id
+          // Two bold, distinct colours — blue for "in", amber for "out" — so the
+          // operator can tell at a glance which job they're on. The active one
+          // fills with its colour; the other stays quiet.
           return (
             <button key={t.id} onClick={() => goToTab(t.id)}
-              className={`flex flex-col gap-1.5 p-3.5 rounded-2xl border-2 text-left transition-all ${on ? 'border-brand bg-brand/5 shadow-sm' : 'border-stone-200 bg-white hover:border-stone-300'}`}>
+              style={on ? { background: t.color, borderColor: t.color } : { borderColor: t.color + '55' }}
+              className={`flex flex-col gap-1.5 p-3.5 rounded-2xl border-2 text-left transition-all ${on ? 'shadow-sm text-white' : 'bg-white'}`}>
               <div className="flex items-center gap-1.5">
-                <t.Icon size={16} className={on ? 'text-brand' : 'text-stone-400'} />
-                <span className={`font-semibold text-[14px] ${on ? 'text-brand' : 'text-stone-700'}`}>{t.label}</span>
-                <span className="text-[11px] text-stone-400">({t.dir})</span>
+                <t.Icon size={18} className={on ? 'text-white' : ''} style={on ? undefined : { color: t.color }} />
+                <span className="font-bold text-[15px]" style={on ? undefined : { color: t.color }}>{t.label}</span>
+                <span className={`text-[11px] ${on ? 'text-white/70' : 'text-stone-400'}`}>({t.dir})</span>
               </div>
-              <div className="text-[12px] text-stone-500">
-                <span className="font-mono font-bold text-[14px] text-text">{t.count}</span> bag{t.count !== 1 ? 's' : ''}
-                <span className="text-stone-300 mx-1.5">·</span>
+              <div className={`text-[12px] ${on ? 'text-white/90' : 'text-stone-500'}`}>
+                <span className={`font-mono font-bold text-[15px] ${on ? 'text-white' : 'text-text'}`}>{t.count}</span> bag{t.count !== 1 ? 's' : ''}
+                <span className={`mx-1.5 ${on ? 'text-white/40' : 'text-stone-300'}`}>·</span>
                 <span className="font-mono">{t.kg.toFixed(1)} kg</span>
               </div>
             </button>
@@ -230,7 +236,7 @@ export function SievingCapture({
                 {value.spillage.map((r, i) => (
                   <div key={r.id} className="space-y-1">
                     <label className={LBL}>Spillage {i + 1} (kg)</label>
-                    <input type="number" inputMode="decimal" value={r.kg} disabled={locked}
+                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.kg} disabled={locked}
                       onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
                   </div>
                 ))}
@@ -271,7 +277,7 @@ export function SievingCapture({
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
                       <BatchInput value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} placeholder="Type or pick" /></div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
-                      <input type="number" inputMode="decimal" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
+                      <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
                       <select value={r.local_export} disabled={locked} onChange={e => updateDebag(r.id, 'local_export', e.target.value)} className={INP + ' cursor-pointer'}>
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
