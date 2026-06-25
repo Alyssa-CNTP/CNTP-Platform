@@ -1541,7 +1541,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-surface border-b border-surface-rule">
-                      {([['Batch No.','batch'],['Date','date'],['Customer','customer'],['Product','product'],['Variant','variant'],['Samples','samples'],['Avg Moisture','moisture'],['Avg BD','bd'],...PAST_SIEVE_COLS.map(c=>[`Avg ${c.label}`,null] as [string,null]),['Sieve Fails',null],['Result','result'],['Export',null]] as [string,string|null][]).map(([h,key]) => (
+                      {([['Batch No.','batch'],['Date','date'],['Customer','customer'],['Product','product'],['Variant','variant'],['Samples','samples'],['Avg Moisture','moisture'],['Avg BD','bd'],['Avg Cust BD',null],...PAST_SIEVE_COLS.map(c=>[`Avg ${c.label}`,null] as [string,null]),['Sieve Fails',null],['Result','result'],['Export',null]] as [string,string|null][]).map(([h,key]) => (
                         <th key={h}
                           onClick={key ? () => toggleHistSort(key) : undefined}
                           className={`px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide whitespace-nowrap ${key?'cursor-pointer select-none hover:text-text':''} ${key && histSort.key===key ? 'text-brand' : 'text-text-muted'}`}>
@@ -1555,10 +1555,12 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                       const samples = b.samples||[]
                       const sieveSamples = samples.filter(s => s.has_sieve)
                       const mbSamples    = samples.filter(s => s.has_mb)
-                      const moist = mbSamples.map(s => parseFloat(s.moisture)).filter(n => !isNaN(n))
-                      const bd    = mbSamples.map(s => parseFloat(s.untapped_bd)).filter(n => !isNaN(n))
-                      const avgM  = moist.length ? (moist.reduce((a,b)=>a+b,0)/moist.length).toFixed(2) : '—'
-                      const avgBD = bd.length    ? (bd.reduce((a,b)=>a+b,0)/bd.length).toFixed(0)    : '—'
+                      const moist  = mbSamples.map(s => parseFloat(s.moisture)).filter(n => !isNaN(n))
+                      const bd     = mbSamples.map(s => parseFloat(s.untapped_bd)).filter(n => !isNaN(n))
+                      const custBd = mbSamples.map(s => parseFloat((s as any).customer_bd)).filter(n => !isNaN(n))
+                      const avgM      = moist.length   ? (moist.reduce((a,b)=>a+b,0)/moist.length).toFixed(2)   : '—'
+                      const avgBD     = bd.length      ? (bd.reduce((a,b)=>a+b,0)/bd.length).toFixed(0)         : '—'
+                      const avgCustBD = custBd.length  ? (custBd.reduce((a,b)=>a+b,0)/custBd.length).toFixed(0) : '—'
                       const avgSieves = Object.fromEntries(PAST_SIEVE_COLS.map(c => {
                         const vals = sieveSamples.map(s => parseFloat(s[c.key as keyof BatchSample] as string)).filter(n => !isNaN(n))
                         return [c.key, vals.length ? (vals.reduce((a,v)=>a+v,0)/vals.length).toFixed(1) : null]
@@ -1587,6 +1589,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{samples.length}</td>
                             <td className="px-4 py-3 font-mono font-bold text-[12px]" style={{ color:parseFloat(avgM)>8.5?'var(--color-err)':'var(--color-ok)' }}>{avgM}{avgM!=='—'?'%':''}</td>
                             <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{avgBD}</td>
+                            <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{avgCustBD}</td>
                             {PAST_SIEVE_COLS.map(c => {
                               const val = avgSieves[c.key]
                               const sp  = getPastSpec(b.customer, c.key, b._spec, b.batch_specs)

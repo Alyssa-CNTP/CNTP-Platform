@@ -214,6 +214,7 @@ export async function exportPasteuriserBatch(batch: any) {
       PAST_SIEVES.forEach(k => { row[`Avg ${PAST_SIEVE_LABELS[k]}`] = avg(ss.map((s: any) => s[k])) })
       row['Avg Moisture %'] = avg(ss.map((s: any) => s.moisture))
       row['Avg BD (cc/100g)'] = avg(ss.map((s: any) => s.untapped_bd))
+      row['Avg Customer BD'] = avg(ss.map((s: any) => s.customer_bd))
       row['Sieve Samples'] = ss.filter((s: any) => s.has_sieve).length
       row['MB Samples'] = ss.filter((s: any) => s.has_mb).length
       row['Sensorial Pass'] = ss.filter((s: any) => s.sensorial_pass === 'Pass').length
@@ -249,12 +250,13 @@ export async function exportPasteuriserBatch(batch: any) {
     })),
     { Field: 'Avg Moisture %',   Value: fmtAvg(avg(mbSamples.map((s: any) => s.moisture)), '%') },
     { Field: 'Avg BD (cc/100g)', Value: fmtAvg(avg(mbSamples.map((s: any) => s.untapped_bd))) },
+    { Field: 'Avg Customer BD',  Value: fmtAvg(avg(mbSamples.map((s: any) => s.customer_bd))) },
   ]
 
   const pct = '0.0"%"'
   const rawNumFmt: Record<string, string> = { 'Temp (°C)': '0.0', 'Moisture %': '0.00"%"', 'BD (cc/100g)': '0', 'Customer BD': '0', 'Weight 1 (kg)': '0.0', 'Weight 2 (kg)': '0.0', 'Weight 3 (kg)': '0.0', 'Needle Count': '0', 'Aroma': '0', 'Flavour': '0', 'Briskness': '0', 'Strength': '0', 'Cup Colour': '0' }
   PAST_SIEVES.forEach(k => { rawNumFmt[PAST_SIEVE_LABELS[k]] = pct; rawNumFmt[`${PAST_SIEVE_LABELS[k]} (g)`] = '0' })
-  const dailyNumFmt: Record<string, string> = { 'Avg Temp (°C)': '0.0', 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0' }
+  const dailyNumFmt: Record<string, string> = { 'Avg Temp (°C)': '0.0', 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0', 'Avg Customer BD': '0' }
   PAST_SIEVES.forEach(k => { dailyNumFmt[`Avg ${PAST_SIEVE_LABELS[k]}`] = pct })
 
   const rawFill = (r: any) => {
@@ -346,13 +348,14 @@ export async function exportPasteuriserBatches(batches: any[], filename: string)
     PAST_SIEVES.forEach(k => { row[`Avg ${PAST_SIEVE_LABELS[k]}`] = avg(sieveSamples.map((s: any) => s[k])) })
     row['Avg Moisture %'] = avg(mbSamples.map((s: any) => s.moisture))
     row['Avg BD (cc/100g)'] = avg(mbSamples.map((s: any) => s.untapped_bd))
+    row['Avg Customer BD'] = avg(mbSamples.map((s: any) => s.customer_bd))
     return row
   })
 
   const pct = '0.0"%"'
   const rawNumFmt: Record<string, string> = { 'Temp (°C)': '0.0', 'Moisture %': '0.00"%"', 'BD (cc/100g)': '0', 'Aroma': '0', 'Flavour': '0', 'Briskness': '0', 'Strength': '0', 'Cup Colour': '0' }
   PAST_SIEVES.forEach(k => { rawNumFmt[PAST_SIEVE_LABELS[k]] = pct })
-  const sumNumFmt: Record<string, string> = { 'Avg Temp (°C)': '0.0', 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0', 'Total Samples': '0' }
+  const sumNumFmt: Record<string, string> = { 'Avg Temp (°C)': '0.0', 'Avg Moisture %': '0.00"%"', 'Avg BD (cc/100g)': '0', 'Avg Customer BD': '0', 'Total Samples': '0' }
   PAST_SIEVES.forEach(k => { sumNumFmt[`Avg ${PAST_SIEVE_LABELS[k]}`] = pct })
 
   const resultTone = (v: any): Tone | undefined => { const s = String(v); return s === 'Pass' ? 'ok' : s === 'Fail' ? 'err' : s === 'Concession' ? 'warn' : undefined }
