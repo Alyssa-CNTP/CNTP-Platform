@@ -13,9 +13,8 @@ import { Loader2, AlertCircle } from 'lucide-react'
 
 export default function LoginPage() {
   const [error,     setError]     = useState('')
-  const [loading,   setLoading]   = useState(false)
   const [msLoading, setMsLoading] = useState(false)
-  const { signIn, user, department, role, permissionsReady } = useAuth()
+  const { user, department, role, permissionsReady } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
@@ -33,18 +32,6 @@ export default function LoginPage() {
       },
     })
     if (error) { setError(error.message); setMsLoading(false) }
-  }
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const fd       = new FormData(e.currentTarget)
-    const email    = (fd.get('email')    as string ?? '').trim()
-    const password = (fd.get('password') as string ?? '')
-    if (!email || !password) { setError('Email and password are required'); return }
-    setLoading(true); setError('')
-    const { error } = await signIn(email, password)
-    if (error) { setError(error); setLoading(false) }
-    else { setTimeout(() => setLoading(false), 8000) }
   }
 
   return (
@@ -68,7 +55,7 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={handleMicrosoft}
-              disabled={msLoading || loading}
+              disabled={msLoading}
               className="btn-work-account"
             >
               {msLoading
@@ -85,13 +72,6 @@ export default function LoginPage() {
               <span>{msLoading ? 'Redirecting…' : 'Continue with work account'}</span>
             </button>
 
-            {/* Divider */}
-            <div className="login-divider">
-              <div className="login-divider-line" />
-              <span className="login-divider-text">or sign in with email</span>
-              <div className="login-divider-line" />
-            </div>
-
             {/* Error */}
             {error && (
               <div className="login-error">
@@ -100,40 +80,11 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* Form */}
-            <form onSubmit={handleSubmit} className="login-form">
-              <div>
-                <label className="login-label">Email address</label>
-                <input
-                  name="email" type="email" autoComplete="email"
-                  inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-                  placeholder="you@rooibostea.co.za"
-                  className="login-input"
-                  onFocus={e => { e.currentTarget.style.borderColor = '#1A3A0E'; e.currentTarget.style.background = '#fff' }}
-                  onBlur={e => { e.currentTarget.style.borderColor = '#E5E7EB'; e.currentTarget.style.background = '#F9FAFB' }}
-                />
-              </div>
-              <div>
-                <label className="login-label">Password</label>
-                <input
-                  name="password" type="password" autoComplete="current-password"
-                  placeholder="••••••••"
-                  className="login-input"
-                  onFocus={e => { e.currentTarget.style.borderColor = '#1A3A0E'; e.currentTarget.style.background = '#fff' }}
-                  onBlur={e => { e.currentTarget.style.borderColor = '#E5E7EB'; e.currentTarget.style.background = '#F9FAFB' }}
-                />
-              </div>
-              <button type="submit" disabled={loading} className="login-submit">
-                {loading && <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />}
-                {loading ? 'Signing in…' : 'Sign in →'}
-              </button>
-            </form>
-
             {/* Footer */}
             <div className="login-footer-note">
               <p>
-                Use your <strong>@rooibostea.co.za</strong> Microsoft account or email.<br/>
-                Forgotten your password? Contact your IT administrator.
+                Sign in with your <strong>@rooibostea.co.za</strong> Microsoft account.<br/>
+                Trouble signing in? Contact your IT administrator.
               </p>
               <p style={{ marginTop: 10 }}>
                 Floor operator? <a href="/floor" style={{ color: '#1A3A0E', fontWeight: 600 }}>Sign in with your PIN →</a>
