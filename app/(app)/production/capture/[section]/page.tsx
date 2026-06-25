@@ -43,8 +43,11 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData }
-const emptyProduction = (variant?: string | null, lot?: string | null, grade: string = 'A'): Production =>
-  ({ id: crypto.randomUUID(), variant: variant || 'Conventional', grade, lot: lot || '', data: emptySievingData() })
+// Variant comes from the assignment when a supervisor set one; grade is always a
+// deliberate choice on the floor. Both start blank when unknown so the operator
+// must pick them — capture never silently defaults to Export / Conventional.
+const emptyProduction = (variant?: string | null, lot?: string | null, grade: string = ''): Production =>
+  ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '', data: emptySievingData() })
 
 function CaptureScreen() {
   const params = useParams()
@@ -132,7 +135,7 @@ function CaptureScreen() {
       if (prevRow && Math.abs(differenceInCalendarDays(parseISO(dateParam), parseISO(prevRow.date))) <= 7) {
         setPrevNote({ note: prevRow.comments, shift: prevRow.shift, date: prevRow.date })
       }
-      const aVariant = (assign as any)?.variant ?? 'Conventional'
+      const aVariant = (assign as any)?.variant ?? ''
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data
       if (d?.productions?.length) {
@@ -467,7 +470,7 @@ function CaptureScreen() {
 
   // After a session is locked, start a fresh session for the next variant/grade.
   async function startNewProduction() {
-    const aV = assignment?.variant ?? 'Conventional'
+    const aV = assignment?.variant ?? ''
     const aL = assignment?.lot_number ?? ''
     const { data: row } = await getDb().schema('production').from('prod_sessions').insert({
       section_id: sectionId, date: dateParam, shift, status: 'draft',
@@ -545,37 +548,6 @@ function CaptureScreen() {
         })}
       </div>
 
-      {/* Mass balance — one card, read as a flow: in → out = variance */}
-      {totalIn > 0 && (
-        <div className="mx-4 mt-2 bg-white border border-stone-200 rounded-2xl shadow-sm flex-shrink-0 px-4 py-3">
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
-              <Scale size={13} /> Mass balance{multi ? ` · P${activeIdx + 1}` : ''}
-            </span>
-            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-              {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-              {withinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-1">
-            <div className="text-center flex-1">
-              <div className="font-mono font-bold text-[20px] text-text leading-none">{totalIn.toFixed(1)}</div>
-              <div className="text-[10px] text-text-muted mt-1">kg in</div>
-            </div>
-            <ArrowRight size={16} className="text-stone-300 shrink-0" />
-            <div className="text-center flex-1">
-              <div className="font-mono font-bold text-[20px] text-text leading-none">{totalOut.toFixed(1)}</div>
-              <div className="text-[10px] text-text-muted mt-1">kg out</div>
-            </div>
-            <span className="text-stone-300 font-bold text-[16px] shrink-0">=</span>
-            <div className="text-center flex-1">
-              <div className={`font-mono font-bold text-[20px] leading-none ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div>
-              <div className="text-[10px] text-text-muted mt-1">variance</div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
         <div className="px-4 py-5 max-w-[800px] space-y-5">
@@ -621,38 +593,93 @@ function CaptureScreen() {
                   running={totalIn > 0} onOpen={() => setTab('checks')} />
               )}
 
-              {/* This batch record's variant + destination. The batch/lot is captured
-                  per bulk bag (with suggestions) — not duplicated here. */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
-                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
-                  {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
-                </select>
-                <div className="flex items-center gap-1.5">
-                  <select value={active.grade ?? 'A'} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
-                    className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand cursor-pointer">
-                    {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
+              {/* Batch set-up + live mass balance — one card. Variant and grade
+                  are a mandatory, deliberate choice (no Export/Conventional
+                  default); the balance appears here once material goes in. The
+                  per-bag batch/lot is captured below, not duplicated here. */}
+              <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">
+                    Batch{multi ? ` · P${activeIdx + 1}` : ''}
+                  </span>
                   <GradeHelp />
                 </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</label>
+                    <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
+                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.variant ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                      <option value="" disabled>Select variant…</option>
+                      {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
+                    <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
+                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                      <option value="" disabled>Select grade…</option>
+                      {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {totalIn > 0 && (
+                  <div className="pt-3 border-t border-stone-100">
+                    <div className="flex items-center justify-between mb-2.5">
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
+                        <Scale size={13} /> Mass balance
+                      </span>
+                      <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+                        {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                        {withinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-1">
+                      <div className="text-center flex-1">
+                        <div className="font-mono font-bold text-[20px] text-text leading-none">{totalIn.toFixed(1)}</div>
+                        <div className="text-[10px] text-text-muted mt-1">kg in</div>
+                      </div>
+                      <ArrowRight size={16} className="text-stone-300 shrink-0" />
+                      <div className="text-center flex-1">
+                        <div className="font-mono font-bold text-[20px] text-text leading-none">{totalOut.toFixed(1)}</div>
+                        <div className="text-[10px] text-text-muted mt-1">kg out</div>
+                      </div>
+                      <span className="text-stone-300 font-bold text-[16px] shrink-0">=</span>
+                      <div className="text-center flex-1">
+                        <div className={`font-mono font-bold text-[20px] leading-none ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div>
+                        <div className="text-[10px] text-text-muted mt-1">variance</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <SievingCapture
-                key={active.id}
-                assignment={assignment}
-                variantWord={active.variant}
-                gradeLetter={active.grade ?? 'A'}
-                locked={locked}
-                value={active.data}
-                onChange={updateActiveData}
-                genSerial={genSerial}
-              />
-              {!locked && (
-                <button onClick={saveDraft} disabled={saving}
-                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
-                  {saving ? <Loader2 size={15} className="animate-spin" /> : saved ? <CheckCircle2 size={15} className="text-ok" /> : <Save size={15} />}
-                  {saving ? 'Saving…' : saved ? 'Saved' : 'Save draft'}
-                </button>
+              {/* Capture only opens once a variant and grade are chosen. */}
+              {(active.variant && active.grade) || locked ? (
+                <>
+                  <SievingCapture
+                    key={active.id}
+                    assignment={assignment}
+                    variantWord={active.variant}
+                    gradeLetter={active.grade || 'A'}
+                    locked={locked}
+                    value={active.data}
+                    onChange={updateActiveData}
+                    genSerial={genSerial}
+                  />
+                  {!locked && (
+                    <button onClick={saveDraft} disabled={saving}
+                      className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
+                      {saving ? <Loader2 size={15} className="animate-spin" /> : saved ? <CheckCircle2 size={15} className="text-ok" /> : <Save size={15} />}
+                      {saving ? 'Saving…' : saved ? 'Saved' : 'Save draft'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-start gap-2.5 px-4 py-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-[13px] text-amber-800">
+                  <Info size={16} className="shrink-0 mt-0.5" />
+                  <span>Choose a <strong>variant</strong> and <strong>grade</strong> above to start capturing this batch.</span>
+                </div>
               )}
             </>
           )}

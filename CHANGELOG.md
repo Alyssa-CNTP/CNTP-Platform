@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: one batch card + native keyboard for bag no. / lot-serial)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` (combined batch card; mandatory variant/grade)
+- `components/production/capture/BatchKeypadField.tsx` (native keyboard, custom keypad removed)
+
+**Changes:**
+- **Variant, grade and the live mass balance are now one card** at the top of the Capture step, so the screen reads as three cards (Batch · Debagging · Bagging) instead of several loose headers. The standalone mass-balance card was folded into this card and appears once material goes in.
+- **Variant and grade are now a mandatory, deliberate choice** — they no longer silently default to Export / Conventional. Both show a `Select…` placeholder (amber-outlined until chosen), and the debagging/bagging sections only open once both are set. A variant set by the supervisor at assignment time still pre-fills.
+- **Bag no. and lot/serial use the device's native keyboard again** — the custom on-screen keypad modal is gone; the field is a normal input (auto-uppercased so codes read like `S-135`, `G-0353`). The "reuse a previous batch" chips are kept.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture: custom keypad for bag no. / lot-serial)
 
 **Files changed:**
