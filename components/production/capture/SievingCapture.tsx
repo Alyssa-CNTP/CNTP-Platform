@@ -8,6 +8,7 @@ import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchInput } from '@/components/production/capture/BatchInput'
+import { KeypadInput } from '@/components/production/capture/CaptureKeypad'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
@@ -236,11 +237,17 @@ export function SievingCapture({
                 {value.spillage.map((r, i) => (
                   <div key={r.id} className="space-y-1">
                     <label className={LBL}>Spillage {i + 1} (kg)</label>
-                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.kg} disabled={locked}
-                      onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
+                    <KeypadInput mode="number" value={r.kg} disabled={locked}
+                      onChange={v => updateSpillage(r.id, v)} placeholder="0" className={INP} label={`Spillage ${i + 1} (kg)`} />
                   </div>
                 ))}
               </div>
+              {!locked && (
+                <button onClick={() => patch({ bucketSecured: true })}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] hover:bg-ok/20 transition-colors">
+                  <Check size={15} /> Done — lock bucket elevator
+                </button>
+              )}
             </div>
           )}
 
@@ -273,20 +280,21 @@ export function SievingCapture({
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1"><label className={LBL}>Bag no.</label>
-                      <input value={r.bag_no} disabled={locked} onChange={e => updateDebag(r.id, 'bag_no', e.target.value)} className={INP} /></div>
+                      <KeypadInput mode="text" value={r.bag_no} disabled={locked} onChange={v => updateDebag(r.id, 'bag_no', v)} className={INP} label="Bag no." placeholder="Tap to enter" /></div>
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
                       <BatchInput value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} placeholder="Type or pick" /></div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
-                      <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
+                      <KeypadInput mode="number" value={r.nett} disabled={locked} onChange={v => updateDebag(r.id, 'nett', v)} className={INP} label="Nett (kg)" placeholder="0" /></div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
                       <select value={r.local_export} disabled={locked} onChange={e => updateDebag(r.id, 'local_export', e.target.value)} className={INP + ' cursor-pointer'}>
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
                       </select></div>
                   </div>
                   {!locked && n(r.nett) > 0 && (
-                    <p className="flex items-center gap-1.5 text-[11px] text-stone-400">
-                      <Check size={13} className="text-ok" /> Locks automatically when you add the next bag or move to Bagging.
-                    </p>
+                    <button onClick={() => setDebagSecured(r.id, true)}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] hover:bg-ok/20 transition-colors">
+                      <Check size={15} /> Done — lock this bag
+                    </button>
                   )}
                 </div>
               )
