@@ -6,6 +6,7 @@ import { format, subMonths } from 'date-fns'
 import ProductionOrderMaintenance from '@/components/management/ProductionOrderMaintenance'
 import OperationalTrends          from '@/components/management/OperationalTrends'
 import { LiveCaptureKPIs }        from '@/components/production/LiveCaptureKPIs'
+import { ProductionTabs }         from '@/components/production/ProductionTabs'
 
 const TABS = [
   {
@@ -42,6 +43,8 @@ export default function ProductionOperationsPage() {
 
   return (
     <div className="flex flex-col min-h-full">
+
+      <div className="px-6 pt-5 bg-surface-card"><ProductionTabs /></div>
 
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div className="px-6 pt-6 pb-0 border-b border-surface-rule bg-surface-card">

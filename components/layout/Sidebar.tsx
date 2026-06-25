@@ -45,12 +45,9 @@ const NAV: NavItem[] = [
   // Assign) lives in the in-page tabs to keep the sidebar lean.
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
 
-  // Planning & Analytics — rosters, analytics, and the staff index.
-  { href: '/production/roster',          label: 'Shift Roster',               icon: CalendarRange,   group: 'Planning & Analytics', departments: ['Production','Management'] },
-  // "Analytics" (was Production Control). Live Capture (barcode scanning) is the
-  // Phase-2 entry inside it, currently in testing.
-  { href: '/production/operations',     label: 'Analytics',                  icon: BarChart2,       group: 'Planning & Analytics', departments: ['Management'] },
-  { href: '/production/staff',           label: 'Staff Directory',            icon: Users,           group: 'Planning & Analytics', departments: ['Production','Management'], permission: 'can_view_ops_dashboard', orPermission: true },
+  // Analytics (was Production Control) + Planning (Shift Roster + Staff Directory)
+  // now live as tabs inside the Production Dashboard hub (components/production/
+  // ProductionTabs), so they're no longer separate sidebar entries.
 
   { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'] },
   { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'] },

@@ -2,15 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { CalendarRange, Users, ClipboardList } from 'lucide-react'
+import { CalendarRange, Users } from 'lucide-react'
 
-// Shared sub-nav for the workforce/people pages so they're one click apart:
-// the monthly Shift Roster, the Staff Directory, and the daily section
-// assignment. Mirrors the Supervisor Hub tab styling.
+// Planning sub-nav: the monthly Shift Roster and the Staff Directory, one click
+// apart. (Section assignment now lives in the Supervisor Hub.) Mirrors the
+// Supervisor Hub tab styling. Sits beneath the Production hub's "Planning" tab.
 const TABS = [
-  { href: '/production/roster',         label: 'Shift Roster',    icon: CalendarRange },
-  { href: '/production/staff',          label: 'Staff Directory', icon: Users },
-  { href: '/production/capture/assign', label: 'Assign Sections', icon: ClipboardList },
+  { href: '/production/roster', label: 'Shift Roster',    icon: CalendarRange },
+  { href: '/production/staff',  label: 'Staff Directory', icon: Users },
 ] as const
 
 export function WorkforceTabs() {

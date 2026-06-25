@@ -34,10 +34,41 @@ qms-only code.
 | #148 | Pasteuriser per-day averages, sortable History, Gap-A fix, pivot export | emoji in page — fine via `git pull` (UTF-8 safe); only SCP corrupts it |
 | #155 | Branded **ExcelJS** exports (all workcenters) | needs `exceljs` in `node_modules` → run `npm install --legacy-peer-deps` BEFORE build |
 | #156 | Retire public dual-read — all Quality pages read qms only; legacy routes deleted | sieving paginates `qms.sd_runs` (>1000 rows) |
+| #163 | Maintenance **Energy**: history view + daily-snapshot capture endpoint | needs a **DB migration**, **env vars**, and a **prod crontab** — see the Energy section below |
 
 > ⚠️ Deploying the `staging` branch pulls **everything** merged to staging since the
 > prod box was last built — not only these three PRs. Review `git log HEAD..origin/staging`
 > on the prod clone first to see the full set.
+
+---
+
+## ⚡ Energy (PR #163) — extra prod steps the code deploy alone does NOT cover
+The energy widget code rides in on the `staging` branch, but three things must be done **on production specifically** (staging already has all three):
+
+1. **Run the migration on the production DB.** In the production Supabase SQL editor (project `sxzjjcyuzyfneesnsjna`), run `supabase/migrations/20260619_001_energy_daily.sql`. It's idempotent and creates `maintenance.energy_daily`. Without it the History view is empty and the capture endpoint returns 500 (the live widget still works — its upsert is best-effort).
+2. **Set env vars in the production `.env.local`** (`/home/cntpdev/apps/production/app/cntp-ops/.env.local`):
+   - `HOMEASSISTANT_TOKEN` — confirm it's present (same Home Assistant instance as staging).
+   - `CRON_SECRET` — generate a **fresh** one for prod (don't reuse staging's): `openssl rand -hex 32`. Restart `cntp-production` after editing so the route picks it up.
+3. **Add a production crontab entry** hitting the **prod** URL with the **prod** secret (prod writes to its own DB, so it needs its own cron — the staging cron does not populate prod):
+   ```bash
+   # one-off: prod capture script
+   cat > /home/cntpdev/scripts/energy-capture-prod.sh <<'SH'
+   #!/bin/sh
+   ENV=/home/cntpdev/apps/production/app/cntp-ops/.env.local
+   SECRET=$(grep -E '^CRON_SECRET=' "$ENV" | cut -d= -f2- | tr -d "\"'")
+   curl -fsS --retry 3 --retry-delay 10 -X POST \
+     -H "Authorization: Bearer $SECRET" \
+     https://cntpplatform.rooibostea.co.za/api/maintenance/energy/capture
+   SH
+   chmod +x /home/cntpdev/scripts/energy-capture-prod.sh
+   # install cron (23:50 SAST = 21:50 UTC; box is UTC) via temp file, preserving existing lines
+   TMP=$(mktemp); crontab -l 2>/dev/null | grep -v 'energy-capture-prod.sh' > "$TMP"
+   echo '50 21 * * * /home/cntpdev/scripts/energy-capture-prod.sh >> /home/cntpdev/logs/energy-capture-prod.log 2>&1' >> "$TMP"
+   crontab "$TMP"; rm -f "$TMP"; crontab -l | grep energy-capture
+   ```
+   Then test once: `/home/cntpdev/scripts/energy-capture-prod.sh` should print `{"ok":true,...}`.
+
+> **Why not GitHub Actions:** the original branch scheduled this with `.github/workflows/energy-capture.yml`, but the deploy GitHub token lacks the `workflow` OAuth scope so that file can't be pushed. Scheduling lives in the VPS crontab instead (same as staging).
 
 ---
 
@@ -86,6 +117,7 @@ done
 - [ ] Sieving shows the full run list (pagination — not capped at 1000)
 - [ ] Raw Material records render (data_json jsonb)
 - [ ] No console errors hitting `/api/quality/legacy-*` (routes are gone — should be no calls)
+- [ ] **Energy (#163):** maintenance dashboard Energy widget loads; History tab shows data after the prod `energy-capture-prod.sh` test run; migration applied; prod crontab line present
 
 ---
 

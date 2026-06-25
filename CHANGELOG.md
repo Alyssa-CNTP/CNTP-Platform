@@ -5,24 +5,75 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-24 — Gustav (maintenance: energy History view + daily Supabase capture + scheduled cron)
+## 2026-06-24 — Gustav (maintenance: per-raiser tabs on Job Cards — IT + manager only)
 
 **Files changed:**
-- components/maintenance/EnergyWidget.tsx
-- components/maintenance/EnergyHistory.tsx (new)
-- app/api/maintenance/energy/route.ts
-- app/api/maintenance/energy/history/route.ts (new)
-- app/api/maintenance/energy/capture/route.ts (new)
-- lib/maintenance/energy.ts (new)
-- supabase/migrations/20260619_001_energy_daily.sql (new)
-- .github/workflows/energy-capture.yml (new)
+- app/(app)/maintenance/job-cards/page.tsx
 
 **Changes:**
-- Energy widget gains a **Today / History** toggle. History shows period totals + daily **Electricity Usage** and **Solar Usage** charts (7/30/90-day) from `maintenance.energy_daily`
-- New **`maintenance.energy_daily`** table (one row per SAST day; RLS enabled). Migration applied to the staging Supabase project
-- `/api/maintenance/energy` now **upserts today's snapshot** on each load (best-effort) via the shared `lib/maintenance/energy.ts`
-- New **`/api/maintenance/energy/history`** (read last N days) and **`/api/maintenance/energy/capture`** (unattended, `Bearer CRON_SECRET`, service-role write) routes
-- New scheduled workflow pings capture daily at **23:50 SAST** so usage is logged even when nobody opens the dashboard. Needs a `CRON_SECRET` (GitHub Actions secret + matching server env var); the cron only fires once the workflow is on the default branch
+- Added a **"By raiser"** panel to the Job Cards view: a tab for each person who has raised job cards (plus an **All** tab with counts). Selecting a tab shows that raiser's summary tiles (Outstanding / Needs input / In progress / Completed) and their cards
+- Visible **only to IT (admin view) and the maintenance manager** (`isAdminView || role === 'maintenance_manager'`). Regular raisers still see only their own cards
+- Maintenance managers see the panel on their board (above "Awaiting allocation"); IT reaches it via the existing **"view as → Raiser"** switcher
+
+---
+
+## 2026-06-24 — Alyssa (Production Dashboard becomes a hub: Analytics + Planning as tabs)
+
+**Files changed:**
+- `components/production/ProductionTabs.tsx` (new) — hub tab bar: Dashboard · Analytics · Planning
+- `components/production/WorkforceTabs.tsx` — trimmed to Shift Roster + Staff Directory (Assign moved to Supervisor Hub)
+- `app/(app)/production/{dashboard,operations,roster,staff}/page.tsx` — render `ProductionTabs` at the top
+- `components/layout/Sidebar.tsx` — removed the "Planning & Analytics" sidebar group
+
+**Changes:**
+- The sidebar's **"Planning & Analytics" section is gone**. The Production Dashboard is now a **hub** with three tabs (`ProductionTabs`): **Dashboard** (the editable widgets), **Analytics** (the former "Production Control" / `/production/operations`, management-only), and **Planning** (Shift Roster + Staff Directory).
+- **Analytics + Production Control now live inside the Production Dashboard** — reachable as the Analytics tab — since that's the dashboard's purpose.
+- **Planning** is a single tab holding only the Shift Roster and Staff Directory; `WorkforceTabs` is its Roster/Staff sub-nav (Assign Sections was removed from it — assignment now lives in the Supervisor Hub).
+- Sidebar **Production** group is now just: Production Dashboard · Capture · Stock Count · Supervisor Hub. No routes or permissions changed — Analytics stays management-gated; everything else reachable via the hub tabs.
+
+---
+
+## 2026-06-24 — Alyssa (Energy: history view + daily capture, scheduled by VPS cron)
+
+**Files changed:**
+- `app/api/maintenance/energy/route.ts` — live energy route now also upserts the day's totals into `maintenance.energy_daily` on read
+- `app/api/maintenance/energy/history/route.ts` (new) — returns stored daily snapshots for the History view
+- `app/api/maintenance/energy/capture/route.ts` (new) — secret-guarded, sessionless endpoint that records the day's totals unattended; `Authorization: Bearer <CRON_SECRET>`
+- `components/maintenance/EnergyWidget.tsx` — adds the History tab/view
+- `components/maintenance/EnergyHistory.tsx` (new) — historical daily grid/solar usage chart
+- `lib/maintenance/energy.ts` (new) — shared Home Assistant fetch + `energy_daily` upsert helpers
+- `supabase/migrations/20260619_001_energy_daily.sql` (new) — `maintenance.energy_daily` table (one row per SAST day), idempotent
+
+**Changes:**
+- **Energy history.** The maintenance Energy widget gains a History view backed by a new `maintenance.energy_daily` table — one row per SAST calendar day of solar / grid / generator / battery kWh, upserted as the live widget is read so it fills through the day.
+- **Unattended daily capture.** New `/api/maintenance/energy/capture` endpoint records the day's totals even when nobody opens the dashboard. It takes no user session — it authenticates with a `CRON_SECRET` bearer token and writes via the service-role client.
+- **Scheduled by VPS cron, not GitHub Actions.** Gustav's original branch scheduled this with a `.github/workflows/energy-capture.yml` Action, but pushing that file requires the `workflow` OAuth scope (which the deploy token lacks), so the push kept getting rejected. Dropped the workflow file; scheduling is now a VPS crontab entry on the staging host POSTing to the capture endpoint at 23:50 SAST.
+- **Deploy notes:** run `20260619_001_energy_daily.sql` in the staging Supabase SQL editor; ensure `CRON_SECRET` and `HOMEASSISTANT_TOKEN` are set in `.env.local` on the VPS.
+
+---
+
+## 2026-06-24 — Alyssa (Declutter the Capture step — clearer Debagging/Bagging split)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` — removed the standalone "Debagging = … / Bagging = …" explainer banner from the Capture step
+- `components/production/capture/SievingCapture.tsx` — replaced the thin Debagging/Bagging toggle with two prominent cards (live bag count + kg per side) and a context hint that changes with the active side
+
+**Changes:**
+- **Less stacked noise.** The Capture step previously stacked four full-width blocks (handover note, a blue Debagging/Bagging explainer, the checks nudge, the variant selectors) before the actual capture controls. Removed the blue explainer — its content now lives as a one-line contextual hint under the toggle, so there's one less block competing for attention.
+- **In-vs-out reads as two clear jobs.** The quiet segmented toggle became two cards. Each shows its live progress — `2 bags · 480.0 kg` — so the split between what goes in and what comes out is the obvious anchor of the step, and operators can see at a glance how much they've logged on each side. The hint reads "What goes into the machine — weigh in each bulk bag." / "What comes out — every bag prints a barcode label." Presentation only; capture logic unchanged.
+
+---
+
+## 2026-06-24 — Alyssa (Capture screen reframed as a process + Overview step)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` — flat tabs replaced by a clickable numbered stepper; Messages moved to a header icon; added the Overview step
+- `components/production/capture/CaptureOverview.tsx` (new) — post-capture overview (formerly "Acumatica summary"), rebuilt from the live capture model
+
+**Changes:**
+- **Process stepper.** The capture screen's flat tab row (Production · Checks · Cleaning · Sign-off · Messages) now reads as the real-world process the operators follow: **1 Checks → 2 Capture → 3 Cleaning → 4 Overview → 5 Sign-off.** Steps are numbered, the current one is highlighted, earlier ones show a tick, and they stay freely clickable — pure presentation over the existing logic, no behaviour change.
+- **Messages out of the flow.** Line chat is no longer a step; it's a message icon in the header band (it isn't a production step).
+- **Overview step (formerly Acumatica summary).** New read-only overview built from the live `Production[]` / `SievingData` model rather than the old draft shape. Groups bagging outputs by item + lot + variant with serials and totals, lists debagging inputs, and shows the mass balance — with Copy and Print for Acumatica data entry. It reflects exactly what the autosave already writes (`prod_debagging` / `prod_bagging` / `prod_mass_balance`); no new persistence was added.
 
 ---
 
