@@ -58,13 +58,14 @@ export const VARIANT_OPTIONS: { value: DbVariant; short: string; label: string }
   { value: 'RA-Conventional', short: 'RA CON', label: 'RA Conventional' },
   { value: 'RA-Organic',      short: 'RA ORG', label: 'RA Organic' },
   { value: 'FT-ORG',          short: 'FT ORG', label: 'Fairtrade Organic' },
+  { value: 'FT-CON',          short: 'FT CON', label: 'Fairtrade Conventional' },
 ]
 
 // Full Acumatica variant word → live-types short code used by getAcumaticaCode().
 export function variantToShort(v: DbVariant | null | undefined): string {
   const map: Record<string, string> = {
     'Conventional': 'CON', 'Organic': 'ORG',
-    'RA-Conventional': 'RA CON', 'RA-Organic': 'RA ORG', 'FT-ORG': 'ORG',
+    'RA-Conventional': 'RA CON', 'RA-Organic': 'RA ORG', 'FT-ORG': 'ORG', 'FT-CON': 'CON',
   }
   return v ? (map[v] ?? 'CON') : 'CON'
 }

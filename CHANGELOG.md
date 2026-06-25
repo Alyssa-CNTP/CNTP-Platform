@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: guide non-technical operators — checks progress, auto-secure, timestamps, FT-Conventional)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx` (per-phase progress + per-check status pills)
+- `components/production/capture/SievingCapture.tsx` (auto-secure bags, lock bucket elevator, log timestamps)
+- `lib/production/capture-config.ts`, `lib/supabase/database.types.ts` (FT-Conventional variant)
+- `supabase/migrations/20260623_004_variant_ft_conventional.sql` (new — widen variant CHECK)
+
+**Changes (from observing real operators on the floor):**
+1. **Checks now show what's filled in** — each phase (Start-up / Running / Shut-down) shows a progress badge ("2 of 3 done · 1 to fill in") and every check carries a status pill (To fill in / Logged / OK / Flagged), so an operator can see at a glance whether start-up is complete.
+2. **Bucket elevator locks per grade** — once the operator finishes the inbound step (moves to Bagging), the bucket-elevator spillage is logged and locked to a read-only summary; it only re-opens via Edit, and a new grade starts fresh.
+3. **Fairtrade Conventional** added to the variant list (DB CHECK widened to allow `FT-CON`).
+4. **Bag timestamps** — every bulk bag and output bag records and shows the time it was logged (SAST), to reconcile captured-vs-paper.
+5. **Auto-secure** — bags secure themselves when finished (output bags on add; bulk bags when the next is added or the operator moves on), instead of needing a manual "secure" tap. Edit/Unlock still available.
+- **Run on the DB (staging + prod):** `20260623_004_variant_ft_conventional.sql`.
+
+---
+
 ## 2026-06-25 — Alyssa (Login: SSO-only — remove the email/password form)
 
 **Files changed:**

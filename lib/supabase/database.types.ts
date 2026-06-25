@@ -14,7 +14,7 @@ export type ScanAction     = 'debagging_in' | 'bagging_out' | 'stock_count' | 'd
 export type LocalExport    = 'Export' | 'Export Blend' | 'Domestic/Local'
 export type OrgConv        = 'CON' | 'ORG'
 export type SectionId      = 'sieving' | 'refining1' | 'refining2' | 'granule' | 'blender' | 'pasteuriser'
-export type Variant        = 'Conventional' | 'Organic' | 'RA-Conventional' | 'RA-Organic' | 'FT-ORG'
+export type Variant        = 'Conventional' | 'Organic' | 'RA-Conventional' | 'RA-Organic' | 'FT-ORG' | 'FT-CON'
 
 export interface Database {
   production: {
