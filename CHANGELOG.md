@@ -5,6 +5,26 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Home page redesign + live Production Dashboard)
+
+**Files changed:**
+- `app/(app)/home/page.tsx` — rebuilt as the company landing page: glass hero over the brand photo (`/rooibos-hero.png`), greeting, a live WhatsApp-style rich preview of the company website, branded Facebook/Instagram cards, and quick links
+- `app/(app)/production/dashboard/page.tsx` — replaced the blank editable-widget board (no live data) with the new live cockpit
+- `components/production/ProductionDashboard.tsx` (new) — production manager's cockpit: live KPIs (output kg, bags, yield %, sections running, sign-offs pending, balance flags, open breakdowns), interactive Recharts (daily output, sessions/day, yield by section, overall yield trend, status pie, output by section), today's section-status table, solar widget, breakdowns affecting production, and the AI analyst
+- `components/production/WeatherTile.tsx` (new) — factory weather via Open-Meteo
+- `components/maintenance/AiAnalystPanel.tsx` — parameterised endpoints/title/cache key so the same panel serves both the maintenance and production dashboards (defaults unchanged)
+- `app/api/weather/route.ts` (new) — Open-Meteo current conditions + 3-day forecast for Blackheath (no API key, no signup)
+- `app/api/link-preview/route.ts` (new) — server-side Open Graph fetch for rich link previews, allow-listed to `rooibostea.co.za`
+- `app/api/production/dashboard-insights/route.ts` (new) — Gemini production analyst (structured insights), mirrors the maintenance analyst contract
+- `app/api/production/ask/route.ts` (new) — Gemini follow-up chat over production aggregates
+
+**Changes:**
+- **Home page** is now a true landing page rather than a placeholder: greeting, company links, and the site links rendered as a live rich preview (website) / branded cards (Facebook `@capenatural`, Instagram `@capenatural`). FB/IG use branded cards because those sites serve a login wall to server bots and don't return usable preview metadata.
+- **Production dashboard** now pulls live data from the capture tables (`prod_sessions`, `prod_mass_balance`, `bag_tags`) and `maintenance.job_cards`, with interactive charts, an AI analyst, factory weather, and solar.
+- **OEE, downtime/stoppages and scrap rate** are intentionally shown as "coming next" — they need machine run-time, stoppage reasons and reject weights that the floor doesn't capture yet (added in a later phase). The smart factory floor plan is also a later phase.
+
+---
+
 ## 2026-06-25 — Alyssa (Login: SSO-only — remove the email/password form)
 
 **Files changed:**

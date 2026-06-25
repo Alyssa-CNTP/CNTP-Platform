@@ -1,21 +1,18 @@
 'use client'
 
-// Production dashboard — the first department dashboard built on the editable
-// dashboard engine (lib/dashboard + components/dashboard/editable). Users arrange
-// their own widgets; layouts persist per-user in shared.dashboard_layouts, with a
-// code-defined default for anyone who hasn't customized.
+// Production dashboard — the production manager's live cockpit. Real KPIs and
+// interactive charts driven by the structured capture tables, plus factory
+// weather, solar, open breakdowns and a Gemini analyst. Replaces the previous
+// blank editable-widget board, which pulled no live data.
 
-import EditableDashboard from '@/components/dashboard/editable/EditableDashboard'
 import { ProductionTabs } from '@/components/production/ProductionTabs'
+import ProductionDashboard from '@/components/production/ProductionDashboard'
 
 export default function ProductionDashboardPage() {
   return (
-    <div>
-      <div className="px-4 pt-5 max-w-[1400px]"><ProductionTabs /></div>
-      <EditableDashboard
-        dashboardKey="production"
-        title="Production Dashboard"
-      />
+    <div className="px-4 pt-5 pb-10 max-w-[1400px] mx-auto">
+      <div className="mb-5"><ProductionTabs /></div>
+      <ProductionDashboard />
     </div>
   )
 }
