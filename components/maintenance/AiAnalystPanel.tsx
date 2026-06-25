@@ -14,9 +14,27 @@ interface Watch { asset: string; reason: string }
 interface Insights { summary: string; highlights: Highlight[]; recommendations: Recommendation[]; watchlist: Watch[] }
 type ChatMsg = { role: 'user' | 'analyst'; text: string }
 
-const todayKey = () => `maint-insight:${new Date().toISOString().slice(0, 10)}`
+interface PanelProps {
+  agg: unknown
+  /** Endpoint that returns { insights, model }. Defaults to the maintenance analyst. */
+  insightsUrl?: string
+  /** Endpoint for follow-up chat. Defaults to the maintenance analyst. */
+  askUrl?: string
+  /** Heading + sublabel + sessionStorage cache key, so each dashboard caches separately. */
+  title?: string
+  subtitle?: string
+  cacheKey?: string
+}
 
-export default function AiAnalystPanel({ agg }: { agg: unknown }) {
+export default function AiAnalystPanel({
+  agg,
+  insightsUrl = '/api/maintenance/insights',
+  askUrl = '/api/maintenance/ask',
+  title = 'AI Maintenance Analyst',
+  subtitle = 'Plain-English insights over your maintenance data',
+  cacheKey = 'maint-insight',
+}: PanelProps) {
+  const todayKey = () => `${cacheKey}:${new Date().toISOString().slice(0, 10)}`
   const [insights, setInsights] = useState<Insights | null>(null)
   const [model, setModel] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -38,7 +56,7 @@ export default function AiAnalystPanel({ agg }: { agg: unknown }) {
   async function run() {
     setLoading(true); setError('')
     try {
-      const res = await fetch('/api/maintenance/insights', {
+      const res = await fetch(insightsUrl, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(agg),
       })
       const j = await res.json()
@@ -55,7 +73,7 @@ export default function AiAnalystPanel({ agg }: { agg: unknown }) {
     const history = [...chat]
     setChat(c => [...c, { role: 'user', text: question }])
     try {
-      const res = await fetch('/api/maintenance/ask', {
+      const res = await fetch(askUrl, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ aggregates: agg, history, question }),
       })
@@ -75,8 +93,8 @@ export default function AiAnalystPanel({ agg }: { agg: unknown }) {
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-azure/10 text-azure"><Sparkles className="w-4 h-4" /></span>
           <div>
-            <h3 className="text-sm font-semibold text-text">AI Maintenance Analyst</h3>
-            <p className="text-[11px] text-text-muted">Plain-English insights over your maintenance data{model ? ` · served by ${model}` : ''}</p>
+            <h3 className="text-sm font-semibold text-text">{title}</h3>
+            <p className="text-[11px] text-text-muted">{subtitle}{model ? ` · served by ${model}` : ''}</p>
           </div>
         </div>
         <button onClick={run} disabled={loading}
