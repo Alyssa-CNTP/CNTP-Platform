@@ -5,7 +5,6 @@ import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
 import { LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
 import { BatchInput } from '@/components/production/capture/BatchInput'
-import { KeypadInput } from '@/components/production/capture/CaptureKeypad'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface PickedOutput {
@@ -108,7 +107,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             <div className={`grid gap-3 ${picked.batchTracked ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-1">
                 <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Weight (kg) *</label>
-                <KeypadInput mode="number" value={weight} onChange={setWeight} className={INP} label="Weight (kg)" placeholder="Tap to enter" />
+                <input autoFocus type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
               </div>
               {picked.batchTracked && (
                 <div className="space-y-1">
