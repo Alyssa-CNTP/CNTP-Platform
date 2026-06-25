@@ -25,6 +25,125 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: one batch card + native keyboard for bag no. / lot-serial)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` (combined batch card; mandatory variant/grade)
+- `components/production/capture/BatchKeypadField.tsx` (native keyboard, custom keypad removed)
+
+**Changes:**
+- **Variant, grade and the live mass balance are now one card** at the top of the Capture step, so the screen reads as three cards (Batch · Debagging · Bagging) instead of several loose headers. The standalone mass-balance card was folded into this card and appears once material goes in.
+- **Variant and grade are now a mandatory, deliberate choice** — they no longer silently default to Export / Conventional. Both show a `Select…` placeholder (amber-outlined until chosen), and the debagging/bagging sections only open once both are set. A variant set by the supervisor at assignment time still pre-fills.
+- **Bag no. and lot/serial use the device's native keyboard again** — the custom on-screen keypad modal is gone; the field is a normal input (auto-uppercased so codes read like `S-135`, `G-0353`). The "reuse a previous batch" chips are kept.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: custom keypad for bag no. / lot-serial)
+
+**Files changed:**
+- `components/production/capture/BatchKeypadField.tsx` (new — opens the existing BatchKeypad)
+- `components/production/capture/SievingCapture.tsx`, `OutputPicker.tsx` (bag no. / lot / batch use it)
+
+**Changes:**
+- **Bag number and lot/serial now open the existing custom keypad** (`components/count/BatchKeypad`) as a centred modal — A–Z, 0–9 and the serial characters. Previously-used batches still show as tappable chips when the field is empty.
+- **Weights (nett, spillage, output) stay on the native keyboard** (numbers + comma → stored as a clean decimal), unchanged.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: revert custom keypad; section-coloured bags; standalone mass balance)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (removed)
+- `components/production/capture/SievingCapture.tsx` (native inputs; blue/orange bags; ungrouped tiles)
+- `components/production/capture/OutputPicker.tsx` (native weight input)
+- `app/(app)/production/capture/[section]/page.tsx` (mass-balance card with scale icon)
+
+**Changes:**
+- **Removed the custom keypad** — capture fields use the device's own keyboard again (number fields still accept a comma and store a clean decimal).
+- **Bags carry the section colour** — Debagging bulk bags are **blue**, Bagging output bags are **amber/orange**, so each list clearly belongs to the section you tapped. The two section tiles stay separate (not merged into one card).
+- **Mass balance is its own block** — a single cohesive card with a **balance/scale icon** showing in / out / variance, sitting under the steps.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture polish: full-screen keypad, grouped balance, bold steps, mandatory fields)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (full-screen + physical-keyboard support)
+- `components/production/capture/SievingCapture.tsx` (balance grouped with the tiles; mandatory bag fields)
+- `app/(app)/production/capture/[section]/page.tsx` (bold stepper; removed the separate balance strip)
+
+**Changes:**
+- **Full-screen keypad** — the capture keypad now fills the screen on tablet/phone with large keys, and is fully usable on a laptop: the **physical keyboard is wired in** (type digits/letters, comma or dot for the decimal, Backspace, Enter/Esc to finish).
+- **Balance grouped with the jobs** — the bold Debagging (blue) / Bagging (orange) tiles and the running mass balance now sit in **one card**, so the in/out/variance reads as a single block. Removed the separate balance strip.
+- **Bold steps** — the process stepper is bolder and larger (the primary focus of the screen).
+- **Mandatory fields** — a bulk bag can't be locked until **bag no., lot and weight** are all filled (it shows what's still missing); output bags already require their fields. Variant and grade are always set per production.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: on-screen keypad, edit re-lock, focus on steps, operator overview)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (new — on-screen keypad)
+- `components/production/capture/SievingCapture.tsx` (keypad fields; Done re-lock for bags + bucket elevator)
+- `components/production/capture/OutputPicker.tsx` (keypad for weight)
+- `components/production/capture/CaptureOverview.tsx` (operator-readable overview, blue/orange)
+- `app/(app)/production/capture/[section]/page.tsx` (steps primary, mass balance secondary; IT-only serials)
+
+**Changes:**
+1. **On-screen keypad** — capture fields (nett, spillage, output weight, bag no.) now open a custom keypad instead of the device keyboard: a numeric pad with a **comma decimal** for weights, and an A–Z / 0–9 / `-` / `/` pad for bag numbers. (Lot/serial keeps its type-ahead chips.)
+2. **Edit re-locks cleanly** (#4/#5) — an open bulk bag and the bucket elevator each have a **"Done — lock"** button, so after editing a previous bag you can re-secure it directly and carry on, without deleting the bag you were busy with. Forward flow still auto-locks.
+3. **Steps are the focus** — the process stepper sits directly under the header; the mass balance is now a slim secondary strip beneath it (quick glance, not the headline).
+4. **Operator overview** — the overview now shows what the operator captured in their terms: **bag numbers, lot/batch, weight, variant, grade**, grouped as Debagging (blue) / Bagging (orange). System serials show only for IT.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: comma decimals, colour-coded jobs, stale handover note)
+
+**Files changed:**
+- `components/production/capture/SievingCapture.tsx` (comma→decimal; colour-coded Debagging/Bagging)
+- `components/production/capture/OutputPicker.tsx` (weight accepts comma)
+- `app/(app)/production/capture/[section]/page.tsx` (comma→decimal; handover-note recency)
+
+**Changes:**
+1. **Comma decimals captured correctly** — SA operators type the decimal as a comma (`1200,5`). The weight/spillage fields now accept a comma (text input + decimal keypad), and every captured number is normalised comma→period before parsing, so the **database always stores a clean decimal**.
+2. **Debagging vs Bagging colour-coded** — the two job tiles now use two bold, distinct colours (blue = Debagging/in, amber = Bagging/out); the active one fills with its colour, so on a small screen the operator can see at a glance which job they're on.
+3. **Stale handover note removed** — the line handover note only shows when it's from a genuinely recent shift (last 7 days). Old seed/demo notes (e.g. the 15 Mar "DEMO-MONTHLY-SEED") no longer persist.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: no-printer "Complete bag" + checks-first routine)
+
+**Files changed:**
+- `lib/production/capture-config.ts` (`LABEL_PRINTING_ENABLED` flag, default off)
+- `components/production/capture/OutputPicker.tsx` ("Complete bag" vs "Add & print")
+- `components/production/capture/SievingCapture.tsx` (skip print; prominent serial to hand-write)
+- `app/(app)/production/capture/[section]/page.tsx` (open on Checks; capture gate; stepper tick)
+
+**Changes:**
+- **No printer needed for testing** — capture no longer depends on a label printer. With `LABEL_PRINTING_ENABLED = false`, the output picker reads **"Complete bag"** (no print round-trip — straight back to add the next bag) and each completed bag shows its **serial in bold for hand-writing on the bag**. Flip the flag to `true` when a printer is wired up — no other changes.
+- **The system now guides the routine** — a fresh shift **opens on the Checks tab** (start-up) instead of jumping into Capture. The Capture tab leads with a clear **"Start with your machine checks"** gate (strong but overridable — capture is still available below), and the **Checks step in the stepper ticks green once checks are signed**.
+- **Lost tags** (design): rather than a manual "reissue" step, the system serial stays canonical and re-findable; when sections are linked, downstream input will be **selected from the upstream bag list** (not retyped), so a lost paper tag is harmless and needs nothing extra to remember.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: guide non-technical operators — checks progress, auto-secure, timestamps, FT-Conventional)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx` (per-phase progress + per-check status pills)
+- `components/production/capture/SievingCapture.tsx` (auto-secure bags, lock bucket elevator, log timestamps)
+- `lib/production/capture-config.ts`, `lib/supabase/database.types.ts` (FT-Conventional variant)
+- `supabase/migrations/20260623_004_variant_ft_conventional.sql` (new — widen variant CHECK)
+
+**Changes (from observing real operators on the floor):**
+1. **Checks now show what's filled in** — each phase (Start-up / Running / Shut-down) shows a progress badge ("2 of 3 done · 1 to fill in") and every check carries a status pill (To fill in / Logged / OK / Flagged), so an operator can see at a glance whether start-up is complete.
+2. **Bucket elevator locks per grade** — once the operator finishes the inbound step (moves to Bagging), the bucket-elevator spillage is logged and locked to a read-only summary; it only re-opens via Edit, and a new grade starts fresh.
+3. **Fairtrade Conventional** added to the variant list (DB CHECK widened to allow `FT-CON`).
+4. **Bag timestamps** — every bulk bag and output bag records and shows the time it was logged (SAST), to reconcile captured-vs-paper.
+5. **Auto-secure** — bags secure themselves when finished (output bags on add; bulk bags when the next is added or the operator moves on), instead of needing a manual "secure" tap. Edit/Unlock still available.
+- **Run on the DB (staging + prod):** `20260623_004_variant_ft_conventional.sql`.
+
+---
+
 ## 2026-06-25 — Alyssa (Login: SSO-only — remove the email/password form)
 
 **Files changed:**

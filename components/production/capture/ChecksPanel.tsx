@@ -129,6 +129,23 @@ export function ChecksPanel({
     return false
   }
 
+  // ── Per-check status, so the operator can SEE what's still outstanding ──────
+  // 'pending' = a reading/value still needs entering; 'logged' = value captured;
+  // 'ok' = a confirm check (assumed OK until flagged); 'flagged' = needs a note.
+  type CheckStatus = 'pending' | 'logged' | 'ok' | 'flagged'
+  function checkStatus(def: MachineCheckDef): CheckStatus {
+    if (raised[def.key]) return 'flagged'
+    switch (def.kind) {
+      case 'confirm':     return confirms[def.key]?.flagged ? 'flagged' : 'ok'
+      case 'number':      return def.hourly ? (vsd.length > 0 ? 'logged' : 'pending')
+                                            : ((numbers[def.key] ?? '').trim() ? 'logged' : 'pending')
+      case 'scale':       return (scaleStd.trim() && scaleAct.trim()) ? 'logged' : 'pending'
+      case 'text':        return (texts[def.key] ?? '').trim() ? 'logged' : 'pending'
+      case 'massbalance': return mbConfirmed ? 'logged' : 'pending'
+      default:            return 'ok'
+    }
+  }
+
   // ── Raise a maintenance job from a failed check ────────────────────────────
   async function raiseMaintenance(def: MachineCheckDef, workflow: 'breakdown' | 'planned') {
     const reason = def.kind === 'scale'
@@ -256,12 +273,22 @@ export function ChecksPanel({
       {PHASES.map(phase => {
         const phaseChecks = checks.filter(c => c.phase === phase)
         if (!phaseChecks.length) return null
+        // Progress for this phase — anything still 'pending' is outstanding.
+        const pending = phaseChecks.filter(c => checkStatus(c) === 'pending').length
+        const total   = phaseChecks.length
+        const allDone = pending === 0
         return (
           <div key={phase} className="space-y-3">
-            <div className="text-[12px] font-semibold text-text uppercase tracking-wide">{PHASE_LABEL[phase]}</div>
+            <div className="flex items-center justify-between">
+              <div className="text-[12px] font-semibold text-text uppercase tracking-wide">{PHASE_LABEL[phase]}</div>
+              <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${allDone ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+                {allDone ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                {allDone ? `All ${total} done` : `${total - pending} of ${total} done · ${pending} to fill in`}
+              </span>
+            </div>
             {phaseChecks.map(def => (
               <CheckCard
-                key={def.key} def={def} spec={specs[def.key]} readOnly={readOnly}
+                key={def.key} def={def} spec={specs[def.key]} readOnly={readOnly} status={checkStatus(def)}
                 confirm={confirms[def.key]} onToggleConfirm={() => setConfirms(c => {
                   const cur = c[def.key]
                   if (cur?.flagged) { const { [def.key]: _, ...rest } = c; return rest }
@@ -314,17 +341,24 @@ export function ChecksPanel({
 // ── One check card ───────────────────────────────────────────────────────────
 function CheckCard(props: any) {
   const {
-    def, spec, readOnly, confirm, onToggleConfirm, onReason, numberValue, onNumber, textValue, onText,
+    def, spec, readOnly, status, confirm, onToggleConfirm, onReason, numberValue, onNumber, textValue, onText,
     qmsHint, scaleStd, scaleAct, onScaleStd, onScaleAct, vsd, lastVsd, onLogVsd,
     massBalance, mbConfirmed, onConfirmMb, failing, raisedCard, onRaise,
   } = props
   const d = def as MachineCheckDef
+  const pill = status === 'pending' ? { txt: 'To fill in', cls: 'bg-warn/10 text-warn' }
+    : status === 'flagged' ? { txt: 'Flagged', cls: 'bg-err/10 text-err' }
+    : status === 'logged'  ? { txt: 'Logged', cls: 'bg-ok/10 text-ok' }
+    : { txt: 'OK', cls: 'bg-ok/10 text-ok' }
 
   return (
-    <div className={`bg-white border rounded-2xl p-4 space-y-3 ${failing ? 'border-err/40' : 'border-stone-200'}`}>
-      <div className="flex items-center justify-between">
+    <div className={`bg-white border rounded-2xl p-4 space-y-3 ${failing ? 'border-err/40' : status === 'pending' ? 'border-warn/30' : 'border-stone-200'}`}>
+      <div className="flex items-center justify-between gap-2">
         <span className="font-semibold text-[13px] text-text">{d.label}</span>
-        {d.help && <span className="text-[10px] text-stone-400">{d.help}</span>}
+        <div className="flex items-center gap-2 shrink-0">
+          {d.help && <span className="text-[10px] text-stone-400 hidden sm:inline">{d.help}</span>}
+          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${pill.cls}`}>{pill.txt}</span>
+        </div>
       </div>
 
       {/* Confirm (exception-based) */}
