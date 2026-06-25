@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: custom keypad for bag no. / lot-serial)
+
+**Files changed:**
+- `components/production/capture/BatchKeypadField.tsx` (new — opens the existing BatchKeypad)
+- `components/production/capture/SievingCapture.tsx`, `OutputPicker.tsx` (bag no. / lot / batch use it)
+
+**Changes:**
+- **Bag number and lot/serial now open the existing custom keypad** (`components/count/BatchKeypad`) as a centred modal — A–Z, 0–9 and the serial characters. Previously-used batches still show as tappable chips when the field is empty.
+- **Weights (nett, spillage, output) stay on the native keyboard** (numbers + comma → stored as a clean decimal), unchanged.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture: revert custom keypad; section-coloured bags; standalone mass balance)
 
 **Files changed:**

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
 import { LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
-import { BatchInput } from '@/components/production/capture/BatchInput'
+import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface PickedOutput {
@@ -112,7 +112,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               {picked.batchTracked && (
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch *</label>
-                  <BatchInput value={batch} onChange={setBatch} options={batchOptions} placeholder="Type or pick a batch" className={INP} />
+                  <BatchKeypadField value={batch} onChange={setBatch} options={batchOptions} placeholder="Tap to enter" className={INP} label="Batch" />
                 </div>
               )}
             </div>

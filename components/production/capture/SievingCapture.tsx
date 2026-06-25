@@ -7,7 +7,7 @@ import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
-import { BatchInput } from '@/components/production/capture/BatchInput'
+import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
@@ -288,9 +288,9 @@ export function SievingCapture({
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1"><label className={LBL}>Bag no.</label>
-                      <input value={r.bag_no} disabled={locked} onChange={e => updateDebag(r.id, 'bag_no', e.target.value)} className={INP} /></div>
+                      <BatchKeypadField value={r.bag_no} disabled={locked} onChange={v => updateDebag(r.id, 'bag_no', v)} className={INP} label="Bag no." /></div>
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
-                      <BatchInput value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} placeholder="Type or pick" /></div>
+                      <BatchKeypadField value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} label="Lot / serial" placeholder="Tap to enter" /></div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
                       <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
