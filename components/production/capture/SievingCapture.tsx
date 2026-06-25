@@ -4,11 +4,10 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchInput } from '@/components/production/capture/BatchInput'
-import { KeypadInput } from '@/components/production/capture/CaptureKeypad'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
@@ -44,6 +43,11 @@ const nowISO = () => new Date().toISOString()
 // Display a logged-at timestamp in SAST (Africa/Johannesburg), e.g. "13:42".
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
+
+// Section colours — bulk bags carry the blue of Debagging, output bags the
+// amber of Bagging, so each list visibly belongs to the section you tapped.
+const DEBAG_BLUE = '#1d4ed8'
+const BAG_ORANGE = '#d97706'
 
 // Destination letter → raw-material local/export label, kept consistent with the
 // production's destination chosen at the top.
@@ -167,8 +171,6 @@ export function SievingCapture({
   }
 
   const { totalIn, totalOut } = sievingTotals(value)
-  const variance  = totalIn - totalOut
-  const withinTol = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
@@ -179,9 +181,8 @@ export function SievingCapture({
 
   return (
     <div className="space-y-4">
-      {/* The two jobs + the running balance, grouped in one card so the bold
-          blue/amber tiles read as a single block with the mass balance. */}
-      <div className="rounded-2xl border border-stone-200 bg-white p-2.5 space-y-2.5 shadow-sm">
+      {/* The two jobs, side by side — tap one to work that section. Each is in
+          its own bold colour (blue = Debagging/in, amber = Bagging/out). */}
       <div className="grid grid-cols-2 gap-2.5">
         {([
           { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: debagCount, kg: totalIn,  color: '#1d4ed8' },
@@ -208,18 +209,6 @@ export function SievingCapture({
             </button>
           )
         })}
-      </div>
-      {totalIn > 0 && (
-        <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-stone-50 border border-stone-100 text-[12px]">
-          <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance</span>
-          <span className="font-mono text-stone-600">{totalIn.toFixed(1)} in</span>
-          <span className="text-stone-300">·</span>
-          <span className="font-mono text-stone-600">{totalOut.toFixed(1)} out</span>
-          <span className={`ml-auto font-mono font-bold px-2 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
-          </span>
-        </div>
-      )}
       </div>
       <p className="text-[12px] text-stone-500 px-1 -mt-1">
         {tab === 'debag'
@@ -256,8 +245,8 @@ export function SievingCapture({
                 {value.spillage.map((r, i) => (
                   <div key={r.id} className="space-y-1">
                     <label className={LBL}>Spillage {i + 1} (kg)</label>
-                    <KeypadInput mode="number" value={r.kg} disabled={locked}
-                      onChange={v => updateSpillage(r.id, v)} placeholder="0" className={INP} label={`Spillage ${i + 1} (kg)`} />
+                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.kg} disabled={locked}
+                      onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
                   </div>
                 ))}
               </div>
@@ -276,8 +265,8 @@ export function SievingCapture({
               // can't accidentally change a finished bag — Edit re-opens it.
               if (r.secured) {
                 return (
-                  <div key={r.id} className="flex items-center gap-3 bg-ok/5 border border-ok/30 rounded-2xl px-4 py-3">
-                    <Lock size={15} className="text-ok shrink-0" />
+                  <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border" style={{ background: DEBAG_BLUE + '0d', borderColor: DEBAG_BLUE + '40' }}>
+                    <Lock size={15} className="shrink-0" style={{ color: DEBAG_BLUE }} />
                     <div className="flex-1 min-w-0">
                       <div className="text-[13px] font-medium text-text">Bulk bag {i + 1} · {n(r.nett).toFixed(1)} kg</div>
                       <div className="font-mono text-[11px] text-text-muted truncate">{[r.bag_no, r.lot, r.local_export].filter(Boolean).join(' · ')}{r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}</div>
@@ -292,18 +281,18 @@ export function SievingCapture({
                 )
               }
               return (
-                <div key={r.id} className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
+                <div key={r.id} className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: DEBAG_BLUE + '40' }}>
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-[13px] text-text">Bulk bag {i + 1}</span>
+                    <span className="font-bold text-[13px]" style={{ color: DEBAG_BLUE }}>Bulk bag {i + 1}</span>
                     {!locked && <button onClick={() => removeDebag(r.id)} className="text-stone-300 hover:text-err p-1"><Trash2 size={15} /></button>}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1"><label className={LBL}>Bag no.</label>
-                      <KeypadInput mode="text" value={r.bag_no} disabled={locked} onChange={v => updateDebag(r.id, 'bag_no', v)} className={INP} label="Bag no." placeholder="Tap to enter" /></div>
+                      <input value={r.bag_no} disabled={locked} onChange={e => updateDebag(r.id, 'bag_no', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
                       <BatchInput value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} placeholder="Type or pick" /></div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
-                      <KeypadInput mode="number" value={r.nett} disabled={locked} onChange={v => updateDebag(r.id, 'nett', v)} className={INP} label="Nett (kg)" placeholder="0" /></div>
+                      <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
                       <select value={r.local_export} disabled={locked} onChange={e => updateDebag(r.id, 'local_export', e.target.value)} className={INP + ' cursor-pointer'}>
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
@@ -341,10 +330,10 @@ export function SievingCapture({
       {tab === 'bag' && (
         <>
           {value.outputs.length > 0 && (
-            <div className="bg-white border border-stone-200 rounded-2xl divide-y divide-stone-100">
+            <div className="bg-white border rounded-2xl divide-y divide-stone-100" style={{ borderColor: BAG_ORANGE + '40' }}>
               {value.outputs.map(b => (
-                <div key={b.id} className={`flex items-center gap-3 px-4 py-3 ${b.secured ? 'bg-ok/5' : ''}`}>
-                  {b.secured && <Lock size={14} className="text-ok shrink-0" />}
+                <div key={b.id} className="flex items-center gap-3 px-4 py-3" style={b.secured ? { background: BAG_ORANGE + '0d' } : undefined}>
+                  {b.secured && <Lock size={14} className="shrink-0" style={{ color: BAG_ORANGE }} />}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
                     {LABEL_PRINTING_ENABLED

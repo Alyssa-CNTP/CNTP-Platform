@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: revert custom keypad; section-coloured bags; standalone mass balance)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (removed)
+- `components/production/capture/SievingCapture.tsx` (native inputs; blue/orange bags; ungrouped tiles)
+- `components/production/capture/OutputPicker.tsx` (native weight input)
+- `app/(app)/production/capture/[section]/page.tsx` (mass-balance card with scale icon)
+
+**Changes:**
+- **Removed the custom keypad** — capture fields use the device's own keyboard again (number fields still accept a comma and store a clean decimal).
+- **Bags carry the section colour** — Debagging bulk bags are **blue**, Bagging output bags are **amber/orange**, so each list clearly belongs to the section you tapped. The two section tiles stay separate (not merged into one card).
+- **Mass balance is its own block** — a single cohesive card with a **balance/scale icon** showing in / out / variance, sitting under the steps.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture polish: full-screen keypad, grouped balance, bold steps, mandatory fields)
 
 **Files changed:**

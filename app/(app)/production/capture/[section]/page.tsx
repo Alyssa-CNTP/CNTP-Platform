@@ -6,7 +6,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check,
+  FileText, Check, Scale,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -544,6 +544,23 @@ function CaptureScreen() {
           )
         })}
       </div>
+
+      {/* Mass balance — its own cohesive block; the scale icon cues what it is */}
+      {totalIn > 0 && (
+        <div className="mx-4 mt-2 flex items-center gap-3 px-4 py-2.5 bg-white border border-stone-200 rounded-2xl flex-shrink-0 shadow-sm">
+          <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0"><Scale size={18} className="text-stone-500" /></div>
+          <div className="flex items-baseline flex-wrap gap-x-2 flex-1 min-w-0">
+            <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance{multi ? ` · P${activeIdx + 1}` : ''}</span>
+            <span className="font-mono text-[13px] text-stone-700">{totalIn.toFixed(1)} in</span>
+            <span className="text-stone-300">·</span>
+            <span className="font-mono text-[13px] text-stone-700">{totalOut.toFixed(1)} out</span>
+          </div>
+          <span className={`inline-flex items-center gap-1.5 font-mono font-bold text-[13px] px-2.5 py-1 rounded-full shrink-0 ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+            {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
+          </span>
+        </div>
+      )}
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
