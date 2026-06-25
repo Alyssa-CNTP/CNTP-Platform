@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Gustav (Pasteuriser: avg customer BD in history table + Excel exports)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `lib/utils/exportExcel.ts`
+
+**Changes:**
+- Added "Avg Cust BD" column to the History & Performance table, showing the average customer bulk density across all MB samples for each completed batch.
+- Added `Avg Customer BD` to the Daily Averages sheet and Batch Summary sheet in the per-batch Excel export (`exportPasteuriserBatch`).
+- Added `Avg Customer BD` to the Batch Summary sheet in the combined historical export (`exportPasteuriserBatches`), with correct number format (integer).
+
+---
+
 ## 2026-06-24 — Gustav (maintenance: per-raiser tabs on Job Cards — IT + manager only)
 
 **Files changed:**
