@@ -5,6 +5,31 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Gustav (Maintenance overhaul: accept/start, urgency, edit/cancel, reactive filters, search, exports, calibration cycle, per-tech status)
+
+**Files changed:**
+- `supabase/migrations/20260625_001_maintenance_jobcard_overhaul.sql` (new — applied to staging DB)
+- `lib/maintenance/types.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/helpers.ts`
+- `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/exporters.ts` (new)
+- `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceDashboard.tsx`
+- `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/planner/page.tsx`
+- `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/job-cards/[id]/assign/route.ts`
+
+**Changes:**
+- **DB (additive, staging):** added `urgency`, `started_at`, `cancelled_at`, `cancelled_by` to `maintenance.job_cards`; widened the status CHECK to allow `cancelled`; added an urgency CHECK.
+- **Allocate panel:** one technician picker only — on-duty chips (auto-ticked least-busy) with a single tick; off-duty staff move to a secondary dropdown (removes the confusing double tick). Manager can set an **urgency label** (low/medium/high/critical, or Auto) at allocation. The **Forward** button moved to the bottom of the panel, after the clarify/comment row.
+- **Accept → Start split:** the technician now *accepts* first, then taps *Start job*; the work **timer only starts on Start** (`started_at`). Breakdowns still time from raise.
+- **Finish gating:** a job cannot be completed until both Work Done and Root Cause are filled (button disabled + server-side guard).
+- **Spares request pauses the timer:** requesting a part puts the job on hold (timer frozen) with a generalised Resume; the same pause/resume now covers breakdown interrupts and spares/problem holds.
+- **Edit / cancel:** managers can edit a card's area/machine/description/urgency and cancel it (terminal `cancelled`). Technicians cannot delete/cancel — manager-only.
+- **Breakdown routing:** breakdowns and the allocate suggestion now route to the **least-busy on-duty technician** (not just the most-recent shift); machine-criticality ranking added (pasteurizer → sieving → granule → refining 1/2).
+- **Job-cards board:** Shift-summary tiles, the per-raiser tiles, and the personal-view tiles are now **reactive filter buttons**; added a **search bar**, a **By-technician** (assignee) filter, **CSV export** + **print**, and a 2-column card layout for a denser overview. Cancelled cards excluded from active lists.
+- **Scheduled:** editable **calibration finalize date** that recomputes the next cycle (`calDoneOn`); **forklift run-hour rows ordered by forklift number**; a **trend window** selector (8w/quarter/6mo/year) on Readings & Trends sparks; **print/export** for weekly & monthly checklists.
+- **Analytics:** dashboard graphs gained a 3/6/12-month range selector.
+- **Planner:** new **per-technician status** panel showing who is busy with which card, who is available, and each person's outstanding cards.
+
+---
+
 ## 2026-06-25 — Gustav (Lab results: heavy metals Aluminum+Copper, PA tab results, datetime stamps, None detected)
 
 **Files changed:**

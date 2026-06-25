@@ -68,7 +68,7 @@ export function useMaintenanceData() {
   const [saving, setSaving] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [nj, setNj] = useState({ workflow: 'planned' as 'breakdown' | 'planned', area: '', machine: '', type: [] as string[], desc: '', longDesc: '', raisedBy: '', photo: null as string | null, aiSug: '' })
-  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; external?: boolean; company?: string; qc?: boolean }>>({})
+  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; external?: boolean; company?: string; qc?: boolean; urgency?: import('./types').Urgency }>>({})
   const [spForm, setSpForm] = useState<Record<number, { partId?: string; desc?: string; qty?: string; from?: string; critical?: boolean }>>({})
   const [slotForm, setSlotForm] = useState({ cardId: '', tech: TECHS[0], techId: null as string | null, date: '', time: '08:00', hours: '2', note: '' })
   const [rosterForm, setRosterForm] = useState({ tech: TECHS[0], techId: null as string | null, start: '', end: '' })
@@ -265,7 +265,8 @@ export function useMaintenanceData() {
         assigned_to: a.external ? '' : a.tech!,
         assigned_user_id: a.external ? null : (a.techId ?? null),
         external: !!a.external, external_company: a.external ? a.company! : '',
-        qc_required: a.qc !== false, actor: actor || 'Maintenance Manager',
+        qc_required: a.qc !== false, urgency: a.urgency ?? null,
+        actor: actor || 'Maintenance Manager',
       }),
     }).catch(() => null)
     if (!res) { setPopup('Could not allocate — network error.'); return }
@@ -311,16 +312,55 @@ export function useMaintenanceData() {
     setSpForm(p => ({ ...p, [j.id]: {} }))
   }
 
-  // Resume a job that was auto-paused by a breakdown. Banks the paused duration
-  // into pause_ms so the worked time stays accurate, then restarts the timer.
+  // ── Accept / Start split ──
+  // Accept records the technician taking ownership (timer not yet running). The
+  // work timer only starts on startJob() — set started_at and move to in_progress.
+  const acceptJob = async (j: JobCard) => {
+    await upJC(j.id, { accepted_at: j.accepted_at ?? new Date().toISOString() })
+    await addLog(j.id, 'event', 'assigned', j.assigned_to ?? actor,
+      j.external ? 'External job accepted.' : 'Technician accepted the job card. Timer starts on "Start job".')
+  }
+  const startJob = async (j: JobCard) => {
+    const now = new Date().toISOString()
+    await upJC(j.id, { status: 'in_progress', accepted_at: j.accepted_at ?? now, started_at: now })
+    await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, j.external ? 'External work started — timer running.' : 'Technician started the job — timer running.')
+  }
+
+  // Pause a running job — used both by the breakdown interrupt and when the tech
+  // requests spares / raises a problem back to the manager. paused_at freezes the
+  // timer; resumeJob banks the elapsed paused time.
+  const pauseJob = async (j: JobCard, reason: string) => {
+    if (j.paused) return
+    await upJC(j.id, { paused: true, paused_at: new Date().toISOString(), paused_reason: reason })
+    await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, `Timer paused — ${reason}.`)
+  }
+
+  // Resume a paused job (breakdown interrupt or spares/problem hold). Banks the
+  // paused duration into pause_ms so worked time stays accurate, then restarts.
   const resumeJob = async (j: JobCard) => {
     if (!j.paused || !j.paused_at) return
     const banked = (j.pause_ms ?? 0) + (Date.now() - new Date(j.paused_at).getTime())
     await upJC(j.id, { paused: false, paused_at: null, pause_ms: banked, paused_reason: '' })
-    await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, 'Resumed previous job after the breakdown — timer running again.')
+    await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, 'Resumed the job — timer running again.')
+  }
+
+  // Manager edits a card's core fields (description, machine, urgency, etc.).
+  const editCard = async (j: JobCard, patch: Partial<JobCard>) => {
+    await upJC(j.id, patch)
+    await addLog(j.id, 'event', j.status, actor || 'Maintenance Manager', 'Job card details edited.')
+  }
+
+  // Cancel a job card (managers only — enforced in the UI). Terminal state.
+  const cancelCard = async (j: JobCard, reason: string) => {
+    await upJC(j.id, { status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: actor || 'Maintenance Manager' })
+    await addLog(j.id, 'event', 'cancelled', actor || 'Maintenance Manager', `Job card cancelled${reason ? ': ' + reason : ''}.`)
   }
 
   const completeWork = async (j: JobCard) => {
+    // A job cannot be finished until the work done and root cause are recorded.
+    const wd = (drafts['wd' + j.id] ?? j.work_done ?? '').trim()
+    const rc = (drafts['rc' + j.id] ?? j.root_cause ?? '').trim()
+    if (!wd || !rc) { setPopup('Before finishing, please record both the Work Done and the Root Cause.'); return }
     const next: Status = j.qc_required ? 'qc_check' : 'verify'
     await upJC(j.id, {
       status: next, completed_at: new Date().toISOString(),
@@ -466,15 +506,19 @@ export function useMaintenanceData() {
     return true
   }
 
-  // ── Calibration: mark done today (next due recomputed from interval) ──
-  const calDone = async (a: CalAsset) => {
-    const today = new Date().toISOString().slice(0, 10)
-    const comment = (a.comment ? a.comment + ' • ' : '') + `Done ${today} by ${actor || displayName || ''}`
-    setCalAssets(p => p.map(x => x.id === a.id ? { ...x, last_done: today, comment } : x))
+  // ── Calibration: mark done (next due recomputed from interval) ──
+  // calDone marks it done today; calDoneOn lets the manager finalise on a chosen
+  // date — the next cycle (last_done + interval_days) recomputes automatically in
+  // the calRows selector.
+  const calDoneOn = async (a: CalAsset, dateStr: string) => {
+    const day = (dateStr || new Date().toISOString().slice(0, 10)).slice(0, 10)
+    const comment = (a.comment ? a.comment + ' • ' : '') + `Done ${day} by ${actor || displayName || ''}`
+    setCalAssets(p => p.map(x => x.id === a.id ? { ...x, last_done: day, comment } : x))
     const { error: err } = await db.schema('maintenance').from('calibration_assets')
-      .update({ last_done: today, comment }).eq('id', a.id)
+      .update({ last_done: day, comment }).eq('id', a.id)
     if (err) setPopup('Save failed: ' + err.message)
   }
+  const calDone = async (a: CalAsset) => calDoneOn(a, new Date().toISOString().slice(0, 10))
   // Equipment serviced today — resets the hours-since-service counter
   const eqServiced = async (equipment: string, total: number | null) => {
     await saveReading('equipment_hours', {
@@ -606,7 +650,7 @@ export function useMaintenanceData() {
   const newCards = jcs.filter(j => j.status === 'raised')
   const hist = jcs.filter(j => j.status === 'complete').slice(0, 20)
   const annualRows = annual.map(a => ({ ...a, days: daysUntil(a.next_due) })).sort((a, b) => a.days - b.days)
-  const openPlannedCards = jcs.filter(j => j.workflow === 'planned' && !['complete'].includes(j.status))
+  const openPlannedCards = jcs.filter(j => j.workflow === 'planned' && !['complete', 'cancelled'].includes(j.status))
 
   const completed = jcs.filter(j => j.status === 'complete')
   const totalMins = completed.reduce((s, j) => s + diffM(j.accepted_at, j.completed_at), 0)
@@ -687,11 +731,12 @@ export function useMaintenanceData() {
 
     actions: {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
-      logSpare, completeWork, resumeJob, qcSubmit, verifyCard, postComment,
+      logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
+      qcSubmit, verifyCard, postComment,
       getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
-      raiseFromChecklist, saveReading, calDone, eqServiced, addMachine,
+      raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,
       createRequest, setRequestStatus, cancelRequest,
     },
 

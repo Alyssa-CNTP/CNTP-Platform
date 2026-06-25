@@ -6,14 +6,15 @@
 // detail page it renders fully expanded. All workflow logic is unchanged.
 
 import { useEffect, useState } from 'react'
-import { ChevronDown, ScanLine, ShoppingCart } from 'lucide-react'
+import { ChevronDown, ScanLine, ShoppingCart, Pencil, XCircle } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
 import { VoiceCapture } from './VoiceCapture'
-import { QC_CHECKS } from '@/lib/maintenance/constants'
+import { QC_CHECKS, URGENCY_META, AREAS } from '@/lib/maintenance/constants'
 import { fmtDT, fmtT, diffM, diffDays, normQc, priorityOf, PRIORITY_META } from '@/lib/maintenance/helpers'
-import type { JobCard, QcAnswer } from '@/lib/maintenance/types'
+import type { JobCard, QcAnswer, Urgency } from '@/lib/maintenance/types'
+import { URGENCIES } from '@/lib/maintenance/types'
 import { INP } from '@/components/production/shared/ui'
 import PartScanner from './PartScanner'
 
@@ -45,6 +46,10 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const [requesting, setRequesting] = useState(false)
   const [reqDesc, setReqDesc] = useState('')
   const [reqQty, setReqQty] = useState('1')
+  // Manager edit / cancel panels.
+  const [editing, setEditing] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
 
   useEffect(() => {
     if (!roles.canManage || j.status !== 'raised' || !expanded) return
@@ -63,8 +68,14 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const isBd = j.workflow === 'breakdown'
   const prio = priorityOf(j)
   const prioMeta = PRIORITY_META[prio]
-  const timerStart = isBd ? j.raised_at : j.accepted_at
+  // Manager-set urgency drives the accent/badge when present, else derived priority.
+  const urgMeta = j.urgency ? URGENCY_META[j.urgency] : null
+  const accentClass = urgMeta?.accent ?? prioMeta.accent
+  // Breakdowns time from raise; planned/other jobs time from "Start job" (started_at).
+  const timerStart = isBd ? j.raised_at : j.started_at
   const showTimer = (j.status === 'in_progress') || (isBd && j.status === 'assigned')
+  // Has the technician accepted but not yet started? (timer not running yet)
+  const acceptedNotStarted = j.status === 'assigned' && !!j.accepted_at
   // Worked minutes net of any paused (breakdown-interruption) time.
   const netMin = Math.max(0, diffM(timerStart, j.completed_at) - Math.round((j.pause_ms ?? 0) / 60000))
   const lgs = cardLogs(j.id)
@@ -80,7 +91,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const act: { label: string; primary: boolean } =
     j.status === 'raised' && canManage ? { label: 'Allocate', primary: true }
     : j.status === 'clarify' && isRaiser ? { label: 'Clarify & resubmit', primary: true }
-    : j.status === 'assigned' && isTech ? { label: isBd ? 'Attend & accept' : 'Accept', primary: true }
+    : j.status === 'assigned' && isTech ? { label: acceptedNotStarted ? 'Start job' : (isBd ? 'Attend & accept' : 'Accept'), primary: true }
     : j.status === 'in_progress' && isTech ? { label: 'Log work', primary: true }
     : j.status === 'qc_check' && isQc ? { label: 'QC check', primary: true }
     : j.status === 'verify' && isRaiser ? { label: 'Verify', primary: true }
@@ -96,20 +107,36 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   // High-priority / breakdown cards get a faint tint so they pop in a list.
   const tint = prio === 'high' ? 'bg-err/[0.03]' : 'bg-surface-card'
 
+  const isCancelled = j.status === 'cancelled'
+  const isTerminal = isCancelled || j.status === 'complete'
+
   return (
-    <div className={`rounded-xl border border-surface-rule border-l-4 ${prioMeta.accent} ${tint} shadow-sm p-4 mb-3`}>
-      {/* Header — card no · priority · type · status */}
+    <div className={`rounded-xl border border-surface-rule border-l-4 ${accentClass} ${isCancelled ? 'bg-surface-dim opacity-75' : tint} shadow-sm p-4 mb-3`}>
+      {/* Header — card no · urgency/priority · type · status */}
       <div className="flex justify-between gap-2 flex-wrap items-start">
         <div className="flex flex-wrap items-center gap-1.5">
           <strong className="text-accent text-sm">{j.card_no}</strong>
-          <span className={`badge ${prioMeta.badge}`}>{prioMeta.label}</span>
+          {urgMeta
+            ? <span className={`badge ${urgMeta.badge}`} title="Manager-set urgency">{urgMeta.label}</span>
+            : <span className={`badge ${prioMeta.badge}`}>{prioMeta.label}</span>}
           <span className={`badge ${isBd ? 'badge-err' : 'badge-info'}`}>{isBd ? 'BREAKDOWN' : 'PLANNED'}</span>
           <StatusBadge status={j.status} />
           {j.external && <span className="badge badge-warn">EXT: {j.external_company}</span>}
           {(j.reopen_count ?? 0) > 0 && <span className="badge badge-err">REOPENED ×{j.reopen_count}</span>}
-          {!j.qc_required && j.status !== 'raised' && <span className="badge badge-gray">NO QC</span>}
+          {!j.qc_required && j.status !== 'raised' && !isCancelled && <span className="badge badge-gray">NO QC</span>}
         </div>
-        <span className="text-[11px] text-text-faint shrink-0">{fmtDT(j.raised_at)}</span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Manager-only edit / cancel. Technicians can never delete a card. */}
+          {canManage && !isTerminal && (expanded || !compact) && (
+            <>
+              <button onClick={() => { setEditing(e => !e); setCancelling(false) }} title="Edit job card"
+                className="inline-flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:bg-surface-dim hover:text-text transition"><Pencil size={14} /></button>
+              <button onClick={() => { setCancelling(c => !c); setEditing(false) }} title="Cancel job card"
+                className="inline-flex items-center justify-center w-7 h-7 rounded-md text-err/70 hover:bg-err/10 hover:text-err transition"><XCircle size={14} /></button>
+            </>
+          )}
+          <span className="text-[11px] text-text-faint">{fmtDT(j.raised_at)}</span>
+        </div>
       </div>
 
       {/* Meta line + title */}
@@ -132,6 +159,71 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
         </div>
       ) : (
         <>
+          {/* Manager: edit core fields */}
+          {canManage && editing && !isTerminal && (
+            <div className={PANEL}>
+              <div className="text-[11px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-2">Edit job card</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className={LB}>Area</label>
+                  <select className={INP} value={drafts['ea' + j.id] ?? j.area} onChange={e => setDrafts(p => ({ ...p, ['ea' + j.id]: e.target.value }))}>
+                    {AREAS.map(a => <option key={a}>{a}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={LB}>Machine</label>
+                  <input className={INP} value={drafts['em' + j.id] ?? (j.machine ?? '')} onChange={e => setDrafts(p => ({ ...p, ['em' + j.id]: e.target.value }))} placeholder="Machine / equipment" />
+                </div>
+              </div>
+              <label className={`${LB} mt-2`}>Short description</label>
+              <input className={INP} value={drafts['ed' + j.id] ?? j.description} onChange={e => setDrafts(p => ({ ...p, ['ed' + j.id]: e.target.value }))} />
+              <label className={`${LB} mt-2`}>Detailed description</label>
+              <textarea className={`${INP} min-h-[50px]`} value={drafts['el' + j.id] ?? j.long_desc} onChange={e => setDrafts(p => ({ ...p, ['el' + j.id]: e.target.value }))} />
+              <label className={`${LB} mt-2`}>Urgency</label>
+              <div className="flex gap-1.5 flex-wrap">
+                {URGENCIES.map(u => (
+                  <button key={u} className={TOG((drafts['eu' + j.id] ?? j.urgency ?? '') === u)}
+                    onClick={() => setDrafts(p => ({ ...p, ['eu' + j.id]: u }))}>{URGENCY_META[u].label}</button>
+                ))}
+                <button className={TOG((drafts['eu' + j.id] ?? j.urgency ?? '') === '')} onClick={() => setDrafts(p => ({ ...p, ['eu' + j.id]: '' }))}>Auto</button>
+              </div>
+              <div className="flex gap-1.5 mt-3">
+                <button className={PRIMARY} onClick={async () => {
+                  const eu = drafts['eu' + j.id]
+                  await actions.editCard(j, {
+                    area: drafts['ea' + j.id] ?? j.area,
+                    machine: (drafts['em' + j.id] ?? j.machine) || null,
+                    description: drafts['ed' + j.id] ?? j.description,
+                    long_desc: drafts['el' + j.id] ?? j.long_desc,
+                    urgency: (eu === undefined ? j.urgency : (eu === '' ? null : eu as Urgency)),
+                  })
+                  setEditing(false)
+                }}>Save changes</button>
+                <button className="border border-surface-rule bg-surface-card text-text-muted rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:border-text/25 transition" onClick={() => setEditing(false)}>Cancel edit</button>
+              </div>
+            </div>
+          )}
+
+          {/* Manager: cancel the job card (terminal) */}
+          {canManage && cancelling && !isTerminal && (
+            <div className="rounded-xl border border-err/30 bg-err/5 p-3.5 mt-3">
+              <div className="text-[12px] font-semibold text-err mb-1.5">Cancel this job card?</div>
+              <div className="text-[11px] text-text-muted mb-2">This closes the card without completing the work. Only the maintenance manager can do this.</div>
+              <input className={INP} value={cancelReason} onChange={e => setCancelReason(e.target.value)} placeholder="Reason for cancelling (optional)…" />
+              <div className="flex gap-1.5 mt-2.5">
+                <button className="bg-err text-white rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:brightness-110 transition" onClick={async () => { await actions.cancelCard(j, cancelReason.trim()); setCancelling(false); setCancelReason('') }}>Confirm cancel</button>
+                <button className="border border-surface-rule bg-surface-card text-text-muted rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:border-text/25 transition" onClick={() => setCancelling(false)}>Keep card</button>
+              </div>
+            </div>
+          )}
+
+          {/* Cancelled summary */}
+          {isCancelled && (
+            <div className="mt-2.5 text-[12px] text-text-muted">
+              Cancelled{j.cancelled_by ? ` by ${j.cancelled_by}` : ''}{j.cancelled_at ? ` · ${fmtDT(j.cancelled_at)}` : ''}.
+            </div>
+          )}
+
           {hasDetail && (
             <>
               <button onClick={() => setShowDetail(s => !s)}
@@ -156,7 +248,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
 
           {showTimer && (
             <div className="mt-2.5">
-              <div className="text-[10px] text-text-muted uppercase tracking-wide">Time elapsed {isBd ? '(since raised — breakdown)' : '(since accepted)'}</div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wide">Time elapsed {isBd ? '(since raised — breakdown)' : '(since job started)'}</div>
               <Timer start={timerStart} pauseMs={j.pause_ms ?? 0} pausedAt={j.paused ? j.paused_at ?? null : null} />
             </div>
           )}
@@ -166,55 +258,90 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             const techBusy = data.jcs.some(x => x.id !== j.id && x.assigned_to === j.assigned_to && x.status === 'in_progress' && !x.paused)
             return (
               <div className="rounded-xl border border-warn/30 bg-warn/5 p-3.5 mt-3">
-                <div className="text-[12px] font-semibold text-warn">Paused — {j.paused_reason || 'technician pulled to a breakdown'}</div>
-                <div className="text-[11px] text-text-muted mt-0.5">The timer is frozen. {techBusy ? 'Finish the breakdown first, then continue this job.' : 'The breakdown is done — you can continue this job.'}</div>
+                <div className="text-[12px] font-semibold text-warn">Paused — {j.paused_reason || 'on hold'}</div>
+                <div className="text-[11px] text-text-muted mt-0.5">The timer is frozen. {techBusy ? 'Finish the more urgent job first, then resume this one.' : 'Resume when you are ready to continue — the timer restarts where it left off.'}</div>
                 <button
                   disabled={techBusy}
                   className={`mt-2 rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] transition ${techBusy ? 'bg-surface-dim text-text-faint cursor-not-allowed' : 'bg-brand text-white hover:brightness-110'}`}
                   onClick={() => actions.resumeJob(j)}>
-                  Continue previous job
+                  Resume job — restart timer
                 </button>
               </div>
             )
           })()}
 
           {/* raised → manager allocates / sends back for clarification */}
-          {j.status === 'raised' && canManage && (
+          {j.status === 'raised' && canManage && (() => {
+            const a = alloc[j.id] ?? {}
+            const dutyNames: string[] = derived.dutyNow
+            const offDuty = staff.filter(s => !dutyNames.includes(s.name))
+            const offDutyPicked = !a.external && a.tech && !dutyNames.includes(a.tech)
+            return (
             <div className={PANEL}>
               <div className="text-[11px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-2">Allocate job card</div>
-              {/* Quick-pick: technicians on duty right now (one tap to select internally) */}
-              {derived.dutyNow.length > 0 && !alloc[j.id]?.external && (
-                <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                  <span className="text-[11px] text-text-muted">On duty now:</span>
-                  {derived.dutyNow.map((name: string) => {
-                    const picked = alloc[j.id]?.tech === name
-                    const s = staff.find(x => x.name === name)
-                    return (
-                      <button key={name}
-                        className={`px-2.5 py-1 rounded-full text-[12px] font-semibold transition ${picked ? 'bg-brand text-white' : 'bg-ok/10 text-ok border border-ok/25 hover:bg-ok/20'}`}
-                        onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: false, tech: name, techId: s?.id ?? null } }))}>
-                        {name}{picked ? ' ✓' : ''}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-              <div className="flex gap-1.5 items-center flex-wrap">
-                <button className={TOG(!(alloc[j.id]?.external))} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: false } }))}>INTERNAL</button>
-                <button className={TOG(!!alloc[j.id]?.external)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: true } }))}>EXTERNAL</button>
-                {alloc[j.id]?.external
-                  ? <input className={`${INP} w-44`} placeholder="External company…" value={alloc[j.id]?.company ?? ''} onChange={e => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], company: e.target.value } }))} />
-                  : <select className={`${INP} w-auto`} value={alloc[j.id]?.tech ?? ''} onChange={e => { const s = staff.find(x => x.name === e.target.value); setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], tech: e.target.value, techId: s?.id ?? null } })) }}><option value="">Technician…</option>{staff.map(s => <option key={s.id ?? s.name} value={s.name}>{s.name}</option>)}</select>}
-                <button className={TOG(alloc[j.id]?.qc ?? true)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], qc: !(p[j.id]?.qc ?? true) } }))}>QC: {(alloc[j.id]?.qc ?? true) ? 'REQUIRED' : 'NOT REQUIRED'}</button>
-                <button className={PRIMARY} onClick={() => actions.allocate(j)}>Forward</button>
+
+              {/* Internal / external */}
+              <div className="flex gap-1.5 items-center flex-wrap mb-2.5">
+                <button className={TOG(!a.external)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: false } }))}>INTERNAL</button>
+                <button className={TOG(!!a.external)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: true } }))}>EXTERNAL</button>
               </div>
-              <div className="text-[11px] text-text-faint mt-1.5">Production-related machines should be tested — keep QC required for those.</div>
-              <div className="flex gap-1.5 mt-2.5 items-center">
+
+              {a.external ? (
+                <input className={`${INP} w-full`} placeholder="External company…" value={a.company ?? ''} onChange={e => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], company: e.target.value } }))} />
+              ) : (
+                <>
+                  {/* ONE technician picker. The on-duty tech is auto-ticked (least busy);
+                      tap another chip to override, or pick someone off-duty below. */}
+                  {dutyNames.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                      <span className="text-[11px] text-text-muted">On duty now:</span>
+                      {dutyNames.map((name: string) => {
+                        const picked = a.tech === name
+                        const s = staff.find(x => x.name === name)
+                        return (
+                          <button key={name}
+                            className={`px-2.5 py-1 rounded-full text-[12px] font-semibold transition ${picked ? 'bg-brand text-white' : 'bg-ok/10 text-ok border border-ok/25 hover:bg-ok/20'}`}
+                            onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], external: false, tech: name, techId: s?.id ?? null } }))}>
+                            {name}{picked ? ' ✓' : ''}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <select className={`${INP} w-full`} value={offDutyPicked ? a.tech : ''} onChange={e => { const s = staff.find(x => x.name === e.target.value); setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], tech: e.target.value, techId: s?.id ?? null } })) }}>
+                    <option value="">{dutyNames.length ? 'Or assign someone else (off duty)…' : 'Select technician…'}</option>
+                    {offDuty.map(s => <option key={s.id ?? s.name} value={s.name}>{s.name}</option>)}
+                  </select>
+                  {offDutyPicked && <div className="text-[11px] text-warn mt-1">Assigning {a.tech} — not on the duty roster right now.</div>}
+                </>
+              )}
+
+              {/* Urgency label + QC */}
+              <div className="mt-2.5">
+                <span className="text-[11px] text-text-muted mr-1.5">Urgency:</span>
+                <span className="inline-flex gap-1.5 flex-wrap align-middle">
+                  {URGENCIES.map(u => (
+                    <button key={u} className={TOG((a.urgency ?? '') === u)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], urgency: u } }))}>{URGENCY_META[u].label}</button>
+                  ))}
+                  <button className={TOG(!a.urgency)} onClick={() => setAlloc(p => { const n = { ...p[j.id] }; delete n.urgency; return { ...p, [j.id]: n } })}>Auto</button>
+                </span>
+              </div>
+              <div className="mt-2.5">
+                <button className={TOG(a.qc ?? true)} onClick={() => setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], qc: !(p[j.id]?.qc ?? true) } }))}>QC: {(a.qc ?? true) ? 'REQUIRED' : 'NOT REQUIRED'}</button>
+                <span className="text-[11px] text-text-faint ml-2">Production-related machines should be tested — keep QC required for those.</span>
+              </div>
+
+              {/* Not clear? send back to raiser */}
+              <div className="flex gap-1.5 mt-3 items-center">
                 <input className={`${INP} flex-1`} placeholder="Not clear? Note what needs clarifying…" value={drafts['cl' + j.id] ?? ''} onChange={e => setDrafts(p => ({ ...p, ['cl' + j.id]: e.target.value }))} />
                 <button className="border border-warn/40 text-warn bg-warn/5 rounded-lg px-3 py-2.5 min-h-[44px] text-[12px] font-semibold whitespace-nowrap hover:bg-warn/10 transition" onClick={() => actions.sendForClarify(j)}>Send back to raiser</button>
               </div>
+
+              {/* Forward — the finishing action, at the bottom */}
+              <button className={`${PRIMARY} w-full mt-3`} onClick={() => actions.allocate(j)}>Forward to {a.external ? (a.company || 'external company') : (a.tech || 'technician')}</button>
             </div>
-          )}
+            )
+          })()}
 
           {/* clarify → raiser updates and resubmits */}
           {j.status === 'clarify' && isRaiser && (
@@ -228,15 +355,23 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
-          {/* assigned → technician accepts (or manager records external start) */}
+          {/* assigned → technician ACCEPTS, then STARTS (two distinct steps). The
+              work timer only begins on "Start job". */}
           {j.status === 'assigned' && isTech && (
             <div className={PANEL}>
-              <div className="text-[12px] text-text-muted">{j.external ? 'External job with ' : 'Forwarded to '}<strong className="text-text">{j.assigned_to}</strong> at {fmtT(j.assigned_at)} — awaiting {j.external ? 'work start' : 'acceptance'}</div>
-              <button className={`${PRIMARY} mt-2.5`} onClick={async () => {
-                await actions.upJC(j.id, { status: 'in_progress', accepted_at: new Date().toISOString() })
-                await actions.addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, j.external ? 'External work started.' : 'Technician accepted the job card.')
-              }}>{j.external ? 'Mark work started' : 'Accept job card'}</button>
-              {!isBd && <div className="text-[11px] text-text-faint mt-1">Timer starts on accept</div>}
+              {!acceptedNotStarted ? (
+                <>
+                  <div className="text-[12px] text-text-muted">{j.external ? 'External job with ' : 'Forwarded to '}<strong className="text-text">{j.assigned_to}</strong> at {fmtT(j.assigned_at)} — awaiting acceptance</div>
+                  <button className={`${PRIMARY} mt-2.5`} onClick={() => actions.acceptJob(j)}>{j.external ? 'Accept external job' : 'Accept job card'}</button>
+                  <div className="text-[11px] text-text-faint mt-1">Accept first — the timer only starts when you tap “Start job”.</div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[12px] text-text-muted"><strong className="text-text">{j.assigned_to}</strong> accepted at {fmtT(j.accepted_at)} — ready to start.</div>
+                  <button className={`${PRIMARY} mt-2.5`} onClick={() => actions.startJob(j)}>{j.external ? 'Mark work started' : 'Start job — start timer'}</button>
+                  <div className="text-[11px] text-text-faint mt-1">Starting another, more urgent job will pause this one.</div>
+                </>
+              )}
             </div>
           )}
 
@@ -306,17 +441,31 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                       onClick={async () => {
                         if (!reqDesc.trim()) return
                         const ok = await actions.createRequest({ card_id: j.id, description: reqDesc.trim(), qty: Math.max(1, parseInt(reqQty, 10) || 1), reason: 'job_card' })
-                        if (ok) { setRequesting(false); setReqDesc(''); setReqQty('1') }
+                        if (ok) {
+                          setRequesting(false); setReqDesc(''); setReqQty('1')
+                          // Requesting spares puts the job on hold — freeze the timer.
+                          if (j.status === 'in_progress' && !j.paused) await actions.pauseJob(j, `awaiting spares — ${reqDesc.trim()}`)
+                        }
                       }}>
-                      Send request
+                      Send request &amp; pause
                     </button>
                   </div>
                 )}
               </div>
 
-              <button className={PRIMARY} onClick={() => actions.completeWork(j)}>
-                {j.qc_required ? `Complete — send to QC${qcFor(j.area) ? ' (' + qcFor(j.area) + ')' : ''}` : 'Complete — send for verification'}
-              </button>
+              {(() => {
+                const canFinish = ((drafts['wd' + j.id] ?? j.work_done ?? '').trim().length > 0) && ((drafts['rc' + j.id] ?? j.root_cause ?? '').trim().length > 0)
+                return (
+                  <>
+                    <button disabled={!canFinish}
+                      className={`rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] transition w-full ${canFinish ? 'bg-brand text-white hover:brightness-110' : 'bg-surface-dim text-text-faint cursor-not-allowed'}`}
+                      onClick={() => actions.completeWork(j)}>
+                      {j.qc_required ? `Complete — send to QC${qcFor(j.area) ? ' (' + qcFor(j.area) + ')' : ''}` : 'Complete — send for verification'}
+                    </button>
+                    {!canFinish && <div className="text-[11px] text-warn mt-1">Record both Work Done and Root Cause before finishing.</div>}
+                  </>
+                )
+              })()}
             </div>
           )}
 

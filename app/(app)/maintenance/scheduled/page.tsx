@@ -7,10 +7,19 @@
 // run-hours, boiler starts) with the Excel database history and due-date formulas.
 
 import { useState } from 'react'
+import { Printer } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { calClass, calBadge, fmtD, fmtT } from '@/lib/maintenance/helpers'
 import { TECHS } from '@/lib/maintenance/constants'
+import { printTable } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
+
+// Order forklift run-hour rows by their forklift number; non-forklifts keep their
+// (days-to-service) order ahead of them.
+const forkliftNum = (name: string): number | null => {
+  const m = /fork\s*lift\D*(\d+)/i.exec(name || '')
+  return m ? parseInt(m[1], 10) : null
+}
 
 const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
 const BTN_OK = 'bg-ok text-white rounded-lg px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition'
@@ -34,7 +43,7 @@ function Spark({ pts, color = '#2563eb', h = 44, labels }: { pts: number[]; colo
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, eqHours, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, raiseFromChecklist, saveReading, calDone, eqServiced } = actions
+  const { getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const { annualRows, lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists } = derived
   const { drafts, setDrafts, setPopup } = ui
 
@@ -42,6 +51,30 @@ export default function ScheduledPage() {
   const [openCL, setOpenCL] = useState<number | null>(null)
   const [calSearch, setCalSearch] = useState('')
   const [rd, setRd] = useState<Record<string, string>>({})
+  // Trend window for the Readings & Trends sparks (weeks of history to plot).
+  const [trendWeeks, setTrendWeeks] = useState(26)
+  // Run-hours list ordered so forklifts are grouped in forklift-number order.
+  const eqOrdered = [...eqLatest].sort((a, b) => {
+    const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
+    if (fa == null && fb == null) return a.days - b.days
+    if (fa == null) return -1
+    if (fb == null) return 1
+    return fa - fb
+  })
+
+  // Print the current weekly/monthly checklist set (status + who/when per task).
+  const printChecklists = (freq: 'weekly' | 'monthly', period: string) => {
+    const rows: (string | number)[][] = []
+    templates.filter(t => t.frequency === freq).forEach(cl => {
+      const st = getComp(cl.id, period)?.task_states ?? {}
+      cl.tasks.forEach((task, ti) => {
+        const s: any = st[ti] ?? {}
+        rows.push([cl.area, cl.doc_ref, task, s.done ? 'Done' : 'Outstanding', s.fault ? 'FAULT' : '', s.by ?? '', s.at ? fmtD(s.at) : '', s.notes ?? ''])
+      })
+    })
+    printTable(`${freq === 'weekly' ? 'Weekly' : 'Monthly'} checklist — ${period}`,
+      ['Area', 'Ref', 'Task', 'Status', 'Fault', 'By', 'Date', 'Notes'], rows)
+  }
 
   const techNames = staff.length ? staff.map(s => s.name) : TECHS
   const lastOf = <T,>(arr: T[]) => arr[arr.length - 1]
@@ -140,13 +173,19 @@ export default function ScheduledPage() {
         const list = templates.filter(t => t.frequency === freq)
         return (
           <div>
-            <div className="mb-3">
+            <div className="mb-3 flex items-start justify-between gap-2 flex-wrap">
+              <div>
               <h2 className="text-sm font-semibold text-text">{freq === 'weekly' ? 'Weekly checklists (WC) — ' + weekKey : 'Monthly checklists (MC) — ' + moKey}</h2>
               <p className="text-[12px] text-text-muted mt-0.5">
                 {freq === 'weekly'
                   ? 'Complete every week. Tap an area to expand the checklist. Every tick records who checked it and when.'
                   : 'Full inspections per area, per the QM-FM checklist. Each task has a fault selector and action notes — a fault can raise a job card directly.'}
               </p>
+              </div>
+              <button onClick={() => printChecklists(freq, period)}
+                className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition shrink-0">
+                <Printer size={14} /> Print / export {freq === 'weekly' ? 'weekly' : 'monthly'}
+              </button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
               {list.map(cl => {
@@ -286,7 +325,16 @@ export default function ScheduledPage() {
                         <td>{c.interval_days}d</td>
                         <td>{c.next ? fmtD(c.next.toISOString()) : '—'}</td>
                         <td className="font-semibold">{c.days === 9999 ? '—' : c.days}</td>
-                        <td><button className={BTN_SM} onClick={() => calDone(c)}>Done today</button></td>
+                        <td>
+                          <div className="flex gap-1 items-center">
+                            <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date"
+                              value={drafts['cd' + c.id] ?? (c.last_done ?? '').slice(0, 10)}
+                              onChange={e => setDrafts(p => ({ ...p, ['cd' + c.id]: e.target.value }))} />
+                            <button className={BTN_OK} title="Finalise on this date — recalculates the next cycle"
+                              onClick={() => calDoneOn(c, drafts['cd' + c.id] ?? new Date().toISOString().slice(0, 10))}>Set</button>
+                            <button className={BTN_SM} onClick={() => calDone(c)}>Today</button>
+                          </div>
+                        </td>
                         <td className="text-[10px] text-text-faint max-w-[160px]">{c.comment || '—'}</td>
                       </tr>
                     ))}</tbody>
@@ -300,8 +348,17 @@ export default function ScheduledPage() {
       {/* ── READINGS & TRENDS: friendly numeric capture + history ── */}
       {sub === 4 && (
         <div className="space-y-4">
-          <div className="card p-3 text-[12px] text-text-muted">
-            Enter readings below — the previous value is shown next to each field and usage is calculated automatically (same formulas as the Excel database). Recording as <strong className="text-text">{actor}</strong>.
+          <div className="card p-3 flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-[12px] text-text-muted">
+              Enter readings below — the previous value is shown next to each field and usage is calculated automatically (same formulas as the Excel database). Recording as <strong className="text-text">{actor}</strong>.
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[11px] text-text-muted">Trend window:</span>
+              {([['8w', 8], ['Quarter', 13], ['6 months', 26], ['Year', 52]] as [string, number][]).map(([l, n]) => (
+                <button key={n} onClick={() => setTrendWeeks(n)}
+                  className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition ${trendWeeks === n ? 'bg-brand text-white' : 'bg-surface-dim text-text-muted hover:text-text'}`}>{l}</button>
+              ))}
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
@@ -334,9 +391,9 @@ export default function ScheduledPage() {
                   }}>Save water readings</button>
                   <div className="mt-3">
                     <div className={LB}>Main meter weekly usage (kL)</div>
-                    <Spark pts={waterUsage.main.slice(-26)} color="#2563eb" labels={[fmtD(waterReadings[Math.max(0, waterReadings.length - 26)]?.reading_date ?? null), fmtD(lastOf(waterReadings)?.reading_date ?? null)]} />
+                    <Spark pts={waterUsage.main.slice(-trendWeeks)} color="#2563eb" labels={[fmtD(waterReadings[Math.max(0, waterReadings.length - trendWeeks)]?.reading_date ?? null), fmtD(lastOf(waterReadings)?.reading_date ?? null)]} />
                     <div className={`${LB} mt-2`}>Boiler usage</div>
-                    <Spark pts={waterUsage.boiler.slice(-26)} color="#0891b2" />
+                    <Spark pts={waterUsage.boiler.slice(-trendWeeks)} color="#0891b2" />
                   </div>
                 </div>
               )})()}
@@ -369,7 +426,7 @@ export default function ScheduledPage() {
                   }}>Save IP reading</button>
                   <div className="mt-3">
                     <div className={LB}>Weekly IP usage (L)</div>
-                    <Spark pts={ipUsage.slice(-26)} color="#d97706" />
+                    <Spark pts={ipUsage.slice(-trendWeeks)} color="#d97706" />
                   </div>
                 </div>
               )})()}
@@ -400,7 +457,7 @@ export default function ScheduledPage() {
                   }}>Save diesel reading</button>
                   <div className="mt-3">
                     <div className={LB}>Generator run hours / week</div>
-                    <Spark pts={dieselReadings.slice(-26).map(r => r.run_hours ?? 0)} color="#dc2626" />
+                    <Spark pts={dieselReadings.slice(-trendWeeks).map(r => r.run_hours ?? 0)} color="#dc2626" />
                   </div>
                 </div>
               )})()}
@@ -440,7 +497,7 @@ export default function ScheduledPage() {
               <h3 className="text-sm font-semibold text-text mb-1">🛠 Run-hours &amp; service due</h3>
               <div className="text-[11px] text-text-faint mb-2">Due = reading date + workdays to reach the service interval at the configured usage rate — exactly the Excel WORKDAY formula. Update hours weekly.</div>
               <div className="max-h-[420px] overflow-y-auto space-y-1.5">
-                {eqLatest.map(({ cfg, latest, due, days }) => (
+                {eqOrdered.map(({ cfg, latest, due, days }) => (
                   <div key={cfg.id} className="bg-surface-raised rounded-lg p-2.5">
                     <div className="flex justify-between items-center gap-2 flex-wrap">
                       <strong className="text-[12px] text-text">{cfg.equipment}</strong>
@@ -475,7 +532,7 @@ export default function ScheduledPage() {
               </div>
               <div className="mt-3">
                 <div className={LB}>Compressor hours since service</div>
-                <Spark pts={eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-30).map(h => h.hours_since_service!)} color="#7c3aed" />
+                <Spark pts={eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-trendWeeks).map(h => h.hours_since_service!)} color="#7c3aed" />
               </div>
             </div>
 
