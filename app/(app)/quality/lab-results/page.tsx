@@ -46,6 +46,8 @@ const COLS: Record<string, [string,string][]> = {
   eto: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
   aflatoxins: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
   mosh_moah: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
+  pa_final:  [['analyte','PA/TA Analyte'],['result','Result (µg/kg)'],['unit','Unit'],['spec','EU Limit'],['status','Status']],
+  glyphosate:[['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -87,13 +89,30 @@ function expandRecord(r: LabResult): any[] {
     })
   }
 
+  // pa_final old flat format → convert to analytes array
+  if (!d.analytes && (d.total_pa_eu !== undefined || d.total_pa_bfr28 !== undefined)) {
+    const entries: any[] = []
+    if (d.total_pa_eu      !== undefined) entries.push({ analyte:'Total PA (EU 2023/915)', result:d.total_pa_eu,      unit:d.unit||'µg/kg', spec:'≤400',  status: d.total_pa_eu!=null&&parseFloat(d.total_pa_eu)>400  ?'Fail':'Pass' })
+    if (d.total_pa_bfr28   !== undefined) entries.push({ analyte:'Total PA (BfR 28)',      result:d.total_pa_bfr28,   unit:d.unit||'µg/kg', spec:'—',     status:'—' })
+    if (d.scopolamine_total !== undefined) entries.push({ analyte:'Scopolamine',            result:d.scopolamine_total,unit:d.unit||'µg/kg', spec:'—',     status:'—' })
+    if (d.total_ta          !== undefined) entries.push({ analyte:'Total TA',               result:d.total_ta,         unit:d.unit||'µg/kg', spec:'≤1000', status: d.total_ta!=null&&parseFloat(d.total_ta)>1000?'Fail':'Pass' })
+    if (entries.length === 0) return [{ batch_no:batchKey, id:r.id, created_at:r.created_at, analyte:'No data', result:'—', unit:'—', spec:'—', status:d.overall_status||'—' }]
+    return entries.map((a: any) => ({
+      batch_no:batchKey, id:r.id, created_at:r.created_at,
+      compound:a.analyte, analyte:a.analyte,
+      result: a.result!=null&&a.result!=='' ? String(a.result) : 'None detected',
+      unit:a.unit, mrl:a.spec, spec:a.spec, status:a.status,
+    }))
+  }
+
   if (d.analytes && Array.isArray(d.analytes)) {
     if (d.analytes.length === 0)
-      return [{ batch_no:batchKey, id:r.id, created_at:r.created_at, compound:'NONE DETECTED', analyte:'NONE DETECTED', result:'—', unit:'—', mrl:'—', spec:'—', status:d.overall_status||'Pass' }]
+      return [{ batch_no:batchKey, id:r.id, created_at:r.created_at, compound:'None detected', analyte:'None detected', result:'None detected', unit:'—', mrl:'—', spec:'—', status:d.overall_status||'Pass' }]
     return d.analytes.map((c: any) => ({
       batch_no:batchKey, id:r.id, created_at:r.created_at,
       compound:c.analyte||c.metal||'—', analyte:c.analyte||c.metal||'—',
-      result:c.result??'—', unit:c.unit||'—',
+      result: c.result!=null&&c.result!=='' ? String(c.result) : 'None detected',
+      unit:c.unit||'—',
       mrl:c.eu_mrl??c.spec??'—', spec:c.spec!=null?`≤${c.spec}`:(c.eu_mrl!=null?`≤${c.eu_mrl}`:'—'),
       status:c.status||d.overall_status||'—',
     }))
@@ -644,7 +663,7 @@ export default function LabResultsPage() {
                 const rows = allRows.map((r:any) => {
                   const o: Record<string, any> = { Batch: r.batch_no ?? '' }
                   cols2.forEach(([k,l]: any) => { o[l] = r[k] ?? '' })
-                  o['Date'] = r.created_at ? new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}) : ''
+                  o['Date'] = r.created_at ? new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}) : ''
                   return o
                 })
                 exportTableXlsx(rows, `lab_${activeTab}_${new Date().toISOString().slice(0,10)}.xlsx`, activeTab)
@@ -790,7 +809,7 @@ export default function LabResultsPage() {
                   })}
                   {r._isFirst && (
                     <td rowSpan={r._span} style={{ padding:'5px 8px', fontSize:10, color:'#9ca3af', verticalAlign:'top', paddingTop:6, whiteSpace:'nowrap' }}>
-                      {r.created_at?new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}):'—'}
+                      {r.created_at?new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'—'}
                     </td>
                   )}
                 </tr>
@@ -825,7 +844,7 @@ export default function LabResultsPage() {
                       <td style={{ padding:'4px 8px', fontFamily:'monospace', fontWeight:700 }}>{r.batch_number||'—'}</td>
                       <td style={{ padding:'4px 8px' }}>{r.workcenter||'—'}</td>
                       <td style={{ padding:'4px 8px' }}>{r.workflow||'—'}</td>
-                      <td style={{ padding:'4px 8px', color:'#6b7280' }}>{r.created_at?new Date(r.created_at).toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}):'—'}</td>
+                      <td style={{ padding:'4px 8px', color:'#6b7280' }}>{r.created_at?new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'—'}</td>
                     </tr>
                   ))}
                 </tbody>
