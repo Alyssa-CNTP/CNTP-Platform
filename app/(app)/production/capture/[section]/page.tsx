@@ -6,7 +6,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, Scale,
+  FileText, Check, Scale, ArrowRight,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -545,20 +545,34 @@ function CaptureScreen() {
         })}
       </div>
 
-      {/* Mass balance — its own cohesive block; the scale icon cues what it is */}
+      {/* Mass balance — one card, read as a flow: in → out = variance */}
       {totalIn > 0 && (
-        <div className="mx-4 mt-2 flex items-center gap-3 px-4 py-2.5 bg-white border border-stone-200 rounded-2xl flex-shrink-0 shadow-sm">
-          <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0"><Scale size={18} className="text-stone-500" /></div>
-          <div className="flex items-baseline flex-wrap gap-x-2 flex-1 min-w-0">
-            <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance{multi ? ` · P${activeIdx + 1}` : ''}</span>
-            <span className="font-mono text-[13px] text-stone-700">{totalIn.toFixed(1)} in</span>
-            <span className="text-stone-300">·</span>
-            <span className="font-mono text-[13px] text-stone-700">{totalOut.toFixed(1)} out</span>
+        <div className="mx-4 mt-2 bg-white border border-stone-200 rounded-2xl shadow-sm flex-shrink-0 px-4 py-3">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
+              <Scale size={13} /> Mass balance{multi ? ` · P${activeIdx + 1}` : ''}
+            </span>
+            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+              {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+              {withinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
+            </span>
           </div>
-          <span className={`inline-flex items-center gap-1.5 font-mono font-bold text-[13px] px-2.5 py-1 rounded-full shrink-0 ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-            {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
-          </span>
+          <div className="flex items-center justify-between gap-1">
+            <div className="text-center flex-1">
+              <div className="font-mono font-bold text-[20px] text-text leading-none">{totalIn.toFixed(1)}</div>
+              <div className="text-[10px] text-text-muted mt-1">kg in</div>
+            </div>
+            <ArrowRight size={16} className="text-stone-300 shrink-0" />
+            <div className="text-center flex-1">
+              <div className="font-mono font-bold text-[20px] text-text leading-none">{totalOut.toFixed(1)}</div>
+              <div className="text-[10px] text-text-muted mt-1">kg out</div>
+            </div>
+            <span className="text-stone-300 font-bold text-[16px] shrink-0">=</span>
+            <div className="text-center flex-1">
+              <div className={`font-mono font-bold text-[20px] leading-none ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div>
+              <div className="text-[10px] text-text-muted mt-1">variance</div>
+            </div>
+          </div>
         </div>
       )}
 
