@@ -3,7 +3,7 @@
 // General-information landing — the company home page. Everyone lands here.
 // A glass hero over the brand photo, a greeting, live company links (website
 // shown as a WhatsApp-style rich preview, socials as branded cards), and a few
-// quick links. The smart factory floor plan slots in here in a later phase.
+// quick links, and the smart factory floor plan (live storage layout + activity).
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -13,6 +13,7 @@ import {
   Globe, ClipboardList, Users, CalendarRange,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
+import { FactoryFloorPlan } from '@/components/home/FactoryFloorPlan'
 
 // lucide dropped brand glyphs, so inline the two we need.
 const FacebookGlyph = (
@@ -73,6 +74,9 @@ export default function HomePage() {
           <p className="text-[12px] text-stone-600 mt-0.5">{format(new Date(), 'EEEE d MMMM yyyy')}</p>
         </div>
       </div>
+
+      {/* Smart factory floor plan — live storage layout + what's happening */}
+      <FactoryFloorPlan />
 
       {/* Announcements — placeholder */}
       <div className="bg-surface-card border border-surface-rule rounded-2xl p-5">

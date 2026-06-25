@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Smart factory floor plan on the home page)
+
+**Files changed:**
+- `lib/home/floorplan-data.ts` (new) — the real warehouse layout auto-derived from `Stock Floor Plan SdB 15012025.xlsx` (Insurance sheet): 128 storage bays to scale with kg capacities, Rooibos vs Rosehips zones, doors and the Packaging area. Coordinates in cm; regenerate from the sheet if the layout changes.
+- `components/home/FactoryFloorPlan.tsx` (new) — interactive SVG of the plan (hover a bay for its capacity), a Rooibos/Rosehips/total capacity summary, and a live activity layer: sections running today and open breakdowns, with breakdown markers placed on the map by zone.
+- `app/api/home/overview/route.ts` (new) — service-role ambient feed (so every role sees it): sections active today (from `prod_sessions`) + open breakdowns (from `maintenance.job_cards`). Returns only counts/labels, no sensitive figures.
+- `app/(app)/home/page.tsx` — floor plan added as the centrepiece, under the hero.
+
+**Changes:**
+- Replaces the old (inaccurate) `WarehouseMap` for the home view with the **accurate** plan straight from the insurance spreadsheet — so it matches the building.
+- The map shows what's happening on the floor without exposing detail: which sections are running and where breakdowns are. Because this is a **storage** plan, production-line breakdowns can't be placed exactly — markers sit by zone (approx) and everything is also listed.
+- **Per-bay live stock is not wired yet** — there's no bay↔database link (`bag_tags.location` is free text; no bay table). Next step for that is a small admin screen to assign each bay a location; then bays can colour by what's actually stored.
+
+---
+
 ## 2026-06-25 — Alyssa (Home page redesign + live Production Dashboard)
 
 **Files changed:**
