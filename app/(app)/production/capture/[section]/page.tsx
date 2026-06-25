@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
@@ -27,7 +27,8 @@ import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
-const n = (v: string) => parseFloat(v) || 0
+// Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
+const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 // The capture screen reads as the real-world process the operators follow:
 // machine checks → capture (debag/bag) → cleaning → overview → sign-off.
@@ -126,7 +127,11 @@ function CaptureScreen() {
         .select('comments,shift,date').eq('section_id', sectionId).not('comments', 'is', null)
         .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(5)
       const prevRow = ((prev as any[]) ?? []).find(r => !(r.date === dateParam && r.shift === shift) && (r.comments ?? '').trim())
-      if (prevRow) setPrevNote({ note: prevRow.comments, shift: prevRow.shift, date: prevRow.date })
+      // Only surface a genuinely recent handover (last 7 days). Anything older is
+      // stale (e.g. seed/demo notes) and just adds noise — don't show it.
+      if (prevRow && Math.abs(differenceInCalendarDays(parseISO(dateParam), parseISO(prevRow.date))) <= 7) {
+        setPrevNote({ note: prevRow.comments, shift: prevRow.shift, date: prevRow.date })
+      }
       const aVariant = (assign as any)?.variant ?? 'Conventional'
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data

@@ -107,7 +107,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             <div className={`grid gap-3 ${picked.batchTracked ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-1">
                 <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Weight (kg) *</label>
-                <input autoFocus type="number" inputMode="decimal" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
+                <input autoFocus type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
               </div>
               {picked.batchTracked && (
                 <div className="space-y-1">
