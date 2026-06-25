@@ -525,17 +525,17 @@ function CaptureScreen() {
           return (
             <div key={s.id} className="flex items-center shrink-0">
               <button onClick={() => setTab(s.id)} className="flex items-center gap-2 group">
-                <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-semibold border transition-colors
+                <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-bold border-2 transition-colors
                   ${isActive ? 'bg-brand text-white border-brand'
-                    : isDone ? 'bg-brand/10 text-brand border-brand/30'
+                    : isDone ? 'bg-brand/10 text-brand border-brand/40'
                     : 'bg-white text-stone-400 border-stone-300 group-hover:border-stone-400'}`}>
-                  {isDone ? <Check size={14} /> : i + 1}
+                  {isDone ? <Check size={15} strokeWidth={3} /> : i + 1}
                 </span>
-                <span className={`text-[13px] font-medium hidden sm:inline transition-colors
-                  ${isActive ? 'text-brand' : isDone ? 'text-stone-600' : 'text-stone-400 group-hover:text-stone-600'}`}>
+                <span className={`text-[14px] font-bold hidden sm:inline transition-colors
+                  ${isActive ? 'text-brand' : isDone ? 'text-stone-700' : 'text-stone-400 group-hover:text-stone-600'}`}>
                   {s.label}
                 </span>
-                <Icon size={14} className={`sm:hidden ${isActive ? 'text-brand' : isDone ? 'text-stone-600' : 'text-stone-400'}`} />
+                <Icon size={15} className={`sm:hidden ${isActive ? 'text-brand' : isDone ? 'text-stone-700' : 'text-stone-400'}`} />
               </button>
               {i < STEPS.length - 1 && (
                 <div className={`w-6 sm:w-10 h-px mx-1.5 sm:mx-2.5 ${activeIdxStep > i ? 'bg-brand/40' : 'bg-stone-200'}`} />
@@ -544,20 +544,6 @@ function CaptureScreen() {
           )
         })}
       </div>
-
-      {/* Mass balance — secondary, a quick glance under the steps */}
-      {totalIn > 0 && (
-        <div className="mx-4 mt-2 flex items-center gap-2.5 px-4 py-2 bg-white border border-stone-200 rounded-xl flex-shrink-0 text-[12px]">
-          <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance{multi ? ` · P${activeIdx + 1}` : ''}</span>
-          <span className="font-mono text-stone-600">{totalIn.toFixed(1)} in</span>
-          <span className="text-stone-300">·</span>
-          <span className="font-mono text-stone-600">{totalOut.toFixed(1)} out</span>
-          <span className={`ml-auto inline-flex items-center gap-1.5 font-mono font-bold px-2 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-            {withinTol ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
-            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
-          </span>
-        </div>
-      )}
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
