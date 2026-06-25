@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-25 — Alyssa (Live capture: on-screen keypad, edit re-lock, focus on steps, operator overview)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (new — on-screen keypad)
+- `components/production/capture/SievingCapture.tsx` (keypad fields; Done re-lock for bags + bucket elevator)
+- `components/production/capture/OutputPicker.tsx` (keypad for weight)
+- `components/production/capture/CaptureOverview.tsx` (operator-readable overview, blue/orange)
+- `app/(app)/production/capture/[section]/page.tsx` (steps primary, mass balance secondary; IT-only serials)
+
+**Changes:**
+1. **On-screen keypad** — capture fields (nett, spillage, output weight, bag no.) now open a custom keypad instead of the device keyboard: a numeric pad with a **comma decimal** for weights, and an A–Z / 0–9 / `-` / `/` pad for bag numbers. (Lot/serial keeps its type-ahead chips.)
+2. **Edit re-locks cleanly** (#4/#5) — an open bulk bag and the bucket elevator each have a **"Done — lock"** button, so after editing a previous bag you can re-secure it directly and carry on, without deleting the bag you were busy with. Forward flow still auto-locks.
+3. **Steps are the focus** — the process stepper sits directly under the header; the mass balance is now a slim secondary strip beneath it (quick glance, not the headline).
+4. **Operator overview** — the overview now shows what the operator captured in their terms: **bag numbers, lot/batch, weight, variant, grade**, grouped as Debagging (blue) / Bagging (orange). System serials show only for IT.
+
+---
+
 ## 2026-06-25 — Alyssa (Live capture: comma decimals, colour-coded jobs, stale handover note)
 
 **Files changed:**

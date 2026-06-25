@@ -511,30 +511,6 @@ function CaptureScreen() {
         <span className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 ${statusColor}`}>{statusLabel}</span>
       </div>
 
-      {/* Mass balance meter */}
-      {totalIn > 0 && (
-        <div className="mx-4 mt-3 mb-1 bg-white border border-stone-200 rounded-2xl p-3.5 flex-shrink-0 shadow-sm">
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
-              Mass balance{multi ? ` · P${activeIdx + 1}` : ''}
-            </span>
-            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-              {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-              {withinTol ? 'Within tolerance' : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
-            </span>
-          </div>
-          <div className="flex items-end gap-3 mb-2.5">
-            <div className="flex-1"><div className="font-mono font-bold text-[20px] text-text leading-none">{totalIn.toFixed(1)}</div><div className="text-[10px] text-text-muted mt-1">kg in</div></div>
-            <div className="flex-1"><div className="font-mono font-bold text-[20px] text-text leading-none">{totalOut.toFixed(1)}</div><div className="text-[10px] text-text-muted mt-1">kg out</div></div>
-            <div className="flex-1"><div className={`font-mono font-bold text-[20px] leading-none ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div><div className="text-[10px] text-text-muted mt-1">variance</div></div>
-          </div>
-          <div className="h-2 rounded-full bg-stone-100 overflow-hidden">
-            <div className={`h-full rounded-full transition-all ${withinTol ? 'bg-ok' : 'bg-warn'}`}
-              style={{ width: `${totalIn > 0 ? Math.min(100, Math.max(4, (totalOut / totalIn) * 100)) : 0}%` }} />
-          </div>
-        </div>
-      )}
-
       {/* Process stepper — the steps the operators actually work through, in order.
           Clickable so they can jump around; current step is highlighted, earlier
           steps read as done. Messages lives in the header, not the flow. */}
@@ -568,6 +544,20 @@ function CaptureScreen() {
           )
         })}
       </div>
+
+      {/* Mass balance — secondary, a quick glance under the steps */}
+      {totalIn > 0 && (
+        <div className="mx-4 mt-2 flex items-center gap-2.5 px-4 py-2 bg-white border border-stone-200 rounded-xl flex-shrink-0 text-[12px]">
+          <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance{multi ? ` · P${activeIdx + 1}` : ''}</span>
+          <span className="font-mono text-stone-600">{totalIn.toFixed(1)} in</span>
+          <span className="text-stone-300">·</span>
+          <span className="font-mono text-stone-600">{totalOut.toFixed(1)} out</span>
+          <span className={`ml-auto inline-flex items-center gap-1.5 font-mono font-bold px-2 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+            {withinTol ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
+          </span>
+        </div>
+      )}
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
@@ -678,6 +668,7 @@ function CaptureScreen() {
                 sectionColor={meta.colorHex}
                 date={dateParam}
                 shift={shift}
+                showSerials={isIT}
               />
             </>
           )}
