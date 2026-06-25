@@ -1,13 +1,13 @@
 'use client'
 
-import { useState } from 'react'
 import { Tag } from 'lucide-react'
-import BatchKeypad from '@/components/count/BatchKeypad'
 
 /**
- * Text field for bag numbers / lot-serials that opens the existing BatchKeypad
- * (the custom A–Z / 0–9 / - / / keypad) as a centred modal. Optional previously-
- * used values show as tappable chips so a batch can be reused without retyping.
+ * Text field for bag numbers / lot-serials. Uses the device's NATIVE keyboard
+ * (no custom on-screen keypad) so it behaves like any normal input. Codes are
+ * upper-cased as typed to match how they're written (e.g. S-135, G-0353).
+ * Optional previously-used values show as tappable chips so a batch can be
+ * reused without retyping.
  */
 export function BatchKeypadField({ value, onChange, label, options = [], placeholder, disabled, className }: {
   value: string
@@ -18,15 +18,24 @@ export function BatchKeypadField({ value, onChange, label, options = [], placeho
   disabled?: boolean
   className?: string
 }) {
-  const [open, setOpen] = useState(false)
   const matches = options.filter(o => o && o !== value).slice(0, 6)
 
   return (
     <div className="space-y-1.5">
-      <button type="button" disabled={disabled} onClick={() => setOpen(true)}
-        className={`${className ?? ''} flex items-center text-left disabled:opacity-60`}>
-        {value || <span className="text-stone-300">{placeholder ?? 'Tap to enter'}</span>}
-      </button>
+      <input
+        type="text"
+        inputMode="text"
+        autoCapitalize="characters"
+        autoCorrect="off"
+        autoComplete="off"
+        spellCheck={false}
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder ?? 'Tap to enter'}
+        onChange={e => onChange(e.target.value.toUpperCase())}
+        className={`${className ?? ''} uppercase placeholder:normal-case placeholder:text-stone-300`}
+      />
 
       {/* Reuse a previous value — only while empty, to keep it tidy */}
       {!value && !disabled && matches.length > 0 && (
@@ -37,19 +46,6 @@ export function BatchKeypadField({ value, onChange, label, options = [], placeho
               <Tag size={11} /> {o}
             </button>
           ))}
-        </div>
-      )}
-
-      {open && !disabled && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(false)}>
-          <div onClick={e => e.stopPropagation()}>
-            <BatchKeypad
-              label={label ?? 'Enter value'}
-              initial={value}
-              onConfirm={v => { onChange(v); setOpen(false) }}
-              onCancel={() => setOpen(false)}
-            />
-          </div>
         </div>
       )}
     </div>
