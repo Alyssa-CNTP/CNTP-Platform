@@ -11,25 +11,11 @@ import {
   type Department, type PermissionKey, type Permissions,
 } from '@/lib/auth/permissions'
 import { PERMISSION_MATRIX } from '@/lib/auth/permission-registry'
-import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Globe, Clock } from 'lucide-react'
+import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Clock } from 'lucide-react'
 
 const ALYSSA_UUID = 'df6cc2b1-c0ec-47ed-bb2e-b07771f3bf0e'
 const JAN_UUID    = 'f73cd225-63f7-4056-918e-f5112c9637e8'
 
-// Cross-department view permissions — shown for users from OTHER departments
-const CROSS_DEPT_PERMISSIONS: { key: PermissionKey; label: string; dept: Department }[] = [
-  { key: 'can_view_management',  label: 'View Management dashboard',     dept: 'Management' },
-  { key: 'can_view_reports',     label: 'View Management reports',        dept: 'Management' },
-  { key: 'can_export_reports',   label: 'Export Management reports',      dept: 'Management' },
-  { key: 'can_view_ops_dashboard', label: 'View Production ops dashboard', dept: 'Production' },
-  { key: 'can_view_live_history',  label: 'View Production live history',  dept: 'Production' },
-  { key: 'can_view_history',     label: 'View Quality historical data',   dept: 'Quality'    },
-  { key: 'can_export_csv',       label: 'Export data to CSV (all depts)', dept: 'Quality'    },
-  { key: 'can_access_sales',     label: 'Access Sales module',            dept: 'Sales'      },
-  { key: 'can_access_research',  label: 'Access Research engine',         dept: 'Sales'      },
-  { key: 'can_access_marketing', label: 'Access Marketing module',        dept: 'Marketing'  },
-  { key: 'can_access_maintenance', label: 'Access Maintenance module',    dept: 'Maintenance' },
-]
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -389,8 +375,13 @@ function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
   onChange:   (key: PermissionKey, value: boolean | null) => void
   readOnly?:  boolean
 }) {
-  const [open, setOpen] = useState<Record<string, boolean>>({})
-  const [crossOpen, setCrossOpen] = useState(false)
+  // Start with own-department groups expanded, cross-department groups collapsed
+  const initOpen = () => {
+    const o: Record<string, boolean> = {}
+    PERMISSION_GROUPS.forEach(g => { o[g.group] = !g.department || g.department === department })
+    return o
+  }
+  const [open, setOpen] = useState<Record<string, boolean>>(initOpen)
   const FONT = { fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, sans-serif' }
 
   function resolved(key: PermissionKey) {
@@ -401,80 +392,133 @@ function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
 
   const totalOverrides = Object.keys(overrides).length
 
-  const relevantGroups = PERMISSION_GROUPS.filter((g: any) =>
-    !g.department || g.department === department
-  )
+  // Own-department groups first, then cross-department, then global (no department)
+  const ownGroups   = PERMISSION_GROUPS.filter(g => g.department === department)
+  const crossGroups = PERMISSION_GROUPS.filter(g => g.department && g.department !== department)
+  const globalGroups= PERMISSION_GROUPS.filter(g => !g.department)
+  const orderedGroups = [...ownGroups, ...globalGroups, ...crossGroups]
 
-  // Cross-department permissions: show items from departments OTHER than user's own
-  const crossDeptPerms = CROSS_DEPT_PERMISSIONS.filter(p => p.dept !== department)
+  function renderGroup(g: typeof PERMISSION_GROUPS[number]) {
+    const { group, permissions: perms, department: gDept } = g
+    const keys    = perms.map(p => p.key)
+    const ovCount = keys.filter(k => k in overrides).length
+    const isOwn   = !gDept || gDept === department
+    const isOpen  = open[group] ?? isOwn
+    const deptMeta= gDept ? DEPARTMENT_META[gDept] : null
 
-  const permDesc: Record<string, string> = {
-    can_delete_records:  'Permanently remove quality records',
-    can_upload_pdfs:     'Upload PDFs and trigger AI data extraction',
-    can_export_csv:      'Download data as spreadsheet',
-    can_manage_users:    'Add, edit and delete platform users',
-    can_reset_passwords: 'Send password reset emails',
-  }
-
-  function renderToggleRow(key: PermissionKey, label: string, desc?: string | null) {
-    const { value, overridden, defaultVal } = resolved(key)
     return (
-      <div key={key} style={{
-        display: 'flex', alignItems: 'center',
-        padding: '10px 14px',
-        borderBottom: '1px solid #F3F4F6',
-        background: overridden ? (value ? '#F0FDF4' : '#FEF2F2') : 'white',
+      <div key={group} style={{
+        border: `1px solid ${isOwn ? '#E5E7EB' : '#E0E7FF'}`,
+        borderRadius: 10, overflow: 'hidden',
       }}>
-        <div style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <span style={{ ...FONT, fontSize: 13, color: '#111827', fontWeight: 500 }}>{label}</span>
-            {overridden && (
-              <span style={{ ...FONT, fontSize: 10, fontWeight: 700, color: value ? '#166534' : '#DC2626' }}>
-                {value ? '↑ granted' : '↓ revoked'}
-              </span>
-            )}
-          </div>
-          {desc && (
-            <div style={{ ...FONT, fontSize: 11, color: '#6B7280', fontStyle: 'italic', marginTop: 1 }}>{desc}</div>
-          )}
-          <div style={{ ...FONT, fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
-            {key} · default:{' '}
-            <span style={{ color: defaultVal ? '#16A34A' : '#9CA3AF', fontWeight: 500 }}>
-              {defaultVal ? 'on' : 'off'}
-            </span>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          {overridden && !readOnly && (
-            <button type="button"
-              onClick={() => onChange(key, null)}
-              style={{ ...FONT, fontSize: 10, padding: '2px 8px', borderRadius: 5, border: '1px solid #E5E7EB', background: 'white', color: '#6B7280', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              reset
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={() => !readOnly && onChange(key, !value)}
-            style={{
-              position: 'relative', width: 40, height: 22, borderRadius: 11,
-              border: 'none', cursor: readOnly ? 'not-allowed' : 'pointer',
-              background: value ? '#16A34A' : '#D1D5DB',
-              opacity: readOnly ? 0.5 : 1,
-              transition: 'background 150ms',
-              flexShrink: 0,
-            }}
-            aria-checked={value}
+        <div style={{ background: isOwn ? '#FAFAFA' : '#F5F7FF', borderBottom: isOpen ? `1px solid ${isOwn ? '#E5E7EB' : '#E0E7FF'}` : 'none' }}>
+          <div
+            role="button" tabIndex={0}
+            onClick={() => setOpen(p => ({ ...p, [group]: !isOpen }))}
+            onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setOpen(p => ({ ...p, [group]: !isOpen }))}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 6px', cursor: 'pointer', userSelect: 'none' }}
           >
-            <span style={{
-              position: 'absolute', top: 3, width: 16, height: 16,
-              borderRadius: '50%', background: 'white',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-              transition: 'left 150ms',
-              left: value ? 21 : 3,
-            }} />
-          </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ ...FONT, fontSize: 13, fontWeight: 600, color: '#111827' }}>{group}</span>
+              {deptMeta && (
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold border ${deptMeta.color}`}>
+                  {deptMeta.label}
+                </span>
+              )}
+              {!isOwn && (
+                <span style={{ ...FONT, fontSize: 10, color: '#6366F1', fontStyle: 'italic' }}>cross-department</span>
+              )}
+              {ovCount > 0 && (
+                <span style={{ ...FONT, fontSize: 10, fontWeight: 700, color: '#D97706', background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 20, padding: '1px 7px' }}>
+                  {ovCount} override{ovCount > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            {isOpen ? <ChevronUp size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} /> : <ChevronDown size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} />}
+          </div>
+          {!readOnly && (
+            <div style={{ display: 'flex', gap: 6, padding: '0 14px 10px' }} onClick={e => e.stopPropagation()}>
+              <button type="button"
+                onClick={() => keys.forEach(k => onChange(k, true))}
+                style={{ ...FONT, fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 6, border: '1px solid #86EFAC', background: '#F0FDF4', color: '#166534', cursor: 'pointer' }}>
+                All on
+              </button>
+              <button type="button"
+                onClick={() => keys.forEach(k => onChange(k, false))}
+                style={{ ...FONT, fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer' }}>
+                All off
+              </button>
+              <button type="button"
+                onClick={() => keys.forEach(k => onChange(k, null))}
+                style={{ ...FONT, fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 6, border: '1px solid #E5E7EB', background: 'white', color: '#6B7280', cursor: 'pointer' }}>
+                Reset
+              </button>
+            </div>
+          )}
         </div>
+        {isOpen && (
+          <div>
+            {perms.map(({ key, label }) => {
+              const { value, overridden, defaultVal } = resolved(key)
+              return (
+                <div key={key} style={{
+                  display: 'flex', alignItems: 'center',
+                  padding: '10px 14px',
+                  borderBottom: '1px solid #F3F4F6',
+                  background: overridden ? (value ? '#F0FDF4' : '#FEF2F2') : 'white',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ ...FONT, fontSize: 13, color: '#111827', fontWeight: 500 }}>{label}</span>
+                      {overridden && (
+                        <span style={{ ...FONT, fontSize: 10, fontWeight: 700, color: value ? '#166534' : '#DC2626' }}>
+                          {value ? '↑ granted' : '↓ revoked'}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ ...FONT, fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+                      {key} · default:{' '}
+                      <span style={{ color: defaultVal ? '#16A34A' : '#9CA3AF', fontWeight: 500 }}>
+                        {defaultVal ? 'on' : 'off'}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    {overridden && !readOnly && (
+                      <button type="button"
+                        onClick={() => onChange(key, null)}
+                        style={{ ...FONT, fontSize: 10, padding: '2px 8px', borderRadius: 5, border: '1px solid #E5E7EB', background: 'white', color: '#6B7280', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        reset
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={readOnly}
+                      onClick={() => !readOnly && onChange(key, !value)}
+                      style={{
+                        position: 'relative', width: 40, height: 22, borderRadius: 11,
+                        border: 'none', cursor: readOnly ? 'not-allowed' : 'pointer',
+                        background: value ? '#16A34A' : '#D1D5DB',
+                        opacity: readOnly ? 0.5 : 1,
+                        transition: 'background 150ms',
+                        flexShrink: 0,
+                      }}
+                      aria-checked={value}
+                    >
+                      <span style={{
+                        position: 'absolute', top: 3, width: 16, height: 16,
+                        borderRadius: '50%', background: 'white',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                        transition: 'left 150ms',
+                        left: value ? 21 : 3,
+                      }} />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     )
   }
@@ -482,158 +526,22 @@ function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-      {/* Header bar */}
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ ...FONT, fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Permission Overrides
-        </span>
-        <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF' }}>
-          {totalOverrides} override{totalOverrides !== 1 ? 's' : ''} from role default
+        <div>
+          <span style={{ ...FONT, fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            All permissions — including cross-department
+          </span>
+          <div style={{ ...FONT, fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+            Own-department groups are expanded. Cross-department groups are collapsed — open any to grant access to other modules.
+          </div>
+        </div>
+        <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF', flexShrink: 0, marginLeft: 12 }}>
+          {totalOverrides} override{totalOverrides !== 1 ? 's' : ''}
         </span>
       </div>
 
-      {relevantGroups.map(({ group, permissions: perms }: typeof PERMISSION_GROUPS[number]) => {
-        const keys    = perms.map((p: { key: PermissionKey; label: string }) => p.key)
-        const ovCount = keys.filter((k: PermissionKey) => k in overrides).length
-        const isOpen  = open[group] ?? false
-
-        return (
-          <div key={group} style={{ border: '1px solid #E5E7EB', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
-              <div
-                role="button" tabIndex={0}
-                onClick={() => setOpen(p => ({ ...p, [group]: !p[group] }))}
-                onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setOpen(p => ({ ...p, [group]: !p[group] }))}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 6px', cursor: 'pointer', userSelect: 'none' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ ...FONT, fontSize: 13, fontWeight: 600, color: '#111827' }}>{group}</span>
-                  {ovCount > 0 && (
-                    <span style={{ ...FONT, fontSize: 10, fontWeight: 700, color: '#D97706', background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 20, padding: '1px 7px' }}>
-                      {ovCount} override{ovCount > 1 ? 's' : ''}
-                    </span>
-                  )}
-                </div>
-                {isOpen ? <ChevronUp size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} /> : <ChevronDown size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} />}
-              </div>
-              {!readOnly && (
-                <div style={{ display: 'flex', gap: 6, padding: '0 14px 10px' }} onClick={e => e.stopPropagation()}>
-                  <button type="button"
-                    onClick={() => keys.forEach((k: PermissionKey) => onChange(k, true))}
-                    style={{ ...FONT, fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 6, border: '1px solid #86EFAC', background: '#F0FDF4', color: '#166534', cursor: 'pointer' }}>
-                    All on
-                  </button>
-                  <button type="button"
-                    onClick={() => keys.forEach((k: PermissionKey) => onChange(k, false))}
-                    style={{ ...FONT, fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer' }}>
-                    All off
-                  </button>
-                  <button type="button"
-                    onClick={() => keys.forEach((k: PermissionKey) => onChange(k, null))}
-                    style={{ ...FONT, fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 6, border: '1px solid #E5E7EB', background: 'white', color: '#6B7280', cursor: 'pointer' }}>
-                    Reset
-                  </button>
-                </div>
-              )}
-            </div>
-            {isOpen && (
-              <div>
-                {perms.map(({ key, label }: { key: PermissionKey; label: string }) =>
-                  renderToggleRow(key, label, permDesc[key as string] ?? null)
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-
-      {/* Cross-department view access section */}
-      {crossDeptPerms.length > 0 && (
-        <div style={{ border: '1px solid #BFDBFE', borderRadius: 10, overflow: 'hidden', marginTop: 4 }}>
-          <div style={{ background: '#EFF6FF', borderBottom: crossOpen ? '1px solid #BFDBFE' : 'none' }}>
-            <div
-              role="button" tabIndex={0}
-              onClick={() => setCrossOpen(o => !o)}
-              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setCrossOpen(o => !o)}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', cursor: 'pointer', userSelect: 'none' }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Globe size={14} style={{ color: '#2563EB' }} />
-                <span style={{ ...FONT, fontSize: 13, fontWeight: 600, color: '#1E40AF' }}>Cross-department view access</span>
-                <span style={{ ...FONT, fontSize: 10, color: '#60A5FA', fontStyle: 'italic' }}>
-                  Allow this user to view dashboards from other departments
-                </span>
-                {crossDeptPerms.filter(p => p.key in overrides && overrides[p.key]).length > 0 && (
-                  <span style={{ ...FONT, fontSize: 10, fontWeight: 700, color: '#1D4ED8', background: '#DBEAFE', border: '1px solid #BFDBFE', borderRadius: 20, padding: '1px 7px' }}>
-                    {crossDeptPerms.filter(p => p.key in overrides && overrides[p.key]).length} granted
-                  </span>
-                )}
-              </div>
-              {crossOpen ? <ChevronUp size={14} style={{ color: '#60A5FA', flexShrink: 0 }} /> : <ChevronDown size={14} style={{ color: '#60A5FA', flexShrink: 0 }} />}
-            </div>
-          </div>
-          {crossOpen && (
-            <div>
-              {crossDeptPerms.map(({ key, label, dept }) => {
-                const m = DEPARTMENT_META[dept]
-                const { value, overridden, defaultVal } = resolved(key)
-                return (
-                  <div key={key} style={{
-                    display: 'flex', alignItems: 'center',
-                    padding: '10px 14px',
-                    borderBottom: '1px solid #F0F9FF',
-                    background: overridden && value ? '#EFF6FF' : 'white',
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <span style={{ ...FONT, fontSize: 13, color: '#111827', fontWeight: 500 }}>{label}</span>
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold border ${m.color}`}>{m.label}</span>
-                        {overridden && value && (
-                          <span style={{ ...FONT, fontSize: 10, fontWeight: 700, color: '#1D4ED8' }}>↑ granted</span>
-                        )}
-                      </div>
-                      <div style={{ ...FONT, fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
-                        {key} · default: <span style={{ color: defaultVal ? '#16A34A' : '#9CA3AF', fontWeight: 500 }}>{defaultVal ? 'on' : 'off'}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                      {overridden && !readOnly && (
-                        <button type="button"
-                          onClick={() => onChange(key, null)}
-                          style={{ ...FONT, fontSize: 10, padding: '2px 8px', borderRadius: 5, border: '1px solid #E5E7EB', background: 'white', color: '#6B7280', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                          reset
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={readOnly}
-                        onClick={() => !readOnly && onChange(key, !value)}
-                        style={{
-                          position: 'relative', width: 40, height: 22, borderRadius: 11,
-                          border: 'none', cursor: readOnly ? 'not-allowed' : 'pointer',
-                          background: value ? '#2563EB' : '#D1D5DB',
-                          opacity: readOnly ? 0.5 : 1,
-                          transition: 'background 150ms',
-                          flexShrink: 0,
-                        }}
-                        aria-checked={value}
-                      >
-                        <span style={{
-                          position: 'absolute', top: 3, width: 16, height: 16,
-                          borderRadius: '50%', background: 'white',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-                          transition: 'left 150ms',
-                          left: value ? 21 : 3,
-                        }} />
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      {orderedGroups.map(renderGroup)}
     </div>
   )
 }
@@ -892,44 +800,27 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
           {tab === 'permissions' && (
             <div>
               <div style={{ background: 'white', border: '1px solid #E5E7EB', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-                <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 12 }}>
+                <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 4 }}>
                   What this person will be able to access
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                  <div>
-                    <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6B7280', marginBottom: 6 }}>Primary modules</div>
-                    <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {dept === 'IT' && ['Operations', 'Logistics', 'Quality', 'Sales', 'Management', 'Maintenance', 'AXIS'].map(m => (
-                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
-                      ))}
-                      {dept === 'Production' && ['Operations', 'Logistics', 'Maintenance (Job Cards)'].map(m => (
-                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
-                      ))}
-                      {dept === 'Quality' && ['Quality', 'Operations'].map(m => (
-                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
-                      ))}
-                      {dept === 'Maintenance' && ['Maintenance'].map(m => (
-                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
-                      ))}
-                      {dept === 'Sales' && ['Sales'].map(m => (
-                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
-                      ))}
-                      {dept === 'Management' && ['Management', 'Sales (read)', 'Maintenance'].map(m => (
-                        <li key={m} style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151' }}>· {m}</li>
-                      ))}
-                      {!['IT','Production','Quality','Sales','Management','Maintenance'].includes(dept) && (
-                        <li style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#9CA3AF' }}>Select a department above</li>
-                      )}
-                    </ul>
-                  </div>
-                  <div>
-                    <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6B7280', marginBottom: 6 }}>Action permissions</div>
-                    <p style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, color: '#374151', margin: 0, lineHeight: 1.5 }}>
-                      {effectiveRole
-                        ? <>Role <strong>{effectiveRole.replace(/_/g, ' ')}</strong> has {overrideCount > 0 ? `${overrideCount} override${overrideCount !== 1 ? 's' : ''} from` : 'the'} role defaults. Toggle individual actions below.</>
-                        : 'No role selected. Set a role on the Details tab to see default permissions.'}
-                    </p>
-                  </div>
+                <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#6B7280', marginBottom: 12, lineHeight: 1.4 }}>
+                  Department determines their home module. Permissions control every specific action — including granting view access to other modules. Toggle permissions below to expand or restrict access.
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#374151', fontWeight: 600 }}>Department:</span>
+                  {dept ? (
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${DEPARTMENT_META[dept].color}`}>
+                      {DEPARTMENT_META[dept].label}
+                    </span>
+                  ) : <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#9CA3AF' }}>not set</span>}
+                  <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#374151', fontWeight: 600, marginLeft: 8 }}>Role:</span>
+                  <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#374151' }}>
+                    {effectiveRole ? effectiveRole.replace(/_/g, ' ') : <span style={{ color: '#9CA3AF' }}>not set</span>}
+                  </span>
+                  <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#374151', fontWeight: 600, marginLeft: 8 }}>Overrides:</span>
+                  <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: overrideCount > 0 ? '#D97706' : '#9CA3AF' }}>
+                    {overrideCount > 0 ? `${overrideCount} custom` : 'none — using role defaults'}
+                  </span>
                 </div>
               </div>
               {/* View toggle: master matrix (default) vs detailed grouped list */}
