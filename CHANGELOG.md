@@ -5,6 +5,236 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-26 — Alyssa (Home/floor-plan polish: login-image backdrop, richer graphics, weather → Home, dashboard leads with graphs)
+
+**Files changed:** `app/(app)/home/page.tsx`, `components/home/HomeIsometric.tsx`, `components/production/FactoryFloorPlan.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Home background** is now the **login photo** (`/rooibos-hero.png`) at low opacity, instead of the cargo illustration.
+- **Weather moved to the Home page** (beside the greeting) and **removed from the Production dashboard**.
+- **Home isometric is more graphical**: added a production line (teal/blue/orange machines + conveyor), silos, a delivery truck at the door, a forklift, pallets and trees, plus soft floor shadows and a warmer palette — still no numbers/KPIs.
+- **Production floor plan is a nicer layout**: building shell with soft shadow, tinted Rosehips zone + zone labels, gradient-filled rounded bays, styled doors — instead of plain grey boxes.
+- **Production dashboard now leads with the metrics + graphs**: removed the big quick-actions/weather row from the top; quick links are a small chip strip lower down (Capture · Supervisor Hub · Shift Rosters · Floor Plan).
+
+---
+
+## 2026-06-25 — Alyssa (Sidebar overhaul · about-style Home with isometric factory · dashboard filters · floor plan → Production)
+
+**Navigation & access** — `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/departments.ts`, `lib/auth/roleHome.ts`, `app/(app)/dashboard/page.tsx`
+- **Command Centre removed.** `/dashboard` now redirects to `/home`; all post-login defaults and guard fall-throughs point to `/home`.
+- **Sidebar reordered** to Production → Operations → Quality → Maintenance → Sales → Marketing → Logistics → Management → Workspace → AXIS → Admin (Settings, Users & Roles last).
+- **Home** pulled out of Operations into a standalone item at the top.
+- **Shift Rosters** is now its own Operations page (universal/always-open), next to Bag Tracking; **Bag Tracking** opened to Production + Quality.
+- **Floor Plan** added to the Production hub (`ProductionTabs` is now Dashboard + Floor Plan); the old Analytics and Planning hub tabs were removed (Analytics folded into the dashboard; roster moved to Operations).
+
+**Home page** — `app/(app)/home/page.tsx`, `components/home/HomeIsometric.tsx` (new), `public/iso-cargo-bg.avif` (new)
+- Rebuilt as an app-style **about page**: full-page isometric cargo backdrop (low opacity) with frosted-glass cards — greeting, About us, company links (website rich preview + branded Facebook/Instagram), help. Quick links removed.
+- New **pretty isometric drawing of the factory** (`HomeIsometric`), generated from the real bay layout but deliberately showing no numbers/KPIs — just an illustration (with a delivery truck + pallets).
+
+**Floor plan → Production** — `components/production/FactoryFloorPlan.tsx` (moved from `components/home/`), `app/(app)/production/floor-plan/page.tsx` (new)
+- The accurate, **dimensioned** civil floor plan (bays to scale, capacities, live activity, ~126 m × 47 m footprint) now lives under Production → Floor Plan.
+
+**Production dashboard** — `components/production/ProductionDashboard.tsx`, `app/(app)/production/{operations,roster,staff}/page.tsx`
+- **Filterable**: trend window selector (7 / 14 / 30 days). **Colour-coded** KPI cards (accent border + tinted value per tone). **Analytics folded in** via the existing `OperationalTrends` (yield · count reliability · inventory velocity). **Section status moved to the very bottom**, as requested.
+
+**Deferred (next):** links to quality-in-production by batch number (bigger build), and the OEE/downtime/scrap capture.
+
+---
+
+## 2026-06-25 — Alyssa (Smart factory floor plan on the home page)
+
+**Files changed:**
+- `lib/home/floorplan-data.ts` (new) — the real warehouse layout auto-derived from `Stock Floor Plan SdB 15012025.xlsx` (Insurance sheet): 128 storage bays to scale with kg capacities, Rooibos vs Rosehips zones, doors and the Packaging area. Coordinates in cm; regenerate from the sheet if the layout changes.
+- `components/home/FactoryFloorPlan.tsx` (new) — interactive SVG of the plan (hover a bay for its capacity), a Rooibos/Rosehips/total capacity summary, and a live activity layer: sections running today and open breakdowns, with breakdown markers placed on the map by zone.
+- `app/api/home/overview/route.ts` (new) — service-role ambient feed (so every role sees it): sections active today (from `prod_sessions`) + open breakdowns (from `maintenance.job_cards`). Returns only counts/labels, no sensitive figures.
+- `app/(app)/home/page.tsx` — floor plan added as the centrepiece, under the hero.
+
+**Changes:**
+- Replaces the old (inaccurate) `WarehouseMap` for the home view with the **accurate** plan straight from the insurance spreadsheet — so it matches the building.
+- The map shows what's happening on the floor without exposing detail: which sections are running and where breakdowns are. Because this is a **storage** plan, production-line breakdowns can't be placed exactly — markers sit by zone (approx) and everything is also listed.
+- **Per-bay live stock is not wired yet** — there's no bay↔database link (`bag_tags.location` is free text; no bay table). Next step for that is a small admin screen to assign each bay a location; then bays can colour by what's actually stored.
+
+---
+
+## 2026-06-25 — Alyssa (Home page redesign + live Production Dashboard)
+
+**Files changed:**
+- `app/(app)/home/page.tsx` — rebuilt as the company landing page: glass hero over the brand photo (`/rooibos-hero.png`), greeting, a live WhatsApp-style rich preview of the company website, branded Facebook/Instagram cards, and quick links
+- `app/(app)/production/dashboard/page.tsx` — replaced the blank editable-widget board (no live data) with the new live cockpit
+- `components/production/ProductionDashboard.tsx` (new) — production manager's cockpit: live KPIs (output kg, bags, yield %, sections running, sign-offs pending, balance flags, open breakdowns), interactive Recharts (daily output, sessions/day, yield by section, overall yield trend, status pie, output by section), today's section-status table, solar widget, breakdowns affecting production, and the AI analyst
+- `components/production/WeatherTile.tsx` (new) — factory weather via Open-Meteo
+- `components/maintenance/AiAnalystPanel.tsx` — parameterised endpoints/title/cache key so the same panel serves both the maintenance and production dashboards (defaults unchanged)
+- `app/api/weather/route.ts` (new) — Open-Meteo current conditions + 3-day forecast for Blackheath (no API key, no signup)
+- `app/api/link-preview/route.ts` (new) — server-side Open Graph fetch for rich link previews, allow-listed to `rooibostea.co.za`
+- `app/api/production/dashboard-insights/route.ts` (new) — Gemini production analyst (structured insights), mirrors the maintenance analyst contract
+- `app/api/production/ask/route.ts` (new) — Gemini follow-up chat over production aggregates
+
+**Changes:**
+- **Home page** is now a true landing page rather than a placeholder: greeting, company links, and the site links rendered as a live rich preview (website) / branded cards (Facebook `@capenatural`, Instagram `@capenatural`). FB/IG use branded cards because those sites serve a login wall to server bots and don't return usable preview metadata.
+- **Production dashboard** now pulls live data from the capture tables (`prod_sessions`, `prod_mass_balance`, `bag_tags`) and `maintenance.job_cards`, with interactive charts, an AI analyst, factory weather, and solar.
+- **OEE, downtime/stoppages and scrap rate** are intentionally shown as "coming next" — they need machine run-time, stoppage reasons and reject weights that the floor doesn't capture yet (added in a later phase). The smart factory floor plan is also a later phase.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: one batch card + native keyboard for bag no. / lot-serial)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx` (combined batch card; mandatory variant/grade)
+- `components/production/capture/BatchKeypadField.tsx` (native keyboard, custom keypad removed)
+
+**Changes:**
+- **Variant, grade and the live mass balance are now one card** at the top of the Capture step, so the screen reads as three cards (Batch · Debagging · Bagging) instead of several loose headers. The standalone mass-balance card was folded into this card and appears once material goes in.
+- **Variant and grade are now a mandatory, deliberate choice** — they no longer silently default to Export / Conventional. Both show a `Select…` placeholder (amber-outlined until chosen), and the debagging/bagging sections only open once both are set. A variant set by the supervisor at assignment time still pre-fills.
+- **Bag no. and lot/serial use the device's native keyboard again** — the custom on-screen keypad modal is gone; the field is a normal input (auto-uppercased so codes read like `S-135`, `G-0353`). The "reuse a previous batch" chips are kept.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: custom keypad for bag no. / lot-serial)
+
+**Files changed:**
+- `components/production/capture/BatchKeypadField.tsx` (new — opens the existing BatchKeypad)
+- `components/production/capture/SievingCapture.tsx`, `OutputPicker.tsx` (bag no. / lot / batch use it)
+
+**Changes:**
+- **Bag number and lot/serial now open the existing custom keypad** (`components/count/BatchKeypad`) as a centred modal — A–Z, 0–9 and the serial characters. Previously-used batches still show as tappable chips when the field is empty.
+- **Weights (nett, spillage, output) stay on the native keyboard** (numbers + comma → stored as a clean decimal), unchanged.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: revert custom keypad; section-coloured bags; standalone mass balance)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (removed)
+- `components/production/capture/SievingCapture.tsx` (native inputs; blue/orange bags; ungrouped tiles)
+- `components/production/capture/OutputPicker.tsx` (native weight input)
+- `app/(app)/production/capture/[section]/page.tsx` (mass-balance card with scale icon)
+
+**Changes:**
+- **Removed the custom keypad** — capture fields use the device's own keyboard again (number fields still accept a comma and store a clean decimal).
+- **Bags carry the section colour** — Debagging bulk bags are **blue**, Bagging output bags are **amber/orange**, so each list clearly belongs to the section you tapped. The two section tiles stay separate (not merged into one card).
+- **Mass balance is its own block** — a single cohesive card with a **balance/scale icon** showing in / out / variance, sitting under the steps.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture polish: full-screen keypad, grouped balance, bold steps, mandatory fields)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (full-screen + physical-keyboard support)
+- `components/production/capture/SievingCapture.tsx` (balance grouped with the tiles; mandatory bag fields)
+- `app/(app)/production/capture/[section]/page.tsx` (bold stepper; removed the separate balance strip)
+
+**Changes:**
+- **Full-screen keypad** — the capture keypad now fills the screen on tablet/phone with large keys, and is fully usable on a laptop: the **physical keyboard is wired in** (type digits/letters, comma or dot for the decimal, Backspace, Enter/Esc to finish).
+- **Balance grouped with the jobs** — the bold Debagging (blue) / Bagging (orange) tiles and the running mass balance now sit in **one card**, so the in/out/variance reads as a single block. Removed the separate balance strip.
+- **Bold steps** — the process stepper is bolder and larger (the primary focus of the screen).
+- **Mandatory fields** — a bulk bag can't be locked until **bag no., lot and weight** are all filled (it shows what's still missing); output bags already require their fields. Variant and grade are always set per production.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: on-screen keypad, edit re-lock, focus on steps, operator overview)
+
+**Files changed:**
+- `components/production/capture/CaptureKeypad.tsx` (new — on-screen keypad)
+- `components/production/capture/SievingCapture.tsx` (keypad fields; Done re-lock for bags + bucket elevator)
+- `components/production/capture/OutputPicker.tsx` (keypad for weight)
+- `components/production/capture/CaptureOverview.tsx` (operator-readable overview, blue/orange)
+- `app/(app)/production/capture/[section]/page.tsx` (steps primary, mass balance secondary; IT-only serials)
+
+**Changes:**
+1. **On-screen keypad** — capture fields (nett, spillage, output weight, bag no.) now open a custom keypad instead of the device keyboard: a numeric pad with a **comma decimal** for weights, and an A–Z / 0–9 / `-` / `/` pad for bag numbers. (Lot/serial keeps its type-ahead chips.)
+2. **Edit re-locks cleanly** (#4/#5) — an open bulk bag and the bucket elevator each have a **"Done — lock"** button, so after editing a previous bag you can re-secure it directly and carry on, without deleting the bag you were busy with. Forward flow still auto-locks.
+3. **Steps are the focus** — the process stepper sits directly under the header; the mass balance is now a slim secondary strip beneath it (quick glance, not the headline).
+4. **Operator overview** — the overview now shows what the operator captured in their terms: **bag numbers, lot/batch, weight, variant, grade**, grouped as Debagging (blue) / Bagging (orange). System serials show only for IT.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: comma decimals, colour-coded jobs, stale handover note)
+
+**Files changed:**
+- `components/production/capture/SievingCapture.tsx` (comma→decimal; colour-coded Debagging/Bagging)
+- `components/production/capture/OutputPicker.tsx` (weight accepts comma)
+- `app/(app)/production/capture/[section]/page.tsx` (comma→decimal; handover-note recency)
+
+**Changes:**
+1. **Comma decimals captured correctly** — SA operators type the decimal as a comma (`1200,5`). The weight/spillage fields now accept a comma (text input + decimal keypad), and every captured number is normalised comma→period before parsing, so the **database always stores a clean decimal**.
+2. **Debagging vs Bagging colour-coded** — the two job tiles now use two bold, distinct colours (blue = Debagging/in, amber = Bagging/out); the active one fills with its colour, so on a small screen the operator can see at a glance which job they're on.
+3. **Stale handover note removed** — the line handover note only shows when it's from a genuinely recent shift (last 7 days). Old seed/demo notes (e.g. the 15 Mar "DEMO-MONTHLY-SEED") no longer persist.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: no-printer "Complete bag" + checks-first routine)
+
+**Files changed:**
+- `lib/production/capture-config.ts` (`LABEL_PRINTING_ENABLED` flag, default off)
+- `components/production/capture/OutputPicker.tsx` ("Complete bag" vs "Add & print")
+- `components/production/capture/SievingCapture.tsx` (skip print; prominent serial to hand-write)
+- `app/(app)/production/capture/[section]/page.tsx` (open on Checks; capture gate; stepper tick)
+
+**Changes:**
+- **No printer needed for testing** — capture no longer depends on a label printer. With `LABEL_PRINTING_ENABLED = false`, the output picker reads **"Complete bag"** (no print round-trip — straight back to add the next bag) and each completed bag shows its **serial in bold for hand-writing on the bag**. Flip the flag to `true` when a printer is wired up — no other changes.
+- **The system now guides the routine** — a fresh shift **opens on the Checks tab** (start-up) instead of jumping into Capture. The Capture tab leads with a clear **"Start with your machine checks"** gate (strong but overridable — capture is still available below), and the **Checks step in the stepper ticks green once checks are signed**.
+- **Lost tags** (design): rather than a manual "reissue" step, the system serial stays canonical and re-findable; when sections are linked, downstream input will be **selected from the upstream bag list** (not retyped), so a lost paper tag is harmless and needs nothing extra to remember.
+
+---
+
+## 2026-06-25 — Alyssa (Live capture: guide non-technical operators — checks progress, auto-secure, timestamps, FT-Conventional)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx` (per-phase progress + per-check status pills)
+- `components/production/capture/SievingCapture.tsx` (auto-secure bags, lock bucket elevator, log timestamps)
+- `lib/production/capture-config.ts`, `lib/supabase/database.types.ts` (FT-Conventional variant)
+- `supabase/migrations/20260623_004_variant_ft_conventional.sql` (new — widen variant CHECK)
+
+**Changes (from observing real operators on the floor):**
+1. **Checks now show what's filled in** — each phase (Start-up / Running / Shut-down) shows a progress badge ("2 of 3 done · 1 to fill in") and every check carries a status pill (To fill in / Logged / OK / Flagged), so an operator can see at a glance whether start-up is complete.
+2. **Bucket elevator locks per grade** — once the operator finishes the inbound step (moves to Bagging), the bucket-elevator spillage is logged and locked to a read-only summary; it only re-opens via Edit, and a new grade starts fresh.
+3. **Fairtrade Conventional** added to the variant list (DB CHECK widened to allow `FT-CON`).
+4. **Bag timestamps** — every bulk bag and output bag records and shows the time it was logged (SAST), to reconcile captured-vs-paper.
+5. **Auto-secure** — bags secure themselves when finished (output bags on add; bulk bags when the next is added or the operator moves on), instead of needing a manual "secure" tap. Edit/Unlock still available.
+- **Run on the DB (staging + prod):** `20260623_004_variant_ft_conventional.sql`.
+
+---
+
+## 2026-06-25 — Alyssa (Login: SSO-only — remove the email/password form)
+
+**Files changed:**
+- `app/login/page.tsx` — removed the email/password form, the "or sign in with email" divider, the `handleSubmit` password flow, and the now-unused `loading`/`signIn` wiring; updated footer copy to "Sign in with your @rooibostea.co.za Microsoft account"
+
+**Changes:**
+- **Root cause:** users hit `400 (Bad Request)` on `/auth/v1/token?grant_type=password`. `signInWithPassword` only validates a **Supabase-stored** password, but most accounts are SSO-provisioned (Azure-only, via the 2026-06-23 auth reconcile) and have no Supabase password — and Microsoft never exposes its password, so the email/password box can never authenticate a Microsoft user. The form was a dead path producing the errors.
+- **Fix:** `/login` is now **Microsoft SSO only** ("Continue with work account"). This is the existing, working production flow: SSO auto-creates the Supabase account on first sign-in, admins then assign a role in `/users` (`shared.app_roles`). Floor-operator PIN login (`/floor`) is unchanged.
+- **Still to do on production deploy:** fix `NEXT_PUBLIC_SITE_URL` in production `.env.local` (currently points at the staging host) so the new-user role-assignment email links to production.
+
+---
+
+## 2026-06-25 — Gustav (Lab results: heavy metals Aluminum+Copper, PA tab results, datetime stamps, None detected)
+
+**Files changed:**
+- `app/(app)/quality/lab-results/page.tsx`
+- `app/api/upload/route.ts`
+
+**Changes:**
+- Heavy metals Gemini extraction prompt: now explicitly extracts ALL metals from the COA including Aluminum and Copper (was only extracting Lead, Cadmium, Mercury, Arsenic). Added instruction for "None detected" on ND values.
+- PA/TA Final Gemini prompt (`pa_final`): completely revised to return results as an `analytes[]` array instead of flat fields, so actual PA values now appear in the table.
+- `lab-results/page.tsx` COLS: added `pa_final` column definition — the PA tab previously had no column definitions so showed an empty table even with data.
+- `expandRecord`: added backwards-compatible handler for existing PA records stored in old flat format (`total_pa_eu`, `total_pa_bfr28`, etc.) — converts them to analyte rows on the fly.
+- `expandRecord`: null/empty analyte results now display as "None detected" instead of a dash.
+- Date columns: all `created_at` timestamps in the lab results tables (main table, export CSV, historical table) now show date **and time** (`dd MMM yyyy HH:mm`) instead of date only.
+
+---
+
+## 2026-06-25 — Gustav (Pasteuriser: avg customer BD in history table + Excel exports)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `lib/utils/exportExcel.ts`
+
+**Changes:**
+- Added "Avg Cust BD" column to the History & Performance table, showing the average customer bulk density across all MB samples for each completed batch.
+- Added `Avg Customer BD` to the Daily Averages sheet and Batch Summary sheet in the per-batch Excel export (`exportPasteuriserBatch`).
+- Added `Avg Customer BD` to the Batch Summary sheet in the combined historical export (`exportPasteuriserBatches`), with correct number format (integer).
+
+---
+
 ## 2026-06-24 — Gustav (maintenance: per-raiser tabs on Job Cards — IT + manager only)
 
 **Files changed:**

@@ -6,6 +6,6 @@ export function roleHome(role: string | null): string {
     case 'admin':
     case 'supervisor':
     case 'management':
-    default:           return '/dashboard'
+    default:           return '/home'
   }
 }

@@ -14,7 +14,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
-  CalendarCheck, CalendarRange, Activity,
+  CalendarCheck, CalendarRange, Activity, Map,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -31,29 +31,23 @@ interface NavItem {
   orPermission?: boolean
 }
 
+// Group order is driven by first-appearance below:
+// Production → Operations → Quality → Maintenance → Sales → Marketing →
+// Logistics → Management → Workspace → AXIS → Admin.
+// Home is rendered as a standalone item above the groups (see render).
 const NAV: NavItem[] = [
-  // Everyday, cross-role entries.
-  { href: '/home',                      label: 'Home',                       icon: Home,            group: 'Operations' },
-  { href: '/dashboard',                 label: 'Command Centre',             icon: LayoutDashboard, group: 'Operations' },
-  { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production'] },
-
-  // Production — capture work & oversight.
-  { href: '/production/dashboard',       label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
+  // ── Production — capture work & oversight ──
+  { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
-  // Supervisor hub — module nav (Timesheets, Productions, Calendar, Messages,
-  // Assign) lives in the in-page tabs to keep the sidebar lean.
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/floor-plan',     label: 'Floor Plan',                 icon: Map,             group: 'Production', departments: ['Production','Management'] },
 
-  // Analytics (was Production Control) + Planning (Shift Roster + Staff Directory)
-  // now live as tabs inside the Production Dashboard hub (components/production/
-  // ProductionTabs), so they're no longer separate sidebar entries.
+  // ── Operations — cross-role, universal entries ──
+  { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations' },
+  { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
 
-  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'] },
-  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'] },
-  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'] },
-  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'] },
-
+  // ── Quality ──
   { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
   { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
   { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
@@ -61,17 +55,14 @@ const NAV: NavItem[] = [
   { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['Quality'], permission: 'can_upload_pdfs' },
   { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['Quality'], permission: 'can_add_sieving_runs' },
 
-  // Maintenance — own section. Full module is Maintenance + Management.
-  // Production sees ONLY Job Cards (to report breakdowns + track their own cards).
+  // ── Maintenance — full module is Maintenance + Management; Production sees only Job Cards ──
   { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
-  { href: '/maintenance/job-cards',      label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
-  { href: '/maintenance/scheduled',      label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
-  { href: '/maintenance/planner',        label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
-  { href: '/maintenance/stock',          label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/job-cards',     label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/scheduled',     label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/planner',       label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/stock',         label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
 
-  { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },
-  { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['Management'], permission: 'can_view_management' },
-
+  // ── Sales ──
   { href: '/sales',                     label: 'Sales Dashboard',            icon: TrendingUp,      group: 'Sales', departments: ['Sales','Management'], permission: 'can_access_sales' },
   { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/linkedin',     label: 'LinkedIn',                   icon: Network,         group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
@@ -79,11 +70,24 @@ const NAV: NavItem[] = [
   { href: '/intelligence',              label: 'Signal Engine',              icon: Radio,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
 
+  // ── Marketing ──
   { href: '/marketing',                 label: 'Marketing Hub',              icon: Sparkles,        group: 'Marketing', departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
   { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['Marketing','Sales','Management'], permission: 'can_access_intelligence' as PermissionKey },
 
+  // ── Logistics ──
+  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'] },
+
+  // ── Management ──
+  { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },
+  { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['Management'], permission: 'can_view_management' },
+
+  // ── Workspace ──
   { href: '/workspace',                 label: 'My Workspace',               icon: Flower2,         group: 'Workspace', permission: 'can_access_workspace' as PermissionKey },
 
+  // ── AXIS — IT change & project tracking (last module group) ──
   { href: '/axis',                      label: 'AXIS Dashboard',             icon: FolderKanban,    group: 'AXIS', itOnly: true },
   { href: '/axis/changelog',            label: 'Change Log',                 icon: GitPullRequest,  group: 'AXIS', itOnly: true },
   { href: '/axis/consideration',        label: 'Consideration',              icon: Inbox,           group: 'AXIS', itOnly: true },
@@ -91,6 +95,7 @@ const NAV: NavItem[] = [
   { href: '/axis/request',              label: 'Submit Request',             icon: Send,            group: 'AXIS' },
   { href: '/axis/tickets',              label: 'Tickets',                    icon: Ticket,          group: 'AXIS', itOnly: true },
 
+  // ── Admin — always last ──
   { href: '/settings',                  label: 'Settings',                   icon: Settings,        group: 'Admin' },
   { href: '/users',                     label: 'Users & Roles',              icon: Users,           group: 'Admin', permission: 'can_manage_users' },
 ]
@@ -108,7 +113,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
   ]
 
   const visibleNav = isFloorOperator ? FLOOR_NAV : NAV.filter(item => {
-    if (item.href === '/home' || item.href === '/dashboard' || item.href === '/settings') return true
+    if (item.href === '/settings') return true
     if (item.href === '/suggest') return true
     if (item.itOnly && !isIT && !isFullAdmin) return false
     if (item.href === '/axis/request') return true
@@ -287,6 +292,27 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
         <nav
           style={{ flex: 1, overflowY: 'auto', padding: '8px 0', scrollbarWidth: 'none' }}
         >
+          {/* Standalone Home — the landing page, sits above all groups */}
+          <Link
+            href="/home"
+            onClick={onMobileClose}
+            title={collapsed ? 'Home' : undefined}
+            style={{
+              position: 'relative', display: 'flex', alignItems: 'center', gap: 9,
+              margin: '6px 8px 2px', padding: collapsed ? '8px 0' : '6.5px 10px',
+              justifyContent: collapsed ? 'center' : undefined, borderRadius: 7,
+              textDecoration: 'none',
+              background: pathname === '/home' ? '#DCFCE7' : 'transparent',
+              color: pathname === '/home' ? '#166534' : '#4B5563',
+              fontWeight: pathname === '/home' ? 500 : 400,
+            }}
+          >
+            {pathname === '/home' && !collapsed && (
+              <div style={{ position: 'absolute', left: 0, top: '18%', bottom: '18%', width: 3, borderRadius: '0 3px 3px 0', background: '#16A34A' }} />
+            )}
+            <Home size={15} style={{ flexShrink: 0, opacity: pathname === '/home' ? 1 : 0.6 }} />
+            {!collapsed && <span style={{ fontSize: 13, whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>Home</span>}
+          </Link>
           {groups.map(({ label, items }) => (
             <div key={label}>
               {!collapsed ? (
