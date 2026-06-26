@@ -53,8 +53,8 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/operations',departments: ['Management'] },
   { prefix: '/production/dashboard', departments: ['Production','Management'] },
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
-  { prefix: '/production/live',      departments: ['Production'] },
-  { prefix: '/production',           departments: ['Production'] },
+  { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
+  { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
   // Maintenance — full module is Maintenance + Management. Production may only
   // reach Job Cards (to report breakdowns + track their own cards). Longest-prefix
@@ -65,9 +65,10 @@ const ROUTE_GUARDS: Array<{
   // Logistics (barcode-driven receiving, warehouse, dispatch)
   { prefix: '/logistics',        departments: ['Production','Quality','Management'] },
 
-  // Management — /status is IT's platform-diagnostics module
+  // Management — /status is IT's platform-diagnostics module.
+  // Cross-department: can_view_management grants access from any department.
   { prefix: '/status',     departments: ['IT'] },
-  { prefix: '/management', departments: ['Management'] },
+  { prefix: '/management', departments: ['Management'], permission: 'can_view_management', orPermission: true },
 
   // Sales & Research
   { prefix: '/research',   departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
