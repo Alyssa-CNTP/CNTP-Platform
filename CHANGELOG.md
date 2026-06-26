@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-26 — Alyssa (Home/floor-plan polish: login-image backdrop, richer graphics, weather → Home, dashboard leads with graphs)
+
+**Files changed:** `app/(app)/home/page.tsx`, `components/home/HomeIsometric.tsx`, `components/production/FactoryFloorPlan.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Home background** is now the **login photo** (`/rooibos-hero.png`) at low opacity, instead of the cargo illustration.
+- **Weather moved to the Home page** (beside the greeting) and **removed from the Production dashboard**.
+- **Home isometric is more graphical**: added a production line (teal/blue/orange machines + conveyor), silos, a delivery truck at the door, a forklift, pallets and trees, plus soft floor shadows and a warmer palette — still no numbers/KPIs.
+- **Production floor plan is a nicer layout**: building shell with soft shadow, tinted Rosehips zone + zone labels, gradient-filled rounded bays, styled doors — instead of plain grey boxes.
+- **Production dashboard now leads with the metrics + graphs**: removed the big quick-actions/weather row from the top; quick links are a small chip strip lower down (Capture · Supervisor Hub · Shift Rosters · Floor Plan).
+
+---
+
 ## 2026-06-25 — Alyssa (Sidebar overhaul · about-style Home with isometric factory · dashboard filters · floor plan → Production)
 
 **Navigation & access** — `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/departments.ts`, `lib/auth/roleHome.ts`, `app/(app)/dashboard/page.tsx`

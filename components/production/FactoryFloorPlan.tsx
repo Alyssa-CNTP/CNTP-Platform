@@ -1,27 +1,21 @@
 'use client'
 
 // components/production/FactoryFloorPlan.tsx
-// The accurate, dimensioned factory floor plan for the Production section (the
-// pretty isometric view lives on the home page). The layout is the REAL
-// warehouse plan (auto-derived from the insurance spreadsheet — see
-// lib/home/floorplan-data.ts), drawn to scale: Rooibos vs Rosehips storage
-// bays with their kg capacities, doors and the Packaging area.
-//
-// Over the top sits a live "what's happening" layer from /api/home/overview:
-// which sections are running today and any open breakdowns, marked on the map.
-// This is a STORAGE plan, so production-line breakdowns can't be placed exactly
-// — markers are positioned by zone (approx) and every item is also listed.
+// The accurate, dimensioned factory floor plan for the Production section — drawn
+// as a clean facility map (building shell, tinted Rooibos/Rosehips zones, doors
+// and the Packaging area, bays to scale with their kg capacities). Data comes
+// from the real insurance plan (lib/home/floorplan-data). A live layer from
+// /api/home/overview marks running sections + open breakdowns by zone.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Activity, Wrench, Package, MapPin } from 'lucide-react'
+import { Activity, Wrench, Package, MapPin, DoorOpen } from 'lucide-react'
 import { BAYS, FLOOR_LABELS, FLOOR_W, FLOOR_H } from '@/lib/home/floorplan-data'
 
-const ROOIBOS = '#cfd4c8'
-const ROOIBOS_STROKE = '#9aa090'
-const ROSEHIPS = '#e0a500'
-const ROSEHIPS_STROKE = '#a87b00'
-const WALL = '#8b95a3'
+const ROOIBOS_STROKE = '#a3a988'
+const ROSEHIPS_STROKE = '#c79320'
+const ROSEHIPS_TINT = '#e0a500'
+const ROOIBOS_TINT = '#cfd4c8'
 const DOWN = '#dc2626'
 
 interface Section { id: string; name: string; code: string; color: string; status: string }
@@ -30,16 +24,13 @@ interface Overview { date: string; sections: Section[]; runningCount: number; br
 
 const STATUS_LABEL: Record<string, string> = { draft: 'Capturing', submitted: 'Submitted', approved: 'Signed off' }
 
-// Place a breakdown roughly by zone keyword. This is a storage plan, so the
-// production line isn't drawn on it — production breakdowns cluster near the
-// main door. Returns approx=false only for areas actually on the plan.
-function locate(area: string, machine: string | null, i: number): { x: number; y: number; approx: boolean } {
+function locate(area: string, machine: string | null, i: number): { x: number; y: number } {
   const t = `${area} ${machine ?? ''}`.toLowerCase()
   const jitter = (i % 4) * 220 - 330
-  if (t.includes('pack')) return { x: 3100 + jitter, y: 3550, approx: false }
-  if (t.includes('rose')) return { x: 800, y: 1900 + jitter, approx: false }
-  if (/(store|warehouse|forklift|racking|\bbay\b|pallet)/.test(t)) return { x: 4800 + jitter, y: 1750, approx: false }
-  return { x: 7180 + jitter, y: 850, approx: true } // production line → near main door
+  if (t.includes('pack')) return { x: 3100 + jitter, y: 3650 }
+  if (t.includes('rose')) return { x: 800, y: 1900 + jitter }
+  if (/(store|warehouse|forklift|racking|\bbay\b|pallet)/.test(t)) return { x: 4800 + jitter, y: 1750 }
+  return { x: 7180 + jitter, y: 850 }
 }
 
 const fmt = (n: number) => n.toLocaleString('en-ZA')
@@ -57,17 +48,26 @@ export function FactoryFloorPlan() {
     return () => { alive = false; if (timer.current) clearInterval(timer.current) }
   }, [])
 
-  const cap = useMemo(() => {
+  const { cap, roseBox } = useMemo(() => {
     let total = 0, rose = 0, nRose = 0
-    for (const b of BAYS) { total += b[4]; if (b[5]) { rose += b[4]; nRose++ } }
-    return { total, rose, rooibos: total - rose, nRose, nRooibos: BAYS.length - nRose }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const b of BAYS) {
+      total += b[4]
+      if (b[5]) {
+        rose += b[4]; nRose++
+        x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[0] + b[2]); y1 = Math.max(y1, b[1] + b[3])
+      }
+    }
+    return {
+      cap: { total, rose, rooibos: total - rose, nRose },
+      roseBox: { x: x0 - 80, y: y0 - 80, w: x1 - x0 + 160, h: y1 - y0 + 160 },
+    }
   }, [])
 
   const running = ov?.sections.filter(s => s.status === 'draft') ?? []
   const breakdowns = ov?.breakdowns ?? []
   const pins = breakdowns.map((b, i) => ({ ...b, ...locate(b.area, b.machine, i) }))
-
-  const pad = 160
+  const pad = 220
 
   return (
     <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 sm:p-5">
@@ -86,34 +86,66 @@ export function FactoryFloorPlan() {
       {/* Capacity summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
         <Stat label="Total capacity" value={`${fmt(cap.total)} kg`} />
-        <Stat label="Rooibos" value={`${fmt(cap.rooibos)} kg`} dot={ROOIBOS} />
-        <Stat label="Rosehips" value={`${fmt(cap.rose)} kg`} dot={ROSEHIPS} />
+        <Stat label="Rooibos" value={`${fmt(cap.rooibos)} kg`} dot={ROOIBOS_TINT} />
+        <Stat label="Rosehips" value={`${fmt(cap.rose)} kg`} dot={ROSEHIPS_TINT} />
         <Stat label="Storage bays" value={String(BAYS.length)} />
       </div>
 
       {/* Map */}
-      <div className="rounded-xl border border-surface-rule bg-surface-dim/40 p-2 overflow-hidden">
+      <div className="rounded-xl border border-surface-rule p-2 overflow-hidden" style={{ background: '#eceadf' }}>
         <svg viewBox={`${-pad} ${-pad} ${FLOOR_W + pad * 2} ${FLOOR_H + pad * 2}`}
           preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: 'auto', display: 'block' }}
           role="img" aria-label="Factory storage floor plan with live activity">
-          <rect x={0} y={0} width={FLOOR_W} height={FLOOR_H} fill="none" stroke={WALL} strokeWidth={30} rx={20} />
-          {BAYS.map((b, i) => (
-            <rect key={i} x={b[0]} y={b[1]} width={b[2]} height={b[3]} rx={8}
-              fill={b[5] ? ROSEHIPS : ROOIBOS} stroke={b[5] ? ROSEHIPS_STROKE : ROOIBOS_STROKE}
-              strokeWidth={hover && hover.cap === b[4] ? 24 : 6} style={{ cursor: 'pointer' }}
-              onMouseEnter={() => setHover({ cap: b[4], rose: !!b[5] })}
-              onMouseLeave={() => setHover(null)} />
-          ))}
-          {FLOOR_LABELS.map((l, i) => (
-            <text key={i} x={l[0]} y={l[1] - 40} fontSize={150} fill={WALL}>{l[2]}</text>
-          ))}
+          <defs>
+            <linearGradient id="ffRoo" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#e6e8d9" /><stop offset="1" stopColor="#cbd1b6" />
+            </linearGradient>
+            <linearGradient id="ffRose" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#f6d36c" /><stop offset="1" stopColor="#e6b13a" />
+            </linearGradient>
+            <filter id="ffShadow" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="34" stdDeviation="34" floodColor="#1a2415" floodOpacity="0.10" />
+            </filter>
+          </defs>
+
+          {/* Building shell */}
+          <rect x={0} y={0} width={FLOOR_W} height={FLOOR_H} rx={70} fill="#f7f6f0" stroke="#b8a988" strokeWidth={40} filter="url(#ffShadow)" />
+
+          {/* Rosehips zone tint */}
+          <rect x={roseBox.x} y={roseBox.y} width={roseBox.w} height={roseBox.h} rx={50}
+            fill="#f9edca" stroke="#dcb854" strokeWidth={10} strokeDasharray="46 34" />
+          <text x={roseBox.x + roseBox.w / 2} y={roseBox.y - 70} fontSize={150} fontWeight={600} fill="#9c7c1c" textAnchor="middle">Rosehips</text>
+          <text x={9200} y={1320} fontSize={170} fontWeight={600} fill="#7d8568" textAnchor="middle" opacity={0.65}>Rooibos storage</text>
+
+          {/* Bays */}
+          {BAYS.map((b, i) => {
+            const on = hover && hover.cap === b[4]
+            return (
+              <rect key={i} x={b[0]} y={b[1]} width={b[2]} height={b[3]} rx={12}
+                fill={b[5] ? 'url(#ffRose)' : 'url(#ffRoo)'} stroke={b[5] ? ROSEHIPS_STROKE : ROOIBOS_STROKE}
+                strokeWidth={on ? 28 : 5} style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHover({ cap: b[4], rose: !!b[5] })} onMouseLeave={() => setHover(null)} />
+            )
+          })}
+
+          {/* Doors + Packaging labels */}
+          {FLOOR_LABELS.map((l, i) => {
+            const door = /door/i.test(l[2])
+            return (
+              <g key={i}>
+                {door && <rect x={l[0] - 20} y={l[1] - 150} width={170} height={50} rx={10} fill="#9aa6b3" />}
+                <text x={l[0] - 20} y={l[1] - 200} fontSize={130} fill="#5d6b52" fontWeight={500}>{l[2]}</text>
+              </g>
+            )
+          })}
+
           {/* Breakdown markers */}
           {pins.map((p, i) => (
             <g key={i}>
-              <circle cx={p.x} cy={p.y} r={120} fill={DOWN} />
-              <circle cx={p.x} cy={p.y} r={120} fill="none" stroke={DOWN} strokeWidth={26}>
-                <animate attributeName="r" values="120;380" dur="1.7s" repeatCount="indefinite" />
-                <animate attributeName="opacity" values="0.85;0" dur="1.7s" repeatCount="indefinite" />
+              <circle cx={p.x} cy={p.y} r={130} fill={DOWN} stroke="#fff" strokeWidth={20} />
+              <circle cx={p.x} cy={p.y} r={130} fill="none" stroke={DOWN} strokeWidth={26}>
+                <animate attributeName="r" values="130;400" dur="1.7s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.8;0" dur="1.7s" repeatCount="indefinite" />
               </circle>
             </g>
           ))}
@@ -128,8 +160,9 @@ export function FactoryFloorPlan() {
             : <span className="text-text-faint">Hover a bay for its capacity</span>}
         </div>
         <div className="flex items-center gap-3 text-text-muted">
-          <span className="inline-flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: ROOIBOS }} /> Rooibos</span>
-          <span className="inline-flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: ROSEHIPS }} /> Rosehips</span>
+          <span className="inline-flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: ROOIBOS_TINT }} /> Rooibos</span>
+          <span className="inline-flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: ROSEHIPS_TINT }} /> Rosehips</span>
+          <span className="inline-flex items-center gap-1.5"><DoorOpen size={13} /> Door</span>
           <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: DOWN }} /> Breakdown</span>
         </div>
       </div>

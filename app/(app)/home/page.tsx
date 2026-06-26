@@ -12,6 +12,7 @@ import { format } from 'date-fns'
 import { LifeBuoy, ExternalLink, Leaf, Globe } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { HomeIsometric } from '@/components/home/HomeIsometric'
+import { WeatherTile } from '@/components/production/WeatherTile'
 
 const WEBSITE = 'https://rooibostea.co.za/'
 const FACEBOOK = 'https://www.facebook.com/capenatural/'
@@ -59,19 +60,22 @@ export default function HomePage() {
 
   return (
     <div className="relative min-h-full">
-      {/* Full-page isometric backdrop, low opacity so cards read clearly */}
+      {/* Full-page login photo backdrop, low opacity so cards read clearly */}
       <div aria-hidden className="absolute inset-0 pointer-events-none"
-        style={{ backgroundImage: 'url(/iso-cargo-bg.avif)', backgroundSize: 'cover', backgroundPosition: 'center', opacity: 0.13 }} />
+        style={{ backgroundImage: 'url(/rooibos-hero.png)', backgroundSize: 'cover', backgroundPosition: 'center', opacity: 0.16 }} />
 
       <div className="relative px-4 py-6 max-w-[1100px] mx-auto space-y-6">
-        {/* Greeting */}
-        <div className="rounded-3xl px-6 py-5" style={glass}>
-          <div className="flex items-center gap-1.5 text-brand mb-1">
-            <Leaf size={15} />
-            <span className="font-display font-semibold text-[13px]">Cape Natural Tea Products</span>
+        {/* Greeting + local weather */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-stretch">
+          <div className="md:col-span-2 rounded-3xl px-6 py-5 flex flex-col justify-center" style={glass}>
+            <div className="flex items-center gap-1.5 text-brand mb-1">
+              <Leaf size={15} />
+              <span className="font-display font-semibold text-[13px]">Cape Natural Tea Products</span>
+            </div>
+            <h1 className="font-display font-bold text-[26px] text-[#1A2415]">{greeting}, {firstName}</h1>
+            <p className="text-[12px] text-stone-600 mt-0.5">{format(new Date(), 'EEEE d MMMM yyyy')}</p>
           </div>
-          <h1 className="font-display font-bold text-[26px] text-[#1A2415]">{greeting}, {firstName}</h1>
-          <p className="text-[12px] text-stone-600 mt-0.5">{format(new Date(), 'EEEE d MMMM yyyy')}</p>
+          <WeatherTile />
         </div>
 
         {/* About */}
