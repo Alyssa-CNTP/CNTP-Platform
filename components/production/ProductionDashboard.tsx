@@ -15,12 +15,11 @@ import {
 } from 'recharts'
 import {
   RefreshCw, Package, Scale, Percent, Activity, CheckCircle2, AlertTriangle,
-  Wrench, CalendarRange, ClipboardList, Users, ChevronRight, Gauge as GaugeIcon,
+  Wrench, CalendarRange, ClipboardList, Users, ChevronRight, Gauge as GaugeIcon, Map as MapIcon,
 } from 'lucide-react'
 import { format, subMonths } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import { WeatherTile } from './WeatherTile'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
 import OperationalTrends from '@/components/management/OperationalTrends'
@@ -157,17 +156,7 @@ export default function ProductionDashboard() {
 
   return (
     <div className="space-y-5">
-      {/* Quick actions + weather */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <QuickAction href="/production/capture" icon={ClipboardList} label="Capture" desc="Record this shift" />
-          <QuickAction href="/supervisor" icon={Users} label="Supervisor Hub" desc="Sign-offs & timesheets" />
-          <QuickAction href="/production/roster" icon={CalendarRange} label="Roster" desc="Shift planning" />
-        </div>
-        <WeatherTile />
-      </div>
-
-      {/* KPI row */}
+      {/* Dashboard leads with the metrics + graphs */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-text">Today · {format(new Date(), 'EEE d MMM')}</h2>
         <button onClick={() => load(true)} className="inline-flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text">
@@ -259,6 +248,15 @@ export default function ProductionDashboard() {
             </Chart>
           </div>
         )}
+      </div>
+
+      {/* Quick links — compact, below the graphs */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-text-muted mr-1">Quick links</span>
+        <QuickChip href="/production/capture" icon={ClipboardList} label="Capture" />
+        <QuickChip href="/supervisor" icon={Users} label="Supervisor Hub" />
+        <QuickChip href="/production/roster" icon={CalendarRange} label="Shift Rosters" />
+        <QuickChip href="/production/floor-plan" icon={MapIcon} label="Floor Plan" />
       </div>
 
       {/* Solar + breakdowns */}
@@ -383,14 +381,10 @@ function Kpi({ label, value, icon: Icon, tone, loading }: { label: string; value
   )
 }
 
-function QuickAction({ href, icon: Icon, label, desc }: { href: string; icon: typeof Package; label: string; desc: string }) {
+function QuickChip({ href, icon: Icon, label }: { href: string; icon: typeof Package; label: string }) {
   return (
-    <Link href={href} className="flex flex-col justify-between rounded-xl border border-surface-rule bg-surface-card p-4 hover:border-brand/40 hover:bg-surface-dim/50 transition group">
-      <Icon size={18} className="text-brand" />
-      <div className="mt-3">
-        <div className="text-[13px] font-semibold text-text group-hover:text-brand transition-colors">{label}</div>
-        <div className="text-[11px] text-text-muted">{desc}</div>
-      </div>
+    <Link href={href} className="inline-flex items-center gap-1.5 rounded-lg border border-surface-rule bg-surface-card px-2.5 py-1.5 text-[12px] text-text hover:border-brand/40 hover:text-brand transition">
+      <Icon size={13} /> {label}
     </Link>
   )
 }
