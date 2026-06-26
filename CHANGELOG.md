@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-26 — Alyssa (fix: cross-department Quality access via permissions)
+
+**Files changed:** `app/(app)/layout.tsx`, `lib/auth/context.tsx`
+
+- **Root cause:** The `/quality` route guard only checked department (`['Quality']`) with no permission escape hatch. Management users with `can_view_history` toggled on saw Quality links in the sidebar (because `canAccessQuality` correctly checked permissions) but were redirected to `/dashboard` whenever they tried to navigate to any `/quality/*` page.
+- **Fix in `layout.tsx`:** Added `permission: 'can_view_history', orPermission: true` to the `/quality` route guard. Users in the Quality department get through by department as before; users in any other department (e.g. Management) now get through if they have `can_view_history` enabled in their overrides.
+- **Fix in `context.tsx`:** Aligned `canAccessQuality` to use `can_view_history` as the single cross-department gate (removed the `p('can_upload_pdfs')` check), so the sidebar and route guard now agree on who can access Quality. This eliminates the workaround of assigning Management users an IT role to bypass guards.
+
+---
+
 ## 2026-06-26 — Alyssa (Home/floor-plan polish: login-image backdrop, richer graphics, weather → Home, dashboard leads with graphs)
 
 **Files changed:** `app/(app)/home/page.tsx`, `components/home/HomeIsometric.tsx`, `components/production/FactoryFloorPlan.tsx`, `components/production/ProductionDashboard.tsx`
