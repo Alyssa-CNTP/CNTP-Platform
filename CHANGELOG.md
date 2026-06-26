@@ -5,6 +5,26 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-26 — Alyssa (fix: cross-department access for all modules + permissions panel redesign)
+
+**Files changed:** `app/(app)/layout.tsx`, `app/(app)/users/page.tsx`
+
+**Route guards** — Added permission-based escape hatches to the remaining routes that were department-only:
+- `/production/live` — now allows any user with `can_view_live_history` (e.g. Management viewing live sessions)
+- `/production` — now allows any user with `can_view_ops_dashboard`
+- `/management` — now allows any user with `can_view_management` (e.g. a Quality user given management dashboard read access)
+
+**Permissions panel redesign** — The core bug: when editing a Management user's permissions, only "Management & Reporting" group was visible. Quality, Production, Sales, Maintenance groups were completely hidden. This meant you couldn't even toggle permissions to grant cross-department access.
+- `PermissionsPanel` now shows **all permission groups** for every user regardless of department
+- Own-department groups are expanded by default; cross-department groups are collapsed but visible and fully togglable
+- Each group header shows its department badge (Quality badge on Quality groups, etc.) so you know which module you're granting access to
+- Removed the limited `CROSS_DEPT_PERMISSIONS` constant and the "Cross-department view access" section — it's now unified into the main panel
+- "What this person can access" preview now shows department/role/overrides dynamically
+
+**How it works now:** Role name = who they are in the company. Department = their home module. Permissions = what specific actions they can do, and which other modules they can open. Toggle any group's permissions on for a user from any department, and the route guard will let them through.
+
+---
+
 ## 2026-06-26 — Alyssa (fix: cross-department Quality access via permissions)
 
 **Files changed:** `app/(app)/layout.tsx`, `lib/auth/context.tsx`
