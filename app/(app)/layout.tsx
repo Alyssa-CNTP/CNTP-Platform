@@ -39,9 +39,10 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/axis/projects',      itOnly: true },
   { prefix: '/axis',               itOnly: true },
 
-  // Quality — Sales can only reach customer-specs
+  // Quality — Sales can only reach customer-specs.
+  // Cross-department: any user with can_view_history (e.g. Management) gets through.
   { prefix: '/quality/customer-specs', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
-  { prefix: '/quality',                departments: ['Quality'] },
+  { prefix: '/quality',                departments: ['Quality'], permission: 'can_view_history', orPermission: true },
 
   // Supervisor hub — production supervisors + management
   { prefix: '/supervisor',           departments: ['Production','Management'] },
