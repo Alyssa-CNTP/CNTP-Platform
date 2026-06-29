@@ -77,6 +77,9 @@ export default function ScheduledPage() {
   const [rd, setRd] = useState<Record<string, string>>({})
   // Per-row calibrate form for the editable annual register (date · interval · who).
   const [calForm, setCalForm] = useState<Record<number, { date?: string; interval?: string; by?: string }>>({})
+  // Per-asset "who did the calibration" for the full register — a calibration
+  // cannot be marked done until someone is selected.
+  const [calWho, setCalWho] = useState<Record<number, string>>({})
   // Trend window for the Readings & Trends sparks (weeks of history to plot).
   const [trendWeeks, setTrendWeeks] = useState(26)
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
@@ -129,16 +132,18 @@ export default function ScheduledPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
-              { v: outstandingChecklists.filter(x => x.t.frequency === 'weekly').length, l: `Weekly outstanding — ${weekKey}`, warn: true },
-              { v: outstandingChecklists.filter(x => x.t.frequency === 'monthly').length, l: `Monthly outstanding — ${moKey}`, warn: true },
-              { v: calRows.filter(c => c.days <= 0).length, l: 'Calibrations overdue', warn: true },
-              { v: calRows.filter(c => c.days > 0 && c.days <= 30).length, l: 'Calibrations due ≤30d', warn: false },
-              { v: eqLatest.filter(e => e.days <= 14).length, l: 'Services due ≤14d (run-hrs)', warn: false },
+              { v: outstandingChecklists.filter(x => x.t.frequency === 'weekly').length, l: `Weekly outstanding — ${weekKey}`, warn: true, to: 1 },
+              { v: outstandingChecklists.filter(x => x.t.frequency === 'monthly').length, l: `Monthly outstanding — ${moKey}`, warn: true, to: 2 },
+              { v: calRows.filter(c => c.days <= 0).length, l: 'Calibrations overdue', warn: true, to: 3 },
+              { v: calRows.filter(c => c.days > 0 && c.days <= 30).length, l: 'Calibrations due ≤30d', warn: false, to: 3 },
+              { v: eqLatest.filter(e => e.days <= 14).length, l: 'Services due ≤14d (run-hrs)', warn: false, to: 4 },
             ].map((t, i) => (
-              <div key={i} className="card p-3 text-center">
+              <button key={i} onClick={() => setSub(t.to)} title="Open"
+                className="card p-3 text-center transition cursor-pointer hover:border-text/30 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand/30">
                 <div className={`text-2xl font-semibold tabular-nums ${t.v > 0 && t.warn ? 'text-err' : t.v > 0 ? 'text-warn' : 'text-ok'}`}>{t.v}</div>
                 <div className="text-[10px] text-text-muted uppercase tracking-wide mt-1">{t.l}</div>
-              </div>
+                <div className="text-[9px] font-semibold text-accent mt-1">View →</div>
+              </button>
             ))}
           </div>
 
@@ -150,15 +155,14 @@ export default function ScheduledPage() {
                 <div key={'cal' + c.id} className="rounded-lg border border-surface-rule bg-surface-card px-3 py-2.5 flex items-center gap-2 text-[13px] flex-wrap">
                   <span className={`badge shrink-0 ${calClass(c.days)}`}>{calBadge(c.days)}</span>
                   <span className="flex-1 min-w-[220px]"><strong className="text-text">{c.asset_name}</strong> <span className="text-text-faint text-[11px]">({c.serial_no}{c.department ? ' · ' + c.department : ''})</span> <span className="text-text-muted">— {c.days <= 0 ? 'overdue by ' + Math.abs(c.days) + ' days' : 'due in ' + c.days + ' days'} · last done {fmtD(c.last_done)}</span></span>
-                  <button className={BTN_SM} onClick={() => calDone(c)}>Done today</button>
-                  <button className={BTN_SM} onClick={() => setSub(3)}>Register</button>
+                  <button className={BTN_SM} onClick={() => setSub(3)} title="Record who calibrated it and when in the register">Mark calibrated →</button>
                 </div>
               ))}
               {eqLatest.filter(e => e.days <= 14 && e.latest).map(e => (
                 <div key={'eq' + e.cfg.id} className="rounded-lg border border-surface-rule bg-surface-card px-3 py-2.5 flex items-center gap-2 text-[13px] flex-wrap">
                   <span className={`badge shrink-0 ${calClass(e.days)}`}>{e.days <= 0 ? 'SERVICE OVERDUE' : 'SERVICE DUE'}</span>
                   <span className="flex-1 min-w-[220px]"><strong className="text-text">{e.cfg.equipment}</strong> <span className="text-text-muted">— {Math.round(e.latest!.hours_since_service!)} / {e.cfg.service_interval_hours} run-hrs since service · projected due {fmtD(e.due!.toISOString())}</span></span>
-                  <button className={BTN_SM} onClick={() => eqServiced(e.cfg.equipment, e.latest!.total_hours)}>Serviced today</button>
+                  <button className={BTN_SM} onClick={() => setSub(4)} title="Record the service against its run-hours">Record service →</button>
                   <button className={BTN_SM} onClick={() => raiseFromChecklist(e.cfg.equipment, 'Run-hours service', `Service due — ${Math.round(e.latest!.hours_since_service!)} run-hours since last service`, '')}>Raise job card</button>
                 </div>
               ))}
@@ -251,7 +255,12 @@ export default function ScheduledPage() {
                           return (
                             <div key={ti} className="mb-2">
                               <div className="flex items-center gap-2">
-                                <div className={`w-5 h-5 rounded-md border flex-shrink-0 flex items-center justify-center text-[11px] text-white cursor-pointer transition ${s.done ? 'bg-ok border-ok' : 'bg-transparent border-surface-rule hover:border-text/30'}`} onClick={() => toggleTask(cl, ti)}>
+                                <div className={`w-5 h-5 rounded-md border flex-shrink-0 flex items-center justify-center text-[11px] text-white cursor-pointer transition ${s.done ? 'bg-ok border-ok' : 'bg-transparent border-surface-rule hover:border-text/30'}`}
+                                  onClick={() => {
+                                    // Monthly tasks must record Fault / No Fault before they can be ticked done.
+                                    if (freq === 'monthly' && !s.done && s.fault === undefined) { setPopup('Select “Fault” or “No Fault” for this item before marking it done.'); return }
+                                    toggleTask(cl, ti)
+                                  }}>
                                   {s.done && '✓'}
                                 </div>
                                 <span className={`text-[12px] flex-1 ${s.done ? 'text-text-muted line-through' : 'text-text'}`}>{task}</span>
@@ -259,7 +268,10 @@ export default function ScheduledPage() {
                               </div>
                               <div className="flex gap-1.5 mt-1" style={{ marginLeft: 28 }}>
                                 {freq === 'monthly' && (
-                                  <select className={`${INP} w-24 text-[11px] py-1 min-h-0`} value={s.fault ? 'YES' : 'NO'} onChange={e => setTaskField(cl, ti, 'fault', e.target.value === 'YES')}>
+                                  <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${s.fault === undefined ? 'border-warn text-warn' : ''}`}
+                                    value={s.fault === true ? 'YES' : s.fault === false ? 'NO' : ''}
+                                    onChange={e => { if (e.target.value) setTaskField(cl, ti, 'fault', e.target.value === 'YES') }}>
+                                    <option value="" disabled>Fault? …</option>
                                     <option value="NO">No Fault</option><option value="YES">Fault</option>
                                   </select>
                                 )}
@@ -345,15 +357,16 @@ export default function ScheduledPage() {
                         <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
                           value={cf.date ?? new Date().toISOString().slice(0, 10)}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
-                        <select className={`${INP} w-24 text-[11px] py-1 min-h-0`} title="Who did the calibration"
-                          value={cf.by ?? actor ?? techNames[0]}
+                        <select className={`${INP} w-24 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
+                          value={cf.by ?? ''}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
+                          <option value="">Who?…</option>
                           {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
                         </select>
-                        <button className={BTN_OK} title="Stamp calibrated on this date (recomputes next due from the cycle)"
+                        <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when, then recompute next due from the cycle"
                           onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
                             (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days) ?? null,
-                            cf.by ?? actor ?? techNames[0])}>✓ Calibrated</button>
+                            cf.by!)}>✓ Calibrated</button>
                       </div>
                     </td>
                     <td>{a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>Email</button>}</td>
@@ -388,13 +401,19 @@ export default function ScheduledPage() {
                         <td>{c.next ? fmtD(c.next.toISOString()) : '—'}</td>
                         <td className="font-semibold">{c.days === 9999 ? '—' : c.days}</td>
                         <td>
-                          <div className="flex gap-1 items-center">
+                          <div className="flex gap-1 items-center flex-wrap">
                             <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date"
                               value={drafts['cd' + c.id] ?? (c.last_done ?? '').slice(0, 10)}
                               onChange={e => setDrafts(p => ({ ...p, ['cd' + c.id]: e.target.value }))} />
-                            <button className={BTN_OK} title="Finalise on this date — recalculates the next cycle"
-                              onClick={() => calDoneOn(c, drafts['cd' + c.id] ?? new Date().toISOString().slice(0, 10))}>Set</button>
-                            <button className={BTN_SM} onClick={() => calDone(c)}>Today</button>
+                            <select className={`${INP} w-24 text-[11px] py-1 min-h-0 ${calWho[c.id] ? '' : 'border-warn'}`} title="Who did the calibration (required)"
+                              value={calWho[c.id] ?? ''} onChange={e => setCalWho(p => ({ ...p, [c.id]: e.target.value }))}>
+                              <option value="">Who?…</option>
+                              {techNames.map(t => <option key={t}>{t}</option>)}
+                            </select>
+                            <button className={`${BTN_OK} ${calWho[c.id] ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!calWho[c.id]} title="Finalise on this date — recalculates the next cycle"
+                              onClick={() => calDoneOn(c, drafts['cd' + c.id] ?? new Date().toISOString().slice(0, 10), calWho[c.id])}>Set</button>
+                            <button className={`${BTN_SM} ${calWho[c.id] ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!calWho[c.id]}
+                              onClick={() => calDone(c, calWho[c.id])}>Today</button>
                           </div>
                         </td>
                         <td className="text-[10px] text-text-faint max-w-[160px]">{c.comment || '—'}</td>

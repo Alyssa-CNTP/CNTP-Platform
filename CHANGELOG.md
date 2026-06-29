@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-29 — Gustav (Scheduled maintenance: interactive Overview tiles, required calibration sign-off, required fault choice)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`
+
+- **Overview tiles are now buttons:** clicking *Weekly outstanding*, *Monthly outstanding*, *Calibrations overdue / ≤30d* or *Services due* jumps straight to the relevant sub-tab.
+- **No one-click "Done today":** the Overview quick-complete buttons were removed — *Mark calibrated →* now routes to the register and *Record service →* to Readings, so nothing is closed off without capturing the detail.
+- **Calibration sign-off requires a person:** the full calibration register and the annual register both now have a required "Who did it?" selector (starts empty, highlighted); *Set / Today / ✓ Calibrated* are disabled until someone is chosen. `calDone`/`calDoneOn` record the chosen person.
+- **Monthly fault choice is required and starts blank:** the Fault selector no longer defaults to "No Fault" — it opens on a "Fault? …" placeholder, and a monthly task **cannot be ticked done until Fault or No Fault is explicitly chosen** (the box is highlighted until then).
+
 ## 2026-06-29 — Gustav (Maintenance round 2: editable annual register, interactive trends, job-card filters/sort, individual prints)
 
 **Files changed:**
