@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-29 — Gustav (Leaf Shade: Docker deployment for the Python service)
+
+**Files changed:**
+- `ml/leafshade/Dockerfile` (new), `ml/leafshade/docker-compose.yml` (new), `ml/leafshade/.dockerignore` (new)
+- `ml/leafshade/README.md`
+
+**Changes:**
+- The staging VPS (Ubuntu 26.04) has Docker 29.5 but no Python 3.11. Added a `python:3.11-slim` Docker image + compose service so the Leaf Shade classifier runs in a container with the exact pinned deps (scikit-learn 1.7.2) without installing Python on the host.
+- Uses `network_mode: host` so the Flask service keeps its original `127.0.0.1:5001` bind (localhost only, never internet-facing) and the Next.js proxy route reaches it unchanged — **no change to `leaf_shade_api.py`**.
+- `restart: unless-stopped` keeps it alive across reboots. One-time start: `cd ml/leafshade && docker compose up -d --build`. README updated with Docker as the primary path (venv/pm2 kept as an alternative).
+
+---
+
 ## 2026-06-29 — Gustav (Raw Material: Leaf Shade ML classifier + pH/TDS tab — ported from CNTPquality)
 
 **Files changed:**

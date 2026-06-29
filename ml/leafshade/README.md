@@ -38,24 +38,46 @@ Leaf Shade history table.
 three files. The other Python pins are in `requirements.txt`. None of this
 touches the Next.js `package.json`.
 
-## Deploy on the VPS (one time)
+## Deploy on the VPS (recommended: Docker)
+
+The VPS (Ubuntu 26.04) has Docker but **not** Python 3.11, so run the service
+in a container — it bundles Python 3.11 + the pinned deps and never touches the
+host Python. One time:
+
+```bash
+cd /home/cntpdev/apps/staging/app/cntp-ops/ml/leafshade
+docker compose up -d --build
+```
+
+`network_mode: host` means the service listens on `127.0.0.1:5001` of the host
+(localhost only — the UFW firewall opens just 2022/80/443, so it is never
+internet-facing). `restart: unless-stopped` keeps it up across reboots/crashes.
+
+On later deploys, only re-run the build if the model or `leaf_shade_api.py`
+changed:
+
+```bash
+cd /home/cntpdev/apps/staging/app/cntp-ops/ml/leafshade
+docker compose up -d --build
+```
+
+Check it:
+
+```bash
+docker compose ps
+curl http://127.0.0.1:5001/health      # {"status":"ok"}
+docker compose logs --tail=30
+```
+
+## Alternative: host virtualenv (if Python 3.11 is installed instead)
 
 ```bash
 cd /home/cntpdev/apps/staging/app/cntp-ops
-
-# 1. Ensure Python 3.11 is available
-python3.11 --version   # repo pins 3.11.9 (.python-version)
-
-# 2. Create the venv + install pinned deps
-bash ml/leafshade/setup.sh
-
-# 3. Register the service with pm2 (localhost:5001, not internet-facing)
+python3.11 --version                 # repo pins 3.11.9 (.python-version)
+bash ml/leafshade/setup.sh           # creates venv + installs pinned deps
 pm2 start ml/leafshade/run.sh --name cntp-leafshade
 pm2 save
 ```
-
-On later deploys, re-run `bash ml/leafshade/setup.sh` (no-op unless
-`requirements.txt` changed) and `pm2 restart cntp-leafshade`.
 
 ## Health check
 
@@ -63,5 +85,7 @@ On later deploys, re-run `bash ml/leafshade/setup.sh` (no-op unless
 curl http://127.0.0.1:5001/health      # {"status":"ok"}
 ```
 
-If the Next.js tab reports *"Leaf shade service is not running"*, the
-`cntp-leafshade` pm2 process is down — check `pm2 logs cntp-leafshade`.
+If the Next.js tab reports *"Leaf shade service is not running"*, the service
+is down:
+- Docker:  `docker compose -f ml/leafshade/docker-compose.yml logs --tail=50`
+- venv/pm2: `pm2 logs cntp-leafshade`
