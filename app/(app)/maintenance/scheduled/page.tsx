@@ -11,7 +11,7 @@ import { Printer } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { calClass, calBadge, fmtD, fmtT } from '@/lib/maintenance/helpers'
 import { TECHS } from '@/lib/maintenance/constants'
-import { printTable } from '@/lib/maintenance/exporters'
+import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
 
 // Order forklift run-hour rows by their forklift number; non-forklifts keep their
@@ -25,17 +25,41 @@ const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em
 const BTN_OK = 'bg-ok text-white rounded-lg px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition'
 const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md px-2.5 py-1.5 text-[11px] font-semibold hover:border-text/25 transition'
 
-// Tiny SVG line chart for trends — no chart library needed
-function Spark({ pts, color = '#2563eb', h = 44, labels }: { pts: number[]; color?: string; h?: number; labels?: [string, string] }) {
-  if (pts.length < 2) return <div className="text-[11px] text-text-faint py-2">Not enough data yet</div>
-  const min = Math.min(...pts), max = Math.max(...pts), w = 200
-  const xy = pts.map((v, i) => `${(i / (pts.length - 1)) * w},${max === min ? h / 2 : h - ((v - min) / (max - min)) * (h - 8) - 4}`).join(' ')
+// Tiny SVG line chart for trends — no chart library needed. Each point is
+// clickable (transparent overlay buttons): tapping one reveals that week's date
+// and value below the chart, so the raw numbers live on the graph itself rather
+// than in a separate table.
+function Spark({ pts, color = '#2563eb', h = 44, labels, dates, unit = '', digits = 1 }: { pts: number[]; color?: string; h?: number; labels?: [string, string]; dates?: (string | null)[]; unit?: string; digits?: number }) {
+  const [sel, setSel] = useState<number | null>(null)
+  if (pts.length < 2) return <div className="text-[11px] text-text-faint py-2">Not enough data yet — tap points once there are ≥2 readings.</div>
+  const min = Math.min(...pts), max = Math.max(...pts), w = 200, n = pts.length
+  const xAt = (i: number) => (i / (n - 1)) * w
+  const yAt = (v: number) => (max === min ? h / 2 : h - ((v - min) / (max - min)) * (h - 8) - 4)
+  const xy = pts.map((v, i) => `${xAt(i)},${yAt(v)}`).join(' ')
+  const fmtV = (v: number) => v.toFixed(digits) + (unit ? ' ' + unit : '')
   return (
     <div>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: h, display: 'block' }} preserveAspectRatio="none">
-        <polyline points={xy} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-      </svg>
+      <div className="relative" style={{ height: h }}>
+        <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: h, display: 'block' }} preserveAspectRatio="none">
+          <polyline points={xy} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          {sel != null && <line x1={xAt(sel)} y1={0} x2={xAt(sel)} y2={h} stroke={color} strokeWidth={1} strokeDasharray="2 2" opacity={0.55} vectorEffect="non-scaling-stroke" />}
+          {sel != null && <circle cx={xAt(sel)} cy={yAt(pts[sel])} r={3} fill={color} vectorEffect="non-scaling-stroke" />}
+        </svg>
+        {/* Transparent per-point hit targets — click to read the value. */}
+        <div className="absolute inset-0 flex">
+          {pts.map((v, i) => (
+            <button key={i} onClick={() => setSel(s => (s === i ? null : i))}
+              title={`${dates?.[i] ? fmtD(dates[i]) + ' · ' : ''}${fmtV(v)}`}
+              className={`flex-1 transition ${sel === i ? 'bg-current/5' : 'hover:bg-current/5'}`} style={{ color }} />
+          ))}
+        </div>
+      </div>
       {labels && <div className="flex justify-between text-[10px] text-text-faint"><span>{labels[0]}</span><span>{labels[1]}</span></div>}
+      <div className="text-[11px] mt-1 min-h-[16px]">
+        {sel != null
+          ? <span className="text-text">{dates?.[sel] ? fmtD(dates[sel]) + ' · ' : `Point ${sel + 1} · `}<strong>{fmtV(pts[sel])}</strong></span>
+          : <span className="text-text-faint">Tap a point to see its value</span>}
+      </div>
     </div>
   )
 }
@@ -43,7 +67,7 @@ function Spark({ pts, color = '#2563eb', h = 44, labels }: { pts: number[]; colo
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, eqHours, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const { getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const { annualRows, lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists } = derived
   const { drafts, setDrafts, setPopup } = ui
 
@@ -51,6 +75,8 @@ export default function ScheduledPage() {
   const [openCL, setOpenCL] = useState<number | null>(null)
   const [calSearch, setCalSearch] = useState('')
   const [rd, setRd] = useState<Record<string, string>>({})
+  // Per-row calibrate form for the editable annual register (date · interval · who).
+  const [calForm, setCalForm] = useState<Record<number, { date?: string; interval?: string; by?: string }>>({})
   // Trend window for the Readings & Trends sparks (weeks of history to plot).
   const [trendWeeks, setTrendWeeks] = useState(26)
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
@@ -211,7 +237,12 @@ export default function ScheduledPage() {
                           </div>
                         </div>
                       </div>
-                      <span className={`badge shrink-0 ${done ? 'badge-ok' : doneN > 0 ? 'badge-warn' : 'badge-gray'}`}>{done ? 'DONE' : doneN > 0 ? doneN + '/' + cl.tasks.length : 'NOT STARTED'}</span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button title="Print this checklist"
+                          onClick={e => { e.stopPropagation(); printChecklistOne(cl, comp, period) }}
+                          className="inline-flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:bg-surface-dim hover:text-text transition"><Printer size={13} /></button>
+                        <span className={`badge ${done ? 'badge-ok' : doneN > 0 ? 'badge-warn' : 'badge-gray'}`}>{done ? 'DONE' : doneN > 0 ? doneN + '/' + cl.tasks.length : 'NOT STARTED'}</span>
+                      </div>
                     </div>
                     {isOpen && (
                       <div className="px-3 pb-3 border-t border-surface-rule pt-2.5 max-h-[400px] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -267,40 +298,71 @@ export default function ScheduledPage() {
         <div className="space-y-4">
           <div>
             <h2 className="text-sm font-semibold text-text">Annual / calibration / verification</h2>
-            <p className="text-[12px] text-text-muted mt-0.5">Boiler: 180-day warning. Others: 60, 30, 7, 1 day alerts. Email the supplier directly from the table.</p>
+            <p className="text-[12px] text-text-muted mt-0.5">Every field is editable. Mark an item calibrated with the date, cycle (days) and who did it — the next-due date recomputes automatically. Boiler: 180-day warning; others: 60 / 30 / 7 / 1-day alerts.</p>
           </div>
 
-          {annualRows.filter(a => a.days <= 60).length > 0 && (
-            <div className="space-y-1.5">
-              {annualRows.filter(a => a.days <= 60).map(a => (
-                <div key={a.id} className="rounded-lg border border-surface-rule bg-surface-card px-3 py-2.5 flex items-center gap-2 text-[13px]">
-                  <span className="flex-1"><strong className="text-text">{a.asset}</strong> <span className="text-text-muted">— {a.days <= 0 ? 'overdue by ' + Math.abs(a.days) + ' days' : 'due in ' + a.days + ' days'}</span></span>
-                  <span className={`badge ${calClass(a.days)}`}>{calBadge(a.days)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* At-a-glance counts (overdue items also sort to the top of the table below). */}
+          <div className="flex gap-2 flex-wrap text-[12px]">
+            <span className="badge badge-err">{annualRows.filter(a => a.days <= 0).length} overdue</span>
+            <span className="badge badge-warn">{annualRows.filter(a => a.days > 0 && a.days <= 30).length} due ≤30d</span>
+            <span className="badge badge-info">{annualRows.filter(a => a.days > 30 && a.days <= 60).length} due ≤60d</span>
+          </div>
 
           <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
             <div className="overflow-x-auto">
               <table className="data-table">
-                <thead><tr>{['Status', 'Category', 'Asset', 'Serial', 'Supplier', 'Due', 'Days', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}</tr></thead>
-                <tbody>{annualRows.map(a => (
+                <thead><tr>{['Status', 'Category', 'Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                <tbody>{annualRows.map(a => {
+                  const cf = calForm[a.id] ?? {}
+                  return (
                   <tr key={a.id}>
-                    <td><span className={`badge ${calClass(a.days)}`}>{calBadge(a.days)}</span></td>
-                    <td><span className="badge badge-gray">{a.category}</span></td>
-                    <td className="font-semibold">{a.asset}</td>
-                    <td className="font-mono text-[11px]">{a.serial_no || '—'}</td>
-                    <td>{a.supplier}</td>
-                    <td>{fmtD(a.next_due)}</td>
-                    <td className="font-semibold">{a.days}</td>
+                    <td><span className={`badge ${calClass(a.days)}`} title={a.days <= 0 ? `overdue by ${Math.abs(a.days)}d` : `due in ${a.days}d`}>{calBadge(a.days)}</span></td>
+                    <td><input className={`${INP} w-24 text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
+                      onChange={e => setDrafts(p => ({ ...p, ['ac' + a.id]: e.target.value }))}
+                      onBlur={e => e.target.value !== a.category && updateAnnual(a.id, { category: e.target.value })} /></td>
+                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
+                      onChange={e => setDrafts(p => ({ ...p, ['aa' + a.id]: e.target.value }))}
+                      onBlur={e => e.target.value !== a.asset && updateAnnual(a.id, { asset: e.target.value })} /></td>
+                    <td><input className={`${INP} w-28 text-[10px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
+                      onChange={e => setDrafts(p => ({ ...p, ['as' + a.id]: e.target.value }))}
+                      onBlur={e => e.target.value !== a.serial_no && updateAnnual(a.id, { serial_no: e.target.value })} /></td>
+                    <td><input className={`${INP} w-28 text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
+                      onChange={e => setDrafts(p => ({ ...p, ['au' + a.id]: e.target.value }))}
+                      onBlur={e => e.target.value !== a.supplier && updateAnnual(a.id, { supplier: e.target.value })} /></td>
+                    <td className="text-[11px] whitespace-nowrap">{a.last_done
+                      ? <span className="text-ok">✓ {fmtD(a.last_done)}{a.last_done_by ? <span className="text-text-faint"> · {a.last_done_by}</span> : ''}</span>
+                      : <span className="text-text-faint">not yet</span>}</td>
+                    <td><input className={`${INP} w-16 text-[11px] py-1 min-h-0`} type="number" inputMode="numeric" placeholder="—"
+                      value={drafts['ai' + a.id] ?? (a.interval_days != null ? String(a.interval_days) : '')}
+                      onChange={e => setDrafts(p => ({ ...p, ['ai' + a.id]: e.target.value }))}
+                      onBlur={e => { const v = e.target.value ? parseInt(e.target.value, 10) : null; if (v !== a.interval_days) updateAnnual(a.id, { interval_days: v }) }} /></td>
+                    <td><input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date"
+                      value={drafts['an' + a.id] ?? (a.next_due ?? '').slice(0, 10)}
+                      onChange={e => setDrafts(p => ({ ...p, ['an' + a.id]: e.target.value }))}
+                      onBlur={e => e.target.value !== (a.next_due ?? '').slice(0, 10) && updateAnnual(a.id, { next_due: e.target.value || null })} /></td>
+                    <td>
+                      <div className="flex gap-1 items-center">
+                        <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
+                          value={cf.date ?? new Date().toISOString().slice(0, 10)}
+                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
+                        <select className={`${INP} w-24 text-[11px] py-1 min-h-0`} title="Who did the calibration"
+                          value={cf.by ?? actor ?? techNames[0]}
+                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
+                          {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                        </select>
+                        <button className={BTN_OK} title="Stamp calibrated on this date (recomputes next due from the cycle)"
+                          onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
+                            (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days) ?? null,
+                            cf.by ?? actor ?? techNames[0])}>✓ Calibrated</button>
+                      </div>
+                    </td>
                     <td>{a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>Email</button>}</td>
                     <td><input className={`${INP} w-28 text-[11px] py-1 min-h-0`} placeholder="Notes…"
                       value={drafts['a' + a.id] ?? a.notes}
                       onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
                       onBlur={e => saveAnnualNotes(a.id, e.target.value)} /></td>
                   </tr>
-                ))}</tbody>
+                )})}</tbody>
               </table>
             </div>
           </div>
@@ -391,9 +453,9 @@ export default function ScheduledPage() {
                   }}>Save water readings</button>
                   <div className="mt-3">
                     <div className={LB}>Main meter weekly usage (kL)</div>
-                    <Spark pts={waterUsage.main.slice(-trendWeeks)} color="#2563eb" labels={[fmtD(waterReadings[Math.max(0, waterReadings.length - trendWeeks)]?.reading_date ?? null), fmtD(lastOf(waterReadings)?.reading_date ?? null)]} />
+                    <Spark pts={waterUsage.main.slice(-trendWeeks)} color="#2563eb" unit="kL" labels={[fmtD(waterReadings[Math.max(0, waterReadings.length - trendWeeks)]?.reading_date ?? null), fmtD(lastOf(waterReadings)?.reading_date ?? null)]} />
                     <div className={`${LB} mt-2`}>Boiler usage</div>
-                    <Spark pts={waterUsage.boiler.slice(-trendWeeks)} color="#0891b2" />
+                    <Spark pts={waterUsage.boiler.slice(-trendWeeks)} color="#0891b2" unit="kL" />
                   </div>
                 </div>
               )})()}
@@ -426,7 +488,7 @@ export default function ScheduledPage() {
                   }}>Save IP reading</button>
                   <div className="mt-3">
                     <div className={LB}>Weekly IP usage (L)</div>
-                    <Spark pts={ipUsage.slice(-trendWeeks)} color="#d97706" />
+                    <Spark pts={ipUsage.slice(-trendWeeks)} color="#d97706" unit="L" digits={0} />
                   </div>
                 </div>
               )})()}
@@ -457,7 +519,7 @@ export default function ScheduledPage() {
                   }}>Save diesel reading</button>
                   <div className="mt-3">
                     <div className={LB}>Generator run hours / week</div>
-                    <Spark pts={dieselReadings.slice(-trendWeeks).map(r => r.run_hours ?? 0)} color="#dc2626" />
+                    <Spark pts={dieselReadings.slice(-trendWeeks).map(r => r.run_hours ?? 0)} dates={dieselReadings.slice(-trendWeeks).map(r => r.reading_date)} color="#dc2626" unit="hrs" />
                   </div>
                 </div>
               )})()}
@@ -532,7 +594,9 @@ export default function ScheduledPage() {
               </div>
               <div className="mt-3">
                 <div className={LB}>Compressor hours since service</div>
-                <Spark pts={eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-trendWeeks).map(h => h.hours_since_service!)} color="#7c3aed" />
+                {(() => { const cmp = eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-trendWeeks); return (
+                  <Spark pts={cmp.map(h => h.hours_since_service!)} dates={cmp.map(h => h.reading_date)} color="#7c3aed" unit="h" digits={0} />
+                )})()}
               </div>
             </div>
 
