@@ -478,6 +478,27 @@ export function useMaintenanceData() {
     if (err) setPopup('Save failed: ' + err.message)
   }
 
+  // Inline-edit any annual register field (category / asset / serial / supplier /
+  // next_due / interval_days). Optimistic, then persisted.
+  const updateAnnual = async (id: number, patch: Partial<AnnualItem>) => {
+    setAnnual(p => p.map(a => (a.id === id ? { ...a, ...patch } : a)))
+    const { error: err } = await db.schema('maintenance').from('annual_items').update(patch).eq('id', id)
+    if (err) setPopup('Save failed: ' + err.message)
+  }
+
+  // Mark an annual / calibration item calibrated: stamps the date it was done and
+  // by whom, and — when an interval is set — recomputes the next-due date from
+  // last_done + interval_days (mirrors the calibration_assets register).
+  const calibrateAnnual = async (a: AnnualItem, dateStr: string, intervalDays: number | null, by: string) => {
+    const day = (dateStr || new Date().toISOString().slice(0, 10)).slice(0, 10)
+    const interval = intervalDays ?? a.interval_days ?? null
+    const next_due = interval ? addDays(day, interval).toISOString().slice(0, 10) : a.next_due
+    const patch: Partial<AnnualItem> = { last_done: day, last_done_by: by || actor || displayName || '', interval_days: interval, next_due }
+    setAnnual(p => p.map(x => (x.id === a.id ? { ...x, ...patch } : x)))
+    const { error: err } = await db.schema('maintenance').from('annual_items').update(patch).eq('id', a.id)
+    if (err) setPopup('Save failed: ' + err.message)
+  }
+
   // ── Checklist fault → job card (goes into the normal allocation workflow) ──
   const raiseFromChecklist = async (area: string, docRef: string, task: string, notes: string) => {
     const { data, error: err } = await db.schema('maintenance').from('job_cards').insert({
@@ -733,7 +754,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
       qcSubmit, verifyCard, postComment,
-      getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes,
+      getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,

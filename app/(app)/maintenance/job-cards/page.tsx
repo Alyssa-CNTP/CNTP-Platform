@@ -17,7 +17,7 @@ import { useMaintenanceContext } from '../layout'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { JobCardItem } from '@/components/maintenance/JobCardItem'
 import { RaiseJobCardForm } from '@/components/maintenance/RaiseJobCardForm'
-import { STATUSES } from '@/lib/maintenance/constants'
+import { STATUSES, URGENCY_META } from '@/lib/maintenance/constants'
 import { fmtD, fmtT, diffDays, diffM, priorityOf, PRIORITY_META, type Priority } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
 import type { JobCard } from '@/lib/maintenance/types'
@@ -26,6 +26,48 @@ const SEG = (active: boolean) =>
   `px-3.5 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap ${active ? 'bg-brand text-white' : 'text-text-muted hover:bg-surface-dim'}`
 
 const PRIO_ORDER: Priority[] = ['high', 'medium', 'low']
+
+// Sort rank: manager-set urgency (critical→low) wins, else the derived priority.
+// Lower = more urgent, so high urgency always floats to the top of any list.
+const urgencyRank = (j: JobCard) => {
+  if (j.urgency) return URGENCY_META[j.urgency].rank // 0 critical … 3 low
+  const p = priorityOf(j)
+  return p === 'high' ? 1 : p === 'medium' ? 2 : 3
+}
+const byUrgencyThenAge = (a: JobCard, b: JobCard) => urgencyRank(a) - urgencyRank(b) || a.raised_at.localeCompare(b.raised_at)
+
+// Shared filter: free-text search across human fields + a raised-date range.
+function makeCardFilter(search: string, from: string, to: string) {
+  const q = search.trim().toLowerCase()
+  return (j: JobCard) => {
+    const day = (j.raised_at ?? '').slice(0, 10)
+    if (from && day < from) return false
+    if (to && day > to) return false
+    if (!q) return true
+    return [j.card_no, j.area, j.machine, j.description, j.long_desc, j.raised_by, j.assigned_to]
+      .some(v => (v ?? '').toLowerCase().includes(q))
+  }
+}
+
+// Reusable search + date-range bar, shared by every job-card view.
+function FilterBar({ search, setSearch, dateFrom, setDateFrom, dateTo, setDateTo }: {
+  search: string; setSearch: (v: string) => void
+  dateFrom: string; setDateFrom: (v: string) => void
+  dateTo: string; setDateTo: (v: string) => void
+}) {
+  const active = !!(search || dateFrom || dateTo)
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="relative flex-1 min-w-[220px]">
+        <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
+        <input className={`${INP} w-full pl-8`} placeholder="Search job cards — number, machine, description, person…" value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      <label className="text-[11px] text-text-muted">From <input className={`${INP} w-auto inline-block ml-1`} type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label>
+      <label className="text-[11px] text-text-muted">To <input className={`${INP} w-auto inline-block ml-1`} type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label>
+      {active && <button onClick={() => { setSearch(''); setDateFrom(''); setDateTo('') }} className="text-[12px] text-text-muted hover:text-text underline">Clear</button>}
+    </div>
+  )
+}
 
 export default function JobCardsPage() {
   const auth = useAuth()
@@ -44,6 +86,8 @@ export default function JobCardsPage() {
 
   const [filt, setFilt] = useState('all')
   const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [techFilt, setTechFilt] = useState('all') // filter the board by the technician working the card
   const [raiseOpen, setRaiseOpen] = useState(false)
   const [raiseMode, setRaiseMode] = useState<'breakdown' | 'planned'>('planned')
@@ -58,10 +102,8 @@ export default function JobCardsPage() {
   const cardRoles = { canManage: role.canManage, isTech: role.isTech, isQc: role.isQc, isRaiser: role.isRaiser }
   const cardHref = (j: JobCard) => `/maintenance/job-cards/${j.id}`
 
-  // Free-text search across the human-meaningful fields.
-  const q = search.trim().toLowerCase()
-  const matchesSearch = (j: JobCard) => !q || [j.card_no, j.area, j.machine, j.description, j.long_desc, j.raised_by, j.assigned_to]
-    .some(v => (v ?? '').toLowerCase().includes(q))
+  // Shared free-text + date-range filter, applied across every view.
+  const cardFilter = makeCardFilter(search, dateFrom, dateTo)
 
   // Technicians who have cards assigned to them — drives the "By technician" filter.
   const techNames = useMemo(
@@ -74,7 +116,7 @@ export default function JobCardsPage() {
     .filter(j => j.status !== 'complete' && j.status !== 'cancelled' && j.status !== 'raised')
     .filter(j => filt === 'all' || j.status === filt)
     .filter(j => techFilt === 'all' || j.assigned_to === techFilt)
-    .filter(matchesSearch)
+    .filter(cardFilter)
   // Group by derived priority, oldest-first within each group.
   const byPriority = (p: Priority) =>
     activeCards.filter(j => priorityOf(j) === p).sort((a, b) => a.raised_at.localeCompare(b.raised_at))
@@ -128,12 +170,15 @@ export default function JobCardsPage() {
         </div>
       )}
 
+      {/* Shared search + date-range filter — available in every view */}
+      <FilterBar search={search} setSearch={setSearch} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} />
+
       {/* ── MANAGER: BOARD (priority-grouped) ── */}
       {role.canManage && (
         <div>
           <ShiftSummary jcs={jcs} completions={data.completions} cardHref={cardHref} />
 
-          {canSeeAllRaisers && <RaisersPanel jcs={jcs} cardRoles={cardRoles} />}
+          {canSeeAllRaisers && <RaisersPanel jcs={jcs} cardRoles={cardRoles} cardFilter={cardFilter} />}
 
           {newCards.length > 0 && (
             <div className="mb-6">
@@ -142,16 +187,12 @@ export default function JobCardsPage() {
                 <h2 className="text-sm font-semibold text-text">Awaiting allocation</h2>
                 <span className="text-[11px] text-text-muted tabular-nums">{newCards.length}</span>
               </div>
-              <div className="stagger">{newCards.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
+              <div className="stagger">{newCards.filter(cardFilter).sort(byUrgencyThenAge).map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
             </div>
           )}
 
-          {/* Search + technician filter + export */}
+          {/* Technician filter + export (search & dates are in the shared bar above) */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <div className="relative flex-1 min-w-[220px]">
-              <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
-              <input className={`${INP} w-full pl-8`} placeholder="Search job cards — number, machine, description, person…" value={search} onChange={e => setSearch(e.target.value)} />
-            </div>
             <select className={`${INP} w-auto`} value={techFilt} onChange={e => setTechFilt(e.target.value)} title="Filter by the technician working the card">
               <option value="all">All technicians</option>
               {techNames.map(t => <option key={t} value={t}>{t}</option>)}
@@ -226,9 +267,9 @@ export default function JobCardsPage() {
             Showing job cards assigned to <strong className="text-text">{actor}</strong>. Breakdown cards run their timer from the moment they were raised.
           </div>
           <div className="stagger">
-            {jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}
+            {jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').filter(cardFilter).sort(byUrgencyThenAge).map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}
           </div>
-          {jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">No open job cards assigned to {actor}.</div>}
+          {jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').filter(cardFilter).length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">No open job cards assigned to {actor}{(search || dateFrom || dateTo) ? ' match this filter' : ''}.</div>}
         </div>
       )}
 
@@ -239,15 +280,15 @@ export default function JobCardsPage() {
             Job cards awaiting QC post-maintenance checks — answer YES / NO / N/A; any YES returns the card to the technician with your comment.
           </div>
           <div className="stagger">
-            {[...jcs.filter(j => j.status === 'qc_check')].sort((a, b) => (actions.qcFor(b.area) === actor ? 1 : 0) - (actions.qcFor(a.area) === actor ? 1 : 0)).map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}
+            {jcs.filter(j => j.status === 'qc_check').filter(cardFilter).sort((a, b) => (actions.qcFor(b.area) === actor ? 1 : 0) - (actions.qcFor(a.area) === actor ? 1 : 0) || byUrgencyThenAge(a, b)).map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}
           </div>
-          {jcs.filter(j => j.status === 'qc_check').length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">Nothing waiting for QC.</div>}
+          {jcs.filter(j => j.status === 'qc_check').filter(cardFilter).length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">Nothing waiting for QC{(search || dateFrom || dateTo) ? ' matches this filter' : ''}.</div>}
         </div>
       )}
 
       {/* ── RAISER DASHBOARD (default) ── */}
       {!role.canManage && !role.isTech && !role.isQc && (
-        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} canSeeAll={canSeeAllRaisers} />
+        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} canSeeAll={canSeeAllRaisers} cardFilter={cardFilter} />
       )}
 
       <BottomSheet open={raiseOpen} onClose={() => setRaiseOpen(false)} center={false}>
@@ -372,7 +413,7 @@ function RaiserTiles({ cards, active, onPick, labels }: { cards: JobCard[]; acti
 
 // IT / maintenance-manager view: a tab per person who has raised job cards, plus
 // an "All" tab. Selecting a tab shows that raiser's summary tiles + their cards.
-function RaisersPanel({ jcs, cardRoles }: { jcs: JobCard[]; cardRoles: CardRoles }) {
+function RaisersPanel({ jcs, cardRoles, cardFilter }: { jcs: JobCard[]; cardRoles: CardRoles; cardFilter: (j: JobCard) => boolean }) {
   const raisers = useMemo(() => {
     const counts = new Map<string, number>()
     for (const j of jcs) {
@@ -386,11 +427,10 @@ function RaisersPanel({ jcs, cardRoles }: { jcs: JobCard[]; cardRoles: CardRoles
 
   const [sel, setSel] = useState<string>('__all__')
   const [tf, setTf] = useState<string | null>(null)
-  const withRaiser = jcs.filter(j => (j.raised_by ?? '').trim())
-  const cards = (sel === '__all__' ? withRaiser : jcs.filter(j => (j.raised_by ?? '').trim() === sel))
-    .slice()
-    .sort((a, b) => b.raised_at.localeCompare(a.raised_at))
-  const shown = cards.filter(tilePredicate(tf))
+  const withRaiser = jcs.filter(j => (j.raised_by ?? '').trim()).filter(cardFilter)
+  const cards = (sel === '__all__' ? withRaiser : withRaiser.filter(j => (j.raised_by ?? '').trim() === sel)).slice()
+  // High urgency always at the top, then most recent.
+  const shown = cards.filter(tilePredicate(tf)).sort(byUrgencyThenAge)
 
   return (
     <div className="card p-4 mb-6">
@@ -423,13 +463,13 @@ function RaisersPanel({ jcs, cardRoles }: { jcs: JobCard[]; cardRoles: CardRoles
   )
 }
 
-function RaiserView({ actor, jcs, cardRoles, canSeeAll }: { actor: string; jcs: JobCard[]; cardRoles: CardRoles; canSeeAll: boolean }) {
+function RaiserView({ actor, jcs, cardRoles, canSeeAll, cardFilter }: { actor: string; jcs: JobCard[]; cardRoles: CardRoles; canSeeAll: boolean; cardFilter: (j: JobCard) => boolean }) {
   // IT / maintenance manager browse everyone via the per-raiser tabs.
-  if (canSeeAll) return <RaisersPanel jcs={jcs} cardRoles={cardRoles} />
+  if (canSeeAll) return <RaisersPanel jcs={jcs} cardRoles={cardRoles} cardFilter={cardFilter} />
 
   const [tf, setTf] = useState<string | null>(null)
-  const mine = jcs.filter(j => j.raised_by === actor)
-  const shown = mine.filter(tilePredicate(tf))
+  const mine = jcs.filter(j => j.raised_by === actor).filter(cardFilter)
+  const shown = mine.filter(tilePredicate(tf)).sort(byUrgencyThenAge)
   return (
     <div>
       <RaiserTiles cards={mine} active={tf} onPick={setTf} labels={{ needsinput: 'Needs my input' }} />

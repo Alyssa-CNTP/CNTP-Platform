@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-29 — Gustav (Maintenance round 2: editable annual register, interactive trends, job-card filters/sort, individual prints)
+
+**Files changed:**
+- `supabase/migrations/20260629_001_maintenance_annual_calibration.sql` (new — applied to staging DB)
+- `lib/maintenance/types.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/exporters.ts`
+- `app/(app)/maintenance/scheduled/page.tsx`
+- `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`
+
+**Changes:**
+- **DB (additive, staging):** added `interval_days` and `last_done_by` to `maintenance.annual_items` to complete the calibrated-on / by / cycle stamp.
+- **Annual / Calibration tab cleaned up:** removed the duplicate "due ≤60d" card list that repeated the table below it (now a single at-a-glance count strip). Every field in the register is **editable inline** (category, asset, serial, supplier, cycle days, next due). Added a **Mark calibrated** action per row — pick the date it was done + who did it; the next-due date recomputes from last-done + cycle. The last-done date and person are shown as a "✓ calibrated" stamp.
+- **Readings & Trends graphs are interactive:** the table is gone — each trend point is now **clickable to reveal that reading's date and value** (with units). Diesel run-hours and compressor-hours points carry exact dates; the weekly trend-window filter (8w / quarter / 6mo / year) is retained.
+- **Job cards — filters in every view:** the search bar plus a **raised-date range filter** now apply across the manager board, technician, QC and raiser views (previously search was manager-only). **High urgency always sorts to the top** of every list (manager-set urgency, then derived priority, then age).
+- **Individual prints:** a **Print job card** button on the job-card detail page renders a full single-card document (header, work done, root cause, spares, activity log). A **per-checklist print** button renders one checklist with its who/when audit trail. (`printJobCardDetail`, `printChecklistOne` in exporters.)
+
 ## 2026-06-29 — Gustav (Maintenance overhaul: accept/start, urgency, edit/cancel, reactive filters, search, exports, calibration cycle, per-tech status)
 
 **Files changed:**
