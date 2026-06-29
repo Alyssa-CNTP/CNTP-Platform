@@ -1862,6 +1862,349 @@ function ManualEntryModal({ workflow, onSaved, onClose }: {
   )
 }
 
+// ─── Leaf Shade tab ─────────────────────────────────────────────────────────
+// Canon CR3 upload → ML classifier (leaf_shade_mlp_28feat_balanced_2026v1,
+// scikit-learn 1.7.2, served by the Python micro-service on 127.0.0.1:5001).
+// The lab also records the shade they physically see (1–11) + a free-text note.
+// Saved to qms.quality_records (workflow='leaf_shade').
+
+const SHADE_OPTIONS = ['1','2','3','4','5','6','7','8','9','10','11']
+
+function LeafShadeTab({ records, canWrite, onRefresh }: {
+  records: QRecord[]; canWrite: boolean; onRefresh: () => void
+}) {
+  const db = getDb()
+  const [file,    setFile]    = useState<File | null>(null)
+  const [batch,   setBatch]   = useState('')
+  const [location,setLocation]= useState('')
+  const [observed,setObserved]= useState('')
+  const [note,    setNote]    = useState('')
+  const [busy,    setBusy]    = useState(false)
+  const [saving,  setSaving]  = useState(false)
+  const [err,     setErr]     = useState('')
+  const [result,  setResult]  = useState<any>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  function pickFile(f: File | null) {
+    setErr('')
+    if (!f) { setFile(null); return }
+    if (!f.name.toLowerCase().endsWith('.cr3')) { setErr('Only Canon CR3 files are accepted.'); return }
+    setFile(f); setResult(null)
+  }
+
+  async function analyse() {
+    if (!file) { setErr('Choose a CR3 file first.'); return }
+    setErr(''); setBusy(true); setResult(null)
+    try {
+      const fd = new FormData()
+      fd.append('cr3', file)
+      const res  = await fetch('/api/leaf-shade/predict', { method: 'POST', body: fd })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Prediction failed')
+      setResult(data)
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function save() {
+    if (!result) return
+    if (!batch.trim()) { setErr('Batch number is required to save.'); return }
+    setErr(''); setSaving(true)
+    try {
+      const { error } = await db.schema('qms').from('quality_records').insert({
+        workcenter: 'rawMaterial', workflow: 'leaf_shade', batch_number: batch.trim(),
+        file_name: result.filename || file?.name || 'leaf_shade',
+        data_json: {
+          predicted_shade: result.predicted_shade,
+          confidence_pct:  result.confidence_pct,
+          top5:            result.top5,
+          model_version:   result.model_version,
+          analysed_at:     new Date().toISOString(),
+          location:        location.trim() || null,
+          physical_shade:  observed || null,
+          observation:     note.trim() || null,
+          features:        result.features,
+          camera:          result.camera,
+          _source_file:    result.filename || file?.name,
+        },
+      })
+      if (error) throw new Error(error.message)
+      setFile(null); setResult(null); setBatch(''); setLocation(''); setObserved(''); setNote('')
+      if (fileRef.current) fileRef.current.value = ''
+      onRefresh()
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cam = result?.camera
+
+  return (
+    <div className="space-y-4">
+      {canWrite && (
+        <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
+          <div className="font-semibold text-[14px] text-text mb-1">🍃 Leaf Shade Classifier</div>
+          <div className="text-[11px] text-text-muted mb-4">Upload a Canon <strong>CR3</strong> RAW photo of the leaf sample. The model predicts the shade; the lab confirms what they physically see.</div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Left: upload + analyse */}
+            <div className="space-y-3">
+              <div>
+                <label className={lbl}>CR3 file</label>
+                <input ref={fileRef} type="file" accept=".cr3,image/x-canon-cr3"
+                  onChange={e => pickFile(e.target.files?.[0] ?? null)}
+                  className="block w-full text-[12px] text-text-muted file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-brand file:text-white file:text-[11px] file:font-semibold file:cursor-pointer" />
+                {file && <div className="mt-1 text-[11px] text-text-muted">📄 {file.name} ({(file.size/1024/1024).toFixed(1)} MB)</div>}
+              </div>
+              <button onClick={analyse} disabled={!file || busy}
+                className="px-5 py-2 rounded-xl bg-brand text-white text-[12px] font-semibold disabled:opacity-50">
+                {busy ? 'Analysing…' : '🔬 Analyse'}
+              </button>
+            </div>
+
+            {/* Right: prediction result */}
+            <div className="bg-surface border border-surface-rule rounded-xl p-4">
+              {!result ? (
+                <div className="text-[12px] text-text-faint h-full flex items-center justify-center">Prediction will appear here</div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-baseline gap-2">
+                    <span className="font-display font-bold text-[26px] text-text">{result.predicted_shade}</span>
+                    <span className="text-[12px] text-text-muted">{result.confidence_pct}% confidence</span>
+                  </div>
+                  {Array.isArray(result.top5) && (
+                    <div className="space-y-1">
+                      {result.top5.map((t: any) => (
+                        <div key={t.rank} className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-text-muted w-16 shrink-0">{t.shade}</span>
+                          <div className="flex-1 h-2 bg-surface-rule rounded-full overflow-hidden">
+                            <div className="h-full bg-brand/70" style={{ width: `${t.confidence}%` }} />
+                          </div>
+                          <span className="text-[10px] font-mono text-text-muted w-12 text-right">{t.confidence}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {cam && (
+                    <div className={`text-[11px] mt-2 px-2 py-1 rounded-lg ${cam.compliant ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+                      {cam.compliant ? '✅ Camera settings compliant' : `⚠️ Camera: ${(cam.issues || []).join(', ')}`}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-text-faint">model: {result.model_version}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Lab observation + save */}
+          {result && (
+            <div className="mt-4 pt-4 border-t border-surface-rule grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className={lbl}>Batch No. *</label>
+                <input className={inp + ' w-full'} value={batch} onChange={e => setBatch(e.target.value)} placeholder="e.g. GS-0098" />
+              </div>
+              <div>
+                <label className={lbl}>Location</label>
+                <input className={inp + ' w-full'} value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Receiving" />
+              </div>
+              <div>
+                <label className={lbl}>Observed shade (1–11)</label>
+                <select className={inp + ' w-full'} value={observed} onChange={e => setObserved(e.target.value)}>
+                  <option value="">—</option>
+                  {SHADE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button onClick={save} disabled={saving} className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold disabled:opacity-50 w-full">
+                  {saving ? 'Saving…' : '💾 Save Record'}
+                </button>
+              </div>
+              <div className="md:col-span-4">
+                <label className={lbl}>What the lab physically sees (notes)</label>
+                <textarea className={inp + ' w-full'} rows={2} value={note} onChange={e => setNote(e.target.value)}
+                  placeholder="Colour, condition, any visible differences from the predicted shade…" />
+              </div>
+            </div>
+          )}
+
+          {err && <div className="mt-3 text-[12px] text-err">⚠ {err}</div>}
+        </div>
+      )}
+
+      {/* History */}
+      <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-surface-rule">
+          <span className="font-semibold text-[14px] text-text">🍃 Leaf Shade Records</span>
+          <span className="text-[11px] text-text-muted">{records.length} records</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-surface border-b border-surface-rule">
+                {['Batch','Date','Predicted','Conf.','Observed','Location','Camera','Notes'].map(h => (
+                  <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
+                ))}
+                {canWrite && <th className="px-4 py-2.5 font-mono text-[10px] text-text-muted">Del</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-rule">
+              {records.length === 0 && (
+                <tr><td colSpan={canWrite ? 9 : 8} className="px-4 py-8 text-center text-[12px] text-text-muted">No leaf shade records yet.</td></tr>
+              )}
+              {records.map((r, i) => {
+                const d = r.data_json || {}
+                const camOk = d.camera?.compliant
+                return (
+                  <tr key={r.id} className={`hover:bg-surface ${i%2===1?'bg-surface/50':''}`}>
+                    <td className="px-4 py-2.5 font-mono font-semibold text-[12px] text-text">{r.batch_number || '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">{r.created_at ? new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}) : '—'}</td>
+                    <td className="px-4 py-2.5 text-[12px] font-semibold text-text">{d.predicted_shade || '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-[11px] text-text-muted">{d.confidence_pct != null ? `${d.confidence_pct}%` : '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.physical_shade || '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted">{d.location || '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px]">{d.camera ? (camOk ? <span className="text-ok">✓</span> : <span className="text-warn">⚠</span>) : '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted max-w-[200px] truncate" title={d.observation || ''}>{d.observation || '—'}</td>
+                    {canWrite && (
+                      <td className="px-4 py-2.5">
+                        <button onClick={async () => { if (!confirm('Delete this record?')) return; await db.schema('qms').from('quality_records').delete().eq('id', r.id); onRefresh() }}
+                          className="px-2 py-0.5 rounded border border-err/30 bg-err/8 text-err text-[10px]">✕</button>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── pH / TDS tab ───────────────────────────────────────────────────────────
+// Manual lab entry of pH and TDS per batch. Saved to qms.quality_records
+// (workflow='ph_tds'). Separate from the Leaf Shade tab by request.
+
+function PhTdsTab({ records, canWrite, onRefresh }: {
+  records: QRecord[]; canWrite: boolean; onRefresh: () => void
+}) {
+  const db = getDb()
+  const [batch, setBatch] = useState('')
+  const [ph,    setPh]    = useState('')
+  const [tds,   setTds]   = useState('')
+  const [note,  setNote]  = useState('')
+  const [saving,setSaving]= useState(false)
+  const [err,   setErr]   = useState('')
+
+  async function save() {
+    if (!batch.trim()) { setErr('Batch number is required.'); return }
+    if (!ph && !tds)   { setErr('Enter at least a pH or a TDS value.'); return }
+    setErr(''); setSaving(true)
+    try {
+      const { error } = await db.schema('qms').from('quality_records').insert({
+        workcenter: 'rawMaterial', workflow: 'ph_tds', batch_number: batch.trim(), file_name: 'manual_entry',
+        data_json: {
+          ph:  ph  !== '' ? parseFloat(ph)  : null,
+          tds: tds !== '' ? parseFloat(tds) : null,
+          observation: note.trim() || null,
+          analysed_at: new Date().toISOString(),
+          _manual_entry: true,
+        },
+      })
+      if (error) throw new Error(error.message)
+      setBatch(''); setPh(''); setTds(''); setNote('')
+      onRefresh()
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {canWrite && (
+        <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
+          <div className="font-semibold text-[14px] text-text mb-1">💧 pH / TDS Entry</div>
+          <div className="text-[11px] text-text-muted mb-4">Record the measured pH and TDS for a batch.</div>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            <div>
+              <label className={lbl}>Batch No. *</label>
+              <input className={inp + ' w-full'} value={batch} onChange={e => setBatch(e.target.value)} placeholder="e.g. GS-0098" />
+            </div>
+            <div>
+              <label className={lbl}>pH</label>
+              <input className={inp + ' w-full'} type="number" step="0.01" value={ph} onChange={e => setPh(e.target.value)} placeholder="e.g. 5.20" />
+            </div>
+            <div>
+              <label className={lbl}>TDS (ppm)</label>
+              <input className={inp + ' w-full'} type="number" step="1" value={tds} onChange={e => setTds(e.target.value)} placeholder="e.g. 340" />
+            </div>
+            <div className="md:col-span-2">
+              <label className={lbl}>Notes</label>
+              <input className={inp + ' w-full'} value={note} onChange={e => setNote(e.target.value)} placeholder="optional" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button onClick={save} disabled={saving} className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold disabled:opacity-50">
+              {saving ? 'Saving…' : '💾 Save Record'}
+            </button>
+            {err && <span className="text-[12px] text-err">⚠ {err}</span>}
+          </div>
+        </div>
+      )}
+
+      {/* History */}
+      <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-surface-rule">
+          <span className="font-semibold text-[14px] text-text">💧 pH / TDS Records</span>
+          <span className="text-[11px] text-text-muted">{records.length} records</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-surface border-b border-surface-rule">
+                {['Batch','Date','pH','TDS (ppm)','Notes'].map(h => (
+                  <th key={h} className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
+                ))}
+                {canWrite && <th className="px-4 py-2.5 font-mono text-[10px] text-text-muted">Del</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-rule">
+              {records.length === 0 && (
+                <tr><td colSpan={canWrite ? 6 : 5} className="px-4 py-8 text-center text-[12px] text-text-muted">No pH / TDS records yet.</td></tr>
+              )}
+              {records.map((r, i) => {
+                const d = r.data_json || {}
+                return (
+                  <tr key={r.id} className={`hover:bg-surface ${i%2===1?'bg-surface/50':''}`}>
+                    <td className="px-4 py-2.5 font-mono font-semibold text-[12px] text-text">{r.batch_number || '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">{r.created_at ? new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}) : '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.ph != null ? d.ph : '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.tds != null ? d.tds : '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted max-w-[240px] truncate" title={d.observation || ''}>{d.observation || '—'}</td>
+                    {canWrite && (
+                      <td className="px-4 py-2.5">
+                        <button onClick={async () => { if (!confirm('Delete this record?')) return; await db.schema('qms').from('quality_records').delete().eq('id', r.id); onRefresh() }}
+                          className="px-2 py-0.5 rounded border border-err/30 bg-err/8 text-err text-[10px]">✕</button>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -1869,8 +2212,13 @@ const TABS = [
   { key:'pa_ta_analysis', label:'🧪 PA/TA Alkaloids'       },
   { key:'residue',        label:'🌿 Residue / Pesticides'  },
   { key:'glyphosate',     label:'🧫 Glyphosate'            },
+  { key:'leaf_shade',     label:'🍃 Leaf Shade'            },
+  { key:'ph_tds',         label:'💧 pH / TDS'              },
   { key:'outstanding',    label:'⚠️ Outstanding'           },
 ]
+
+// Tabs that do NOT use the PDF (Gemini) drop zone or the count badge
+const NON_PDF_TABS = ['overview', 'outstanding', 'leaf_shade', 'ph_tds']
 
 export default function RawMaterialPage() {
   const { p } = useAuth()
@@ -1912,7 +2260,7 @@ export default function RawMaterialPage() {
   const byWf    = (wf: string) => records.filter(r => r.workflow === wf)
   const tabCount = (wf: string) => byWf(wf).length
 
-  const showDropZone = canWrite && tab !== 'overview' && tab !== 'outstanding'
+  const showDropZone = canWrite && !NON_PDF_TABS.includes(tab)
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -1984,6 +2332,8 @@ export default function RawMaterialPage() {
             {tab === 'pa_ta_analysis' && <PATable          records={byWf('pa_ta_analysis')} isAdmin={canWrite} onRefresh={() => { setSpinning(true); load() }} onComment={updateComment} />}
             {tab === 'residue'        && <ResidueTable     records={byWf('residue')}         isAdmin={canWrite} onRefresh={() => { setSpinning(true); load() }} onComment={updateComment} />}
             {tab === 'glyphosate'     && <GlyphosateTable  records={byWf('glyphosate')}      isAdmin={canWrite} onRefresh={() => { setSpinning(true); load() }} onComment={updateComment} />}
+            {tab === 'leaf_shade'     && <LeafShadeTab     records={byWf('leaf_shade')}      canWrite={canWrite} onRefresh={() => { setSpinning(true); load() }} />}
+            {tab === 'ph_tds'         && <PhTdsTab         records={byWf('ph_tds')}          canWrite={canWrite} onRefresh={() => { setSpinning(true); load() }} />}
             {tab === 'outstanding'    && <OutstandingTracker />}
           </>
         )}
