@@ -1870,13 +1870,16 @@ function ManualEntryModal({ workflow, onSaved, onClose }: {
 
 const SHADE_OPTIONS = ['1','2','3','4','5','6','7','8','9','10','11']
 
+// Leaf shade is captured per facility — each is its own sub-tab.
+const LEAF_SHADE_LOCATIONS = ['Graafwater', 'Vanrhynsdorp', 'Blackheath']
+
 function LeafShadeTab({ records, canWrite, onRefresh }: {
   records: QRecord[]; canWrite: boolean; onRefresh: () => void
 }) {
   const db = getDb()
+  const [loc,     setLoc]     = useState(LEAF_SHADE_LOCATIONS[0])
   const [file,    setFile]    = useState<File | null>(null)
   const [batch,   setBatch]   = useState('')
-  const [location,setLocation]= useState('')
   const [observed,setObserved]= useState('')
   const [note,    setNote]    = useState('')
   const [busy,    setBusy]    = useState(false)
@@ -1899,8 +1902,15 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
       const fd = new FormData()
       fd.append('cr3', file)
       const res  = await fetch('/api/leaf-shade/predict', { method: 'POST', body: fd })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Prediction failed')
+      // The server may return an HTML error page (e.g. Nginx 413 for an
+      // oversized upload) instead of JSON — handle that gracefully.
+      const raw = await res.text()
+      let data: any = null
+      try { data = raw ? JSON.parse(raw) : null } catch { /* not JSON */ }
+      if (!res.ok || !data) {
+        if (res.status === 413) throw new Error(`File too large — the server rejected the upload (${(file.size/1024/1024).toFixed(1)} MB). Ask IT to raise Nginx client_max_body_size.`)
+        throw new Error(data?.error ?? `Prediction failed (HTTP ${res.status})`)
+      }
       setResult(data)
     } catch (e: any) {
       setErr(e.message)
@@ -1923,7 +1933,7 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
           top5:            result.top5,
           model_version:   result.model_version,
           analysed_at:     new Date().toISOString(),
-          location:        location.trim() || null,
+          location:        loc,
           physical_shade:  observed || null,
           observation:     note.trim() || null,
           features:        result.features,
@@ -1932,7 +1942,7 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
         },
       })
       if (error) throw new Error(error.message)
-      setFile(null); setResult(null); setBatch(''); setLocation(''); setObserved(''); setNote('')
+      setFile(null); setResult(null); setBatch(''); setObserved(''); setNote('')
       if (fileRef.current) fileRef.current.value = ''
       onRefresh()
     } catch (e: any) {
@@ -1943,13 +1953,30 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
   }
 
   const cam = result?.camera
+  const locRecords = records.filter(r => (r.data_json?.location || '') === loc)
 
   return (
     <div className="space-y-4">
+      {/* Environment / facility sub-tabs (leaf shade only) */}
+      <div className="flex gap-2 flex-wrap">
+        {LEAF_SHADE_LOCATIONS.map(l => {
+          const n = records.filter(r => (r.data_json?.location || '') === l).length
+          return (
+            <button key={l} onClick={() => { setLoc(l); setErr('') }}
+              className={`px-4 py-2 rounded-xl text-[12px] font-semibold border transition-colors ${
+                loc === l ? 'bg-brand text-white border-brand' : 'bg-surface-card text-text-muted border-surface-rule hover:text-text'
+              }`}>
+              📍 {l}
+              <span className={`ml-1.5 font-mono text-[10px] px-1.5 py-0.5 rounded-full ${loc === l ? 'bg-white/20' : 'bg-surface'}`}>{n}</span>
+            </button>
+          )
+        })}
+      </div>
+
       {canWrite && (
         <div className="bg-surface-card border border-surface-rule rounded-xl p-5">
-          <div className="font-semibold text-[14px] text-text mb-1">🍃 Leaf Shade Classifier</div>
-          <div className="text-[11px] text-text-muted mb-4">Upload a Canon <strong>CR3</strong> RAW photo of the leaf sample. The model predicts the shade; the lab confirms what they physically see.</div>
+          <div className="font-semibold text-[14px] text-text mb-1">🍃 Leaf Shade Classifier — {loc}</div>
+          <div className="text-[11px] text-text-muted mb-4">Upload a Canon <strong>CR3</strong> RAW photo of the leaf sample taken at <strong>{loc}</strong>. The model predicts the shade; the lab confirms what they physically see.</div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Left: upload + analyse */}
@@ -2003,14 +2030,10 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
 
           {/* Lab observation + save */}
           {result && (
-            <div className="mt-4 pt-4 border-t border-surface-rule grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="mt-4 pt-4 border-t border-surface-rule grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
-                <label className={lbl}>Batch No. *</label>
+                <label className={lbl}>Batch No. * <span className="text-text-faint normal-case">· {loc}</span></label>
                 <input className={inp + ' w-full'} value={batch} onChange={e => setBatch(e.target.value)} placeholder="e.g. GS-0098" />
-              </div>
-              <div>
-                <label className={lbl}>Location</label>
-                <input className={inp + ' w-full'} value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Receiving" />
               </div>
               <div>
                 <label className={lbl}>Observed shade (1–11)</label>
@@ -2024,7 +2047,7 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
                   {saving ? 'Saving…' : '💾 Save Record'}
                 </button>
               </div>
-              <div className="md:col-span-4">
+              <div className="md:col-span-3">
                 <label className={lbl}>What the lab physically sees (notes)</label>
                 <textarea className={inp + ' w-full'} rows={2} value={note} onChange={e => setNote(e.target.value)}
                   placeholder="Colour, condition, any visible differences from the predicted shade…" />
@@ -2039,8 +2062,8 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
       {/* History */}
       <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3 border-b border-surface-rule">
-          <span className="font-semibold text-[14px] text-text">🍃 Leaf Shade Records</span>
-          <span className="text-[11px] text-text-muted">{records.length} records</span>
+          <span className="font-semibold text-[14px] text-text">🍃 Leaf Shade Records — {loc}</span>
+          <span className="text-[11px] text-text-muted">{locRecords.length} records</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -2053,10 +2076,10 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-rule">
-              {records.length === 0 && (
-                <tr><td colSpan={canWrite ? 9 : 8} className="px-4 py-8 text-center text-[12px] text-text-muted">No leaf shade records yet.</td></tr>
+              {locRecords.length === 0 && (
+                <tr><td colSpan={canWrite ? 9 : 8} className="px-4 py-8 text-center text-[12px] text-text-muted">No leaf shade records for {loc} yet.</td></tr>
               )}
-              {records.map((r, i) => {
+              {locRecords.map((r, i) => {
                 const d = r.data_json || {}
                 const camOk = d.camera?.compliant
                 return (
