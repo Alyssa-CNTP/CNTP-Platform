@@ -39,9 +39,10 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/axis/projects',      itOnly: true },
   { prefix: '/axis',               itOnly: true },
 
-  // Quality — Sales can only reach customer-specs
+  // Quality — Sales can only reach customer-specs.
+  // Cross-department: any user with can_view_history (e.g. Management) gets through.
   { prefix: '/quality/customer-specs', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
-  { prefix: '/quality',                departments: ['Quality'] },
+  { prefix: '/quality',                departments: ['Quality'], permission: 'can_view_history', orPermission: true },
 
   // Supervisor hub — production supervisors + management
   { prefix: '/supervisor',           departments: ['Production','Management'] },
@@ -50,8 +51,10 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/count',                departments: ['Production'], permission: 'can_submit_count'       },
   { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
   { prefix: '/production/operations',departments: ['Management'] },
-  { prefix: '/production/live',      departments: ['Production'] },
-  { prefix: '/production',           departments: ['Production'] },
+  { prefix: '/production/dashboard', departments: ['Production','Management'] },
+  { prefix: '/production/floor-plan',departments: ['Production','Management'] },
+  { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
+  { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
   // Maintenance — full module is Maintenance + Management. Production may only
   // reach Job Cards (to report breakdowns + track their own cards). Longest-prefix
@@ -62,9 +65,10 @@ const ROUTE_GUARDS: Array<{
   // Logistics (barcode-driven receiving, warehouse, dispatch)
   { prefix: '/logistics',        departments: ['Production','Quality','Management'] },
 
-  // Management — /status is IT's platform-diagnostics module
+  // Management — /status is IT's platform-diagnostics module.
+  // Cross-department: can_view_management grants access from any department.
   { prefix: '/status',     departments: ['IT'] },
-  { prefix: '/management', departments: ['Management'] },
+  { prefix: '/management', departments: ['Management'], permission: 'can_view_management', orPermission: true },
 
   // Sales & Research
   { prefix: '/research',   departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
@@ -96,6 +100,10 @@ const ROUTE_META: Record<string, {
   '/production/live':        { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
   '/production/live/capture':{ title: 'Capture Session',        variant: 'default' },
   '/production/capture':     { title: 'Production Capture',      variant: 'default' },
+  '/production/dashboard':   { title: 'Production Dashboard',    variant: 'default' },
+  '/production/floor-plan':  { title: 'Factory Floor Plan',      variant: 'default' },
+  '/production/roster':      { title: 'Shift Rosters',           variant: 'default' },
+  '/production/staff':       { title: 'Staff Directory',         variant: 'default' },
   '/production/operators':   { title: 'Operators',              variant: 'default' },
   '/info':                   { title: 'Section Information',    variant: 'default' },
   '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
@@ -232,6 +240,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       pathname === '/dashboard' ||
       pathname === '/settings'  ||
       pathname === '/suggest'   ||
+      // Shift Rosters + Staff Directory are universal (Operations, every role)
+      pathname.startsWith('/production/roster') ||
+      pathname.startsWith('/production/staff')  ||
       pathname === '/axis/request' ||
       pathname.startsWith('/axis/request/')
     ) return
@@ -244,7 +255,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (!guard) return
 
     // IT-only routes (AXIS internals) — only IT dept or full admin
-    if (guard.itOnly && !isIT && !isFullAdmin) { router.replace('/dashboard'); return }
+    if (guard.itOnly && !isIT && !isFullAdmin) { router.replace('/home'); return }
 
     // If the user has the required permission explicitly enabled, they get through
     // regardless of department. Permission is the single source of truth.
@@ -259,12 +270,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     // No explicit permission — enforce department check
     if (guard.departments && !isDeveloper && !(department && guard.departments.includes(department))) {
-      router.replace('/dashboard'); return
+      router.replace('/home'); return
     }
     // Department matches but permission still required — unless the permission is
     // an alternative to department (orPermission), in which case department alone suffices.
     if (guard.permission && !guard.orPermission && !p(guard.permission)) {
-      router.replace('/dashboard'); return
+      router.replace('/home'); return
     }
   }, [loading, permissionsReady, user, pathname, isIT, isFullAdmin, department, role, p, router])
 
@@ -283,7 +294,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // Find best matching route key (longest prefix match)
   const routeKey = Object.keys(ROUTE_META)
     .filter(k => pathname === k || pathname.startsWith(k + '/'))
-    .sort((a, b) => b.length - a.length)[0] ?? '/dashboard'
+    .sort((a, b) => b.length - a.length)[0] ?? '/home'
 
   const meta = ROUTE_META[routeKey] ?? { title: 'CNTP Ops', variant: 'default' as const }
 

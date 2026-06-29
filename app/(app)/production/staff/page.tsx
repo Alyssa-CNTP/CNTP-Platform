@@ -9,7 +9,6 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { WorkforceTabs } from '@/components/production/WorkforceTabs'
-import { ProductionTabs } from '@/components/production/ProductionTabs'
 import { ROSTER_CATEGORIES, SKILL_TAGS, categoryMeta, tagLabel } from '@/lib/production/roster-config'
 
 interface Employee {
@@ -111,7 +110,6 @@ export default function StaffDirectoryPage() {
 
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <ProductionTabs />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display font-bold text-[22px] text-text">Staff Directory</h1>

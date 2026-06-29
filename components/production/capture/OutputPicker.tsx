@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Search, Sparkles, X, Printer } from 'lucide-react'
+import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
-import { BatchInput } from '@/components/production/capture/BatchInput'
+import { LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface PickedOutput {
@@ -106,22 +107,22 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             <div className={`grid gap-3 ${picked.batchTracked ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-1">
                 <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Weight (kg) *</label>
-                <input autoFocus type="number" inputMode="decimal" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
+                <input autoFocus type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
               </div>
               {picked.batchTracked && (
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch *</label>
-                  <BatchInput value={batch} onChange={setBatch} options={batchOptions} placeholder="Type or pick a batch" className={INP} />
+                  <BatchKeypadField value={batch} onChange={setBatch} options={batchOptions} placeholder="Tap to enter" className={INP} label="Batch" />
                 </div>
               )}
             </div>
             {!picked.batchTracked && (
-              <p className="text-[11px] text-text-muted flex items-center gap-1.5"><Printer size={12} /> Tracked automatically by barcode — no batch number needed.</p>
+              <p className="text-[11px] text-text-muted flex items-center gap-1.5"><Check size={12} /> Tracked by its bag number{LABEL_PRINTING_ENABLED ? ' (barcode)' : ''} — no batch number needed.</p>
             )}
             {picked.code && <p className="text-[11px] text-text-muted font-mono">{picked.code} · {picked.description}</p>}
             <button onClick={confirm} disabled={!weight}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
-              <Printer size={16} /> Add &amp; print label
+              {LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>}
             </button>
           </div>
         )}
