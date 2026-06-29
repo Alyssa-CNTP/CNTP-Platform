@@ -11,8 +11,9 @@
 // Editing controls are gated to managers; everyone else sees a read-only view.
 
 import { useState } from 'react'
+import Link from 'next/link'
 import {
-  ChevronDown, ChevronRight, CalendarRange, UserCheck, Clock3, Wrench, Plus,
+  ChevronDown, ChevronRight, CalendarRange, UserCheck, Clock3, Wrench, Plus, Users,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { useMaintenanceContext } from '../layout'
@@ -64,7 +65,7 @@ export default function PlannerPage() {
   const ctx = useMaintenanceContext()
   const { loading, data, derived, actions, ui } = ctx
   const { jcs, slots, roster, staff } = data
-  const { duty, openPlannedCards } = derived
+  const { duty, dutyNow, openPlannedCards } = derived
   const { slotForm, setSlotForm, rosterForm, setRosterForm } = ui
 
   // Technicians come from the live staff directory (falls back to TECHS).
@@ -166,6 +167,61 @@ export default function PlannerPage() {
             : <div className="mt-1.5 text-sm text-text-faint">Nothing scheduled ahead.</div>}
         </div>
       </div>
+
+      {/* ── Per-technician status — what each person is busy with + outstanding ── */}
+      {techNames.length > 0 && (
+        <div className="card p-4 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Users size={16} className="text-text-muted" />
+            <h2 className="text-sm font-semibold text-text">Per-technician status</h2>
+            <span className="text-[11px] text-text-muted">what each person is doing now &amp; what is outstanding</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {techNames.map(t => {
+              const open = jcs.filter(j => j.assigned_to === t && j.status !== 'complete' && j.status !== 'cancelled')
+              const active = open.find(j => j.status === 'in_progress' && !j.paused)
+              const paused = open.filter(j => j.status === 'in_progress' && j.paused)
+              const waitingAccept = open.filter(j => j.status === 'assigned')
+              const onDuty = dutyNow.includes(t)
+              const tc = colorFor(t)
+              return (
+                <div key={t} className="rounded-lg border border-surface-rule bg-surface-raised p-3">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: tc.dot }} />
+                      <strong className="text-[13px] text-text truncate">{t}</strong>
+                    </div>
+                    <span className={`badge ${onDuty ? 'badge-ok' : 'badge-gray'}`}>{onDuty ? 'ON DUTY' : 'OFF'}</span>
+                  </div>
+                  <div className="text-[12px] mb-1.5">
+                    {active
+                      ? <span className="text-warn font-medium">● Busy: <Link href={`/maintenance/job-cards/${active.id}`} className="text-accent">{active.card_no}</Link> — {active.area}</span>
+                      : paused.length
+                        ? <span className="text-text-muted">⏸ On hold ({paused.length}) — free to take work</span>
+                        : <span className="text-ok">○ Available</span>}
+                  </div>
+                  <div className="flex gap-3 text-[11px] text-text-muted mb-1.5">
+                    <span><strong className="text-text tabular-nums">{open.length}</strong> outstanding</span>
+                    <span><strong className="text-text tabular-nums">{waitingAccept.length}</strong> to accept</span>
+                  </div>
+                  {open.length > 0 && (
+                    <div className="space-y-0.5">
+                      {open.slice(0, 4).map(j => (
+                        <div key={j.id} className="text-[11px] truncate">
+                          <Link href={`/maintenance/job-cards/${j.id}`} className="text-accent">{j.card_no}</Link>
+                          <span className="text-text-faint"> · {j.status.replace(/_/g, ' ')}</span>
+                          <span className="text-text-muted"> — {j.description}</span>
+                        </div>
+                      ))}
+                      {open.length > 4 && <div className="text-[10px] text-text-faint">+{open.length - 4} more</div>}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Add a planned slot (collapsible, manager only) ── */}
       {canManage && (

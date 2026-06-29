@@ -27,7 +27,25 @@ export async function POST(req: NextRequest) {
 
     const db = await getSessionClient()
     const isBd = workflow === 'breakdown'
-    const duty = isBd ? await resolveOnDutyTechnician(db) : null
+    // Route a breakdown to the on-duty technician who is NOT already busy. Falls
+    // back to the most-recent shift (resolveOnDutyTechnician) when no one is free
+    // or only one tech is on duty.
+    let duty = isBd ? await resolveOnDutyTechnician(db) : null
+    if (isBd) {
+      const nowIso = new Date().toISOString()
+      const { data: onDuty } = await db.schema('maintenance' as any).from('duty_roster')
+        .select('technician, technician_user_id, start_at, end_at')
+        .lte('start_at', nowIso).gte('end_at', nowIso)
+      if (onDuty && onDuty.length) {
+        const { data: openCards } = await db.schema('maintenance' as any).from('job_cards')
+          .select('assigned_to, status, paused').in('status', ['assigned', 'in_progress'])
+        const load = (name: string) => (openCards ?? []).filter((c: any) => c.assigned_to === name && !(c.status === 'in_progress' && c.paused)).length
+        const ranked = onDuty
+          .map((r: any) => ({ userId: r.technician_user_id ?? null, name: r.technician, load: load(r.technician) }))
+          .sort((a: any, b: any) => a.load - b.load)
+        if (ranked[0]) duty = { userId: ranked[0].userId, name: ranked[0].name }
+      }
+    }
 
     const row: any = {
       workflow, area: b.area, machine: b.machine || null,

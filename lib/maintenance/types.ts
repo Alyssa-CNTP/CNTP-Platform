@@ -2,11 +2,16 @@
 // Shared maintenance-module types — extracted verbatim from the original
 // monolithic page (no behaviour change).
 
-export const STATUSES = ['raised', 'clarify', 'assigned', 'in_progress', 'qc_check', 'verify', 'complete'] as const
+export const STATUSES = ['raised', 'clarify', 'assigned', 'in_progress', 'qc_check', 'verify', 'complete', 'cancelled'] as const
 export type Status = typeof STATUSES[number]
 
 export type View = 'manager' | 'tech' | 'qc' | 'raiser'
 export type QcAnswer = 'yes' | 'no' | 'na'
+
+// Manager-set urgency label, applied when a card is allocated. When null the UI
+// falls back to the derived priorityOf(). Ordered low → critical.
+export const URGENCIES = ['low', 'medium', 'high', 'critical'] as const
+export type Urgency = typeof URGENCIES[number]
 
 export interface JobCard {
   id: number; card_no: string; area: string; machine: string | null
@@ -14,7 +19,9 @@ export interface JobCard {
   workflow: 'breakdown' | 'planned'
   raised_by: string; raised_at: string
   status: Status; assigned_to: string | null; assigned_at: string | null
-  accepted_at: string | null; completed_at: string | null
+  accepted_at: string | null; started_at: string | null; completed_at: string | null
+  // Manager urgency label (null → derived priority); cancellation audit fields.
+  urgency: Urgency | null; cancelled_at: string | null; cancelled_by: string | null
   work_done: string; root_cause: string; tools_used: string
   qc_required: boolean; external: boolean; external_company: string
   qc_checks: any[]; qc_name: string; qc_done_at: string | null
