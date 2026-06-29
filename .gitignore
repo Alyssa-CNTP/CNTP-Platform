@@ -46,3 +46,7 @@ research-engine/ollama_data/
 *.zip
 *.tar
 *.tar_*
+# Leaf shade Python service — local virtualenv & caches (created by setup.sh on the VPS)
+ml/leafshade/.venv/
+ml/**/__pycache__/
+*.pyc

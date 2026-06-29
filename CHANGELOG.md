@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-29 — Gustav (Raw Material: Leaf Shade ML classifier + pH/TDS tab — ported from CNTPquality)
+
+**Files changed:**
+- `ml/leafshade/` (new) — `leaf_shade_api.py`, `leaf_shade_models/*.pkl`, `requirements.txt`, `setup.sh`, `run.sh`, `README.md`, `.python-version`
+- `app/api/leaf-shade/predict/route.ts` (new)
+- `app/(app)/quality/raw-material/page.tsx`
+- `.gitignore`
+
+**Changes:**
+- Ported the **Leaf Shade Classifier** from the old `CNTPquality` Express app (`server/leafShade.js` + `server/leaf_shade_api.py`). It is a Flask micro-service that takes a Canon **CR3** RAW photo, extracts 30 colour features (OpenCV/rawpy) and predicts the leaf shade (Shade 0–11) with an MLPClassifier + StandardScaler + LabelEncoder.
+- The three model pickles were saved with **scikit-learn 1.7.2**; `requirements.txt` pins the exact Python versions (validated: model loads, 30-feature pipeline runs end-to-end). **No Next.js `package.json` module versions were changed.**
+- Added **`POST /api/leaf-shade/predict`** — a Next.js route that proxies the CR3 to the Python service on `127.0.0.1:5001` (not internet-facing) and returns prediction + top-5 + camera-compliance.
+- Added a **🍃 Leaf Shade** tab in Raw Material: CR3 upload → model prediction, plus the lab's **physically observed shade (1–11)** and a **free-text observation** note. Saves to `qms.quality_records` (`workflow='leaf_shade'`).
+- Added a separate **💧 pH / TDS** tab in Raw Material for manual pH + TDS entry per batch. Saves to `qms.quality_records` (`workflow='ph_tds'`). No schema migration needed — `data_json` is jsonb.
+- The Python service runs as its own pm2 process (`cntp-leafshade`); see `ml/leafshade/README.md` for one-time VPS setup (`bash ml/leafshade/setup.sh` + `pm2 start ml/leafshade/run.sh --name cntp-leafshade`).
+
+---
+
 ## 2026-06-29 — Gustav (Scheduled maintenance: interactive Overview tiles, required calibration sign-off, required fault choice)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`
