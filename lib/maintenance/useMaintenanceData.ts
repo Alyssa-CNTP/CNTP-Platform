@@ -531,15 +531,16 @@ export function useMaintenanceData() {
   // calDone marks it done today; calDoneOn lets the manager finalise on a chosen
   // date — the next cycle (last_done + interval_days) recomputes automatically in
   // the calRows selector.
-  const calDoneOn = async (a: CalAsset, dateStr: string) => {
+  const calDoneOn = async (a: CalAsset, dateStr: string, by?: string) => {
     const day = (dateStr || new Date().toISOString().slice(0, 10)).slice(0, 10)
-    const comment = (a.comment ? a.comment + ' • ' : '') + `Done ${day} by ${actor || displayName || ''}`
+    const who = by || actor || displayName || ''
+    const comment = (a.comment ? a.comment + ' • ' : '') + `Done ${day} by ${who}`
     setCalAssets(p => p.map(x => x.id === a.id ? { ...x, last_done: day, comment } : x))
     const { error: err } = await db.schema('maintenance').from('calibration_assets')
       .update({ last_done: day, comment }).eq('id', a.id)
     if (err) setPopup('Save failed: ' + err.message)
   }
-  const calDone = async (a: CalAsset) => calDoneOn(a, new Date().toISOString().slice(0, 10))
+  const calDone = async (a: CalAsset, by?: string) => calDoneOn(a, new Date().toISOString().slice(0, 10), by)
   // Equipment serviced today — resets the hours-since-service counter
   const eqServiced = async (equipment: string, total: number | null) => {
     await saveReading('equipment_hours', {
