@@ -9,6 +9,8 @@
 import { useState } from 'react'
 import { Printer } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
+import { useAuth } from '@/lib/auth/context'
+import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { calClass, calBadge, fmtD, fmtT } from '@/lib/maintenance/helpers'
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
@@ -25,50 +27,17 @@ const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em
 const BTN_OK = 'bg-ok text-white rounded-lg px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition'
 const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md px-2.5 py-1.5 text-[11px] font-semibold hover:border-text/25 transition'
 
-// Tiny SVG line chart for trends — no chart library needed. Each point is
-// clickable (transparent overlay buttons): tapping one reveals that week's date
-// and value below the chart, so the raw numbers live on the graph itself rather
-// than in a separate table.
-function Spark({ pts, color = '#2563eb', h = 44, labels, dates, unit = '', digits = 1 }: { pts: number[]; color?: string; h?: number; labels?: [string, string]; dates?: (string | null)[]; unit?: string; digits?: number }) {
-  const [sel, setSel] = useState<number | null>(null)
-  if (pts.length < 2) return <div className="text-[11px] text-text-faint py-2">Not enough data yet — tap points once there are ≥2 readings.</div>
-  const min = Math.min(...pts), max = Math.max(...pts), w = 200, n = pts.length
-  const xAt = (i: number) => (i / (n - 1)) * w
-  const yAt = (v: number) => (max === min ? h / 2 : h - ((v - min) / (max - min)) * (h - 8) - 4)
-  const xy = pts.map((v, i) => `${xAt(i)},${yAt(v)}`).join(' ')
-  const fmtV = (v: number) => v.toFixed(digits) + (unit ? ' ' + unit : '')
-  return (
-    <div>
-      <div className="relative" style={{ height: h }}>
-        <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: h, display: 'block' }} preserveAspectRatio="none">
-          <polyline points={xy} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-          {sel != null && <line x1={xAt(sel)} y1={0} x2={xAt(sel)} y2={h} stroke={color} strokeWidth={1} strokeDasharray="2 2" opacity={0.55} vectorEffect="non-scaling-stroke" />}
-          {sel != null && <circle cx={xAt(sel)} cy={yAt(pts[sel])} r={3} fill={color} vectorEffect="non-scaling-stroke" />}
-        </svg>
-        {/* Transparent per-point hit targets — click to read the value. */}
-        <div className="absolute inset-0 flex">
-          {pts.map((v, i) => (
-            <button key={i} onClick={() => setSel(s => (s === i ? null : i))}
-              title={`${dates?.[i] ? fmtD(dates[i]) + ' · ' : ''}${fmtV(v)}`}
-              className={`flex-1 transition ${sel === i ? 'bg-current/5' : 'hover:bg-current/5'}`} style={{ color }} />
-          ))}
-        </div>
-      </div>
-      {labels && <div className="flex justify-between text-[10px] text-text-faint"><span>{labels[0]}</span><span>{labels[1]}</span></div>}
-      <div className="text-[11px] mt-1 min-h-[16px]">
-        {sel != null
-          ? <span className="text-text">{dates?.[sel] ? fmtD(dates[sel]) + ' · ' : `Point ${sel + 1} · `}<strong>{fmtV(pts[sel])}</strong></span>
-          : <span className="text-text-faint">Tap a point to see its value</span>}
-      </div>
-    </div>
-  )
-}
-
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
-  const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, eqHours, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
-  const { annualRows, lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists } = derived
+  const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
+  const { getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const auth = useAuth()
+  const canManage = deriveMaintRole(auth).canManage
+  // On-duty technicians (auto-suggested for checklist allocation) + the full
+  // staff directory for the picker.
+  const dutyNow: string[] = derived.dutyNow
+  const allTechs = (data.staff.length ? data.staff.map(s => s.name) : TECHS)
+  const { annualRows, lastComp, eqLatest, calRows, outstandingChecklists } = derived
   const { drafts, setDrafts, setPopup } = ui
 
   const [sub, setSub] = useState(0)
@@ -80,8 +49,6 @@ export default function ScheduledPage() {
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
-  // Trend window for the Readings & Trends sparks (weeks of history to plot).
-  const [trendWeeks, setTrendWeeks] = useState(26)
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
   const eqOrdered = [...eqLatest].sort((a, b) => {
     const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
@@ -121,7 +88,7 @@ export default function ScheduledPage() {
 
       {/* Light segmented control */}
       <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit flex-wrap">
-        {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration', 'Readings & Trends'].map((t, i) => (
+        {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration', 'Readings'].map((t, i) => (
           <button key={t} onClick={() => setSub(i)}
             className={`px-3.5 py-1.5 rounded-md text-[12px] font-semibold whitespace-nowrap transition ${sub === i ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{t}</button>
         ))}
@@ -226,8 +193,12 @@ export default function ScheduledPage() {
                 const isOpen = openCL === cl.id
                 const prev = lastComp(cl.id)
                 const dot = done ? 'bg-ok' : doneN > 0 ? 'bg-warn' : 'bg-text-faint'
+                const assigned = comp?.assigned_to || ''
+                const assignedToMe = !!assigned && assigned === actor
+                // Suggest the on-duty technician first, then the rest of the team.
+                const techOptions = [...dutyNow, ...allTechs.filter(t => !dutyNow.includes(t))]
                 return (
-                  <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
+                  <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
                     <div className="p-3 cursor-pointer flex justify-between items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
                       <div className="flex items-center gap-2 min-w-0">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
@@ -239,11 +210,21 @@ export default function ScheduledPage() {
                               : prev ? <>Last: {prev.period_key} by <strong className="text-text">{prev.completed_by || '—'}</strong></>
                               : 'Never completed in the system'}
                           </div>
+                          {assigned && <div className="text-[10px] mt-0.5"><span className={`badge ${assignedToMe ? 'badge-info' : 'badge-gray'}`}>→ {assigned}{assignedToMe ? ' (you)' : ''}</span></div>}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
+                        {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
+                        {canManage && (
+                          <select className={`${INP} w-28 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                            value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
+                            <option value="">Allocate…</option>
+                            {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
+                            <optgroup label="All technicians">{techOptions.filter(t => !dutyNow.includes(t)).map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
+                          </select>
+                        )}
                         <button title="Print this checklist"
-                          onClick={e => { e.stopPropagation(); printChecklistOne(cl, comp, period) }}
+                          onClick={() => printChecklistOne(cl, comp, period)}
                           className="inline-flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:bg-surface-dim hover:text-text transition"><Printer size={13} /></button>
                         <span className={`badge ${done ? 'badge-ok' : doneN > 0 ? 'badge-warn' : 'badge-gray'}`}>{done ? 'DONE' : doneN > 0 ? doneN + '/' + cl.tasks.length : 'NOT STARTED'}</span>
                       </div>
@@ -429,17 +410,8 @@ export default function ScheduledPage() {
       {/* ── READINGS & TRENDS: friendly numeric capture + history ── */}
       {sub === 4 && (
         <div className="space-y-4">
-          <div className="card p-3 flex items-center justify-between gap-2 flex-wrap">
-            <div className="text-[12px] text-text-muted">
-              Enter readings below — the previous value is shown next to each field and usage is calculated automatically (same formulas as the Excel database). Recording as <strong className="text-text">{actor}</strong>.
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[11px] text-text-muted">Trend window:</span>
-              {([['8w', 8], ['Quarter', 13], ['6 months', 26], ['Year', 52]] as [string, number][]).map(([l, n]) => (
-                <button key={n} onClick={() => setTrendWeeks(n)}
-                  className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition ${trendWeeks === n ? 'bg-brand text-white' : 'bg-surface-dim text-text-muted hover:text-text'}`}>{l}</button>
-              ))}
-            </div>
+          <div className="card p-3 text-[12px] text-text-muted">
+            Enter readings below — the previous value is shown next to each field and usage is calculated automatically (same formulas as the Excel database). Recording as <strong className="text-text">{actor}</strong>. The trend graphs are now on the <strong className="text-text">Maintenance dashboard</strong>.
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
@@ -470,12 +442,6 @@ export default function ScheduledPage() {
                     })
                     if (ok) setRd(p => ({ ...p, wmain_meter: '', wunit1: '', wunit2_w1: '', wunit2_w2: '', wboiler: '' }))
                   }}>Save water readings</button>
-                  <div className="mt-3">
-                    <div className={LB}>Main meter weekly usage (kL)</div>
-                    <Spark pts={waterUsage.main.slice(-trendWeeks)} color="#2563eb" unit="kL" labels={[fmtD(waterReadings[Math.max(0, waterReadings.length - trendWeeks)]?.reading_date ?? null), fmtD(lastOf(waterReadings)?.reading_date ?? null)]} />
-                    <div className={`${LB} mt-2`}>Boiler usage</div>
-                    <Spark pts={waterUsage.boiler.slice(-trendWeeks)} color="#0891b2" unit="kL" />
-                  </div>
                 </div>
               )})()}
             </div>
@@ -505,10 +471,6 @@ export default function ScheduledPage() {
                     })
                     if (ok) setRd(p => ({ ...p, ipflow: '', ipdip: '', iprecv: '', ipcost: '' }))
                   }}>Save IP reading</button>
-                  <div className="mt-3">
-                    <div className={LB}>Weekly IP usage (L)</div>
-                    <Spark pts={ipUsage.slice(-trendWeeks)} color="#d97706" unit="L" digits={0} />
-                  </div>
                 </div>
               )})()}
             </div>
@@ -536,10 +498,6 @@ export default function ScheduledPage() {
                     })
                     if (ok) setRd(p => ({ ...p, dhrs: '', dfuel: '' }))
                   }}>Save diesel reading</button>
-                  <div className="mt-3">
-                    <div className={LB}>Generator run hours / week</div>
-                    <Spark pts={dieselReadings.slice(-trendWeeks).map(r => r.run_hours ?? 0)} dates={dieselReadings.slice(-trendWeeks).map(r => r.reading_date)} color="#dc2626" unit="hrs" />
-                  </div>
                 </div>
               )})()}
             </div>
@@ -610,12 +568,6 @@ export default function ScheduledPage() {
                     </div>
                   </div>
                 ))}
-              </div>
-              <div className="mt-3">
-                <div className={LB}>Compressor hours since service</div>
-                {(() => { const cmp = eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-trendWeeks); return (
-                  <Spark pts={cmp.map(h => h.hours_since_service!)} dates={cmp.map(h => h.reading_date)} color="#7c3aed" unit="h" digits={0} />
-                )})()}
               </div>
             </div>
 

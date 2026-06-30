@@ -48,14 +48,17 @@ function Stat({ label, value, unit, color }: { label: string; value: number; uni
 
 export function EnergyHistory() {
   const [days, setDays]       = useState<number>(30)
+  const [from, setFrom]       = useState('')   // custom range (overrides days when set)
+  const [to, setTo]           = useState('')
   const [rows, setRows]       = useState<DayRow[]>([])
   const [error, setError]     = useState('')
   const [loading, setLoading] = useState(true)
 
-  const load = useCallback(async (d: number) => {
+  const load = useCallback(async (d: number, f: string, t: string) => {
     setLoading(true)
     try {
-      const res  = await fetch(`/api/maintenance/energy/history?days=${d}`)
+      const qs = (f || t) ? `from=${f}&to=${t}` : `days=${d}`
+      const res  = await fetch(`/api/maintenance/energy/history?${qs}`)
       const json = await res.json()
       if (!res.ok) { setError(json?.error ?? 'Could not load energy history'); setRows([]) }
       else         { setRows(json.days ?? []); setError('') }
@@ -66,7 +69,8 @@ export function EnergyHistory() {
     }
   }, [])
 
-  useEffect(() => { load(days) }, [days, load])
+  useEffect(() => { load(days, from, to) }, [days, from, to, load])
+  const customActive = !!(from || to)
 
   const fmtDay = (s: string) =>
     new Date(`${s}T00:00:00`).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' })
@@ -84,16 +88,26 @@ export function EnergyHistory() {
 
   return (
     <div className="space-y-5">
-      {/* Range selector */}
-      <div className="flex items-center justify-between">
+      {/* Range selector — quick windows + a custom date range */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <span className="text-[11px] text-text-faint">{rows.length} day{rows.length === 1 ? '' : 's'} recorded</span>
-        <div className="inline-flex rounded-lg border border-surface-rule overflow-hidden">
-          {RANGES.map(r => (
-            <button key={r} onClick={() => setDays(r)}
-              className={`px-2.5 py-1 text-[11px] font-medium transition ${days === r ? 'bg-surface-dim text-text' : 'text-text-muted hover:bg-surface-dim/50'}`}>
-              {r}d
-            </button>
-          ))}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="inline-flex rounded-lg border border-surface-rule overflow-hidden">
+            {RANGES.map(r => (
+              <button key={r} onClick={() => { setFrom(''); setTo(''); setDays(r) }}
+                className={`px-2.5 py-1 text-[11px] font-medium transition ${!customActive && days === r ? 'bg-surface-dim text-text' : 'text-text-muted hover:bg-surface-dim/50'}`}>
+                {r}d
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 text-[11px] text-text-muted">
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} title="From"
+              className="rounded-md border border-surface-rule bg-surface-card px-2 py-1 text-[11px] text-text" />
+            <span>–</span>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} title="To"
+              className="rounded-md border border-surface-rule bg-surface-card px-2 py-1 text-[11px] text-text" />
+            {customActive && <button onClick={() => { setFrom(''); setTo('') }} className="text-text-muted hover:text-text underline">Clear</button>}
+          </div>
         </div>
       </div>
 
@@ -142,7 +156,7 @@ export function EnergyHistory() {
           {/* Solar usage — PV produced, per day */}
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted mb-2">Solar Usage — daily</p>
-            <ResponsiveContainer width="100%" height={160}>
+            <ResponsiveContainer width="100%" height={110}>
               <BarChart data={chartRows} margin={{ top: 4, right: 4, left: -16, bottom: 0 }} barSize={10}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis dataKey="day" tick={{ fontSize: 9, fill: 'var(--color-text-faint, #888)' }} tickLine={false} interval="preserveStartEnd" />

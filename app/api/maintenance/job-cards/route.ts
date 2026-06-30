@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
-import { resolveOnDutyTechnician } from '@/lib/maintenance/roster'
+import { resolveOnDutyTechnician, listOnDutyTechnicians } from '@/lib/maintenance/roster'
 import { notify } from '@/lib/notifications'
 import { resolveRecipients, getMaintenanceManagerIds } from '@/lib/notifications/recipients'
 
@@ -32,17 +32,16 @@ export async function POST(req: NextRequest) {
     // or only one tech is on duty.
     let duty = isBd ? await resolveOnDutyTechnician(db) : null
     if (isBd) {
-      const nowIso = new Date().toISOString()
-      const { data: onDuty } = await db.schema('maintenance' as any).from('duty_roster')
-        .select('technician, technician_user_id, start_at, end_at')
-        .lte('start_at', nowIso).gte('end_at', nowIso)
-      if (onDuty && onDuty.length) {
+      // On-duty techs come from the Operations roster (single source); pick the
+      // one carrying the least active load.
+      const onDuty = await listOnDutyTechnicians(db)
+      if (onDuty.length) {
         const { data: openCards } = await db.schema('maintenance' as any).from('job_cards')
           .select('assigned_to, status, paused').in('status', ['assigned', 'in_progress'])
         const load = (name: string) => (openCards ?? []).filter((c: any) => c.assigned_to === name && !(c.status === 'in_progress' && c.paused)).length
         const ranked = onDuty
-          .map((r: any) => ({ userId: r.technician_user_id ?? null, name: r.technician, load: load(r.technician) }))
-          .sort((a: any, b: any) => a.load - b.load)
+          .map(r => ({ userId: r.userId, name: r.name, load: load(r.name) }))
+          .sort((a, b) => a.load - b.load)
         if (ranked[0]) duty = { userId: ranked[0].userId, name: ranked[0].name }
       }
     }

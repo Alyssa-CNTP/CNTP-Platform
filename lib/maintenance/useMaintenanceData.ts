@@ -59,6 +59,11 @@ export function useMaintenanceData() {
   const [machines, setMachines] = useState<Machine[]>([])
   // Reorder / part requests (loaded defensively in its own effect — see loadRequests).
   const [requests, setRequests] = useState<SpareRequest[]>([])
+  // Operations "Shift Roster" (production schema) — the single source for who is
+  // the on-duty maintenance technician. Loaded defensively (own effect) so a
+  // permission/schema hiccup falls back to the legacy maintenance duty_roster.
+  const [opsPeriods, setOpsPeriods] = useState<{ id: string; start_date: string; end_date: string }[]>([])
+  const [opsEntries, setOpsEntries] = useState<{ period_id: string; role_key: string; shift: string; person_name: string }[]>([])
 
   // Acting-as name — defaults to the signed-in user; preserved from the original.
   const [actor, setActor] = useState('')
@@ -157,6 +162,20 @@ export function useMaintenanceData() {
 
   useEffect(() => { loadRequests() }, [loadRequests])
 
+  // Load the Operations shift roster (single source for on-duty technician).
+  const loadOpsRoster = useCallback(async () => {
+    try {
+      const [{ data: periods }, { data: entries }] = await Promise.all([
+        db.schema('production' as any).from('roster_periods').select('id,start_date,end_date'),
+        db.schema('production' as any).from('roster_entries').select('period_id,role_key,shift,person_name'),
+      ])
+      setOpsPeriods((periods ?? []) as any)
+      setOpsEntries((entries ?? []) as any)
+    } catch { /* keep empty — falls back to the maintenance duty_roster */ }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadOpsRoster() }, [loadOpsRoster])
+
   // Raise a reorder / part request → server route (gating + manager notify).
   const createRequest = async (payload: { part_id?: number | null; part_no?: string | null; description: string; qty: number; reason: string; card_id?: number | null; note?: string }) => {
     let res: Response
@@ -207,19 +226,35 @@ export function useMaintenanceData() {
     if (err) setPopup('Save failed: ' + err.message)
   }
 
-  const onDutyTech = () => {
-    const now = Date.now()
-    return roster.find(r => new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime())?.technician ?? null
+  // On-duty maintenance technicians from the Operations shift roster (the single
+  // source). Maintenance-role entries for today's period + current shift
+  // (Day 07:00–16:00 / Night 16:00–01:00, SAST). Falls back to the legacy
+  // maintenance duty_roster only when Operations has no maintenance entries.
+  const MAINT_ROLE_KEYS = ['maintenance_tech', 'maintenance_asst']
+  const opsOnDutyNames = () => {
+    const sast = new Date(Date.now() + 2 * 3600_000)
+    const hour = sast.getUTCHours()
+    const shift = hour >= 7 && hour < 16 ? 'day' : 'night'
+    const today = sast.toISOString().slice(0, 10)
+    const pids = opsPeriods.filter(p => p.start_date <= today && today <= p.end_date).map(p => p.id)
+    if (!pids.length) return [] as string[]
+    return Array.from(new Set(
+      opsEntries
+        .filter(e => pids.includes(e.period_id) && MAINT_ROLE_KEYS.includes(e.role_key) && e.shift === shift)
+        .map(e => (e.person_name ?? '').trim()).filter(Boolean)
+    ))
   }
-  // All technicians on duty right now (a shift has two) — drives quick-pick
-  // allocation buttons on the board.
+  // All technicians on duty right now — drives quick-pick allocation + suggestions.
   const onDutyTechs = () => {
+    const ops = opsOnDutyNames()
+    if (ops.length) return ops
     const now = Date.now()
     return Array.from(new Set(
       roster.filter(r => new Date(r.start_at).getTime() <= now && now <= new Date(r.end_at).getTime())
         .map(r => r.technician)
     ))
   }
+  const onDutyTech = () => onDutyTechs()[0] ?? null
 
   const createJC = async () => {
     if (!nj.area || !nj.desc || !nj.raisedBy) { setPopup('Please fill in your name, the area and a short description.'); return }
@@ -443,7 +478,14 @@ export function useMaintenanceData() {
       template_id: tpl.id, period_key: period,
       task_states: patch.task_states ?? existing?.task_states ?? {},
       comments: patch.comments ?? existing?.comments ?? '',
-      completed_by: displayName || existing?.completed_by || '',
+      // Only stamp completed_by on an actual work edit (tasks/comments) — not when
+      // merely allocating the checklist to a technician.
+      completed_by: (patch.task_states !== undefined || patch.comments !== undefined)
+        ? (displayName || existing?.completed_by || '')
+        : (existing?.completed_by ?? ''),
+      assigned_to: patch.assigned_to !== undefined ? patch.assigned_to : (existing?.assigned_to ?? null),
+      assigned_by: patch.assigned_by !== undefined ? patch.assigned_by : (existing?.assigned_by ?? null),
+      assigned_at: patch.assigned_at !== undefined ? patch.assigned_at : (existing?.assigned_at ?? null),
       updated_at: new Date().toISOString(),
     }
     setCompletions(p => {
@@ -455,6 +497,11 @@ export function useMaintenanceData() {
       .upsert(merged, { onConflict: 'template_id,period_key' }).select().single()
     if (err) { setPopup('Save failed: ' + err.message); return }
     setCompletions(p => p.map(c => (c.template_id === tpl.id && c.period_key === period ? data : c)))
+  }
+
+  // Manager allocates a checklist (template + current period) to a technician.
+  const allocateChecklist = async (tpl: Template, techName: string) => {
+    await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
   }
 
   const toggleTask = (tpl: Template, ti: number) => {
@@ -755,7 +802,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
       qcSubmit, verifyCard, postComment,
-      getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, updateAnnual, calibrateAnnual,
+      getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,
