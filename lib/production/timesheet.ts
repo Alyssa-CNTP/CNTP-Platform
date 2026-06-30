@@ -14,11 +14,12 @@ import { getDb } from '@/lib/supabase/db'
 export const TEA_MIN_MINUTES = 5
 export const TEA_MAX_MINUTES = 30
 
-export type BreakType = 'tea' | 'lunch'
+export type BreakType = 'tea' | 'lunch' | 'changeover' | 'maintenance' | 'other'
 export interface TimesheetBreak {
   type:  BreakType
   start: string  // ISO
   end:   string  // ISO
+  notes?: string
 }
 export interface DerivedTimesheet {
   shiftStart:    string | null  // ISO
