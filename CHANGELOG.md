@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Alyssa (Production Orders page, expandable capture overview, date-scoped serials, maintenance escalation)
+
+**Files changed:**
+- `app/(app)/production/orders/page.tsx` (new)
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/layout/Sidebar.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+- `components/production/capture/TimesheetConfirm.tsx`
+
+**Changes:**
+- **Production Orders page** (`/production/orders`): lists all `prod_sessions` across every section, grouped by date, with status badge (in progress / awaiting sign-off / signed off), shift, variant, operator names, lot number, kg in → kg out, and variance badge (green/amber vs. tolerance). Filterable by section, status, shift, and date range. Each card links directly into the capture page for that session. Visible to Production + Management.
+- **Sidebar**: added Production Orders nav entry under the Production group (FileText icon).
+- **Capture overview — expandable grouped rows**: bagging rows grouped by product (10 bags of Fine Leaf = 1 row with count + total kg). Click any group to expand and see individual bag rows with serial number, time logged, and weight. Expand all / Collapse all buttons. Active filter badge. Filter bar: product text search, variant select, grade select, clear button.
+- **Serial counter date-scoped**: `bag_tags` serial lookup now uses a `like('serial_number', 'ST-DDMMYY-%')` prefix so the counter resets to 001 each day instead of continuing from the previous day's last number.
+- **Timesheet maintenance escalation**: maintenance break entries now require a description — confirm button is blocked and a warning is shown until notes are filled in. On timesheet confirm, each maintenance stoppage fires a `line_messages` alert to the section channel with operator name, section, shift, description, and duration for immediate supervisor visibility.
+
+---
+
 ## 2026-06-29 — Gustav (Leaf Shade: Docker deployment for the Python service)
 
 **Files changed:**
