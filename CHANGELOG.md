@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Lab Manager — Phase 3: granule block layout + allocate→approve)
+
+**Files changed:**
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/lab-manager/page.tsx`
+- DB: `qms.granule_runs` + columns `lm_status`, `allocated_by`, `allocated_at`, `approved_by`, `final_reason` (staging)
+
+**Changes:**
+- **Granule active runs now use the pasteuriser-style block layout** — a row of selectable batch blocks (sample count + status); clicking one opens its full card, instead of stacking every run.
+- **New-run warning** — starting a run while open runs exist now prompts a confirm suggesting you add a sample to an existing run instead.
+- **Granule allocate → approve workflow** — QC clicks **📤 Allocate to Lab Manager** (run → `awaiting_approval`); the approver (Lab/Quality Manager or IT) sets **Pass/Fail/Concession** (reason required on Fail/Concession), from the granule card or the Lab Manager dashboard. QC can **↩ Recall** while unapproved.
+- **Lab Manager dashboard now covers granule too** — the pending-approvals queue lists both pasteuriser and granule runs (tagged), each with out-of-spec bag/box highlights (granule OOS derived from sample violations). The daily overview shows granule batches per day with their OOS bags.
+
 ## 2026-06-30 — Gustav (Lab Manager — Phase 2: dashboard, approvals queue, daily sign-off)
 
 **Files changed:**

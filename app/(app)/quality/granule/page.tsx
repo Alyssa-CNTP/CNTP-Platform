@@ -1199,16 +1199,19 @@ interface RunCardProps {
   onAddSample: (r: any) => void
   onAddTasting: (r: any, sid: number | null) => void
   onDelete: (id: number) => void
-  onFinalise: (id: number, status: string) => void
+  onFinalise: (id: number, status: string, reason?: string) => void
   onUpdateSpec: (id: number, spec: any) => void
   onRecheckSample: (id: number, f: any) => void
   onEditSample: (id: number, f: any) => void
   onCommentSample: (id: number, f: any) => void
   onEditTasting: (id: number, f: any) => void
   onUpdateBatch: (id: number, bn: string) => void
+  onAllocate: (id: number) => void
+  onRecall: (id: number) => void
+  canApprove: boolean
 }
 
-function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onCommentSample, onEditTasting, onUpdateBatch }: RunCardProps) {
+function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
   const [expanded, setExpanded]         = useState(true)
   const [editingSpec, setEditingSpec]   = useState(false)
   const [editingSample, setEditingSample] = useState<any>(null)
@@ -1269,13 +1272,39 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
           <button onClick={() => onAddTasting(run, null)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">🍵 Tasting</button>
-          <button
-            onClick={() => { if (noTastings) { alert('Cannot finalise: at least one tasting record is required before finalising a run.'); return } onFinalise(run.id, 'Pass') }}
-            className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer"
-            style={{ border: noTastings ? '1px solid #d1d5db' : '1px solid #166534', background: noTastings ? '#f3f4f6' : '#f0fdf4', color: noTastings ? '#9ca3af' : '#166534', cursor: noTastings ? 'not-allowed' : 'pointer' }}
-            title={noTastings ? 'Add at least one tasting before finalising' : 'Mark as complete and move to History'}>
-            ✓ Finalise{noTastings ? ' 🍵?' : ''}
-          </button>
+          {run.lm_status === 'awaiting_approval' ? (
+            <>
+              <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold border-2 border-warn/40 bg-warn/10 text-warn">
+                ⏳ Awaiting Lab Manager{run.allocated_by ? ` · ${run.allocated_by}` : ''}
+              </span>
+              {canApprove ? (
+                (['Pass', 'Fail', 'Concession'] as const).map(st => (
+                  <button key={st}
+                    onClick={() => {
+                      if (st === 'Pass') { onFinalise(run.id, 'Pass'); return }
+                      const reason = prompt(`Reason for "${st}" (required):`, '')
+                      if (reason === null) return
+                      if (!reason.trim()) { alert('A reason is required'); return }
+                      onFinalise(run.id, st, reason.trim())
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border-2"
+                    style={{ borderColor: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706', background: st === 'Pass' ? '#f0fdf4' : st === 'Fail' ? '#fef2f2' : '#fffbeb', color: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706' }}>
+                    {st}
+                  </button>
+                ))
+              ) : (
+                <button onClick={() => onRecall(run.id)} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold cursor-pointer">↩ Recall to QC</button>
+              )}
+            </>
+          ) : (
+            <button
+              onClick={() => { if (noTastings) { alert('Cannot allocate: at least one tasting record is required first.'); return } onAllocate(run.id) }}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer"
+              style={{ border: noTastings ? '1px solid #d1d5db' : '1px solid #1f4e79', background: noTastings ? '#f3f4f6' : '#1f4e79', color: noTastings ? '#9ca3af' : '#fff', cursor: noTastings ? 'not-allowed' : 'pointer' }}
+              title={noTastings ? 'Add at least one tasting before allocating' : 'Send to the Lab Manager for pass/fail approval'}>
+              📤 Allocate to Lab Manager{noTastings ? ' 🍵?' : ''}
+            </button>
+          )}
           <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer">⬇ Excel</button>
           {isAdmin && <button onClick={() => onDelete(run.id)} className="px-2 py-1.5 rounded-lg border-none bg-err/10 text-err text-[12px] cursor-pointer">🗑</button>}
         </div>
@@ -1849,8 +1878,10 @@ function GranuleSpecsTab({ isAdmin }: { isAdmin: boolean }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function GranulePage() {
-  const { p } = useAuth()
-  const isAdmin = p('can_delete_runs')
+  const { p, session } = useAuth()
+  const isAdmin    = p('can_delete_runs')
+  const canApprove = p('can_approve_runs')
+  const whoAmI     = () => session?.user?.email?.split('@')[0] || 'unknown'
   const db           = getDb()
 
   const [tab, setTab]                           = useState<'dashboard'|'history'|'specs'>('dashboard')
@@ -1860,6 +1891,7 @@ export default function GranulePage() {
   const [showNewRun, setShowNewRun]             = useState(false)
   const [sampleTarget, setSampleTarget]         = useState<any>(null)
   const [tastingTarget, setTastingTarget]       = useState<any>(null) // { run, sampleId }
+  const [selectedRunId, setSelectedRunId]       = useState<number | null>(null)
 
   // ── Load runs, samples, tastings, and specs in parallel ──
   const load = useCallback(async () => {
@@ -1957,10 +1989,30 @@ export default function GranulePage() {
     setRuns(prev => prev.filter(r => r.id !== id))
   }
 
-  async function handleFinaliseRun(id: number, status: string) {
-    const { error } = await db.schema('qms').from('granule_runs').update({ final_status: status, overall_status: status }).eq('id', id)
+  // QC allocates a captured run to the Lab Manager for pass/fail approval.
+  async function handleAllocateRun(id: number) {
+    const run = runs.find(r => r.id === id)
+    if (!run || (run.samples || []).length === 0) { alert('Add at least one sample before allocating to the Lab Manager.'); return }
+    if (!confirm('Allocate this run to the Lab Manager for pass/fail approval?')) return
+    const who = whoAmI(), at = new Date().toISOString()
+    const { error } = await db.schema('qms').from('granule_runs').update({ lm_status: 'awaiting_approval', allocated_by: who, allocated_at: at }).eq('id', id)
+    if (error) { alert(error.message); return }
+    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, lm_status: 'awaiting_approval', allocated_by: who, allocated_at: at }))
+  }
+
+  // QC pulls a run back from the Lab Manager queue while unapproved.
+  async function handleRecallRun(id: number) {
+    const { error } = await db.schema('qms').from('granule_runs').update({ lm_status: null, allocated_by: null, allocated_at: null }).eq('id', id)
+    if (error) { alert(error.message); return }
+    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, lm_status: null, allocated_by: null, allocated_at: null }))
+  }
+
+  // Lab Manager / Quality Manager / IT approves the allocated run.
+  async function handleFinaliseRun(id: number, status: string, reason = '') {
+    const who = whoAmI()
+    const { error } = await db.schema('qms').from('granule_runs').update({ final_status: status, overall_status: status, approved_by: who, final_reason: reason || null, lm_status: 'complete' }).eq('id', id)
     if (error) { alert('Failed to finalise run'); return }
-    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, final_status: status, overall_status: status }))
+    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, final_status: status, overall_status: status, approved_by: who, final_reason: reason || null, lm_status: 'complete' }))
   }
 
   async function handleRecheckSample(sampleId: number, recheckData: any) {
@@ -2028,6 +2080,16 @@ export default function GranulePage() {
 
   const currentRuns   = runs.filter(r => !r.final_status)
   const finalisedRuns = runs.filter(r => !!r.final_status)
+  const selectedRun   = currentRuns.find(r => r.id === selectedRunId) || currentRuns[0] || null
+
+  // Warn the QC if there are already open runs before starting another.
+  function openNewRun() {
+    if (currentRuns.length > 0 &&
+        !confirm(`⚠ There ${currentRuns.length === 1 ? 'is' : 'are'} already ${currentRuns.length} open granule run${currentRuns.length !== 1 ? 's' : ''}.\n\nAdd a sample to an existing run instead of starting a new one?\n\nClick OK to start a NEW run anyway, or Cancel to go back.`)) {
+      return
+    }
+    setShowNewRun(true)
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -2059,9 +2121,28 @@ export default function GranulePage() {
                 </div>
               </div>
             )}
-            <div className="flex items-center gap-3 flex-wrap">
-              <button onClick={() => setShowNewRun(true)} title="Start when a new batch has been completed or begun" className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
-              <span className="font-bold text-[12px]">Active Runs · {currentRuns.length} run{currentRuns.length !== 1 ? 's' : ''}</span>
+
+            {/* Batch selector — blocks (click to open), matching the pasteuriser layout */}
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={openNewRun} title="Start when a new batch has been completed or begun"
+                className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
+              {currentRuns.length === 0 && (
+                <span className="text-[12px] text-text-muted italic">No active runs — click "New Run" to start</span>
+              )}
+              {currentRuns.map(run => {
+                const sel = selectedRun?.id === run.id
+                const awaiting = run.lm_status === 'awaiting_approval'
+                return (
+                  <button key={run.id} onClick={() => setSelectedRunId(run.id)}
+                    className={`px-3 py-1.5 rounded-xl border-2 text-[12px] font-semibold transition-colors ${sel ? 'border-brand bg-info/5 text-brand' : 'border-surface-rule bg-surface-card text-text-muted'}`}>
+                    {run.batch_number}
+                    <span className="ml-1 text-[9px] opacity-60">({(run.samples || []).length})</span>
+                    <span className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-full font-bold ${awaiting ? 'bg-warn/15 text-warn' : 'bg-info/10 text-info'}`}>
+                      {awaiting ? '⏳ Awaiting LM' : '🔶 In Progress'}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
 
             {currentRuns.length === 0 ? (
@@ -2069,23 +2150,24 @@ export default function GranulePage() {
                 <div className="text-[28px] mb-2">🔶</div>
                 <div className="font-bold text-[13px] mb-1">No active runs</div>
                 <div className="text-[11px] text-text-muted mb-4">Click "New Run" to start a granule production run</div>
-                <button onClick={() => setShowNewRun(true)} className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
+                <button onClick={openNewRun} className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
               </div>
-            ) : (
-              currentRuns.map(run => (
-                <GranuleRunCard key={run.id} run={run} isAdmin={isAdmin}
-                  onAddSample={r => setSampleTarget(r)}
-                  onAddTasting={(r, sid) => setTastingTarget({ run: r, sampleId: sid })}
-                  onDelete={handleDeleteRun}
-                  onFinalise={handleFinaliseRun}
-                  onUpdateSpec={handleUpdateSpec}
-                  onRecheckSample={handleRecheckSample}
-                  onEditSample={handleEditSample}
-                  onCommentSample={handleCommentSample}
-                  onEditTasting={handleEditTasting}
-                  onUpdateBatch={handleUpdateBatch} />
-              ))
-            )}
+            ) : selectedRun ? (
+              <GranuleRunCard key={selectedRun.id} run={selectedRun} isAdmin={isAdmin}
+                onAddSample={r => setSampleTarget(r)}
+                onAddTasting={(r, sid) => setTastingTarget({ run: r, sampleId: sid })}
+                onDelete={handleDeleteRun}
+                onFinalise={handleFinaliseRun}
+                onUpdateSpec={handleUpdateSpec}
+                onRecheckSample={handleRecheckSample}
+                onEditSample={handleEditSample}
+                onCommentSample={handleCommentSample}
+                onEditTasting={handleEditTasting}
+                onUpdateBatch={handleUpdateBatch}
+                onAllocate={handleAllocateRun}
+                onRecall={handleRecallRun}
+                canApprove={canApprove} />
+            ) : null}
           </div>
         ) : tab === 'history' ? (
           <GranuleHistoryTab runs={runs} onReopen={handleReopenRun} onUpdateBatch={handleUpdateBatch} />
