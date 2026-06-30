@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Lab Manager — Phase 2: dashboard, approvals queue, daily sign-off)
+
+**Files changed:**
+- `app/(app)/quality/lab-manager/page.tsx` (new)
+- `app/(app)/quality/pasteuriser/page.tsx` (export `computePastOosFlags`, store `oos_flags` on allocate/approve)
+- `components/layout/Sidebar.tsx`
+- DB: new table `qms.daily_signoffs` (staging)
+
+**Changes:**
+- New **Lab Manager** dashboard at `/quality/lab-manager` (sidebar entry gated on `can_approve_runs`):
+  - **Pending Approvals** — pasteuriser runs QC allocated (`awaiting_approval`). Each card shows the out-of-spec bags/boxes (which bag + which field vs spec) and Pass / Concession / Fail buttons (Fail/Concession require a reason). Approving writes the result back to the run.
+  - **Daily Overview & Sign-off** — pick a production day; per station (Pasteuriser, Granule, Sieving) it lists that day's batches/runs and flags out-of-spec bags/boxes, with a per-station **Sign off** button → `qms.daily_signoffs` (one sign-off per station per day, snapshot stored).
+- Pasteuriser now computes and stores `oos_flags` (out-of-spec bag/box list) when a run is allocated and when approved, so the dashboard highlights are accurate as of sign-off.
+- (Phase 3 — granule block-layout redesign + its own allocate→approve + active-run warning — follows.)
+
 ## 2026-06-30 — Gustav (Lab Manager approval — Phase 1: roles + pasteuriser allocate→approve)
 
 **Files changed:**

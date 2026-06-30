@@ -14,7 +14,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
-  CalendarCheck, CalendarRange, Activity, Map,
+  CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -49,6 +49,7 @@ const NAV: NavItem[] = [
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
 
   // ── Quality ──
+  { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
   { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
   { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
   { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },

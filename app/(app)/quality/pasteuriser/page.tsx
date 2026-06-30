@@ -132,6 +132,7 @@ interface Batch {
   allocated_at?:   string
   allocated_by?:   string
   approved_by?:    string
+  oos_flags?:      any[]
   created_at:      string
 }
 
@@ -213,6 +214,26 @@ function pastChk(value: any, spec: {min:number|null,max:number|null} | null): 'p
   if (spec.min != null && n < spec.min) return 'fail'
   if (spec.max != null && n > spec.max) return 'fail'
   return 'pass'
+}
+
+// Out-of-spec bag/box flags for a pasteuriser batch — used by the Lab Manager
+// daily overview to point out which bag/box is out of spec, and on what.
+export function computePastOosFlags(batch: any): { bag: string; time?: string; fails: { field: string; value: any; spec: any }[] }[] {
+  const flags: { bag: string; time?: string; fails: { field: string; value: any; spec: any }[] }[] = []
+  const cust = batch?.customer, spec = batch?._spec, ov = batch?.batch_specs
+  for (const s of (batch?.samples ?? [])) {
+    const fails: { field: string; value: any; spec: any }[] = []
+    const mSpec  = getPastSpec(cust, 'moisture', spec, ov)
+    if (pastChk(s.moisture, mSpec) === 'fail')      fails.push({ field: 'Moisture', value: s.moisture, spec: mSpec })
+    const bdSpec = getPastSpec(cust, 'untapped_bd', spec, ov)
+    if (pastChk(s.untapped_bd, bdSpec) === 'fail')  fails.push({ field: 'BD', value: s.untapped_bd, spec: bdSpec })
+    if (s.has_sieve) for (const c of PAST_SIEVE_COLS) {
+      const sp = getPastSpec(cust, c.key, spec, ov)
+      if (pastChk((s as any)[c.key], sp) === 'fail') fails.push({ field: c.label, value: (s as any)[c.key], spec: sp })
+    }
+    if (fails.length) flags.push({ bag: s.serial_bin || `Sample ${s.id}`, time: s.time, fails })
+  }
+  return flags
 }
 
 function checkSieveOrder(row: any): Set<string> {
@@ -1092,7 +1113,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     if (!hasSensorial) { alert('⚠ Cannot allocate: no sensorial data has been recorded.\nPlease add at least one sensorial assessment before sending to the Lab Manager.'); return }
     if (!confirm('Allocate this run to the Lab Manager for pass/fail approval?')) return
     setBatches(prev => {
-      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, batch_status:'awaiting_approval', allocated_at:new Date().toISOString(), allocated_by:whoAmI() })
+      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, batch_status:'awaiting_approval', allocated_at:new Date().toISOString(), allocated_by:whoAmI(), oos_flags:computePastOosFlags(b) })
       const batch = updated.find(b => b.id === activeBatchId)
       if (batch) saveBatchToDB(batch)
       return updated
@@ -1114,7 +1135,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     const hasSensorial = (activeBatch?.samples||[]).some(s => s.has_sensorial)
     if (!hasSensorial) { alert('⚠ Cannot finalise: no sensorial data has been recorded.\nPlease add at least one sensorial assessment before closing.'); return }
     setBatches(prev => {
-      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, final_result:result, finalised_at:new Date().toISOString(), batch_status:'complete', final_reason:reason||undefined, approved_by:whoAmI() })
+      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, final_result:result, finalised_at:new Date().toISOString(), batch_status:'complete', final_reason:reason||undefined, approved_by:whoAmI(), oos_flags:computePastOosFlags(b) })
       const batch = updated.find(b => b.id === activeBatchId)
       if (batch) saveBatchToDB(batch)
       return updated
