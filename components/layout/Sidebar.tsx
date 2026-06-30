@@ -10,7 +10,7 @@ import {
   Users, Radio, Info, Tag, LogOut, Beaker,
   TrendingUp, Globe, FlaskConical,
   Microscope, FileText, BookOpen, Layers, Settings,
-  FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare, FileText,
+  FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare,
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
