@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Lab Manager approval — Phase 1: roles + pasteuriser allocate→approve)
+
+**Files changed:**
+- `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+- `app/(app)/quality/pasteuriser/page.tsx`
+
+**Changes:**
+- Added two Quality roles — **Lab Manager** and **Quality Manager** — plus two new permissions: `can_approve_runs` (pass/fail an allocated run) and `can_signoff_day` (daily station sign-off). IT roles (senior_developer/co_developer) inherit both via their all-on defaults, so Lab Manager + Quality Manager + IT can all approve, per request.
+- **Pasteuriser run flow is now two-step:** QC captures and clicks **📤 Allocate to Lab Manager** (run → `awaiting_approval`); the approver (Lab/Quality Manager or IT) then sets **Pass/Fail/Concession** (Fail/Concession require a reason). The run records `allocated_by`, `approved_by` and timestamps. QC can **↩ Recall to QC** while it is unapproved. Re-open still available after approval.
+- (Phase 2 — Lab Manager dashboard with the approval pop-up + daily per-station sign-off — and Phase 3 — granule redesign — follow.)
+
+---
+
 ## 2026-06-30 — Gustav (Leaf Shade: fix wrong predictions — match desktop pipeline)
 
 **Files changed:**

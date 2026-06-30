@@ -129,6 +129,9 @@ interface Batch {
   finalised_at?:   string
   batch_status?:   string
   final_reason?:   string
+  allocated_at?:   string
+  allocated_by?:   string
+  approved_by?:    string
   created_at:      string
 }
 
@@ -912,7 +915,8 @@ function RunsOverview({ batches, activeBatch }: { batches: Batch[]; activeBatch:
 
 function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const db     = getDb()
-  const { session } = useAuth()
+  const { session, p } = useAuth()
+  const canApprove = p('can_approve_runs')
 
   const [batches,       setBatches]        = useState<Batch[]>([])
   const [activeBatchId, setActiveBatchId]  = useState<string|null>(null)
@@ -1080,11 +1084,37 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     })
   }
 
+  const whoAmI = () => session?.user?.email?.split('@')[0] || 'unknown'
+
+  // Step 1 (QC): allocate a captured run to the Lab Manager for approval.
+  function allocateToLabManager() {
+    const hasSensorial = (activeBatch?.samples||[]).some(s => s.has_sensorial)
+    if (!hasSensorial) { alert('⚠ Cannot allocate: no sensorial data has been recorded.\nPlease add at least one sensorial assessment before sending to the Lab Manager.'); return }
+    if (!confirm('Allocate this run to the Lab Manager for pass/fail approval?')) return
+    setBatches(prev => {
+      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, batch_status:'awaiting_approval', allocated_at:new Date().toISOString(), allocated_by:whoAmI() })
+      const batch = updated.find(b => b.id === activeBatchId)
+      if (batch) saveBatchToDB(batch)
+      return updated
+    })
+  }
+
+  // QC can pull a run back from the Lab Manager queue while it is unapproved.
+  function recallFromLabManager() {
+    setBatches(prev => {
+      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, batch_status:'in_progress', allocated_at:undefined, allocated_by:undefined })
+      const batch = updated.find(b => b.id === activeBatchId)
+      if (batch) saveBatchToDB(batch)
+      return updated
+    })
+  }
+
+  // Step 2 (Lab Manager / Quality Manager / IT): approve the allocated run.
   function finaliseBatch(result: string, reason = '') {
     const hasSensorial = (activeBatch?.samples||[]).some(s => s.has_sensorial)
     if (!hasSensorial) { alert('⚠ Cannot finalise: no sensorial data has been recorded.\nPlease add at least one sensorial assessment before closing.'); return }
-    setBatches(p => {
-      const updated = p.map(b => b.id !== activeBatchId ? b : { ...b, final_result:result, finalised_at:new Date().toISOString(), batch_status:'complete', final_reason:reason||undefined })
+    setBatches(prev => {
+      const updated = prev.map(b => b.id !== activeBatchId ? b : { ...b, final_result:result, finalised_at:new Date().toISOString(), batch_status:'complete', final_reason:reason||undefined, approved_by:whoAmI() })
       const batch = updated.find(b => b.id === activeBatchId)
       if (batch) saveBatchToDB(batch)
       return updated
@@ -1258,38 +1288,60 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
 
                   {/* Action buttons */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    {!activeBatch.final_result ? (
+                    {activeBatch.final_result ? (
+                      /* ── Approved / finalised ── */
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[11px] text-text-muted">Finalise as:</span>
-                        {(['Pass','Fail','Concession'] as const).map(r => {
-                          const hasSens = activeBatch.samples.some(s => s.has_sensorial)
-                          return (
-                            <button key={r}
-                              onClick={() => {
-                                if (!hasSens) return
-                                if (r === 'Fail' || r === 'Concession') {
-                                  const reason = prompt(`Reason for "${r}" (required):`, '')
-                                  if (reason === null) return
-                                  if (!reason.trim()) { alert('A reason is required'); return }
-                                  finaliseBatch(r, reason.trim())
-                                } else finaliseBatch(r)
-                              }}
-                              title={!hasSens ? 'Add sensorial data before finalising' : ''}
-                              className="px-3 py-1.5 rounded-lg border-2 text-[11px] font-bold transition-colors"
-                              style={{ borderColor:hasSens?PASS_COLORS[r][2]:'#d1d5db', background:hasSens?PASS_COLORS[r][0]:'#f3f4f6', color:hasSens?PASS_COLORS[r][1]:'#9ca3af', cursor:hasSens?'pointer':'not-allowed', opacity:hasSens?1:0.55 }}>
-                              {r}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
                         <span className="px-3 py-1.5 rounded-lg text-[12px] font-bold border-2"
                           style={{ background:PASS_COLORS[activeBatch.final_result]?.[0], color:PASS_COLORS[activeBatch.final_result]?.[1], borderColor:PASS_COLORS[activeBatch.final_result]?.[2] }}>
                           Final: {activeBatch.final_result}
                         </span>
+                        {activeBatch.approved_by && <span className="text-[10px] text-text-muted">approved by {activeBatch.approved_by}</span>}
                         <button onClick={reopenBatch} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔓 Re-open</button>
                       </div>
+                    ) : activeBatch.batch_status === 'awaiting_approval' ? (
+                      /* ── Allocated to Lab Manager, awaiting pass/fail ── */
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold border-2 border-warn/40 bg-warn/10 text-warn">
+                          ⏳ Awaiting Lab Manager{activeBatch.allocated_by ? ` · sent by ${activeBatch.allocated_by}` : ''}
+                        </span>
+                        {canApprove ? (
+                          <>
+                            <span className="text-[11px] text-text-muted">Approve as:</span>
+                            {(['Pass','Fail','Concession'] as const).map(r => (
+                              <button key={r}
+                                onClick={() => {
+                                  if (r === 'Fail' || r === 'Concession') {
+                                    const reason = prompt(`Reason for "${r}" (required):`, '')
+                                    if (reason === null) return
+                                    if (!reason.trim()) { alert('A reason is required'); return }
+                                    finaliseBatch(r, reason.trim())
+                                  } else finaliseBatch(r)
+                                }}
+                                className="px-3 py-1.5 rounded-lg border-2 text-[11px] font-bold transition-colors"
+                                style={{ borderColor:PASS_COLORS[r][2], background:PASS_COLORS[r][0], color:PASS_COLORS[r][1] }}>
+                                {r}
+                              </button>
+                            ))}
+                          </>
+                        ) : (
+                          <button onClick={recallFromLabManager} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">↩ Recall to QC</button>
+                        )}
+                      </div>
+                    ) : (
+                      /* ── In progress: QC allocates to the Lab Manager ── */
+                      (() => {
+                        const hasSens = activeBatch.samples.some(s => s.has_sensorial)
+                        return (
+                          <button
+                            onClick={() => { if (hasSens) allocateToLabManager() }}
+                            disabled={!hasSens}
+                            title={!hasSens ? 'Add sensorial data before allocating' : ''}
+                            className="px-4 py-1.5 rounded-lg border-2 text-[11px] font-bold transition-colors disabled:opacity-50"
+                            style={{ borderColor:hasSens?'#1f4e79':'#d1d5db', background:hasSens?'#1f4e79':'#f3f4f6', color:hasSens?'#fff':'#9ca3af', cursor:hasSens?'pointer':'not-allowed' }}>
+                            📤 Allocate to Lab Manager
+                          </button>
+                        )
+                      })()
                     )}
                     <button
                       onClick={() => exportPasteuriserBatch(activeBatch)}

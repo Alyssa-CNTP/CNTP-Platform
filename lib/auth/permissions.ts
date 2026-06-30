@@ -43,6 +43,8 @@ export type PermissionKey =
   | 'can_edit_samples'
   | 'can_add_tastings'
   | 'can_edit_tastings'
+  | 'can_approve_runs'
+  | 'can_signoff_day'
   // Quality — Sieving
   | 'can_add_sieving_runs'
   | 'can_delete_sieving_runs'
@@ -99,7 +101,8 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_edit_lab_comments','can_edit_customer_specs','can_delete_specs','can_edit_sieve_specs',
   'can_edit_granule_specs','can_create_runs','can_edit_runs','can_finalise_runs',
   'can_reopen_runs','can_delete_runs','can_add_samples','can_edit_samples',
-  'can_add_tastings','can_edit_tastings','can_add_sieving_runs','can_delete_sieving_runs',
+  'can_add_tastings','can_edit_tastings','can_approve_runs','can_signoff_day',
+  'can_add_sieving_runs','can_delete_sieving_runs',
   'can_edit_sieving_specs','can_submit_count','can_edit_count','can_view_all_sections',
   'can_view_ops_dashboard',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
@@ -160,6 +163,8 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
   ],
   Quality: [
     { role: 'quality_default',  label: 'Quality (Default)', desc: 'All permissions off — toggle on what they need' },
+    { role: 'lab_manager',      label: 'Lab Manager',       desc: 'Approves (pass/fail) allocated runs and signs off daily station overviews' },
+    { role: 'quality_manager',  label: 'Quality Manager',   desc: 'Lab Manager rights plus spec editing and deletes' },
   ],
   Production: [
     { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
@@ -267,6 +272,30 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_audit_log: true,
   },
 
+  // ── Quality — Lab Manager: captures + approves runs and signs off days ─────
+  lab_manager: {
+    can_view_history: true, can_export_csv: true,
+    can_create_runs: true, can_edit_runs: true, can_finalise_runs: true,
+    can_reopen_runs: true, can_add_samples: true, can_edit_samples: true,
+    can_add_tastings: true, can_edit_tastings: true,
+    can_add_sieving_runs: true,
+    can_approve_runs: true, can_signoff_day: true,
+  },
+
+  // ── Quality — Quality Manager: Lab Manager + specs + deletes ───────────────
+  quality_manager: {
+    can_save_records: true, can_edit_records: true, can_delete_records: true,
+    can_view_history: true, can_export_csv: true,
+    can_edit_customer_specs: true, can_delete_specs: true,
+    can_edit_sieve_specs: true, can_edit_granule_specs: true,
+    can_create_runs: true, can_edit_runs: true, can_finalise_runs: true,
+    can_reopen_runs: true, can_delete_runs: true,
+    can_add_samples: true, can_edit_samples: true,
+    can_add_tastings: true, can_edit_tastings: true,
+    can_add_sieving_runs: true, can_delete_sieving_runs: true,
+    can_approve_runs: true, can_signoff_day: true,
+  },
+
   // ── All other roles: zero defaults — toggle on per person ──────────────────
   // Any role string not listed here resolves to all-false.
 }
@@ -345,6 +374,8 @@ export const PERMISSION_GROUPS: {
       { key: 'can_edit_samples',  label: 'Edit existing samples' },
       { key: 'can_add_tastings',  label: 'Record tasting sessions' },
       { key: 'can_edit_tastings', label: 'Edit tasting records' },
+      { key: 'can_approve_runs',  label: 'Approve allocated runs (Lab Manager pass/fail)' },
+      { key: 'can_signoff_day',   label: 'Sign off daily station overviews' },
     ],
   },
   {
