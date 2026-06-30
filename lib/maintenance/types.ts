@@ -41,7 +41,7 @@ export interface Slot { id: number; card_id: number | null; technician: string; 
 export interface Staff { id: string | null; name: string; initials: string; email?: string | null; phone?: string | null; role?: string }
 export interface Template { id: number; frequency: 'weekly' | 'monthly'; area: string; doc_ref: string; tasks: string[]; sort_order: number }
 // task_states values carry who ticked the task and when (audit trail)
-export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string; by?: string; at?: string }>; comments: string; completed_by: string; updated_at?: string }
+export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string; by?: string; at?: string }>; comments: string; completed_by: string; updated_at?: string; assigned_to?: string | null; assigned_by?: string | null; assigned_at?: string | null }
 export interface AnnualItem { id: number; category: string; asset: string; serial_no: string; supplier: string; next_due: string | null; last_done: string | null; interval_days: number | null; last_done_by: string | null; notes: string }
 export interface SparePart { id: number; part_no: string; class: string; description: string; qty_new: number; qty_used: number; barcode?: string | null }
 export interface Offsite { id: number; item: string; sent_to: string; date_sent: string | null; status: string }

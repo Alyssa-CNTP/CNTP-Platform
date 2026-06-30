@@ -443,7 +443,14 @@ export function useMaintenanceData() {
       template_id: tpl.id, period_key: period,
       task_states: patch.task_states ?? existing?.task_states ?? {},
       comments: patch.comments ?? existing?.comments ?? '',
-      completed_by: displayName || existing?.completed_by || '',
+      // Only stamp completed_by on an actual work edit (tasks/comments) — not when
+      // merely allocating the checklist to a technician.
+      completed_by: (patch.task_states !== undefined || patch.comments !== undefined)
+        ? (displayName || existing?.completed_by || '')
+        : (existing?.completed_by ?? ''),
+      assigned_to: patch.assigned_to !== undefined ? patch.assigned_to : (existing?.assigned_to ?? null),
+      assigned_by: patch.assigned_by !== undefined ? patch.assigned_by : (existing?.assigned_by ?? null),
+      assigned_at: patch.assigned_at !== undefined ? patch.assigned_at : (existing?.assigned_at ?? null),
       updated_at: new Date().toISOString(),
     }
     setCompletions(p => {
@@ -455,6 +462,11 @@ export function useMaintenanceData() {
       .upsert(merged, { onConflict: 'template_id,period_key' }).select().single()
     if (err) { setPopup('Save failed: ' + err.message); return }
     setCompletions(p => p.map(c => (c.template_id === tpl.id && c.period_key === period ? data : c)))
+  }
+
+  // Manager allocates a checklist (template + current period) to a technician.
+  const allocateChecklist = async (tpl: Template, techName: string) => {
+    await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
   }
 
   const toggleTask = (tpl: Template, ti: number) => {
@@ -755,7 +767,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
       qcSubmit, verifyCard, postComment,
-      getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, updateAnnual, calibrateAnnual,
+      getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,

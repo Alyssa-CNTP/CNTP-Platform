@@ -9,6 +9,8 @@
 import { useState } from 'react'
 import { Printer } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
+import { useAuth } from '@/lib/auth/context'
+import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { calClass, calBadge, fmtD, fmtT } from '@/lib/maintenance/helpers'
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
@@ -67,7 +69,13 @@ function Spark({ pts, color = '#2563eb', h = 44, labels, dates, unit = '', digit
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, eqHours, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const { getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const auth = useAuth()
+  const canManage = deriveMaintRole(auth).canManage
+  // On-duty technicians (auto-suggested for checklist allocation) + the full
+  // staff directory for the picker.
+  const dutyNow: string[] = derived.dutyNow
+  const allTechs = (data.staff.length ? data.staff.map(s => s.name) : TECHS)
   const { annualRows, lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists } = derived
   const { drafts, setDrafts, setPopup } = ui
 
@@ -226,8 +234,12 @@ export default function ScheduledPage() {
                 const isOpen = openCL === cl.id
                 const prev = lastComp(cl.id)
                 const dot = done ? 'bg-ok' : doneN > 0 ? 'bg-warn' : 'bg-text-faint'
+                const assigned = comp?.assigned_to || ''
+                const assignedToMe = !!assigned && assigned === actor
+                // Suggest the on-duty technician first, then the rest of the team.
+                const techOptions = [...dutyNow, ...allTechs.filter(t => !dutyNow.includes(t))]
                 return (
-                  <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
+                  <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
                     <div className="p-3 cursor-pointer flex justify-between items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
                       <div className="flex items-center gap-2 min-w-0">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
@@ -239,11 +251,21 @@ export default function ScheduledPage() {
                               : prev ? <>Last: {prev.period_key} by <strong className="text-text">{prev.completed_by || '—'}</strong></>
                               : 'Never completed in the system'}
                           </div>
+                          {assigned && <div className="text-[10px] mt-0.5"><span className={`badge ${assignedToMe ? 'badge-info' : 'badge-gray'}`}>→ {assigned}{assignedToMe ? ' (you)' : ''}</span></div>}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
+                        {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
+                        {canManage && (
+                          <select className={`${INP} w-28 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                            value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
+                            <option value="">Allocate…</option>
+                            {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
+                            <optgroup label="All technicians">{techOptions.filter(t => !dutyNow.includes(t)).map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
+                          </select>
+                        )}
                         <button title="Print this checklist"
-                          onClick={e => { e.stopPropagation(); printChecklistOne(cl, comp, period) }}
+                          onClick={() => printChecklistOne(cl, comp, period)}
                           className="inline-flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:bg-surface-dim hover:text-text transition"><Printer size={13} /></button>
                         <span className={`badge ${done ? 'badge-ok' : doneN > 0 ? 'badge-warn' : 'badge-gray'}`}>{done ? 'DONE' : doneN > 0 ? doneN + '/' + cl.tasks.length : 'NOT STARTED'}</span>
                       </div>
