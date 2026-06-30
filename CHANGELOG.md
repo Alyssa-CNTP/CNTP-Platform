@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Leaf Shade: fix wrong predictions — match desktop pipeline)
+
+**Files changed:**
+- `ml/leafshade/leaf_shade_api.py`
+- `ml/leafshade/requirements.txt`
+
+**Changes:**
+- **Bug fix:** the web service decoded the CR3 with `half_size=True`, which halves resolution and skips demosaic interpolation, shifting the 30 colour features away from what the model was trained on → wrong leaf shade. Removed `half_size=True` so the RAW decode is full-resolution, matching the desktop training pipeline (Blackheath).
+- Pinned the Python deps to the desktop reference versions so the demosaic + feature extraction reproduce training values exactly: `rawpy==0.25.1` (was 0.27.0), `opencv-python-headless==4.13.0.90` (was 4.13.0.92), `numpy==2.2.6` (was 2.4.6). scikit-learn stays 1.7.2 and joblib 1.5.3 (already matched).
+- Requires a container rebuild on the VPS: `cd ml/leafshade && docker compose up -d --build`.
+
+---
+
 ## 2026-06-30 — Alyssa (July 2026 roster seed)
 
 **Files changed:**
