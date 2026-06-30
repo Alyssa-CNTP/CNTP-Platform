@@ -120,8 +120,11 @@ def load_cr3(file_bytes: bytes):
     try:
         cam_actual = extract_camera_info(path)
         with rawpy.imread(path) as raw:
+            # Full-resolution demosaic — MUST match the desktop training pipeline
+            # (Blackheath_Code.txt). half_size=True changes the colour features and
+            # produces a different (wrong) shade, so it is intentionally omitted.
             img16 = raw.postprocess(use_camera_wb=True, no_auto_bright=True,
-                                    output_bps=16, half_size=True)
+                                    output_bps=16)
     finally:
         try: os.remove(path)
         except OSError: pass
