@@ -5,7 +5,7 @@
 // Each group expands to show individual bags with serial, weight, and time.
 // IT/supervisors see the same grouped view; individual rows always expandable.
 
-import { useState, useMemo } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck, ChevronDown, ChevronRight, Filter, X } from 'lucide-react'
 import { sievingTotals, type SievingData } from '@/components/production/capture/SievingCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
@@ -33,9 +33,9 @@ function buildBagGroups(prods: Production[]): GroupedBag[] {
   prods.forEach((p, pi) => {
     ;(p.data.outputs ?? []).forEach((b, bi) => {
       if (num(b.weight) === 0) return
-      const lot   = b.batch || p.lot || '—'
-      const grade = b.destination || p.grade || '—'
-      const key   = `${b.productType}||${lot}||${p.variant}||${grade}`
+      const lot   = (b.batch || p.lot || '—').trim()
+      const grade = (b.destination || p.grade || '—').trim()
+      const key   = `${(b.productType ?? '').trim()}||${lot}||${(p.variant ?? '').trim()}||${grade}`
       const flat: FlatBag = { product: b.productType, lot, kg: num(b.weight), variant: p.variant, grade, serial: b.serial, loggedAt: b.logged_at, prodIdx: pi, bagIdx: bi }
       const g = map.get(key)
       if (g) { g.kg += num(b.weight); g.count++; g.bags.push(flat) }
@@ -241,9 +241,9 @@ export function CaptureOverview({ productions, sectionName, sectionColor, date, 
                     {filteredGroups.map(g => {
                       const isOpen = expanded.has(g.key)
                       return (
-                        <>
+                        <React.Fragment key={g.key}>
                           {/* Grouped row */}
-                          <tr key={g.key}
+                          <tr
                             onClick={() => toggleExpand(g.key)}
                             className="border-b border-stone-100 cursor-pointer hover:bg-stone-50 transition-colors"
                             style={isOpen ? { background: BAG_ORANGE + '08' } : undefined}>
@@ -279,7 +279,7 @@ export function CaptureOverview({ productions, sectionName, sectionColor, date, 
                               <Cell className="text-right font-mono text-[12px] font-medium text-stone-700">{b.kg.toFixed(1)} kg</Cell>
                             </tr>
                           ))}
-                        </>
+                        </React.Fragment>
                       )
                     })}
                   </tbody>

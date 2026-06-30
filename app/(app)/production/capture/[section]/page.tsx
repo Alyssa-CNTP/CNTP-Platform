@@ -334,10 +334,10 @@ function CaptureScreen() {
           // Preserve the operator's physical bag number in notes for traceability.
           bag_serial_no: null, notes: r.bag_no || null,
           lot_number: r.lot || prod.lot || null,
-          product_type: '500kg Farm Bag', variant: prod.variant,
+          product_type: '500kg Farm Bag', variant: prod.variant, grade: prod.grade || null,
           kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
           delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
-          is_spillage: false,
+          is_spillage: false, logged_at: r.logged_at || null,
         })
       })
     })
@@ -352,8 +352,8 @@ function CaptureScreen() {
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: 'B',
           bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
-          acumatica_id: b.code || null, variant: prod.variant,
-          kg: n(b.weight),
+          acumatica_id: b.code || null, variant: prod.variant, grade: prod.grade || null,
+          kg: n(b.weight), logged_at: b.logged_at || null,
         })
       })
     })

@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Alyssa (July 2026 roster seed)
+
+**Files changed:**
+- `supabase/migrations/20260630_001_roster_july2026.sql` (new)
+
+**Changes:**
+- Seeded all 4 July 2026 weekly roster periods to the database: 29 Jun–3 Jul, 6–10 Jul, 13–17 Jul, 20–24 Jul. Each period has day (07h00–16h00) and night (16h00–01h00) shifts with 286 entries total across Production, Store, QC, Cleaning, Maintenance, and H&S roles. Skill tags (FL, ER, FF, FA, II, FM, SHER, SS, H&S, C) parsed directly from the source spreadsheet. Data is live in `production.roster_periods` and `production.roster_entries` on staging.
+
+---
+
 ## 2026-06-30 — Alyssa (Production Orders page, expandable capture overview, date-scoped serials, maintenance escalation)
 
 **Files changed:**
