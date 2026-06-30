@@ -43,18 +43,39 @@ export default function LabManagerPage() {
 
   const loadPending = useCallback(async () => {
     setLoadingP(true)
-    const { data } = await db.schema('qms').from('quality_records').select('*')
-      .eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run')
-      .order('created_at', { ascending: false }).limit(500)
-    const rows = (data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
+    const [pRes, gRes, gsRes] = await Promise.all([
+      db.schema('qms').from('quality_records').select('*').eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run').order('created_at', { ascending: false }).limit(500),
+      db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }).limit(500),
+      db.schema('qms').from('granule_samples').select('*').limit(3000),
+    ])
+    const past = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
       .filter((r: any) => r.d.batch_status === 'awaiting_approval' && !r.d.final_result)
-    setPending(rows)
+      .map((r: any) => ({
+        kind: 'pasteuriser', id: r.id, batch: r.batch_number || r.d.batch_number || '—',
+        meta: `${r.d.production_date || '—'} · ${r.d.customer || '—'} · ${r.d.type_grade || [r.d.product_family, r.d.grade, r.d.variant].filter(Boolean).join(' ')}`,
+        samples: (r.d.samples ?? []).length, allocated_by: r.d.allocated_by, allocated_at: r.d.allocated_at,
+        oos: r.d.oos_flags ?? computePastOosFlags(r.d), raw: r,
+      }))
+    const gsByRun: Record<number, any[]> = {}
+    for (const s of (gsRes.data ?? [])) (gsByRun[s.run_id] = gsByRun[s.run_id] || []).push(s)
+    const gran = (gRes.data ?? []).filter((r: any) => r.lm_status === 'awaiting_approval' && !r.final_status)
+      .map((r: any) => {
+        const samples = gsByRun[r.id] || []
+        const oos = samples.filter((s: any) => (s.violations || []).length > 0)
+          .map((s: any) => ({ bag: s.bulk_bag_serial || `Sample ${s.id}`, time: s.sample_time, fails: (s.violations || []).map((v: string) => ({ field: v, value: '', spec: null })) }))
+        return {
+          kind: 'granule', id: r.id, batch: r.batch_number || '—',
+          meta: `${r.production_date || '—'} · ${r.type_grade || r.grade || '—'} · QC ${r.qc_name || '—'}`,
+          samples: samples.length, allocated_by: r.allocated_by, allocated_at: r.allocated_at, oos, raw: r,
+        }
+      })
+    setPending([...past, ...gran])
     setLoadingP(false)
   }, [db])
 
   useEffect(() => { loadPending() }, [loadPending])
 
-  async function decide(row: any, result: 'Pass' | 'Fail' | 'Concession') {
+  async function decide(item: any, result: 'Pass' | 'Fail' | 'Concession') {
     let reason = ''
     if (result !== 'Pass') {
       const r = prompt(`Reason for "${result}" (required):`, '')
@@ -62,18 +83,16 @@ export default function LabManagerPage() {
       if (!r.trim()) { alert('A reason is required'); return }
       reason = r.trim()
     }
-    const newData = {
-      ...row.d,
-      final_result: result,
-      finalised_at: new Date().toISOString(),
-      batch_status: 'complete',
-      final_reason: reason || undefined,
-      approved_by: whoAmI,
-      oos_flags: row.d.oos_flags ?? computePastOosFlags(row.d),
+    if (item.kind === 'pasteuriser') {
+      const d = item.raw.d
+      const newData = { ...d, final_result: result, finalised_at: new Date().toISOString(), batch_status: 'complete', final_reason: reason || undefined, approved_by: whoAmI, oos_flags: d.oos_flags ?? computePastOosFlags(d) }
+      const { error } = await db.schema('qms').from('quality_records').update({ data_json: newData }).eq('id', item.id)
+      if (error) { alert('Save failed: ' + error.message); return }
+    } else {
+      const { error } = await db.schema('qms').from('granule_runs').update({ final_status: result, overall_status: result, approved_by: whoAmI, final_reason: reason || null, lm_status: 'complete' }).eq('id', item.id)
+      if (error) { alert('Save failed: ' + error.message); return }
     }
-    const { error } = await db.schema('qms').from('quality_records').update({ data_json: newData }).eq('id', row.id)
-    if (error) { alert('Save failed: ' + error.message); return }
-    setPending(prev => prev.filter(x => x.id !== row.id))
+    setPending(prev => prev.filter(x => !(x.kind === item.kind && x.id === item.id)))
   }
 
   // ── Daily overview ─────────────────────────────────────────────────────────
@@ -86,15 +105,19 @@ export default function LabManagerPage() {
 
   const loadDaily = useCallback(async () => {
     setLoadingD(true)
-    const [pRes, gRes, sRes, soRes] = await Promise.all([
+    const [pRes, gRes, gsRes, sRes, soRes] = await Promise.all([
       db.schema('qms').from('quality_records').select('*').eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run').order('created_at', { ascending: false }).limit(500),
       db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }).limit(500),
+      db.schema('qms').from('granule_samples').select('*').limit(3000),
       db.schema('qms').from('sd_runs').select('*').order('created_at', { ascending: false }).limit(1000),
       db.schema('qms').from('daily_signoffs').select('*').eq('production_date', day),
     ])
     const pRows = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
       .filter((r: any) => (r.d.production_date || '').slice(0, 10) === day)
+    const gsByRun: Record<number, any[]> = {}
+    for (const s of (gsRes.data ?? [])) (gsByRun[s.run_id] = gsByRun[s.run_id] || []).push(s)
     const gRows = (gRes.data ?? []).filter((r: any) => String(r.production_date || r.date || '').slice(0, 10) === day)
+      .map((r: any) => ({ ...r, _samples: gsByRun[r.id] || [] }))
     const sRows = (sRes.data ?? []).filter((r: any) => String(r.date || '').slice(0, 10) === day)
     const so: Record<string, any> = {}
     for (const row of (soRes.data ?? [])) so[row.workcenter] = row
@@ -117,12 +140,17 @@ export default function LabManagerPage() {
     })
   }
   function granSummary() {
-    return gran.map((r: any) => ({
-      batch: r.batch_number || '—',
-      status: r.status || '—',
-      grade: r.type_grade || r.grade || '—',
-      qc: r.qc_name || '—',
-    }))
+    return gran.map((r: any) => {
+      const oos = (r._samples || []).filter((s: any) => (s.violations || []).length > 0)
+        .map((s: any) => ({ bag: s.bulk_bag_serial || `Sample ${s.id}`, time: s.sample_time, fails: (s.violations || []).map((v: string) => ({ field: v })) }))
+      return {
+        batch: r.batch_number || '—',
+        status: r.final_status || (r.lm_status === 'awaiting_approval' ? 'Awaiting LM' : 'In progress'),
+        grade: r.type_grade || r.grade || '—',
+        qc: r.qc_name || '—',
+        oos,
+      }
+    })
   }
   function sievSummary() {
     return siev.map((r: any) => ({
@@ -171,25 +199,26 @@ export default function LabManagerPage() {
           {!loadingP && pending.length === 0 && (
             <div className="bg-surface-card border border-surface-rule rounded-xl p-10 text-center text-text-muted text-[13px]">No runs awaiting approval. 🎉</div>
           )}
-          {pending.map((r: any) => {
-            const flags = r.d.oos_flags ?? computePastOosFlags(r.d)
+          {pending.map((item: any) => {
+            const flags = item.oos || []
             return (
-              <div key={r.id} className="bg-surface-card border border-surface-rule rounded-xl p-4">
+              <div key={`${item.kind}-${item.id}`} className="bg-surface-card border border-surface-rule rounded-xl p-4">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div>
-                    <div className="font-mono font-bold text-[14px] text-text">{r.batch_number || r.d.batch_number}</div>
-                    <div className="text-[11px] text-text-muted">
-                      {r.d.production_date || '—'} · {r.d.customer || '—'} · {r.d.type_grade || [r.d.product_family, r.d.grade, r.d.variant].filter(Boolean).join(' ')}
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-[14px] text-text">{item.batch}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${item.kind === 'pasteuriser' ? 'bg-info/10 text-info' : 'bg-brand/10 text-brand'}`}>{item.kind === 'pasteuriser' ? '🫗 Pasteuriser' : '🔬 Granule'}</span>
                     </div>
+                    <div className="text-[11px] text-text-muted">{item.meta}</div>
                     <div className="text-[11px] text-text-muted mt-0.5">
-                      {(r.d.samples ?? []).length} samples · allocated by {r.d.allocated_by || '—'} {r.d.allocated_at ? `· ${fmtDateTime(r.d.allocated_at)}` : ''}
+                      {item.samples} samples · allocated by {item.allocated_by || '—'} {item.allocated_at ? `· ${fmtDateTime(item.allocated_at)}` : ''}
                     </div>
                   </div>
                   {canApprove && (
                     <div className="flex gap-2">
-                      <button onClick={() => decide(r, 'Pass')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
-                      <button onClick={() => decide(r, 'Concession')} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
-                      <button onClick={() => decide(r, 'Fail')} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
+                      <button onClick={() => decide(item, 'Pass')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
+                      <button onClick={() => decide(item, 'Concession')} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
+                      <button onClick={() => decide(item, 'Fail')} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
                     </div>
                   )}
                 </div>
@@ -202,7 +231,7 @@ export default function LabManagerPage() {
                       <div className="text-[11px] font-semibold text-err">⚠ {flags.length} out-of-spec bag/box{flags.length > 1 ? 'es' : ''}:</div>
                       {flags.map((f: any, i: number) => (
                         <div key={i} className="text-[11px] text-text-muted">
-                          <span className="font-mono font-semibold text-text">{f.bag}</span>{f.time ? ` (${f.time})` : ''} — {f.fails.map((x: any) => `${x.field}: ${x.value}${x.spec ? ` [${x.spec.min ?? ''}–${x.spec.max ?? ''}]` : ''}`).join(', ')}
+                          <span className="font-mono font-semibold text-text">{f.bag}</span>{f.time ? ` (${f.time})` : ''} — {f.fails.map((x: any) => `${x.field}${x.value !== '' && x.value != null ? `: ${x.value}` : ''}${x.spec ? ` [${x.spec.min ?? ''}–${x.spec.max ?? ''}]` : ''}`).join(', ')}
                         </div>
                       ))}
                     </div>
@@ -230,7 +259,7 @@ export default function LabManagerPage() {
             let rows: any[] = []
             let oosCount = 0
             if (st.key === 'pasteuriser') { const s = pastSummary(); rows = s; oosCount = s.reduce((a, b) => a + (b.oos?.length || 0), 0) }
-            else if (st.key === 'granule') rows = granSummary()
+            else if (st.key === 'granule') { const s = granSummary(); rows = s; oosCount = s.reduce((a, b) => a + (b.oos?.length || 0), 0) }
             else { const s = sievSummary(); rows = s; oosCount = s.filter(x => x.fail).length }
 
             return (
@@ -271,12 +300,19 @@ export default function LabManagerPage() {
                       ))}
                     </div>
                   ) : st.key === 'granule' ? (
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       {rows.map((b: any, i: number) => (
-                        <div key={i} className="flex items-center gap-2 text-[12px]">
-                          <span className="font-mono font-semibold text-text">{b.batch}</span>
-                          <span className="text-text-muted">· {b.grade} · QC {b.qc} ·</span>
-                          <span className="text-text-muted">{b.status}</span>
+                        <div key={i} className="flex flex-col gap-1 border-b border-surface-rule/60 pb-2 last:border-0">
+                          <div className="flex items-center gap-2 text-[12px]">
+                            <span className="font-mono font-semibold text-text">{b.batch}</span>
+                            <span className="text-text-muted">· {b.grade} · QC {b.qc} ·</span>
+                            <span className={`font-semibold ${b.status === 'Pass' ? 'text-ok' : b.status === 'Fail' ? 'text-err' : b.status === 'Concession' ? 'text-warn' : 'text-text-muted'}`}>{b.status}</span>
+                          </div>
+                          {b.oos.length > 0 && (
+                            <div className="text-[11px] text-err pl-2">
+                              ⚠ {b.oos.map((f: any) => `${f.bag}${f.time ? ` (${f.time})` : ''}: ${f.fails.map((x: any) => x.field).join(', ')}`).join('  •  ')}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
