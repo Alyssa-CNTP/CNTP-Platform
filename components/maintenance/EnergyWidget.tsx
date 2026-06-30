@@ -185,7 +185,7 @@ export function EnergyWidget() {
               {chartRows.some(r => r.solar > 0) && (
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted mb-2">Solar Production</p>
-                  <ResponsiveContainer width="100%" height={140}>
+                  <ResponsiveContainer width="100%" height={100}>
                     <BarChart data={chartRows} margin={{ top: 4, right: 4, left: -16, bottom: 0 }} barSize={14}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                       <XAxis dataKey="hour" tick={{ fontSize: 9, fill: 'var(--color-text-faint, #888)' }} tickLine={false} />
