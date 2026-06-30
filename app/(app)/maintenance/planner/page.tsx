@@ -66,7 +66,7 @@ export default function PlannerPage() {
   const { loading, data, derived, actions, ui } = ctx
   const { jcs, slots, roster, staff } = data
   const { duty, dutyNow, openPlannedCards } = derived
-  const { slotForm, setSlotForm, rosterForm, setRosterForm } = ui
+  const { slotForm, setSlotForm } = ui
 
   // Technicians come from the live staff directory (falls back to TECHS).
   const techNames = staff.map(s => s.name)
@@ -340,47 +340,22 @@ export default function PlannerPage() {
         </div>
       </Section>
 
-      {/* ── Duty roster ── */}
-      <Section title="Duty roster" subtitle="Breakdowns auto-route to whoever is on duty" open={openRoster} onToggle={() => setOpenRoster(o => !o)}>
-        <div className="rounded-lg bg-info/10 border border-info/20 p-2 mb-3 text-[12px] text-text">
-          A breakdown raised during a duty slot goes straight to that technician.
-          Currently on duty: <strong className={duty ? 'text-ok' : 'text-err'}>{duty ?? 'NOBODY'}</strong>
-        </div>
-        {canManage && (
-          <div className="flex gap-2 flex-wrap items-end mb-3">
-            <div><label className={LB}>Technician</label><select className={`${INP} w-28`} value={rosterForm.tech} onChange={e => { const s = staffByName(e.target.value); setRosterForm(p => ({ ...p, tech: e.target.value, techId: s?.id ?? null })) }}>{techNames.map(t => <option key={t}>{t}</option>)}</select></div>
-            <div><label className={LB}>From</label><input className={`${INP} w-44`} type="datetime-local" value={rosterForm.start} onChange={e => setRosterForm(p => ({ ...p, start: e.target.value }))} /></div>
-            <div><label className={LB}>To</label><input className={`${INP} w-44`} type="datetime-local" value={rosterForm.end} onChange={e => setRosterForm(p => ({ ...p, end: e.target.value }))} /></div>
-            <button className={PRIMARY} onClick={actions.addRoster}>Add duty slot</button>
+      {/* ── Duty roster (now sourced from the Operations shift roster) ── */}
+      <Section title="Duty roster" subtitle="Sourced from the Operations shift roster" open={openRoster} onToggle={() => setOpenRoster(o => !o)}>
+        <div className="rounded-lg bg-info/10 border border-info/20 p-3 text-[12px] text-text space-y-2">
+          <div>
+            The on-duty maintenance technician is now read from the <strong>Operations shift roster</strong> —
+            the Maintenance-role rows for the current Day / Night shift. Breakdowns auto-route to whoever is on
+            shift there, so the roster is managed in one place.
           </div>
-        )}
-        {(() => {
-          const upcoming = roster.filter(r => new Date(r.end_at).getTime() > nowMs - 7 * 86400000)
-            .sort((a, b) => a.start_at.localeCompare(b.start_at))
-          if (upcoming.length === 0) return <div className="text-[12px] text-text-faint">No duty slots yet — breakdowns will wait for manager allocation until a roster exists.</div>
-          const byDay = upcoming.reduce((m: Record<string, typeof upcoming>, r) => {
-            const key = fmtD(r.start_at); (m[key] ??= []).push(r); return m
-          }, {})
-          return Object.entries(byDay).map(([day, rows]) => (
-            <div key={day} className="mb-2">
-              <div className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">{day}</div>
-              {rows.map(r => {
-                const onNow = new Date(r.start_at).getTime() <= nowMs && nowMs <= new Date(r.end_at).getTime()
-                const tc = colorFor(r.technician)
-                return (
-                  <div key={r.id} style={{ borderLeftColor: tc.dot }}
-                    className={`flex gap-2 items-center text-[12px] px-2.5 py-2 rounded-md mb-1 border-l-4 shadow-sm ${onNow ? 'bg-ok/10 ring-1 ring-ok/40' : 'bg-surface-raised'}`}>
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: tc.dot }} />
-                    <strong className="w-20">{r.technician}</strong>
-                    {onNow && <span className="badge badge-ok">ON DUTY NOW</span>}
-                    <span className="text-text-muted flex-1">{fmtT(r.start_at)} → {fmtDT(r.end_at)}</span>
-                    {canManage && <button className="min-h-[28px] text-[10px] px-2 py-1 rounded bg-err text-white hover:brightness-110" onClick={() => actions.delRoster(r.id)}>✕</button>}
-                  </div>
-                )
-              })}
-            </div>
-          ))
-        })()}
+          <div>Currently on duty: <strong className={duty ? 'text-ok' : 'text-err'}>{duty ?? 'NOBODY'}</strong>
+            {dutyNow.length > 1 && <span className="text-text-muted"> (+{dutyNow.length - 1} more on shift)</span>}
+          </div>
+          <Link href="/production/roster"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand text-white px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition">
+            <CalendarRange size={14} /> Open the shift roster
+          </Link>
+        </div>
       </Section>
 
       {/* ── QC area map ── */}
