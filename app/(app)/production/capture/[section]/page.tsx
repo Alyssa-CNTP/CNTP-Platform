@@ -138,13 +138,37 @@ function CaptureScreen() {
       const aVariant = (assign as any)?.variant ?? ''
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data
+      const dbHasData = d?.productions?.length > 0 &&
+        (d.productions as any[]).some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0)
       if (d?.productions?.length) {
         setProductions(d.productions as Production[])
       } else if (d?.outputs) {
         // legacy single-production draft → wrap as one production
         setProductions([{ id: crypto.randomUUID(), variant: aVariant, grade: 'A', lot: aLot, data: d as SievingData }])
       } else {
-        setProductions([emptyProduction(aVariant, aLot)])
+        // DB draft is empty — check localStorage recovery before defaulting to blank
+        let recovered = false
+        try {
+          const lsRaw = localStorage.getItem(`capture_draft_${sectionId}_${dateParam}_${shift}`)
+          if (lsRaw) {
+            const ls = JSON.parse(lsRaw)
+            if (ls?.productions?.length) { setProductions(ls.productions); recovered = true }
+          }
+        } catch {}
+        if (!recovered) setProductions([emptyProduction(aVariant, aLot)])
+      }
+      // If DB has no capture data but localStorage does, prefer localStorage —
+      // this covers the case where the tablet lost the async Supabase write.
+      if (!dbHasData && d?.productions?.length) {
+        try {
+          const lsRaw = localStorage.getItem(`capture_draft_${sectionId}_${dateParam}_${shift}`)
+          if (lsRaw) {
+            const ls = JSON.parse(lsRaw)
+            if (ls?.productions?.length && ls.productions.some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0)) {
+              setProductions(ls.productions)
+            }
+          }
+        } catch {}
       }
       if (sess) {
         setSessionId((sess as any).id)
@@ -234,6 +258,19 @@ function CaptureScreen() {
   }
   const logActivityRef = useRef(logActivity); logActivityRef.current = logActivity
 
+  // ── Synchronous localStorage write on every change — safety net for tablet
+  //    browsers that kill async DB writes on screen-lock / tab exit. Recovered
+  //    automatically on next load if DB draft is empty.
+  useEffect(() => {
+    if (loading || status === 'approved') return
+    try {
+      localStorage.setItem(
+        `capture_draft_${sectionId}_${dateParam}_${shift}`,
+        JSON.stringify({ productions, savedAt: new Date().toISOString() }),
+      )
+    } catch { /* storage full — best-effort */ }
+  }, [productions, loading, status])
+
   // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
     if (loading) return
@@ -290,7 +327,11 @@ function CaptureScreen() {
       prod.data.debag.forEach(r => {
         if (n(r.nett) === 0) return
         rows.push({
-          session_id: sid, bag_no: bagNo++, bag_serial_no: r.bag_no || null, lot_number: r.lot || prod.lot || null,
+          session_id: sid, bag_no: bagNo++,
+          // bag_serial_no is a FK to bag_tags — farm bags aren't in bag_tags, so null it.
+          // Preserve the operator's physical bag number in notes for traceability.
+          bag_serial_no: null, notes: r.bag_no || null,
+          lot_number: r.lot || prod.lot || null,
           product_type: '500kg Farm Bag', variant: prod.variant,
           kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
           delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
@@ -573,6 +614,17 @@ function CaptureScreen() {
                 </div>
               )}
 
+              {status === 'submitted' && !locked && (
+                <div className="bg-info/5 border border-info/30 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-[14px] font-medium text-info"><CheckCircle2 size={16} /> Submitted — awaiting supervisor sign-off.</div>
+                  <p className="text-[12px] text-text-muted">You don't need to wait. Start capturing the next production order now — the supervisor can approve this one from their dashboard.</p>
+                  <button onClick={startNewProduction}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-info text-white font-medium text-[14px] hover:opacity-90 transition-opacity">
+                    <Plus size={16} /> Start new batch record
+                  </button>
+                </div>
+              )}
+
               {/* Routine guide: until start-up checks are done, lead with a clear
                   "do checks first" gate. Strong but not blocking — capture is still
                   below for the cases where they must proceed. */}
@@ -666,6 +718,7 @@ function CaptureScreen() {
                     value={active.data}
                     onChange={updateActiveData}
                     genSerial={genSerial}
+                    operatorId={verifiedOp?.user_id ?? user?.id ?? null}
                   />
                   {!locked && (
                     <button onClick={saveDraft} disabled={saving}

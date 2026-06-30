@@ -26,13 +26,27 @@ function debagRows(prods: Production[]) {
   }))
   return rows
 }
-function bagRows(prods: Production[]) {
-  const rows: { product: string; lot: string; kg: number; variant: string; grade: string; serial: string }[] = []
+function bagRows(prods: Production[], grouped = true) {
+  if (!grouped) {
+    const rows: { product: string; lot: string; kg: number; variant: string; grade: string; serial: string }[] = []
+    prods.forEach(p => (p.data.outputs ?? []).forEach(b => {
+      if (num(b.weight) === 0) return
+      rows.push({ product: b.productType, lot: b.batch || p.lot || '—', kg: num(b.weight), variant: p.variant, grade: b.destination || p.grade || '—', serial: b.serial })
+    }))
+    return rows
+  }
+  // Group by product + lot + variant + grade — 10 bags of Fine Leaf show as one row
+  const map = new Map<string, { product: string; lot: string; kg: number; variant: string; grade: string; count: number; serial: string }>()
   prods.forEach(p => (p.data.outputs ?? []).forEach(b => {
     if (num(b.weight) === 0) return
-    rows.push({ product: b.productType, lot: b.batch || p.lot || '—', kg: num(b.weight), variant: p.variant, grade: b.destination || p.grade || '—', serial: b.serial })
+    const lot = b.batch || p.lot || '—'
+    const grade = b.destination || p.grade || '—'
+    const key = `${b.productType}||${lot}||${p.variant}||${grade}`
+    const existing = map.get(key)
+    if (existing) { existing.kg += num(b.weight); existing.count++; existing.serial = '' }
+    else map.set(key, { product: b.productType, lot, kg: num(b.weight), variant: p.variant, grade, count: 1, serial: b.serial })
   }))
-  return rows
+  return Array.from(map.values())
 }
 
 function Cell({ children, className = '' }: { children: React.ReactNode; className?: string }) {
@@ -44,7 +58,7 @@ export function CaptureOverview({ productions, sectionName, sectionColor, date, 
 }) {
   const [copied, setCopied] = useState(false)
   const ins  = debagRows(productions)
-  const outs = bagRows(productions)
+  const outs = bagRows(productions, !showSerials)
   const totals = productions.reduce((acc, p) => {
     const t = sievingTotals(p.data)
     return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut, spillage: acc.spillage + t.spillage }
@@ -112,7 +126,7 @@ export function CaptureOverview({ productions, sectionName, sectionColor, date, 
                       </tr>
                     ))}
                     {totals.spillage > 0 && (
-                      <tr className="border-t border-stone-100"><Cell className="text-stone-400" >Bucket elevator</Cell><Cell> </Cell><Cell className="text-stone-400">excl. balance</Cell><Cell className="text-right font-mono text-stone-400">{totals.spillage.toFixed(1)} kg</Cell></tr>
+                      <tr className="border-t border-stone-100"><Cell className="text-stone-500 font-medium">Bucket elevator</Cell><Cell /><Cell className="text-stone-400">incl. in balance</Cell><Cell className="text-right font-mono text-stone-600">{totals.spillage.toFixed(1)} kg</Cell></tr>
                     )}
                   </tbody>
                 </table>
@@ -128,15 +142,19 @@ export function CaptureOverview({ productions, sectionName, sectionColor, date, 
                 </div>
                 <table className="w-full border-collapse">
                   <thead><tr className="border-b border-stone-100 text-left text-[9px] font-bold uppercase tracking-wide text-stone-400">
-                    <Cell>Product</Cell><Cell>Lot / batch</Cell><Cell>Variant</Cell><Cell>Grade</Cell>{showSerials && <Cell>Serial</Cell>}<Cell className="text-right">Weight</Cell>
+                    <Cell>Product</Cell><Cell>Lot / batch</Cell><Cell>Variant</Cell><Cell>Grade</Cell>
+                    {!showSerials && <Cell className="text-right">Bags</Cell>}
+                    {showSerials && <Cell>Serial</Cell>}
+                    <Cell className="text-right">Weight</Cell>
                   </tr></thead>
                   <tbody>
-                    {outs.map((r, i) => (
+                    {(outs as any[]).map((r, i) => (
                       <tr key={i} className="border-b border-stone-50 last:border-0">
                         <Cell className="font-medium text-stone-800">{r.product}</Cell>
                         <Cell className="font-mono text-stone-600">{r.lot}</Cell>
                         <Cell className="text-stone-600">{r.variant}</Cell>
                         <Cell className="text-stone-600">{r.grade}</Cell>
+                        {!showSerials && <Cell className="text-right font-mono text-stone-500">{r.count ?? 1}</Cell>}
                         {showSerials && <Cell className="font-mono text-[10px] text-stone-400">{r.serial}</Cell>}
                         <Cell className="text-right font-mono font-bold text-stone-800">{r.kg.toFixed(1)} kg</Cell>
                       </tr>
