@@ -1886,6 +1886,7 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
   const [saving,  setSaving]  = useState(false)
   const [err,     setErr]     = useState('')
   const [result,  setResult]  = useState<any>(null)
+  const [drag,    setDrag]    = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   function pickFile(f: File | null) {
@@ -1983,9 +1984,23 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
             <div className="space-y-3">
               <div>
                 <label className={lbl}>CR3 file</label>
-                <input ref={fileRef} type="file" accept=".cr3,image/x-canon-cr3"
-                  onChange={e => pickFile(e.target.files?.[0] ?? null)}
-                  className="block w-full text-[12px] text-text-muted file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-brand file:text-white file:text-[11px] file:font-semibold file:cursor-pointer" />
+                {/* Drag-and-drop zone (also click to browse) */}
+                <div
+                  onDragOver={e => { e.preventDefault(); setDrag(true) }}
+                  onDragLeave={e => { e.preventDefault(); setDrag(false) }}
+                  onDrop={e => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files?.[0] ?? null) }}
+                  onClick={() => fileRef.current?.click()}
+                  className={`relative border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors ${
+                    drag ? 'border-brand bg-info/10' : 'border-surface-rule hover:border-brand/40 hover:bg-surface'
+                  }`}>
+                  <div className="text-xl mb-1">📄</div>
+                  <div className="text-[12px] font-semibold text-text-muted">Drag &amp; drop a CR3 file here</div>
+                  <div className="text-[11px] text-text-faint mb-2">or click to browse</div>
+                  <span className="inline-block px-3 py-1 rounded-lg bg-brand text-white text-[11px] font-semibold">Browse CR3</span>
+                  <input ref={fileRef} type="file" accept=".cr3,image/x-canon-cr3"
+                    onChange={e => { pickFile(e.target.files?.[0] ?? null); e.currentTarget.value = '' }}
+                    className="hidden" />
+                </div>
                 {file && <div className="mt-1 text-[11px] text-text-muted">📄 {file.name} ({(file.size/1024/1024).toFixed(1)} MB)</div>}
               </div>
               <button onClick={analyse} disabled={!file || busy}
