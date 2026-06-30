@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import { Clock, Coffee, UtensilsCrossed, Plus, Trash2, CheckCircle2, Loader2, Info, RefreshCw, Wrench, ChevronDown } from 'lucide-react'
+import { Clock, Coffee, UtensilsCrossed, Plus, Trash2, CheckCircle2, Loader2, Info, RefreshCw, Wrench, ChevronDown, AlertTriangle } from 'lucide-react'
 import {
   loadActivity, loadTimesheet, saveTimesheet, deriveTimesheet, workedMinutes,
   type DerivedTimesheet, type TimesheetBreak, type BreakType,
 } from '@/lib/production/timesheet'
+import { getDb } from '@/lib/supabase/db'
+import { sectionMeta } from '@/lib/production/capture-config'
 
 // ── ISO ⇄ "HH:mm" helpers (local time, anchored to the session date) ──────────
 function isoToTime(iso: string | null): string {
@@ -128,8 +130,10 @@ export function TimesheetConfirm({
 
   function removeBreak(i: number) { setBreaks(bs => bs.filter((_, j) => j !== i)) }
 
+  const maintenanceMissingNotes = breaks.some(b => b.type === 'maintenance' && !b.notes?.trim())
+
   async function confirm() {
-    if (!sessionId) return
+    if (!sessionId || maintenanceMissingNotes) return
     setSaving(true)
     try {
       await saveTimesheet({
@@ -137,6 +141,23 @@ export function TimesheetConfirm({
         shiftStart: startIso, shiftEnd: endIso, breaks,
         derived: derived ?? { shiftStart: startIso, shiftEnd: endIso, breaks, workedMinutes: worked },
       })
+      // Escalate maintenance stoppages to supervisor via line_messages
+      const maintenanceBreaks = breaks.filter(b => b.type === 'maintenance')
+      if (maintenanceBreaks.length > 0) {
+        const db = getDb()
+        const meta = sectionMeta(sectionId)
+        for (const b of maintenanceBreaks) {
+          const dur = breakDuration(b)
+          const body = `🔧 Maintenance stoppage reported by ${operatorName} (${meta.name}, ${shift} shift): ${b.notes?.trim()}${dur ? ` — ${dur}` : ''}`
+          await db.from('line_messages').insert({
+            section_id: sectionId,
+            sender_name: operatorName,
+            sender_id: operatorId,
+            body,
+            type: 'alert',
+          }).throwOnError()
+        }
+      }
     } catch {
       setSaveWarn(true)
     } finally {
@@ -283,8 +304,15 @@ export function TimesheetConfirm({
         <span className="font-mono font-bold text-[14px] text-text">{fmtWorked(worked)}</span>
       </div>
 
+      {maintenanceMissingNotes && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-err/5 border border-err/20 rounded-xl text-[12px] text-err">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+          <span>Maintenance stoppages require a description before you can confirm.</span>
+        </div>
+      )}
+
       {!locked && (
-        <button onClick={confirm} disabled={saving}
+        <button onClick={confirm} disabled={saving || maintenanceMissingNotes}
           className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
           {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} className="text-ok" />}
           Confirm timesheet

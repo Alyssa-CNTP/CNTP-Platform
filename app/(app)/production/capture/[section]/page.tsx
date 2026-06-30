@@ -192,8 +192,10 @@ function CaptureScreen() {
         if (row) { setSessionId((row as any).id); setStatus('draft') }
       }
 
-      // Seed serial counter from the highest existing NNN for section+date
-      const prefix = `${meta.code}-`
+      // Seed serial counter from today's bags only — each date restarts at 001.
+      const dp = dateParam.split('-')
+      const ddmmyy = dp.length === 3 ? `${dp[2]}${dp[1]}${dp[0].slice(2)}` : '000000'
+      const prefix = `${meta.code}-${ddmmyy}-`
       const { data: tags } = await db.schema('production').from('bag_tags')
         .select('serial_number').like('serial_number', `${prefix}%`)
       let maxSeq = 0
