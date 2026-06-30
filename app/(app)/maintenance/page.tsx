@@ -5,12 +5,16 @@
 // the focused analytics + AI analyst (KPIs and charts live in MaintenanceDashboard).
 
 import Link from 'next/link'
-import { ClipboardList, CalendarCheck, Boxes, ArrowRight } from 'lucide-react'
+import { ClipboardList, CalendarCheck, Boxes, ArrowRight, AlertTriangle } from 'lucide-react'
 import { useMaintenanceContext } from './layout'
+import { useAuth } from '@/lib/auth/context'
+import { deriveMaintRole } from '@/lib/maintenance/roles'
 import MaintenanceAnalytics from '@/components/maintenance/MaintenanceDashboard'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 
 export default function MaintenanceDashboard() {
+  const auth = useAuth()
+  const canManage = deriveMaintRole(auth).canManage
   const { loading, error, data, derived } = useMaintenanceContext()
   const { duty, newCards, annualRows } = derived
   const dueSoon = annualRows.filter(a => a.days <= 60).length
@@ -34,6 +38,26 @@ export default function MaintenanceDashboard() {
       </div>
 
       {error && <div className="card p-3 text-[12px] text-err border border-err/30">{error}</div>}
+
+      {/* New job cards awaiting allocation — prominent manager alert */}
+      {canManage && newCards.length > 0 && (
+        <Link href="/maintenance/job-cards"
+          className="block rounded-xl border border-warn/30 bg-warn/5 px-4 py-3 hover:bg-warn/10 transition">
+          <div className="flex items-center gap-3">
+            <span className="relative inline-flex items-center justify-center w-9 h-9 rounded-lg bg-warn/15 text-warn shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+              <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-err text-white text-[10px] font-bold tabular-nums">{newCards.length}</span>
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-text">{newCards.length} job card{newCards.length > 1 ? 's' : ''} awaiting your allocation</div>
+              <div className="text-[12px] text-text-muted truncate">
+                {newCards.slice(0, 4).map(j => `${j.card_no} (${j.area})`).join(' · ')}{newCards.length > 4 ? ` +${newCards.length - 4} more` : ''}
+              </div>
+            </div>
+            <span className="text-warn text-sm font-semibold shrink-0">Allocate →</span>
+          </div>
+        </Link>
+      )}
 
       {/* Module quick-links */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
