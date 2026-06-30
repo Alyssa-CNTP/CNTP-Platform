@@ -65,6 +65,8 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_samples', label: 'Edit samples' },
           { key: 'can_add_tastings', label: 'Record tastings' },
           { key: 'can_edit_tastings', label: 'Edit tastings' },
+          { key: 'can_approve_runs', label: 'Approve allocated runs (Lab Manager)' },
+          { key: 'can_signoff_day', label: 'Sign off daily station overviews' },
         ] },
       { key: 'quality.sieving', label: 'Sieving',
         read: 'dept', write: 'can_add_sieving_runs', delete: 'can_delete_sieving_runs',
