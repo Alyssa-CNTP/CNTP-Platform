@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/auth/context'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import MaintenanceAnalytics from '@/components/maintenance/MaintenanceDashboard'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
+import { TrendsPanel } from '@/components/maintenance/TrendsPanel'
 
 export default function MaintenanceDashboard() {
   const auth = useAuth()
@@ -76,6 +77,9 @@ export default function MaintenanceDashboard() {
           </Link>
         ))}
       </div>
+
+      {/* Utility trends — water / IP / diesel / compressor run-hours */}
+      <TrendsPanel />
 
       {/* Energy monitoring — solar vs grid kWh today from Home Assistant */}
       <EnergyWidget />

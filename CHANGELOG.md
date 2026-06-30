@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Maintenance overhaul round 4: table board, checklist allocation, unified roster, dashboard trends, energy)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`, `app/(app)/maintenance/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/planner/page.tsx`, `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/energy/history/route.ts`, `lib/maintenance/roster.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/maintenance/JobCardTable.tsx` (new), `components/maintenance/Spark.tsx` (new), `components/maintenance/TrendsPanel.tsx` (new), `components/maintenance/EnergyHistory.tsx`, `components/maintenance/EnergyWidget.tsx`
+
+- **Job-card board → professional one-line table** (`JobCardTable`): each card is one row that expands to the full job card (allocate / log work / QC / verify) with a live in-row timer. **Per-technician allocation tabs replace the old "by raiser" panel**; added an **urgency filter** (kept search + date-range). Tech / QC / raiser views use the same table.
+- **New-job-card alert** banner on the maintenance dashboard for managers (count + link to allocate).
+- **Checklist allocation:** managers allocate each weekly/monthly checklist to a technician (on-duty suggested first); assignee sees a highlight + badge. (+migration `20260629_002`, applied to staging.)
+- **Roster unified:** the on-duty maintenance technician now comes from the **Operations shift roster** (`production.roster_*`, Maintenance-role rows for the current Day/Night shift) — including breakdown auto-routing. The maintenance duty-roster editor is retired (links to `/production/roster`); the legacy table is only a fallback.
+- **Trends moved to the dashboard:** the water / IP / diesel / compressor trend graphs now live on the Maintenance dashboard (`TrendsPanel`, shared `Spark`) with the window selector; the Scheduled "Readings & Trends" tab is now **capture-only ("Readings")** — removes the duplication.
+- **Energy:** solar charts shrunk; energy-history API + widget gain a **custom From/To date-range filter** over stored data.
+
 ## 2026-06-29 — Gustav (Scheduled maintenance: interactive Overview tiles, required calibration sign-off, required fault choice)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`
