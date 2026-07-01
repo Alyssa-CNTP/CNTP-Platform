@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Alyssa (maintenance planner: remove add-slot/week calendar/duty-roster, add shift roster card)
+
+**Files changed:**
+- `app/(app)/maintenance/planner/page.tsx`
+
+**Changes:**
+- Removed "Add a planned slot" collapsible section (was writing to `maintenance.slots`).
+- Removed "This week" weekly calendar section (was reading from `maintenance.duty_roster` which showed every maintenance person on duty every day — inaccurate).
+- Removed "Duty roster" collapsible section (was a static info panel linking to `/production/roster`).
+- Replaced all three with a single **"Maintenance on shift"** card that queries `production.roster_periods` and `production.roster_entries` directly, showing who is assigned to the Day shift and Night shift for the current period. The active shift (07:00–16:59 = day, otherwise night) is highlighted. Shows role label (Technician / Assistant), per-person ON DUTY badge where applicable, and a direct link to edit in the shift roster.
+- Removed now-unused state (`openWeek`, `openAddSlot`, `openRoster`, `weekStart`), functions (`slotsOn`, `rosterOn`), and imports (`Plus`, `NavBtn`, `INP` from add-slot form, `PRIMARY` constant).
+
+---
+
 ## 2026-07-01 — Gustav (Sieving chart: timeline navigator for previous weeks/months)
 
 **Files changed:**
