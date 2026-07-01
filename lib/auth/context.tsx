@@ -267,7 +267,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // permission. Only the full admin (senior_developer) sees everything; the IT
   // department is NOT a blanket key — IT users need the permission/role for a
   // module just like everyone else.
-  const canAccessQuality    = isFullAdmin || isQuality    || isManagement || p('can_view_history')
+  const canAccessQuality    = isFullAdmin || isQuality    || p('can_view_history')
   const canAccessProduction = isFullAdmin || isProduction || p('can_submit_count') || p('can_view_ops_dashboard')
   const canAccessSales      = isFullAdmin || isSales      || p('can_access_sales')
   const canAccessMarketing  = isFullAdmin || isMarketing  || p('can_access_marketing')
