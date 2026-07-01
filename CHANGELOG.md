@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Skills Matrix redesign + Staff Directory by department)
+
+**Files changed:**
+- `app/(app)/production/staff/matrix/page.tsx`
+- `app/(app)/production/staff/page.tsx`
+- `components/production/WorkforceTabs.tsx`
+- `lib/auth/permissions.ts`
+- `lib/auth/permission-registry.ts`
+
+**Changes:**
+- Skills Matrix completely redesigned — 3 operational views replace the raw Excel-style grid: **By Person** (dept-grouped collapsibles, competency progress bar, floor-section qualification badges), **By Section** (6 floor section cards each showing qualified/in-training/not-started counts + clickable name chips), **SOP Gaps** (SOPs sorted worst coverage first, coverage bars, <30% flagged red). Summary stats always visible at top.
+- Staff Directory redesigned: grouped by department (accordion, all expanded by default), names alphabetical within each dept. Rows show position, employee code, competency chip, leave badge. Full add/edit/delete from here — inline delete confirmation (no modal). Edit modal extended with employee_code, position, position_code, start_date fields.
+- New `can_delete_staff` permission key — defaults true for production_supervisor and quality_manager; wired into Users & Roles UI under Staff & Competency.
+- WorkforceTabs (Shift Roster page sub-nav): removed Staff Directory tab; replaced with "Staff & Skills →" cross-reference link.
+
+---
+
 ## 2026-07-02 — Alyssa (Staff Profiles + Skills/Competency Matrix — Phase 1)
 
 **Files changed:**
