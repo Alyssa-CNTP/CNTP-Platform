@@ -5,23 +5,6 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-07-03 — Alyssa (Maintenance planner shift boundary + maintenance_manager role visibility)
-
-**Files changed:**
-- `app/(app)/maintenance/planner/page.tsx`
-- `lib/maintenance/useMaintenanceData.ts`
-- `lib/maintenance/roster.ts`
-- `lib/maintenance/constants.ts`
-
-**Changes:**
-- Fixed `currentShift()` boundary: `h < 17` → `h < 16` — night shift starts at 16:00, not 17:00; mismatch caused ON DUTY badge and isActiveShift highlight to disagree for the 16:00–17:00 hour
-- Added `maintenance_manager` to `MAINT_ROLE_KEYS` in `useMaintenanceData.ts` and `roster.ts` so Shuaib Sentso's roster entries are included in the on-duty check
-- Added `maintenance_manager` to the planner's roster query (previously only fetched `maintenance_tech` and `maintenance_asst`)
-- Added `Shuaib Sentso` to the TECHS fallback list in `constants.ts`
-- Set `role=maintenance_manager` in Supabase auth app_metadata for `maintenance@rooibostea.co.za` (production)
-
----
-
 ## 2026-07-02 — Alyssa (Capture overview — hierarchical tables, cross-shift totals, spillage rename)
 
 **Files changed:**
