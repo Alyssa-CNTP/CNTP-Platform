@@ -155,14 +155,20 @@ function AssignScreen() {
         .eq('period_id', period.id).eq('shift', rShift)
       const entries = (rows as any[]) ?? []
 
-      // Resolve operator ids for entries that only carry an employee link.
+      // Resolve operator ids: 1) direct operator_id, 2) employee→operator link, 3) name match.
       const empIds = [...new Set(entries.filter(e => !e.operator_id && e.employee_id).map(e => e.employee_id))]
       const empOp = new Map<string, string | null>()
       if (empIds.length) {
         const { data: emps } = await pdb.from('employees').select('id,operator_id').in('id', empIds)
         ;(emps as any[] ?? []).forEach(e => empOp.set(e.id, e.operator_id))
       }
-      const opFor = (e: any): string | null => e.operator_id ?? (e.employee_id ? (empOp.get(e.employee_id) ?? null) : null)
+      // Name-based fallback: match person_name to operators.name (case-insensitive trim)
+      const nameOp = new Map<string, string>()
+      operators.forEach(op => nameOp.set(op.name.trim().toLowerCase(), op.id))
+      const opFor = (e: any): string | null =>
+        e.operator_id ??
+        (e.employee_id ? (empOp.get(e.employee_id) ?? null) : null) ??
+        (e.person_name ? (nameOp.get(e.person_name.trim().toLowerCase()) ?? null) : null)
 
       let filled = 0
       setDrafts(prev => {
