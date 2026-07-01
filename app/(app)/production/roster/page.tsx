@@ -23,11 +23,11 @@ interface Period {
 }
 interface Entry {
   id: string; period_id: string; role_key: string; shift: RosterShift
-  employee_id: string | null; person_name: string; tags: string[]; sort_order: number
+  employee_id: string | null; operator_id: string | null; person_name: string; tags: string[]; sort_order: number
 }
 interface Employee {
   id: string; name: string; display_name: string | null
-  department: string; job_title: string | null; skills: string[]
+  department: string; job_title: string | null; skills: string[]; operator_id: string | null
 }
 
 const db = () => getDb().schema('production')
@@ -76,7 +76,7 @@ export default function RosterPage() {
   // ── Load roles + employees + periods once ───────────────────────────────────
   useEffect(() => {
     (async () => {
-      db().from('employees').select('id,name,display_name,department,job_title,skills')
+      db().from('employees').select('id,name,display_name,department,job_title,skills,operator_id')
         .eq('active', true).order('name')
         .then(({ data }: any) => setEmployees((data as Employee[]) ?? []))
 
@@ -116,7 +116,7 @@ export default function RosterPage() {
     if (!periodId) { setEntries([]); return }
     setDirtyCategories(new Set()) // fresh load clears all unsaved state
     db().from('roster_entries')
-      .select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order')
+      .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
       .eq('period_id', periodId).order('sort_order')
       .then(({ data }: any) => setEntries((data as Entry[]) ?? []))
   }, [periodId])
@@ -169,7 +169,8 @@ export default function RosterPage() {
     const cat = roleCategory.get(roleKey) ?? ''
     const sort = cellEntries(roleKey, shift).length
     const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, person_name: name.trim(), tags, sort_order: sort }])
+    const emp = employees.find(e => e.id === employeeId)
+    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags, sort_order: sort }])
     markDirty(cat)
     setEditing(null)
   }
@@ -177,7 +178,8 @@ export default function RosterPage() {
     if (!name.trim()) return
     const entry = entries.find(e => e.id === id)
     const cat = entry ? (roleCategory.get(entry.role_key) ?? '') : ''
-    setEntries(es => es.map(e => e.id === id ? { ...e, employee_id: employeeId, person_name: name.trim(), tags } : e))
+    const emp = employees.find(e => e.id === employeeId)
+    setEntries(es => es.map(e => e.id === id ? { ...e, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags } : e))
     markDirty(cat)
     setEditing(null)
   }
@@ -212,13 +214,14 @@ export default function RosterPage() {
         .filter(e => catRoleKeys.includes(e.role_key))
         .map((e, i) => ({
           period_id: e.period_id, role_key: e.role_key, shift: e.shift,
-          employee_id: e.employee_id, person_name: e.person_name, tags: e.tags, sort_order: i,
+          employee_id: e.employee_id, operator_id: e.operator_id ?? null,
+          person_name: e.person_name, tags: e.tags, sort_order: i,
         }))
       let fresh: Entry[] = []
       if (toInsert.length > 0) {
         const { data, error } = await db().from('roster_entries')
           .insert(toInsert as any)
-          .select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order')
+          .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
         if (error) throw error
         fresh = (data as Entry[]) ?? []
       }
@@ -264,6 +267,7 @@ export default function RosterPage() {
         role_key:  e.role_key,
         shift:     e.shift === 'day' ? 'night' : 'day',
         employee_id: e.employee_id,
+        operator_id: e.operator_id ?? null,
         person_name: e.person_name,
         tags:        e.tags,
         sort_order:  e.sort_order,
@@ -271,7 +275,7 @@ export default function RosterPage() {
       if (rotated.length > 0) await db().from('roster_entries').insert(rotated as any)
 
       const { data: newEntries } = await db().from('roster_entries')
-        .select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order')
+        .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
         .eq('period_id', np.id).order('sort_order')
 
       setPeriods(ps => [np as Period, ...ps])
