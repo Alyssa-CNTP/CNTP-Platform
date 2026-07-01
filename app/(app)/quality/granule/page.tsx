@@ -17,6 +17,7 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { isNegative } from '@/lib/utils/validation'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
@@ -540,6 +541,14 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
       if (form.dryer2_bulk_density === '' || form.dryer2_bulk_density == null) errs.push('Dryer 2 Bulk Density')
       if (form.dryer2_dryer_temp === '' || form.dryer2_dryer_temp == null) errs.push('Dryer 2 Temp')
     }
+    // No captured value may be negative.
+    const negFields: [any, string][] = [
+      [form.moisture, 'Moisture'], [form.bulk_density, 'Bulk Density'], [form.dryer_temp, 'Dryer Temperature'],
+      [form.weight_1, 'Weight 1'], [form.weight_2, 'Weight 2'], [form.weight_3, 'Weight 3'],
+      [form.dryer2_moisture, 'Dryer 2 Moisture'], [form.dryer2_bulk_density, 'Dryer 2 Bulk Density'], [form.dryer2_dryer_temp, 'Dryer 2 Temp'],
+    ]
+    negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
+    if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
     setErrors(errs); setWarnings(warns)
     return errs.length === 0
   }
@@ -609,7 +618,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
             {([['Date *','sample_date','date',''],['Time *','sample_time','text','HH:MM'],['Dryer Number *','dryer_number','text','e.g. D1'],['Moisture (%) *','moisture','number','%'],['Bulk Density (cc/100g) *','bulk_density','number','cc/100g'],['Dryer Temp (°C) *','dryer_temp','number','°C']] as const).map(([label, key, type, ph]) => (
               <div key={key}>
                 <label className={`${lbl} ${errors.some(e => e.startsWith(label.replace(' *',''))) ? 'text-err' : ''}`}>{label}</label>
-                <input type={type} step="any" value={(form as any)[key]} placeholder={ph} onChange={e => set(key, e.target.value)}
+                <input type={type} min={type==='number'?0:undefined} step="any" value={(form as any)[key]} placeholder={ph} onChange={e => set(key, e.target.value)}
                   className={`${inp} w-full ${errors.some(e => e.startsWith(label.replace(' *',''))) ? 'border-err/40' : ''}`} />
               </div>
             ))}
@@ -645,7 +654,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
             {form.bag_type === 'bulk' && (
               <div>
                 <label className={`${lbl} ${errors.some(e => e.startsWith('Bulk Bag Weight')) ? 'text-err' : ''}`}>Bulk Bag Weight (kg) *</label>
-                <input type="number" step="any" value={form.weight_1} onChange={e => set('weight_1', e.target.value)}
+                <input type="number" min="0" step="any" value={form.weight_1} onChange={e => set('weight_1', e.target.value)}
                   placeholder="e.g. 498.5" className={`${inp} w-36`} />
               </div>
             )}
@@ -654,7 +663,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
                 {(['weight_1','weight_2','weight_3'] as const).map((k, i) => (
                   <div key={k}>
                     <label className={lbl}>Check {i + 1} (kg) *</label>
-                    <input type="number" step="any" value={form[k]} onChange={e => set(k, e.target.value)}
+                    <input type="number" min="0" step="any" value={form[k]} onChange={e => set(k, e.target.value)}
                       placeholder="e.g. 20.1" className={`${inp} w-full`} />
                   </div>
                 ))}
@@ -674,7 +683,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
                 {([['Moisture % *','dryer2_moisture'],['BD (cc/100g) *','dryer2_bulk_density'],['Dryer Temp (°C) *','dryer2_dryer_temp']] as const).map(([label, key]) => (
                   <div key={key}>
                     <label className={`${lbl} ${errors.some(e => e.startsWith(label.replace(' *',''))) ? 'text-err' : ''}`}>{label}</label>
-                    <input type="number" step="any" value={(form as any)[key]} onChange={e => set(key, e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" min="0" step="any" value={(form as any)[key]} onChange={e => set(key, e.target.value)} className={`${inp} w-full`} />
                   </div>
                 ))}
               </div>
@@ -825,6 +834,10 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
     if (form.bulk_density === '' || form.bulk_density == null) errs.push('Bulk Density')
     if (form.dryer_temp === '' || form.dryer_temp == null) errs.push('Dryer Temperature')
     if (form.sieving_done && !GRANULE_SIEVES.every(s => grams[s.key] !== '')) errs.push('Sieve Data (all fractions required)')
+    // No captured value may be negative.
+    const negFields: [any, string][] = [[form.moisture, 'Moisture'], [form.bulk_density, 'Bulk Density'], [form.dryer_temp, 'Dryer Temperature']]
+    negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
+    if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
     setErrors(errs)
     return errs.length === 0
   }
@@ -1229,6 +1242,9 @@ function GranuleEditSpecModal({ run, onSave, onClose }: { run: any; onSave: (id:
   const setSieve  = (frac: string, bound: string, v: string) => setForm(f => ({ ...f, [`sieve_${frac}`]: { ...(f[`sieve_${frac}`] as any), [bound]: v } }))
 
   const handleSave = async () => {
+    const negScalar = ['moisture_max', 'bd_min', 'bd_max'].find(k => isNegative(form[k]))
+    const negSieve = GRANULE_SIEVES.some(s => isNegative((form[`sieve_${s.key}`] as any)?.min) || isNegative((form[`sieve_${s.key}`] as any)?.max))
+    if (negScalar || negSieve) { alert('Spec values cannot be negative.'); return }
     setSaving(true)
     const spec_json: any = {
       moisture_max: form.moisture_max !== '' ? parseFloat(form.moisture_max as string) : null,
