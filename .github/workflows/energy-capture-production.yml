@@ -1,0 +1,38 @@
+name: Energy Capture — Production
+
+# Hits the production app's capture endpoint near end-of-day (SAST) so energy
+# usage is recorded in maintenance.energy_daily even if nobody opens the dashboard.
+#
+# Required GitHub repo secrets:
+#   PROD_APP_URL        e.g. https://cntpplatform.rooibostea.co.za  (no trailing slash)
+#   PROD_CRON_SECRET    must match the CRON_SECRET env var on the production VPS
+
+on:
+  schedule:
+    # 20:00 UTC = 22:00 SAST — close to end-of-day but before midnight rollover
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: energy-capture-production
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Capture daily energy snapshot
+        env:
+          PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
+          PROD_CRON_SECRET: ${{ secrets.PROD_CRON_SECRET }}
+        run: |
+          HTTP=$(curl -s -o /tmp/body.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $PROD_CRON_SECRET" \
+            "$PROD_APP_URL/api/maintenance/energy/capture")
+          cat /tmp/body.json
+          if [ "$HTTP" != "200" ]; then
+            echo "❌ Capture failed with HTTP $HTTP"
+            exit 1
+          fi
+          echo "✅ Energy captured (HTTP $HTTP)"

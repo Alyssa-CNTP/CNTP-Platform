@@ -9,6 +9,7 @@ import {
   AlertCircle, Circle, RefreshCw, ChevronRight, ChevronDown,
   Play, Pen, Users, Scale, AlertTriangle, Wrench,
 } from 'lucide-react'
+import { EnergyTotals } from '@/components/production/EnergyTotals'
 import Link from 'next/link'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -412,6 +413,9 @@ export default function ProductionPage() {
           </Link>
         </div>
       </div>
+
+      {/* ── ENERGY TOTALS ─────────────────────────────────────────────────── */}
+      <EnergyTotals />
 
       {/* ── ALERT STRIP ───────────────────────────────────────────────────── */}
       {(needSignOff > 0 || mbFlags > 0) && (
