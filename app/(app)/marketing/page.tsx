@@ -33,6 +33,8 @@ interface Campaign {
   status:       string
   brief:        string | null
   notes:        string | null
+  channel:      string | null
+  signal_ids:   string[]
 }
 
 interface Audience {
@@ -118,6 +120,8 @@ function AiResult({ text, loading, label = 'Marketing Intelligence' }: { text: s
 // Market Pulse + 3-column signal view (Opportunities · Social Trends · Audience)
 // ─────────────────────────────────────────────────────────────────────────────
 
+const AUDIENCE_KEYWORD_GROUPS = new Set(['wellness','k_beauty','halal','kosher','vegan','sustainability','organic','gen_z','consumer','lifestyle'])
+
 function DashboardTab() {
   const [signals,    setSignals]    = useState<Signal[]>([])
   const [loading,    setLoading]    = useState(true)
@@ -135,7 +139,10 @@ function DashboardTab() {
 
   const opportunities  = useMemo(() => signals.filter(s => s.classification === 'opportunity').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
   const socialTrends   = useMemo(() => signals.filter(s => ['youtube','tiktok','instagram','reddit'].includes(s.source_type)).sort((a, b) => b.relevance_score - a.relevance_score), [signals])
-  const audienceSignals= useMemo(() => signals.filter(s => s.classification === 'relationship' || s.keyword_group === 'wellness').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
+  const audienceSignals= useMemo(() => signals.filter(s =>
+    s.classification === 'relationship' ||
+    (s.keyword_group && AUDIENCE_KEYWORD_GROUPS.has(s.keyword_group))
+  ).sort((a, b) => b.relevance_score - a.relevance_score), [signals])
 
   const regionData = useMemo(() => {
     const counts = new Map<string, number>()
@@ -263,10 +270,12 @@ function CampaignsTab() {
   const [aiLoading, setAiLoading] = useState(false)
   const [brief,     setBrief]     = useState('')
 
-  const [title,    setTitle]    = useState('')
-  const [market,   setMarket]   = useState('')
-  const [audience, setAudience] = useState('')
-  const [notes,    setNotes]    = useState('')
+  const [title,      setTitle]      = useState('')
+  const [market,     setMarket]     = useState('')
+  const [audience,   setAudience]   = useState('')
+  const [channel,    setChannel]    = useState('')
+  const [notes,      setNotes]      = useState('')
+  const [signalIds,  setSignalIds]  = useState<string[]>([])
 
   useEffect(() => {
     callMarketing({ action: 'list_campaigns' })
@@ -277,19 +286,20 @@ function CampaignsTab() {
 
   const generateBrief = async () => {
     if (!market || !audience) return
-    setAiLoading(true); setBrief('')
+    setAiLoading(true); setBrief(''); setSignalIds([])
     const d = await callMarketing({ action: 'campaign_brief', market, audience_tag: audience })
     setBrief(d.response ?? '')
+    setSignalIds(d.signal_ids ?? [])
     setAiLoading(false)
   }
 
   const saveCampaign = async () => {
     if (!title) return
     setLoading(true)
-    await callMarketing({ action: 'save_campaign', title, market, audience_tag: audience, brief, notes })
+    await callMarketing({ action: 'save_campaign', title, market, audience_tag: audience, brief, notes, channel: channel || null, signal_ids: signalIds })
     const d = await callMarketing({ action: 'list_campaigns' })
     setCampaigns(d.campaigns ?? [])
-    setCreating(false); setTitle(''); setMarket(''); setAudience(''); setBrief(''); setNotes('')
+    setCreating(false); setTitle(''); setMarket(''); setAudience(''); setChannel(''); setBrief(''); setNotes(''); setSignalIds([])
     setLoading(false)
   }
 
@@ -334,6 +344,18 @@ function CampaignsTab() {
                 <button key={a} onClick={() => setAudience(a)}
                   className={`px-3 py-1.5 rounded-lg text-[12px] border transition-colors capitalize ${audience === a ? 'border-accent bg-accent/10 text-accent font-semibold' : 'border-surface-rule bg-surface text-text-muted hover:text-text'}`}>
                   {a.replace(/_/g, ' ')}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-mono text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1.5">Channel (optional)</label>
+            <div className="flex flex-wrap gap-2">
+              {(['email','social','trade','event','other'] as const).map(c => (
+                <button key={c} onClick={() => setChannel(ch => ch === c ? '' : c)}
+                  className={`px-3 py-1.5 rounded-lg text-[12px] border transition-colors capitalize ${channel === c ? 'border-accent bg-accent/10 text-accent font-semibold' : 'border-surface-rule bg-surface text-text-muted hover:text-text'}`}>
+                  {c}
                 </button>
               ))}
             </div>
@@ -395,6 +417,8 @@ function CampaignsTab() {
               <div className="flex gap-2 flex-wrap">
                 {c.market       && <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-surface border border-surface-rule text-text-muted">{c.market}</span>}
                 {c.audience_tag && <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-surface border border-surface-rule text-text-muted capitalize">{c.audience_tag.replace(/_/g, ' ')}</span>}
+                {c.channel      && <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-surface border border-surface-rule text-text-muted capitalize">{c.channel}</span>}
+                {c.signal_ids?.length > 0 && <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-accent/10 border border-accent/20 text-accent">{c.signal_ids.length} signals</span>}
               </div>
               {c.brief && (
                 <p className="text-[12px] text-text-muted leading-relaxed line-clamp-3">{c.brief}</p>
