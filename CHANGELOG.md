@@ -164,6 +164,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Alyssa (roster period selector date duplication fix)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- Fixed period dropdown showing the date range twice (e.g. "29 Jun – 3 Jul · 29 Jun – 3 Jul 2026") when the period name already matches the formatted date range. Now only appends the range if the name differs.
+- Seeded July 2026 roster (4 weekly periods, 286 entries) into production DB.
+
+---
+
 ## 2026-06-30 — Alyssa (July 2026 roster seed)
 
 **Files changed:**
