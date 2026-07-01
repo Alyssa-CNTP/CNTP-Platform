@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (QC name autocomplete now sourced from the shift roster)
+
+**Files changed:**
+- `lib/hooks/useQcNames.ts`
+
+**Changes:**
+- Replaced the `production.employees` (`department='qc'`) lookup with distinct `person_name` values from `production.roster_entries`, filtered to role keys in the roster's "Quality" category (QC Supervisor, QC, Lab Analyst, Incoming Goods QC Inspector), across both day and night shift.
+- Reason: the employees-table department flag no longer matched who is actually rostered onto QC roles — the autocomplete now mirrors exactly who shows up under "QUALITY" on the shift roster's on-duty card.
+
+---
+
 ## 2026-07-01 — Gustav (QC name autocomplete across sieving, pasteuriser, granule)
 
 **Files changed:**
