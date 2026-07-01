@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { checkOutlier } from '@/lib/utils/outliers'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -398,9 +399,27 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
   const [focusedSieve, setFocusedSieve] = useState(GRANULE_SIEVES[0].key)
   const [errors, setErrors]             = useState<string[]>([])
   const [warnings, setWarnings]         = useState<string[]>([])
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   const isAfterShift = (() => { const [hh] = (form.sample_time || '').split(':').map(Number); return !isNaN(hh) && hh >= 16 })()
   const serialPrefix = buildSerialPrefix(form.sample_date)
+
+  // ── Variation / outlier detection vs the other samples in this run ──
+  // Flags moisture/BD/temp only when this run already has real spread AND
+  // the new value sits >2.5 std away — same convention as pasteuriser.
+  const outlierWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const hist = prevSamples.map((s: any) => parseFloat(s[key])).filter((v: number) => !isNaN(v))
+      const result = checkOutlier(n, hist, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from run avg ${result.mean.toFixed(1)}${unit}`)
+    }
+    checkField('moisture', 'Moisture', form.moisture, 0.3, '%')
+    checkField('bulk_density', 'Bulk Density', form.bulk_density, 5, '')
+    checkField('dryer_temp', 'Dryer Temp', form.dryer_temp, 1.0, '°C')
+    return warns
+  })()
 
   const set = (k: string, v: any) => {
     setForm(f => {
@@ -497,6 +516,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
 
   function handleSave() {
     if (!validate()) return
+    if (outlierWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const effectiveQcName = isAfterShift && form.qc_name.trim() ? form.qc_name : run.qc_name
     onSave({ ...form, qc_name: effectiveQcName, run_id: run.id, spec_json: run.spec_json })
   }
@@ -529,6 +549,20 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
         <div className="p-5 space-y-4">
           {errors.length > 0 && <div className="px-4 py-2 bg-err/8 border border-err/20 rounded-xl text-[11px] text-err">⚠ {errors.join(' · ')}</div>}
           {warnings.length > 0 && <div className="px-4 py-2 bg-warn/8 border border-warn/30 rounded-xl text-[11px] text-warn">⚠ {warnings.join(' · ')}</div>}
+
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
+          {outlierWarnings.length > 0 && (
+            <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
+              <div className="font-bold text-[12px] text-warn mb-1">⚠ Unusual variation — please double-check before saving</div>
+              <ul className="list-disc pl-5 space-y-0.5 mb-2">
+                {outlierWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
+              </ul>
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
+                <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
+            </div>
+          )}
 
           {/* After-shift QC */}
           {isAfterShift && (
@@ -685,7 +719,8 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={handleSave} className="px-6 py-2 rounded-xl text-white text-[12px] font-bold" style={{ background: '#166534' }}>💾 Save Sample</button>
+            <button onClick={handleSave} disabled={outlierWarnings.length > 0 && !confirmAnomaly}
+              className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#166534' }}>💾 Save Sample</button>
           </div>
         </div>
       </div>
@@ -709,10 +744,27 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
   })
   const [saving, setSaving]  = useState(false)
   const [errors, setErrors]  = useState<string[]>([])
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
   const totalG = GRANULE_SIEVES.reduce((s, f) => s + (parseFloat(grams[f.key]) || 0), 0)
   const pcts   = Object.fromEntries(GRANULE_SIEVES.map(f => { const g = parseFloat(grams[f.key]) || 0; return [f.key, totalG > 0 ? Math.round((g / totalG) * 1000) / 10 : 0] }))
+
+  // ── Variation / outlier detection vs the other samples in this run ──
+  const otherSamples = (run.samples || []).filter((s: any) => s.id !== sample.id)
+  const outlierWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const hist = otherSamples.map((s: any) => parseFloat(s[key])).filter((v: number) => !isNaN(v))
+      const result = checkOutlier(n, hist, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from run avg ${result.mean.toFixed(1)}${unit}`)
+    }
+    checkField('moisture', 'Moisture', form.moisture, 0.3, '%')
+    checkField('bulk_density', 'Bulk Density', form.bulk_density, 5, '')
+    checkField('dryer_temp', 'Dryer Temp', form.dryer_temp, 1.0, '°C')
+    return warns
+  })()
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -749,6 +801,7 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
 
   async function handleSave() {
     if (!validate()) return
+    if (outlierWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     setSaving(true)
     await onSave(sample.id, { ...form, sieve_g: form.sieving_done ? grams : {}, sieve_pct: form.sieving_done ? pcts : {}, run_id: sample.run_id, spec_json: sp })
     setSaving(false)
@@ -777,6 +830,21 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
         </div>
         <div className="p-5 space-y-4">
           {errors.length > 0 && <div className="px-4 py-2 bg-err/8 border border-err/20 rounded-xl text-[11px] text-err">⚠ Missing: {errors.join(' · ')}</div>}
+
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
+          {outlierWarnings.length > 0 && (
+            <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
+              <div className="font-bold text-[12px] text-warn mb-1">⚠ Unusual variation — please double-check before saving</div>
+              <ul className="list-disc pl-5 space-y-0.5 mb-2">
+                {outlierWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
+              </ul>
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
+                <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-3">
             {([['Date *','sample_date','date'],['Time *','sample_time','text'],['Dryer Number *','dryer_number','text'],['Bulk Bag Serial *','bulk_bag_serial','text'],['Moisture (%) *','moisture','number'],['Bulk Density *','bulk_density','number'],['Dryer Temp (°C) *','dryer_temp','number']] as const).map(([label, key, type]) => (
               <div key={key}>
@@ -831,7 +899,8 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
           </div>
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={handleSave} disabled={saving} className="px-6 py-2 rounded-xl text-white text-[12px] font-bold" style={{ background: '#1d4ed8' }}>{saving ? 'Saving…' : '✓ Save Changes'}</button>
+            <button onClick={handleSave} disabled={saving || (outlierWarnings.length > 0 && !confirmAnomaly)}
+              className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#1d4ed8' }}>{saving ? 'Saving…' : '✓ Save Changes'}</button>
           </div>
         </div>
       </div>
