@@ -71,11 +71,11 @@ export async function POST(req: NextRequest) {
 
   // 1. Health check — give a clear error if the Python service isn't running
   try {
-    const h = await fetch(`${PY_URL}/health`, { signal: AbortSignal.timeout(3000) })
+    const h = await fetch(`${PY_URL}/health`, { signal: AbortSignal.timeout(5000) })
     if (!h.ok) throw new Error('unhealthy')
   } catch {
     return NextResponse.json({
-      error: 'Leaf shade service is not running. Start it on the server with: pm2 start ml/leafshade/run.sh --name cntp-leafshade',
+      error: 'Leaf shade service is not running. On the VPS: cd ml/leafshade && docker compose up -d --build && docker compose logs --tail=40',
     }, { status: 503 })
   }
 
