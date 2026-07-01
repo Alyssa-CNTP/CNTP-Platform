@@ -18,7 +18,7 @@ import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { AREAS } from '@/lib/maintenance/constants'
 import { fmtT, fmtDT } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
-import { getDb } from '@/lib/supabase/client'
+import { getDb } from '@/lib/supabase/db'
 
 // ── SAST helpers ──────────────────────────────────────────────────────────────
 function todaySAST() {
