@@ -26,10 +26,10 @@ interface DebagLotGroup { lot: string; rows: DebagRow[]; totalKg: number }
 
 interface FlatBag {
   product: string; lot: string; kg: number; variant: string; grade: string
-  serial: string; loggedAt?: string
+  serial: string; loggedAt?: string; description?: string
 }
 interface BagLotGroup { lot: string; variant: string; grade: string; bags: FlatBag[]; count: number; kg: number }
-interface ProductGroup { product: string; acumaticaCode?: string | null; lots: BagLotGroup[]; totalCount: number; totalKg: number }
+interface ProductGroup { product: string; acumaticaCode?: string | null; acumaticaDesc?: string; lots: BagLotGroup[]; totalCount: number; totalKg: number }
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
@@ -64,10 +64,12 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
       if (num(b.weight) === 0) return
       const lot   = (b.batch || p.lot || '—').trim()
       const grade = (b.destination || p.grade || '—').trim()
-      const flat: FlatBag = { product: b.productType, lot, kg: num(b.weight), variant: p.variant, grade, serial: b.serial, loggedAt: b.logged_at }
+      const flat: FlatBag = { product: b.productType, lot, kg: num(b.weight), variant: p.variant, grade, serial: b.serial, loggedAt: b.logged_at, description: b.description }
 
       let pg = prodMap.get(b.productType)
-      if (!pg) { pg = { product: b.productType, acumaticaCode: b.code, lots: [], totalCount: 0, totalKg: 0 }; prodMap.set(b.productType, pg) }
+      if (!pg) { pg = { product: b.productType, acumaticaCode: b.code, acumaticaDesc: b.description, lots: [], totalCount: 0, totalKg: 0 }; prodMap.set(b.productType, pg) }
+      if (!pg.acumaticaDesc && b.description) pg.acumaticaDesc = b.description
+      if (!pg.acumaticaCode && b.code)        pg.acumaticaCode = b.code
       pg.totalCount++; pg.totalKg += num(b.weight)
 
       const lotKey = `${lot}||${p.variant}||${grade}`
@@ -382,8 +384,10 @@ export function CaptureOverview({
                               </td>
                               <td className="px-3 py-2.5 font-bold text-[13px] text-stone-900">
                                 {pg.product}
-                                {pg.acumaticaCode && (
-                                  <span className="ml-2 font-mono text-[10px] font-normal text-stone-400">{pg.acumaticaCode}</span>
+                                {(pg.acumaticaDesc || pg.acumaticaCode) && (
+                                  <span className="ml-2 font-mono text-[10px] font-normal text-stone-400">
+                                    {pg.acumaticaDesc || pg.acumaticaCode}
+                                  </span>
                                 )}
                               </td>
                               <td className="px-3 py-2.5 text-[11px] text-stone-500">

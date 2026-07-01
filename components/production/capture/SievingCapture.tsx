@@ -17,7 +17,7 @@ export interface DebagRow {
   delivery_date: string; local_export: string; secured?: boolean; logged_at?: string
 }
 export interface OutBag {
-  id: string; serial: string; productType: string; code: string | null
+  id: string; serial: string; productType: string; code: string | null; description?: string
   weight: string; batch: string; destination: string; printed: boolean
   secured?: boolean; logged_at?: string
 }
@@ -155,7 +155,7 @@ export function SievingCapture({
     // An output bag is complete the moment it's added (picked + printed), so it
     // logs and secures itself right away — no separate "secure" tap needed.
     patch({ outputs: [...value.outputs, {
-      id: bag.id, serial, productType: p.productType, code: p.code,
+      id: bag.id, serial, productType: p.productType, code: p.code, description: p.description,
       weight: p.weight, batch: bag.lot_number, destination: grade, printed: true,
       secured: true, logged_at: now,
     }] })
