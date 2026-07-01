@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (Duplicate batch guard hardened; search added to Lab Results)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/lab-results/page.tsx`
+
+**Changes:**
+- Pasteuriser and granule already blocked creating a new run with a batch number that matches an **active or finalised/historical** run — but two gaps could let a real duplicate slip through:
+  - **Normalisation**: the comparison was `.trim().toLowerCase()` only, so "GS-0098" vs "GS 0098" vs "GS_0098" were treated as different batch numbers. Added a shared `normBatch()` (same rule raw-material already used) so all common formatting variants collapse to the same key.
+  - **Row cap**: the batches/runs used for the check were loaded with a single query, silently capped at PostgREST's 1000-row limit — a very old batch number beyond that cap could go undetected. Both pages now paginate through the full history (same pattern already used in Sieving), so the whole history is always loaded.
+  - Messaging is unchanged: an active duplicate says to add a sample to the existing run instead; a finalised duplicate says to use a different batch number.
+- **Lab Results**: added a single search box above the table (works across every tab — Micro, Residue, Heavy Metals, EtO, Aflatoxins, MOSH/MOAH, PAs, Glyphosate) that matches against every field of a record, not just the visible columns.
+
 ## 2026-07-01 — Alyssa (energy totals on production dashboard + production capture cron)
 
 **Files changed:**
