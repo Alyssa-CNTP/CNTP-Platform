@@ -300,7 +300,8 @@ async function main() {
         .upsert({
           employee_id: empId, sop_id: sopId,
           status: comp.status, raw_code: comp.raw_code, score: comp.score,
-          training_completed: comp.training_completed, date_completed: comp.date_completed,
+          training_completed: comp.training_completed ?? false,
+          date_completed: comp.date_completed,
         }, { onConflict: 'employee_id,sop_id' })
         .select('id').single();
 

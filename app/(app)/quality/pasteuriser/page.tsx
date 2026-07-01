@@ -73,6 +73,15 @@ const PAST_SPEC_DEFAULTS: Record<string,{min:number|null,max:number|null}> = {
   hourly_temp: { min: 85, max: null },
 }
 
+// Hard physical-plausibility ceilings/floors — distinct from PAST_SPEC_DEFAULTS
+// (which is customer pass/fail spec). These catch typos (e.g. "25" instead of
+// "2.5") and can never be bypassed by ticking "confirm anyway".
+const PAST_SANITY_BOUNDS: Record<string,[number,number]> = {
+  moisture:    [0, 15],
+  untapped_bd: [150, 450],
+  hourly_temp: [60, 150],
+}
+
 const PASS_COLORS: Record<string,[string,string,string]> = {
   Pass:       ['#f0fdf4','#166534','#86efac'],
   Fail:       ['#fee2e2','#991b1b','#fca5a5'],
@@ -635,6 +644,23 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     if (!row.time.trim())     { alert('Time is required'); return }
     if (!row.date)            { alert('Date is required'); return }
     if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
+    if (!row.serial_bin?.trim()) { alert('Bin/Bag No. is required'); return }
+    if (row.has_mb && !row.untapped_bd?.toString().trim()) { alert('Untapped BD is required'); return }
+    if (row.has_mb && !row.moisture?.toString().trim())    { alert('Moisture is required'); return }
+    if (row.has_sieve) {
+      const missingSieve = PAST_SIEVE_COLS.filter(c => !row[c.key]?.toString().trim())
+      if (missingSieve.length) { alert(`All sieve fields are required — missing: ${missingSieve.map(c => c.label).join(', ')}`); return }
+    }
+    // Hard sanity bounds — physically implausible values (typos) are blocked
+    // outright, unlike the statistical anomalyWarnings below which can be
+    // confirmed past.
+    for (const [key, [lo, hi]] of Object.entries(PAST_SANITY_BOUNDS)) {
+      const n = parseFloat(row[key])
+      if (!isNaN(n) && (n < lo || n > hi)) {
+        alert(`${key.replace('_',' ')} value ${n} is outside the plausible range (${lo}–${hi}) — check for a typo.`)
+        return
+      }
+    }
     // No captured value may be negative.
     const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'final_weight_1', 'final_weight_2', 'final_weight_3',
       ...PAST_SIEVE_COLS.flatMap(c => [c.key, c.key + '_g'])]
