@@ -50,3 +50,4 @@ research-engine/ollama_data/
 ml/leafshade/.venv/
 ml/**/__pycache__/
 *.pyc
+scripts/data/

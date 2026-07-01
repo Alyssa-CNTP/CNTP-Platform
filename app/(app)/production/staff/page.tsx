@@ -2,19 +2,28 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
+import Link from 'next/link'
 import {
   Users, Loader2, Plus, X, Check, Trash2, Search, AlertTriangle,
-  Phone, Plane, ChevronDown,
+  Phone, Plane, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { WorkforceTabs } from '@/components/production/WorkforceTabs'
+import { StaffTabs } from '@/components/production/StaffTabs'
 import { ROSTER_CATEGORIES, SKILL_TAGS, categoryMeta, tagLabel } from '@/lib/production/roster-config'
 
 interface Employee {
   id: string; name: string; display_name: string | null
   department: string; job_title: string | null; skills: string[]
   phone: string | null; active: boolean
+  position: string | null; position_code: string | null
+  employee_code: string | null; start_date: string | null
+}
+
+interface CompetencySummary {
+  employee_id: string
+  total: number
+  competent: number
 }
 interface Leave {
   id: string; employee_id: string; start_date: string; end_date: string
@@ -35,6 +44,7 @@ export default function StaffDirectoryPage() {
   const { user } = useAuth()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [leave, setLeave] = useState<Leave[]>([])
+  const [competencySummaries, setCompetencySummaries] = useState<CompetencySummary[]>([])
   const [loading, setLoading] = useState(true)
   const [dbReady, setDbReady] = useState(true)
   const [query, setQuery] = useState('')
@@ -44,12 +54,26 @@ export default function StaffDirectoryPage() {
   async function load() {
     try {
       const { data, error } = await db().from('employees')
-        .select('id,name,display_name,department,job_title,skills,phone,active').order('name')
+        .select('id,name,display_name,department,job_title,skills,phone,active,position,position_code,employee_code,start_date').order('name')
       if (error) throw error
       setEmployees((data as Employee[]) ?? [])
       const { data: lv } = await db().from('employee_leave')
         .select('id,employee_id,start_date,end_date,kind,reason').order('start_date', { ascending: false })
       setLeave((lv as Leave[]) ?? [])
+      // Load competency summaries for the chip display
+      const { data: comps } = await db().from('employee_competencies')
+        .select('employee_id,status')
+      if (comps) {
+        const byEmp: Record<string, { total: number; competent: number }> = {}
+        for (const c of comps as { employee_id: string; status: string }[]) {
+          if (!byEmp[c.employee_id]) byEmp[c.employee_id] = { total: 0, competent: 0 }
+          byEmp[c.employee_id].total++
+          if (c.status === 'competent') byEmp[c.employee_id].competent++
+        }
+        setCompetencySummaries(
+          Object.entries(byEmp).map(([employee_id, v]) => ({ employee_id, ...v }))
+        )
+      }
     } catch {
       setDbReady(false)
     }
@@ -72,6 +96,12 @@ export default function StaffDirectoryPage() {
     return c
   }, [employees])
 
+  const compByEmp = useMemo(() => {
+    const m = new Map<string, CompetencySummary>()
+    competencySummaries.forEach(s => m.set(s.employee_id, s))
+    return m
+  }, [competencySummaries])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return employees
@@ -91,7 +121,7 @@ export default function StaffDirectoryPage() {
       setEmployees(es => es.map(e => e.id === id ? { ...e, ...payload } as Employee : e))
     } else {
       const { data } = await db().from('employees').insert(payload as any)
-        .select('id,name,display_name,department,job_title,skills,phone,active').single()
+        .select('id,name,display_name,department,job_title,skills,phone,active,position,position_code,employee_code,start_date').single()
       if (data) setEmployees(es => [...es, data as Employee].sort((a, b) => a.name.localeCompare(b.name)))
     }
     setEditing(null)
@@ -121,7 +151,7 @@ export default function StaffDirectoryPage() {
         </button>
       </div>
 
-      <WorkforceTabs />
+      <StaffTabs />
 
       {!dbReady && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
@@ -155,33 +185,55 @@ export default function StaffDirectoryPage() {
           ) : filtered.map(e => {
             const ol = onLeaveToday(e.id)
             const meta = categoryMeta(e.department)
+            const comp = compByEmp.get(e.id)
             return (
-              <button key={e.id} onClick={() => setEditing(e)}
-                className="w-full flex items-center gap-3 px-4 py-3 border-b border-surface-rule last:border-0 hover:bg-surface text-left transition-colors"
+              <div key={e.id} className="flex items-center border-b border-surface-rule last:border-0"
                 style={{ borderLeft: `3px solid ${meta.colorHex}` }}>
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.colorHex }} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[13px] font-medium truncate ${e.active ? 'text-text' : 'text-stone-400 line-through'}`}>{e.display_name || e.name}</span>
-                    {ol && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                        <Plane size={9} /> On {ol.kind} · till {fmtD(ol.end_date)}
+                {/* Main row — opens edit modal */}
+                <button onClick={() => setEditing(e)}
+                  className="flex-1 flex items-center gap-3 px-4 py-3 hover:bg-surface text-left transition-colors">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.colorHex }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[13px] font-medium truncate ${e.active ? 'text-text' : 'text-stone-400 line-through'}`}>{e.display_name || e.name}</span>
+                      {ol && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                          <Plane size={9} /> On {ol.kind} · till {fmtD(ol.end_date)}
+                        </span>
+                      )}
+                      {!e.active && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-500">Inactive</span>}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5 text-[11px] text-text-muted">
+                      <span className="capitalize">{meta.label}</span>
+                      {(e.position || e.job_title) && <><span>·</span><span className="truncate">{e.position || e.job_title}</span></>}
+                      {e.phone && <><span>·</span><span className="inline-flex items-center gap-1"><Phone size={9} />{e.phone}</span></>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {/* Competency chip */}
+                    {comp && comp.total > 0 && (
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                        comp.competent === comp.total
+                          ? 'bg-ok/15 text-ok'
+                          : comp.competent === 0
+                          ? 'bg-stone-100 text-stone-400'
+                          : 'bg-warn/15 text-warn'
+                      }`}>
+                        {comp.competent}/{comp.total}
                       </span>
                     )}
-                    {!e.active && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-500">Inactive</span>}
+                    {e.skills.map(c => (
+                      <span key={c} title={tagLabel(c)} className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand">{c}</span>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-2 mt-0.5 text-[11px] text-text-muted">
-                    <span className="capitalize">{meta.label}</span>
-                    {e.job_title && <><span>·</span><span className="truncate">{e.job_title}</span></>}
-                    {e.phone && <><span>·</span><span className="inline-flex items-center gap-1"><Phone size={9} />{e.phone}</span></>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {e.skills.map(c => (
-                    <span key={c} title={tagLabel(c)} className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand">{c}</span>
-                  ))}
-                </div>
-              </button>
+                </button>
+                {/* Profile link → own page */}
+                <Link href={`/production/staff/${e.id}`}
+                  className="flex items-center px-3 py-3 text-stone-300 hover:text-brand transition-colors"
+                  title="View full profile">
+                  <ChevronRight size={16} />
+                </Link>
+              </div>
             )
           })}
         </div>
