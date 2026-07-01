@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Alyssa (roster Shift A/B naming with weekly swap)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- Roster grid columns now display **Shift A / Shift B** (drawn from `day_label`/`night_label` on the period) instead of generic "Day/Night". Times remain as subtitle.
+- "New period" modal includes a **Day = Shift A / Day = Shift B** toggle. Defaults to the opposite of the previous period (auto-alternates). First ever period defaults to Day = Shift A.
+- "Generate next week" modal **auto-swaps labels**: if this week's day = Shift A, next week's day = Shift B (the shift letter follows the people, not the clock slot).
+- "On duty" toggle buttons also show Shift A/B names.
+
+---
+
 ## 2026-07-01 — Alyssa (roster auto-rotation, drag-and-drop, publish to maintenance)
 
 **Files changed:**
