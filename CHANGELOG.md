@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Permission system: explicit per-role defaults, management read-only restored)
+
+**Files changed:**
+- `lib/auth/permissions.ts`
+- `lib/auth/context.tsx`
+
+**Changes:**
+- Reverted cross-department read spread from all roles — permissions remain explicit and job-specific per role
+- `management_default` retains its read-only platform-wide access (quality view, production view, maintenance view, reporting) as that is management's actual function
+- Renamed `can_view_history` label in the Users page to "View quality pages & records (required for cross-department access)" so admins know it is the single toggle needed to grant quality read access — not the full write/delete set
+- All other named role defaults unchanged from original
+
+---
+
 ## 2026-07-03 — Alyssa (Management role — read-only access to all modules by default)
 
 **Files changed:**
