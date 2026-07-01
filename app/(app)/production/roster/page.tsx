@@ -182,9 +182,11 @@ export default function RosterPage() {
   }
 
   // ── New period ──────────────────────────────────────────────────────────────
-  async function createPeriod(p: { name: string; start: string; end: string }) {
+  async function createPeriod(p: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) {
     const { data } = await db().from('roster_periods').insert({
-      name: p.name, start_date: p.start, end_date: p.end, created_by: user?.id ?? null,
+      name: p.name, start_date: p.start, end_date: p.end,
+      day_label: p.dayLabel, night_label: p.nightLabel,
+      created_by: user?.id ?? null,
     } as any).select('id,name,start_date,end_date,day_label,night_label,notes,status,published_at').single()
     if (data) {
       const mapped = { ...(data as any), status: (data as any).status ?? 'draft', published_at: (data as any).published_at ?? null }
@@ -195,11 +197,13 @@ export default function RosterPage() {
   }
 
   // ── Generate next period from current (rotated day↔night) ─────────────────
-  async function generateNextPeriod(config: { name: string; start: string; end: string }) {
+  async function generateNextPeriod(config: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) {
     setGenerating(true)
     try {
       const { data: newPeriod } = await db().from('roster_periods').insert({
-        name: config.name, start_date: config.start, end_date: config.end, created_by: user?.id ?? null,
+        name: config.name, start_date: config.start, end_date: config.end,
+        day_label: config.dayLabel, night_label: config.nightLabel,
+        created_by: user?.id ?? null,
       } as any).select('id,name,start_date,end_date,day_label,night_label,notes,status,published_at').single()
       if (!newPeriod) return
       const np = { ...(newPeriod as any), status: (newPeriod as any).status ?? 'draft', published_at: null }
@@ -431,7 +435,7 @@ export default function RosterPage() {
         </p>
       </div>
 
-      {showNew && <NewPeriodModal onClose={() => setShowNew(false)} onCreate={createPeriod} />}
+      {showNew && <NewPeriodModal onClose={() => setShowNew(false)} onCreate={createPeriod} prevPeriod={period} />}
       {showGenerate && period && (
         <GenerateModal
           currentPeriod={period}
@@ -485,7 +489,7 @@ function OnDutyCard({ period, entries, roleCategory, leaveEmpIds }: {
               <button key={s.key} onClick={() => setShift(s.key)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium transition-colors ${on ? 'bg-brand text-white' : 'bg-white text-stone-500 hover:text-text'}`}>
                 {s.key === 'day' ? <Sun size={12} /> : <Moon size={12} />}
-                {s.label.replace(' Shift', '')}
+                {(s.key === 'day' ? period.day_label : period.night_label) || s.label}
                 {isNow && <span className={`text-[8px] font-semibold px-1 py-0.5 rounded-full ${on ? 'bg-white/25' : 'bg-ok/15 text-ok'}`}>now</span>}
               </button>
             )
@@ -555,15 +559,18 @@ function RosterGrid({
         <thead>
           <tr className="border-b border-surface-rule bg-surface">
             <th className="px-4 py-3 text-left font-mono text-[10px] text-text-muted uppercase tracking-wide w-[200px] sticky left-0 bg-surface z-10">Role</th>
-            {ROSTER_SHIFTS.map(s => (
-              <th key={s.key} className="px-4 py-3 text-left">
-                <div className="flex items-center gap-1.5">
-                  {s.key === 'day' ? <Sun size={13} className="text-amber-500" /> : <Moon size={13} className="text-indigo-400" />}
-                  <span className="font-display font-bold text-[13px] text-text">{s.label}</span>
-                </div>
-                <div className="font-mono text-[10px] text-text-muted mt-0.5">{shiftLabel(s.key)}</div>
-              </th>
-            ))}
+            {ROSTER_SHIFTS.map(s => {
+              const label = shiftLabel(s.key)  // e.g. "Shift A" or "Shift B"
+              return (
+                <th key={s.key} className="px-4 py-3 text-left">
+                  <div className="flex items-center gap-1.5">
+                    {s.key === 'day' ? <Sun size={13} className="text-amber-500" /> : <Moon size={13} className="text-indigo-400" />}
+                    <span className="font-display font-bold text-[13px] text-text">{label || s.label}</span>
+                  </div>
+                  <div className="font-mono text-[10px] text-text-muted mt-0.5">{s.time}</div>
+                </th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>
@@ -794,12 +801,23 @@ function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () 
   )
 }
 
-function NewPeriodModal({ onClose, onCreate }: {
-  onClose: () => void; onCreate: (p: { name: string; start: string; end: string }) => void
+function NewPeriodModal({ onClose, onCreate, prevPeriod }: {
+  onClose: () => void
+  onCreate: (p: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) => void
+  prevPeriod?: Period | null
 }) {
   const [name, setName]   = useState('')
   const [start, setStart] = useState('')
   const [end, setEnd]     = useState('')
+  // Infer the default shift A/B assignment from the previous period (swap it)
+  const defaultDayIsA = prevPeriod
+    ? prevPeriod.day_label === 'Shift B'   // last week day=B → this week day=A
+    : true                                  // first ever period: day = A
+  const [dayIsA, setDayIsA] = useState(defaultDayIsA)
+
+  const dayLabel   = dayIsA ? 'Shift A' : 'Shift B'
+  const nightLabel = dayIsA ? 'Shift B' : 'Shift A'
+
   const valid = name.trim() && start && end && start <= end
 
   const suggested = useMemo(() => {
@@ -812,7 +830,7 @@ function NewPeriodModal({ onClose, onCreate }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[380px] p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[400px] p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 className="font-display font-bold text-[16px] text-text">New roster period</h3>
           <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={16} /></button>
@@ -831,12 +849,27 @@ function NewPeriodModal({ onClose, onCreate }: {
         </div>
         <div className="space-y-1.5">
           <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Label</label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder={suggested || 'e.g. June 2026'}
+          <input value={name} onChange={e => setName(e.target.value)} placeholder={suggested || 'e.g. July wk 1'}
             className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] text-text outline-none focus:border-brand" />
+        </div>
+        {/* Shift A/B assignment */}
+        <div className="space-y-2">
+          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Shift letters this week</label>
+          <div className="inline-flex rounded-lg border border-stone-200 overflow-hidden">
+            <button type="button" onClick={() => setDayIsA(true)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium transition-colors ${dayIsA ? 'bg-brand text-white' : 'bg-white text-stone-500 hover:text-text'}`}>
+              <Sun size={13} /> Day = Shift A
+            </button>
+            <button type="button" onClick={() => setDayIsA(false)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium transition-colors ${!dayIsA ? 'bg-brand text-white' : 'bg-white text-stone-500 hover:text-text'}`}>
+              <Moon size={13} /> Day = Shift B
+            </button>
+          </div>
+          <p className="text-[11px] text-stone-400">Morning (07:00–16:00) = <strong>{dayLabel}</strong> · Night (16:00–01:00) = <strong>{nightLabel}</strong></p>
         </div>
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50">Cancel</button>
-          <button onClick={() => valid && onCreate({ name: name.trim() || suggested, start, end })} disabled={!valid}
+          <button onClick={() => valid && onCreate({ name: name.trim() || suggested, start, end, dayLabel, nightLabel })} disabled={!valid}
             className="flex-1 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
             Create
           </button>
@@ -853,7 +886,7 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
   employees: Employee[]
   generating: boolean
   onClose: () => void
-  onGenerate: (config: { name: string; start: string; end: string }) => void
+  onGenerate: (config: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) => void
 }) {
   const nextStart = addDays(parseISO(currentPeriod.start_date + 'T12:00:00'), 7)
   const nextEnd   = addDays(parseISO(currentPeriod.end_date   + 'T12:00:00'), 7)
@@ -861,18 +894,22 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
   const [end,   setEnd]   = useState(format(nextEnd,   'yyyy-MM-dd'))
   const [name,  setName]  = useState(`${format(nextStart, 'd')}–${format(nextEnd, 'd MMM')}`)
 
+  // Shift labels swap each week (Shift A ↔ Shift B follow the people, not the clock)
+  const nextDayLabel   = currentPeriod.night_label || 'Shift B'
+  const nextNightLabel = currentPeriod.day_label   || 'Shift A'
+
   const valid = name.trim() && start && end && start <= end
 
-  // Employees on leave during the new period
-  const empById = useMemo(() => new Map(employees.map(e => [e.id, e])), [employees])
-
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _employees = employees  // retained for future leave lookup by name
   // Who is being rotated and what their new shift will be
   const rotated = useMemo(() => {
     return currentEntries.map(e => ({
       ...e,
-      newShift: e.shift === 'day' ? 'night' as RosterShift : 'day' as RosterShift,
+      newShift:      e.shift === 'day' ? 'night' as RosterShift : 'day' as RosterShift,
+      newShiftLabel: e.shift === 'day' ? nextNightLabel : nextDayLabel,
     }))
-  }, [currentEntries])
+  }, [currentEntries, nextDayLabel, nextNightLabel])
 
   // Check leave for the new period dates using what we already have
   const [newLeaveIds, setNewLeaveIds] = useState<Set<string>>(new Set())
@@ -928,12 +965,14 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
           </div>
           <div className="grid grid-cols-2 divide-x divide-stone-100">
             {(['day', 'night'] as RosterShift[]).map(s => {
-              const people = rotated.filter(e => e.newShift === s)
+              const people    = rotated.filter(e => e.newShift === s)
+              const shiftName = s === 'day' ? nextDayLabel : nextNightLabel
               return (
                 <div key={s} className="p-3 space-y-1.5">
                   <div className="flex items-center gap-1.5 mb-2">
                     {s === 'day' ? <Sun size={12} className="text-amber-500" /> : <Moon size={12} className="text-indigo-400" />}
-                    <span className="text-[11px] font-semibold text-stone-600 capitalize">{s} shift</span>
+                    <span className="text-[11px] font-semibold text-stone-600">{shiftName}</span>
+                    <span className="text-[10px] text-stone-400">({s})</span>
                   </div>
                   {people.slice(0, 8).map(e => {
                     const onLeave = !!e.employee_id && newLeaveIds.has(e.employee_id)
@@ -964,7 +1003,7 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
 
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50">Cancel</button>
-          <button onClick={() => valid && onGenerate({ name: name.trim(), start, end })} disabled={!valid || generating}
+          <button onClick={() => valid && onGenerate({ name: name.trim(), start, end, dayLabel: nextDayLabel, nightLabel: nextNightLabel })} disabled={!valid || generating}
             className="flex-1 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors flex items-center justify-center gap-2">
             {generating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             Generate & rotate
