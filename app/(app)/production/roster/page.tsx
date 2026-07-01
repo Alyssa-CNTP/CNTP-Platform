@@ -114,6 +114,7 @@ export default function RosterPage() {
   // ── Load entries when the selected period changes ───────────────────────────
   useEffect(() => {
     if (!periodId) { setEntries([]); return }
+    setDirtyCategories(new Set()) // fresh load clears all unsaved state
     db().from('roster_entries')
       .select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order')
       .eq('period_id', periodId).order('sort_order')
@@ -144,41 +145,90 @@ export default function RosterPage() {
     return m
   }, [roles])
 
+  // ── Per-department staged save ──────────────────────────────────────────────
+  // All edits update local state only — no DB write until "Save [Dept]" is clicked.
+  // Each department (category) owns its own dirty flag. Two supervisors editing
+  // different departments simultaneously will not collide: each save does
+  // delete-all + insert-all for only their category's role keys.
+  const [dirtyCategories, setDirtyCategories] = useState<Set<string>>(new Set())
+  const [savingCategory, setSavingCategory]   = useState<string | null>(null)
+
+  function markDirty(categoryKey: string) {
+    setDirtyCategories(s => new Set([...s, categoryKey]))
+  }
+
   function cellEntries(roleKey: string, shift: RosterShift) {
     return entries
       .filter(e => e.role_key === roleKey && e.shift === shift)
       .sort((a, b) => a.sort_order - b.sort_order)
   }
 
-  // ── Entry CRUD ──────────────────────────────────────────────────────────────
-  async function addEntry(roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) {
+  // Stage locally — no DB write
+  function addEntry(roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) {
     if (!periodId || !name.trim()) return
+    const cat = roleCategory.get(roleKey) ?? ''
     const sort = cellEntries(roleKey, shift).length
-    const { data } = await db().from('roster_entries').insert({
-      period_id: periodId, role_key: roleKey, shift,
-      employee_id: employeeId, person_name: name.trim(), tags, sort_order: sort,
-    } as any).select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order').single()
-    if (data) setEntries(es => [...es, data as Entry])
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, person_name: name.trim(), tags, sort_order: sort }])
+    markDirty(cat)
     setEditing(null)
   }
-  async function updateEntry(id: string, employeeId: string | null, name: string, tags: string[]) {
+  function updateEntry(id: string, employeeId: string | null, name: string, tags: string[]) {
     if (!name.trim()) return
-    await db().from('roster_entries').update({ employee_id: employeeId, person_name: name.trim(), tags } as any).eq('id', id)
+    const entry = entries.find(e => e.id === id)
+    const cat = entry ? (roleCategory.get(entry.role_key) ?? '') : ''
     setEntries(es => es.map(e => e.id === id ? { ...e, employee_id: employeeId, person_name: name.trim(), tags } : e))
+    markDirty(cat)
     setEditing(null)
   }
-  async function deleteEntry(id: string) {
-    await db().from('roster_entries').delete().eq('id', id)
+  function deleteEntry(id: string) {
+    const entry = entries.find(e => e.id === id)
+    const cat = entry ? (roleCategory.get(entry.role_key) ?? '') : ''
     setEntries(es => es.filter(e => e.id !== id))
+    markDirty(cat)
     setEditing(null)
   }
-
-  // ── Drag and drop: move a person chip to a different cell ──────────────────
-  async function moveEntry(id: string, newRoleKey: string, newShift: RosterShift) {
+  function moveEntry(id: string, newRoleKey: string, newShift: RosterShift) {
     const entry = entries.find(e => e.id === id)
     if (!entry || (entry.role_key === newRoleKey && entry.shift === newShift)) return
-    await db().from('roster_entries').update({ role_key: newRoleKey, shift: newShift } as any).eq('id', id)
+    const srcCat = roleCategory.get(entry.role_key) ?? ''
+    const dstCat = roleCategory.get(newRoleKey) ?? ''
     setEntries(es => es.map(e => e.id === id ? { ...e, role_key: newRoleKey, shift: newShift } : e))
+    markDirty(srcCat)
+    if (dstCat !== srcCat) markDirty(dstCat)
+  }
+
+  // Persist one department — delete all DB rows for those role keys, re-insert current state
+  async function saveDepartment(categoryKey: string) {
+    if (!periodId) return
+    setSavingCategory(categoryKey)
+    try {
+      const catRoleKeys = roles.filter(r => r.category === categoryKey).map(r => r.key)
+      if (catRoleKeys.length === 0) return
+      await db().from('roster_entries').delete()
+        .eq('period_id', periodId)
+        .in('role_key', catRoleKeys)
+      const toInsert = entries
+        .filter(e => catRoleKeys.includes(e.role_key))
+        .map((e, i) => ({
+          period_id: e.period_id, role_key: e.role_key, shift: e.shift,
+          employee_id: e.employee_id, person_name: e.person_name, tags: e.tags, sort_order: i,
+        }))
+      let fresh: Entry[] = []
+      if (toInsert.length > 0) {
+        const { data, error } = await db().from('roster_entries')
+          .insert(toInsert as any)
+          .select('id,period_id,role_key,shift,employee_id,person_name,tags,sort_order')
+        if (error) throw error
+        fresh = (data as Entry[]) ?? []
+      }
+      setEntries(es => [...es.filter(e => !catRoleKeys.includes(e.role_key)), ...fresh])
+      setDirtyCategories(s => { const n = new Set(s); n.delete(categoryKey); return n })
+    } catch (err) {
+      console.error('saveDepartment failed', err)
+    } finally {
+      setSavingCategory(null)
+    }
   }
 
   // ── New period ──────────────────────────────────────────────────────────────
@@ -249,11 +299,12 @@ export default function RosterPage() {
       const maintRoleKeys = ['maintenance_tech', 'maintenance_asst']
       const maintEntries = entries.filter(e => maintRoleKeys.includes(e.role_key))
       if (maintEntries.length > 0) {
-        // Remove existing duty_roster rows for this week
+        // Delete any existing duty_roster rows that OVERLAP this period
+        // (overlap = start_at < periodEnd AND end_at > periodStart)
         await getDb().schema('maintenance' as any).from('duty_roster')
           .delete()
-          .gte('start_at', period.start_date + 'T00:00:00Z')
-          .lte('start_at', period.end_date + 'T23:59:59Z')
+          .lt('start_at', `${format(addDays(parseISO(period.end_date + 'T12:00:00'), 1), 'yyyy-MM-dd')}T00:00:00Z`)
+          .gt('end_at', `${period.start_date}T00:00:00Z`)
 
         // Create daily slots for each maintenance person over the period
         const slots: any[] = []
@@ -414,6 +465,9 @@ export default function RosterPage() {
             dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
             dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
             onMove={moveEntry}
+            dirtyCategories={dirtyCategories}
+            savingCategory={savingCategory}
+            onSaveDept={saveDepartment}
           />
         </>
       )}
@@ -535,6 +589,7 @@ function OnDutyCard({ period, entries, roleCategory, leaveEmpIds }: {
 function RosterGrid({
   period, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing,
   onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove,
+  dirtyCategories, savingCategory, onSaveDept,
 }: {
   period: Period
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
@@ -551,6 +606,9 @@ function RosterGrid({
   dragOverCell: string | null
   setDragOverCell: (key: string | null) => void
   onMove: (id: string, roleKey: string, shift: RosterShift) => void
+  dirtyCategories: Set<string>
+  savingCategory: string | null
+  onSaveDept: (cat: string) => void
 }) {
   const shiftLabel = (s: RosterShift) => s === 'day' ? period.day_label : period.night_label
   return (
@@ -560,7 +618,7 @@ function RosterGrid({
           <tr className="border-b border-surface-rule bg-surface">
             <th className="px-4 py-3 text-left font-mono text-[10px] text-text-muted uppercase tracking-wide w-[200px] sticky left-0 bg-surface z-10">Role</th>
             {ROSTER_SHIFTS.map(s => {
-              const label = shiftLabel(s.key)  // e.g. "Shift A" or "Shift B"
+              const label = shiftLabel(s.key)
               return (
                 <th key={s.key} className="px-4 py-3 text-left">
                   <div className="flex items-center gap-1.5">
@@ -580,7 +638,10 @@ function RosterGrid({
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
               dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
               dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
-              onMove={onMove} />
+              onMove={onMove}
+              isDirty={dirtyCategories.has(cat.key)}
+              isSaving={savingCategory === cat.key}
+              onSave={() => onSaveDept(cat.key)} />
           ))}
         </tbody>
       </table>
@@ -588,15 +649,25 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove }: any) {
+function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave }: any) {
   return (
     <>
       <tr>
-        <td colSpan={3} className="px-4 py-1.5 border-y border-surface-rule sticky left-0 z-10"
+        <td colSpan={3} className="px-3 py-1.5 border-y border-surface-rule"
           style={{ background: cat.colorHex + '14', borderLeft: `3px solid ${cat.colorHex}` }}>
-          <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide font-semibold" style={{ color: cat.colorHex }}>
-            <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex }} /> {cat.label}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide font-semibold" style={{ color: cat.colorHex }}>
+              <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex }} /> {cat.label}
+            </span>
+            {isDirty && (
+              <button onClick={onSave} disabled={isSaving}
+                className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-ok text-white text-[10px] font-semibold disabled:opacity-60 hover:opacity-90 transition-opacity">
+                {isSaving
+                  ? <><Loader2 size={11} className="animate-spin" /> Saving…</>
+                  : <><Check size={11} /> Save {cat.label}</>}
+              </button>
+            )}
+          </div>
         </td>
       </tr>
       {items.map((role: RosterRole) => (
