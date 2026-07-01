@@ -25,17 +25,20 @@ const salesDb = createClient(
   { db: { schema: 'sales' } }
 )
 
-async function recentSignalContext(keyword: string): Promise<string> {
+async function recentSignalContext(keyword: string): Promise<{ context: string; ids: string[] }> {
   try {
     const { data } = await salesDb
       .from('signals')
-      .select('title, summary_en, classification, region, source_type')
+      .select('id, title, summary_en, classification, region, source_type')
       .ilike('title', `%${keyword}%`)
       .order('created_at', { ascending: false })
       .limit(8)
-    if (!data?.length) return ''
-    return data.map((s: any) => `[${s.source_type}/${s.region ?? 'global'}] ${s.summary_en || s.title}`).join('\n')
-  } catch { return '' }
+    if (!data?.length) return { context: '', ids: [] }
+    return {
+      context: data.map((s: any) => `[${s.source_type}/${s.region ?? 'global'}] ${s.summary_en || s.title}`).join('\n'),
+      ids:     data.map((s: any) => s.id as string),
+    }
+  } catch { return { context: '', ids: [] } }
 }
 
 export async function POST(req: Request) {
@@ -81,6 +84,8 @@ export async function POST(req: Request) {
         brief:        body.brief ?? null,
         notes:        body.notes ?? null,
         status:       'draft',
+        channel:      body.channel ?? null,
+        signal_ids:   body.signal_ids ?? [],
       })
       .select('id')
       .single()
@@ -118,21 +123,20 @@ export async function POST(req: Request) {
 
   // ── AI actions ──────────────────────────────────────────────────────────────
 
-  let prompt: string
+  const { block: hsBlock } = await houseStyleBlock()
 
-  switch (action) {
-
-    case 'campaign_brief': {
-      if (!body.market || !body.audience_tag)
-        return NextResponse.json({ error: 'market and audience_tag required' }, { status: 400 })
-      const signals = await recentSignalContext(`${body.market} ${body.audience_tag}`)
-      prompt = `Generate a complete marketing campaign brief for a South African rooibos and herbal tea exporter (CNTP).
+  // campaign_brief is handled separately so it can return signal_ids alongside the brief
+  if (action === 'campaign_brief') {
+    if (!body.market || !body.audience_tag)
+      return NextResponse.json({ error: 'market and audience_tag required' }, { status: 400 })
+    const { context: signalContext, ids: signalIds } = await recentSignalContext(`${body.market} ${body.audience_tag}`)
+    const prompt = `Generate a complete marketing campaign brief for a South African rooibos and herbal tea exporter (CNTP).
 
 TARGET MARKET: ${body.market}
 AUDIENCE SEGMENT: ${body.audience_tag}
 ${body.product ? `PRODUCT FOCUS: ${body.product}` : ''}
 
-${signals ? `RECENT MARKET SIGNALS:\n${signals}\n` : ''}
+${signalContext ? `RECENT MARKET SIGNALS:\n${signalContext}\n` : ''}
 
 ## CAMPAIGN OBJECTIVE
 What should this campaign achieve? (awareness, trial, trade relationship, B2B lead generation)
@@ -157,20 +161,26 @@ The single most important next step for this audience to take.
 
 ## TIMELINE SUGGESTION
 A realistic 6-week campaign arc.`
-      break
-    }
+    const { response, ok } = await queryGeminiDetailed({ prompt, systemExtra: hsBlock, maxTokens: 900 })
+    if (!ok) return NextResponse.json({ error: 'AI unavailable' }, { status: 503 })
+    return NextResponse.json({ response, signal_ids: signalIds })
+  }
+
+  let prompt: string
+
+  switch (action) {
 
     case 'content_angles': {
       if (!body.platform || !body.market)
         return NextResponse.json({ error: 'platform and market required' }, { status: 400 })
-      const signals = await recentSignalContext(body.market)
+      const { context: signalContext } = await recentSignalContext(body.market)
       prompt = `Generate 5 specific content angles for a South African rooibos exporter posting on ${body.platform}.
 
 MARKET: ${body.market}
 ${body.audience_tag ? `AUDIENCE: ${body.audience_tag}` : ''}
 ${body.product ? `PRODUCT: ${body.product}` : ''}
 
-${signals ? `RECENT SIGNALS (use these as hooks where relevant):\n${signals}\n` : ''}
+${signalContext ? `RECENT SIGNALS (use these as hooks where relevant):\n${signalContext}\n` : ''}
 
 For each angle provide:
 1. HOOK — the opening line or visual concept (platform-native)
@@ -186,10 +196,10 @@ Make the angles specific, not generic. Reference real things: the Cederberg orig
     case 'audience_brief': {
       if (!body.audience_tag)
         return NextResponse.json({ error: 'audience_tag required' }, { status: 400 })
-      const signals = await recentSignalContext(body.audience_tag)
+      const { context: signalContext } = await recentSignalContext(body.audience_tag)
       prompt = `Generate a detailed audience intelligence brief for the segment: ${body.audience_tag}
 
-${signals ? `RECENT SIGNALS FOR THIS AUDIENCE:\n${signals}\n` : ''}
+${signalContext ? `RECENT SIGNALS FOR THIS AUDIENCE:\n${signalContext}\n` : ''}
 
 ## WHO THEY ARE
 Demographics, psychographics, values, purchase behaviour. Where they are geographically strongest.
@@ -218,8 +228,7 @@ One specific, actionable first step to reach this audience in the next 4 weeks.`
       return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
   }
 
-  const { block: hsBlock } = await houseStyleBlock()
-  const { response, ok }   = await queryGeminiDetailed({ prompt, systemExtra: hsBlock, maxTokens: 900 })
+  const { response, ok } = await queryGeminiDetailed({ prompt, systemExtra: hsBlock, maxTokens: 900 })
 
   if (!ok) return NextResponse.json({ error: 'AI unavailable' }, { status: 503 })
   return NextResponse.json({ response })
