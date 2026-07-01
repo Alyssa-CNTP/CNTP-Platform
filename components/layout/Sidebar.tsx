@@ -15,6 +15,7 @@ import {
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
+  FileSpreadsheet,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -68,7 +69,7 @@ const NAV: NavItem[] = [
   // ── Sales ──
   { href: '/sales',                     label: 'Sales Dashboard',            icon: TrendingUp,      group: 'Sales', departments: ['Sales','Management'], permission: 'can_access_sales' },
   { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/intelligence/linkedin',     label: 'LinkedIn',                   icon: Network,         group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/intelligence/global-wits',  label: 'Global Wits',                icon: FileSpreadsheet, group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/research',                  label: 'Research Engine',            icon: Beaker,          group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
   { href: '/intelligence',              label: 'Signal Engine',              icon: Radio,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
