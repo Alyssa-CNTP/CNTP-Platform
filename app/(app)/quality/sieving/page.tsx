@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDate } from '@/lib/utils/formatDate'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -497,7 +498,8 @@ export default function SievingPage() {
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
   const [period,         setPeriod]         = useState<'today'|'week'|'month'|'60d'|'all'>('all')
-  const [colFilters,     setColFilters]     = useState<Record<string,string>>({})
+  const [searchText,     setSearchText]     = useState('')
+  const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
   const [errors,         setErrors]         = useState<Record<string,string>>({})
   const [isRetest,       setIsRetest]       = useState(false)
@@ -627,38 +629,52 @@ export default function SievingPage() {
   const periodCutoff = (() => {
     if (period === 'all') return null
     const d = new Date()
-    if (period === 'today') return d.toISOString().slice(0,10)
+    if (period === 'today') return isoDate(d)
     if (period === 'week')  d.setDate(d.getDate() - 7)
     if (period === 'month') d.setMonth(d.getMonth() - 1)
     if (period === '60d')   d.setDate(d.getDate() - 60)
-    return d.toISOString().slice(0,10)
+    return isoDate(d)
   })()
 
-  // Per-column filter row — case-insensitive substring match against each
-  // column's displayed value.
-  const colFilterAccessors: Record<string, (r:any) => string> = {
-    date: r => r.date || '', lotNumber: r => r.lotNumber || '', serialNumber: r => r.serialNumber || '',
-    grade: r => r.grade || '', variant: r => r.variant || '', runType: r => r.runType || '',
-    qcName: r => r.qcName || '', time: r => r.time || '', bulkDensity: r => String(r.bulkDensity ?? ''),
-    needleCount: r => String(r.needleCount ?? ''), leafShade: r => String(r.leafShade ?? ''),
-    passStatus: r => r.passStatus || '',
-    violations: r => (r.violations || []).join('; '),
-  }
-  const matchesColFilters = (row: any) => {
-    for (const [key, val] of Object.entries(colFilters)) {
-      if (!val.trim()) continue
-      const accessor = colFilterAccessors[key] || ((r:any) => String(r[key] ?? ''))
-      if (!accessor(row).toLowerCase().includes(val.trim().toLowerCase())) return false
+  // Global search — case-insensitive substring match across every displayed
+  // field (date, lot, serial, grade, variant, type, QC, time, BD, needles,
+  // shade, every sieve %, status, violations).
+  const rowSearchText = (row: any) => [
+    row.date, row.lotNumber, row.serialNumber, row.grade, row.variant, row.runType,
+    row.qcName, row.time, row.bulkDensity, row.needleCount, row.leafShade, row.passStatus,
+    ...sdGetMesh(activeProduct, row.variant).map(m => row[m]),
+    ...(row.violations || []),
+  ].filter(Boolean).join(' ').toLowerCase()
+
+  // Column sort — click a header to sort by it (toggles asc/desc).
+  const sortKeyVal = (row: any, key: string): string|number => {
+    switch (key) {
+      case 'date':        return (row.date||'')+(row.time||'')
+      case 'lotNumber':   return (row.lotNumber||'').toLowerCase()
+      case 'serialNumber':return (row.serialNumber||'').toLowerCase()
+      case 'grade':       return (row.grade||'').toLowerCase()
+      case 'variant':     return (row.variant||'').toLowerCase()
+      case 'runType':     return (row.runType||'').toLowerCase()
+      case 'qcName':      return (row.qcName||'').toLowerCase()
+      case 'time':        return row.time||''
+      case 'bulkDensity': { const v = parseFloat(row.bulkDensity); return isNaN(v) ? -Infinity : v }
+      case 'needleCount': { const v = parseFloat(row.needleCount); return isNaN(v) ? -Infinity : v }
+      case 'leafShade':   { const v = parseFloat(row.leafShade); return isNaN(v) ? -Infinity : v }
+      case 'passStatus':  return (row.passStatus||'').toLowerCase()
+      case 'violations':  return (row.violations||[]).length
+      default: { const v = parseFloat(row[key]); return isNaN(v) ? -Infinity : v }   // sieve mesh columns
     }
-    return true
   }
+  const toggleSort = (key: string) =>
+    setSdSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
 
   const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
     .filter((r:any) => !periodCutoff || (r.date||'') >= periodCutoff)
-    .filter(matchesColFilters)
+    .filter((r:any) => !searchText.trim() || rowSearchText(r).includes(searchText.trim().toLowerCase()))
     .slice().sort((a:any,b:any) => {
-      const da = (a.date||'')+(a.time||''), db2 = (b.date||'')+(b.time||'')
-      return da < db2 ? 1 : da > db2 ? -1 : 0
+      const va = sortKeyVal(a, sdSort.key), vb = sortKeyVal(b, sdSort.key)
+      const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
+      return sdSort.dir === 'asc' ? cmp : -cmp
     })
   const activeMesh  = sdGetMesh(activeProduct, form.variant)
   const specKey     = `${form.grade}|${form.variant}`
@@ -939,9 +955,14 @@ export default function SievingPage() {
             style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
               background:period===k?'#166534':'#fff',color:period===k?'#fff':'#374151',borderColor:period===k?'#166534':'#e5e7eb'}}>{l}</button>
         ))}
-        {Object.values(colFilters).some(v=>v.trim()) && (
-          <button onClick={()=>setColFilters({})} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #dc2626',fontSize:11,cursor:'pointer',fontWeight:600,background:'#fef2f2',color:'#dc2626'}}>✕ Clear column filters</button>
-        )}
+        <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
+          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
+            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
+          {searchText && (
+            <button onClick={()=>setSearchText('')} title="Clear search"
+              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
+          )}
+        </div>
       </div>
 
       {/* New Run Form */}
@@ -1139,58 +1160,35 @@ export default function SievingPage() {
             <thead>
               <tr style={{background:'#1f4e79',color:'#fff',position:'sticky',top:0,zIndex:2}}>
                 {canWrite&&<th style={{padding:'5px 4px',width:22}}></th>}
-                <th style={{padding:'5px 8px',textAlign:'left',whiteSpace:'nowrap'}}>Date</th>
-                {!specDef.noLotNumber&&<th style={{padding:'5px 8px',textAlign:'left'}}>Lot</th>}
-                <th style={{padding:'5px 8px',textAlign:'left'}}>Serial</th>
-                <th style={{padding:'5px 8px'}}>Grade</th>
-                <th style={{padding:'5px 8px'}}>Var.</th>
-                <th style={{padding:'5px 8px'}}>Type</th>
-                <th style={{padding:'5px 8px'}}>QC</th>
-                <th style={{padding:'5px 8px'}}>Time</th>
-                {!specDef.noBulkDensity&&<th style={{padding:'5px 8px'}}>BD</th>}
-                {specDef.hasNeedleCount&&<th style={{padding:'5px 8px',fontSize:9}}>Needles</th>}
-                {specDef.hasLeafShade&&<th style={{padding:'5px 8px',fontSize:9}}>Shade</th>}
-                {sdGetMesh(activeProduct,'CON').map(m=><th key={m} style={{padding:'5px 6px',textAlign:'center',fontSize:9}}>{m.replace(' (%)','')}</th>)}
-                <th style={{padding:'5px 8px'}}>Status</th>
-                <th style={{padding:'5px 8px',fontSize:9,color:'#bfdbfe'}}>Violations</th>
-              </tr>
-              {/* Per-column filter row */}
-              <tr style={{background:'#eef2f7'}}>
-                {canWrite&&<th style={{padding:'2px 4px'}}></th>}
-                {(['date','lotNumber','serialNumber','grade','variant','runType','qcName','time'] as const).map(key => {
-                  if (key==='lotNumber' && specDef.noLotNumber) return null
-                  return (
-                    <th key={key} style={{padding:'2px 4px'}}>
-                      <input value={colFilters[key]||''} onChange={e=>setColFilters(f=>({...f,[key]:e.target.value}))}
-                        placeholder="filter…" style={{width:'100%',minWidth:44,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
-                    </th>
-                  )
-                })}
-                {!specDef.noBulkDensity&&<th style={{padding:'2px 4px'}}>
-                  <input value={colFilters.bulkDensity||''} onChange={e=>setColFilters(f=>({...f,bulkDensity:e.target.value}))}
-                    placeholder="filter…" style={{width:'100%',minWidth:40,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
-                </th>}
-                {specDef.hasNeedleCount&&<th style={{padding:'2px 4px'}}>
-                  <input value={colFilters.needleCount||''} onChange={e=>setColFilters(f=>({...f,needleCount:e.target.value}))}
-                    placeholder="filter…" style={{width:'100%',minWidth:40,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
-                </th>}
-                {specDef.hasLeafShade&&<th style={{padding:'2px 4px'}}>
-                  <input value={colFilters.leafShade||''} onChange={e=>setColFilters(f=>({...f,leafShade:e.target.value}))}
-                    placeholder="filter…" style={{width:'100%',minWidth:40,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
-                </th>}
-                {sdGetMesh(activeProduct,'CON').map(m=>(
-                  <th key={m} style={{padding:'2px 4px'}}>
-                    <input value={colFilters[m]||''} onChange={e=>setColFilters(f=>({...f,[m]:e.target.value}))}
-                      placeholder="…" style={{width:'100%',minWidth:34,padding:'3px 4px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,textAlign:'center',boxSizing:'border-box'}}/>
+                {([
+                  ['date','Date',true],
+                  ...(specDef.noLotNumber?[]:[['lotNumber','Lot',true]]),
+                  ['serialNumber','Serial',true],
+                  ['grade','Grade',false],
+                  ['variant','Var.',false],
+                  ['runType','Type',false],
+                  ['qcName','QC',false],
+                  ['time','Time',false],
+                  ...(specDef.noBulkDensity?[]:[['bulkDensity','BD',false]]),
+                  ...(specDef.hasNeedleCount?[['needleCount','Needles',false]]:[]),
+                  ...(specDef.hasLeafShade?[['leafShade','Shade',false]]:[]),
+                ] as [string,string,boolean][]).map(([key,label,left])=>(
+                  <th key={key} onClick={()=>toggleSort(key)}
+                    style={{padding:'5px 8px',textAlign:left?'left':'center',whiteSpace:'nowrap',cursor:'pointer',userSelect:'none'}}
+                    title="Click to sort">
+                    {label}{sdSort.key===key?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                   </th>
                 ))}
-                <th style={{padding:'2px 4px'}}>
-                  <input value={colFilters.passStatus||''} onChange={e=>setColFilters(f=>({...f,passStatus:e.target.value}))}
-                    placeholder="filter…" style={{width:'100%',minWidth:44,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                {sdGetMesh(activeProduct,'CON').map(m=>(
+                  <th key={m} onClick={()=>toggleSort(m)} style={{padding:'5px 6px',textAlign:'center',fontSize:9,cursor:'pointer',userSelect:'none'}} title="Click to sort">
+                    {m.replace(' (%)','')}{sdSort.key===m?(sdSort.dir==='asc'?' ▲':' ▼'):''}
+                  </th>
+                ))}
+                <th onClick={()=>toggleSort('passStatus')} style={{padding:'5px 8px',cursor:'pointer',userSelect:'none'}} title="Click to sort">
+                  Status{sdSort.key==='passStatus'?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                 </th>
-                <th style={{padding:'2px 4px'}}>
-                  <input value={colFilters.violations||''} onChange={e=>setColFilters(f=>({...f,violations:e.target.value}))}
-                    placeholder="filter…" style={{width:'100%',minWidth:44,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                <th onClick={()=>toggleSort('violations')} style={{padding:'5px 8px',fontSize:9,color:'#bfdbfe',cursor:'pointer',userSelect:'none'}} title="Click to sort">
+                  Violations{sdSort.key==='violations'?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                 </th>
               </tr>
             </thead>

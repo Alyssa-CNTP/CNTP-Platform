@@ -26,6 +26,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
+import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
@@ -1456,7 +1457,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                       </span>
                                     </td>
                                     <td className="px-2 py-2.5 font-mono font-bold text-[11px]">{s.time||'—'}</td>
-                                    <td className="px-2 py-2.5 text-[10px] text-info font-semibold whitespace-nowrap">{s.date ? format(new Date(s.date+'T12:00:00'),'dd MMM') : '—'}</td>
+                                    <td className="px-2 py-2.5 text-[10px] text-info font-semibold whitespace-nowrap">{s.date || '—'}</td>
                                     <td className="px-2 py-2.5 text-[10px] text-text-muted">{s.serial_bin||'—'}</td>
                                     <td className="px-2 py-2.5 text-[10px]">{s.qc_name||'—'}</td>
                                     <td className="px-2 py-2.5 text-center text-[10px] border-r-2 border-surface-rule">{s.hourly_temp||'—'}</td>
@@ -1646,8 +1647,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                       const isExpanded = expandedHistId === b.id
                       const sampleDates = [...new Set((b.samples||[]).map(s=>s.date).filter(Boolean))].sort()
                       const dateDisplay = sampleDates.length === 0 ? (b.production_date||'—')
-                        : sampleDates.length === 1 ? format(new Date(sampleDates[0]+'T12:00'),'d MMM')
-                        : `${format(new Date(sampleDates[0]+'T12:00'),'d MMM')} – ${format(new Date(sampleDates[sampleDates.length-1]+'T12:00'),'d MMM')}`
+                        : sampleDates.length === 1 ? sampleDates[0]
+                        : `${sampleDates[0]} – ${sampleDates[sampleDates.length-1]}`
 
                       return (
                         <>
@@ -1725,7 +1726,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                               const am = mean(mb,'moisture'), abd = mean(mb,'untapped_bd'), at = mean(ss,'hourly_temp')
                                               return (
                                                 <tr key={d} className={`hover:bg-surface ${di%2===1?'bg-surface/50':'bg-surface-card'}`}>
-                                                  <td className="px-3 py-2 font-mono font-bold text-text whitespace-nowrap">{d!=='Unknown' ? format(new Date(d+'T12:00'),'dd MMM yyyy') : '—'}</td>
+                                                  <td className="px-3 py-2 font-mono font-bold text-text whitespace-nowrap">{d!=='Unknown' ? d : '—'}</td>
                                                   <td className="px-3 py-2 text-center font-mono text-text-muted">{ss.length}</td>
                                                   <td className="px-3 py-2 text-center font-mono">{isNaN(at)?'—':at.toFixed(1)}</td>
                                                   <td className="px-3 py-2 text-center font-mono font-bold" style={{ color:am>8.5?'var(--color-err)':'var(--color-ok)' }}>{isNaN(am)?'—':am.toFixed(2)+'%'}</td>
@@ -1757,7 +1758,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                               <tr key={s.id||si} className={`hover:bg-surface ${hasFail?'bg-err/3 border-l-2 border-l-err':'bg-surface-card'}`}>
                                                 <td className="px-3 py-2 text-center font-bold text-text-muted">{si+1}</td>
                                                 <td className="px-3 py-2"><span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${s.has_sieve?'bg-info/10 text-info':'bg-purple-100 text-purple-700'}`}>{s.has_sieve?'Full':'MB'}</span></td>
-                                                <td className="px-3 py-2 font-mono text-[9px] text-text-muted">{s.date ? format(new Date(s.date+'T12:00'),'dd MMM') : '—'}</td>
+                                                <td className="px-3 py-2 font-mono text-[9px] text-text-muted">{s.date || '—'}</td>
                                                 <td className="px-3 py-2 font-mono">{s.time||'—'}</td>
                                                 <td className="px-3 py-2 font-mono text-text-muted">{s.serial_bin||'—'}</td>
                                                 <td className="px-3 py-2 text-center">{s.hourly_temp||'—'}</td>
@@ -1832,7 +1833,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <tr key={r.id} className={`hover:bg-surface ${i%2===1?'bg-warn/[0.02]':''}`}>
                               <td className="px-4 py-2.5 font-mono font-semibold text-[12px] text-text">{batchNo}</td>
                               <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">
-                                {r.created_at ? new Date(r.created_at).toLocaleDateString('en-ZA', { day:'numeric', month:'short', year:'numeric' }) : '—'}
+                                {isoDate(r.created_at)}
                               </td>
                               <td className="px-4 py-2.5 text-[12px] text-text-muted">{customer}</td>
                               <td className="px-4 py-2.5 text-[11px] text-text-muted">{product}</td>
@@ -2049,7 +2050,7 @@ function TestTab({ title, icon, testType, isAdmin }: { title:string; icon:string
                   return (
                     <tr key={r.id} className={`hover:bg-surface transition-colors ${i%2===1?'bg-surface/50':''}`}>
                       <td className="px-5 py-3 font-mono font-bold text-[12px] text-text">{r.batch_no||d.batch_no||'—'}</td>
-                      <td className="px-5 py-3 text-[11px] text-text-muted font-mono">{r.created_at?format(new Date(r.created_at),'d MMM yyyy'):'—'}</td>
+                      <td className="px-5 py-3 text-[11px] text-text-muted font-mono">{isoDate(r.created_at)}</td>
                       <td className="px-5 py-3 text-[11px] text-text-muted">{d.lab||r.lab_name||'—'}</td>
                       <td className="px-5 py-3"><StatusBadge status={status}/></td>
                       <td className="px-5 py-3 text-[11px] text-text-muted max-w-[150px] truncate">{r.comment||'—'}</td>

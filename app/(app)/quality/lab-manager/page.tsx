@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { computePastOosFlags } from '../pasteuriser/page'
 
 const STATIONS = [
@@ -23,10 +24,8 @@ const STATIONS = [
 function parseData(r: any) {
   try { return typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch { return {} }
 }
-function fmtDateTime(s?: string) {
-  return s ? new Date(s).toLocaleString('en-ZA', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
-}
-const todayISO = () => new Date().toISOString().slice(0, 10)
+const fmtDateTime = isoDateTime
+const todayISO = () => isoDate(new Date())
 
 export default function LabManagerPage() {
   const { p, session } = useAuth()
