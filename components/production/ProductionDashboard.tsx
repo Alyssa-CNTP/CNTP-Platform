@@ -1,23 +1,23 @@
 'use client'
 
 // components/production/ProductionDashboard.tsx
-// The production manager's cockpit. Live KPIs + interactive charts driven by the
-// structured capture tables (prod_sessions, prod_mass_balance, bag_tags), plus
-// factory weather, solar (Home Assistant), open breakdowns affecting production,
-// and a Gemini AI analyst. OEE / downtime / scrap need data we don't capture yet
-// — they're flagged as "coming with capture", not faked.
+// Production manager's KPI cockpit — redesigned to surface yields, machine
+// parameters derived from capture checks, and quality integration (PSD vs
+// machine settings). Three tabs: Yields · Machine KPIs · Quality Integration.
 
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import {
-  BarChart, Bar, LineChart, Line, ComposedChart, PieChart, Pie,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
+  LineChart, Line, BarChart, Bar, ComposedChart,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ReferenceLine, Cell, Legend,
 } from 'recharts'
 import {
-  RefreshCw, Package, Scale, Percent, Activity, CheckCircle2, AlertTriangle,
-  Wrench, CalendarRange, ClipboardList, Users, ChevronRight, Gauge as GaugeIcon, Map as MapIcon,
+  RefreshCw, Scale, Percent, Activity, CheckCircle2, AlertTriangle,
+  Wrench, CalendarRange, ClipboardList, Users, ChevronRight,
+  Map as MapIcon, TrendingUp, Cpu, FlaskConical, Info,
 } from 'lucide-react'
-import { format, subMonths } from 'date-fns'
+import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
@@ -25,253 +25,697 @@ import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
 import OperationalTrends from '@/components/management/OperationalTrends'
 
 const C = { brand: '#1A3A0E', accent: '#5A8A2A', azure: '#2A7CB8', warn: '#B85C0A', err: '#B81C1C', ok: '#1A7A3C', info: '#2A7CB8', gray: '#96A88A' }
-const PIE = [C.accent, C.azure, C.ok, C.warn, C.err, C.gray]
 const round1 = (n: number) => Math.round(n * 10) / 10
 
-const SESSION_STATUS: Record<string, { label: string; cls: string }> = {
-  none:      { label: 'Idle',       cls: 'bg-stone-100 text-stone-500' },
-  draft:     { label: 'Capturing',  cls: 'bg-warn/10 text-warn' },
-  submitted: { label: 'Submitted',  cls: 'bg-info/10 text-info' },
-  approved:  { label: 'Signed off', cls: 'bg-ok/10 text-ok' },
+// ── Info tooltip ──────────────────────────────────────────────────────────────
+// Shows a floating tooltip with formula/methodology when clicked.
+function InfoTip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="relative inline-flex">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
+        className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold text-text-muted hover:text-text hover:bg-surface-dim border border-surface-rule transition cursor-help"
+        aria-label="How is this calculated?"
+      >
+        <Info size={9} />
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute z-50 bottom-6 left-1/2 -translate-x-1/2 w-64 p-3 rounded-xl border border-surface-rule bg-surface-card shadow-xl text-[11px] text-text-muted leading-relaxed"
+        >
+          {text}
+          <button
+            onClick={() => setOpen(false)}
+            className="block mt-2 ml-auto text-[10px] text-text-faint hover:text-text"
+          >
+            Close ×
+          </button>
+        </div>
+      )}
+    </span>
+  )
 }
 
-interface SessionRow { id: string; section_id: string; status: string; date: string }
-interface MB { session_id: string; total_input_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
-interface Breakdown { card_no: string; area: string; machine: string | null; status: string; raised_at: string }
+// ── KPI tile ──────────────────────────────────────────────────────────────────
+function Kpi({ label, value, icon: Icon, tone, loading, info }: {
+  label: string; value: string; icon: typeof Scale; tone: 'ok' | 'warn' | 'err' | 'info'; loading: boolean; info?: string
+}) {
+  const accent = { ok: C.ok, warn: C.warn, err: C.err, info: C.azure }[tone]
+  const tint = { ok: 'rgba(26,122,60,0.06)', warn: 'rgba(184,92,10,0.06)', err: 'rgba(184,28,28,0.06)', info: 'rgba(42,124,184,0.05)' }[tone]
+  return (
+    <div className="rounded-xl border border-surface-rule p-4" style={{ borderLeft: `3px solid ${accent}`, background: tint }}>
+      <div className="flex items-center justify-between">
+        <Icon size={14} style={{ color: accent }} />
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: accent }} />
+      </div>
+      <div className="text-[22px] leading-none font-semibold mt-2" style={{ color: accent }}>
+        {loading ? '—' : value}
+      </div>
+      <div className="flex items-center mt-1">
+        <span className="text-[10px] uppercase tracking-wide text-text-muted">{label}</span>
+        {info && <InfoTip text={info} />}
+      </div>
+    </div>
+  )
+}
+
+// ── Quick link chip ───────────────────────────────────────────────────────────
+function QuickChip({ href, icon: Icon, label }: { href: string; icon: typeof Scale; label: string }) {
+  return (
+    <Link href={href} className="inline-flex items-center gap-1.5 rounded-lg border border-surface-rule bg-surface-card px-2.5 py-1.5 text-[12px] text-text hover:border-brand/40 hover:text-brand transition">
+      <Icon size={13} /> {label}
+    </Link>
+  )
+}
+
+// ── Chart wrapper ─────────────────────────────────────────────────────────────
+function Chart({ title, subtitle, info, children }: { title: string; subtitle: string; info?: string; children: React.ReactElement }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-start gap-1">
+        <div>
+          <div className="flex items-center gap-0.5">
+            <h3 className="text-sm font-semibold text-text">{title}</h3>
+            {info && <InfoTip text={info} />}
+          </div>
+          <p className="text-[11px] text-text-muted">{subtitle}</p>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={220}>{children}</ResponsiveContainer>
+    </div>
+  )
+}
+
+// ── Compliance badge ──────────────────────────────────────────────────────────
+function CompBadge({ pct }: { pct: number | null }) {
+  if (pct == null) return <span className="text-[11px] text-text-faint">—</span>
+  const tone = pct >= 90 ? 'ok' : pct >= 75 ? 'warn' : 'err'
+  const cls = { ok: 'bg-ok/10 text-ok', warn: 'bg-warn/10 text-warn', err: 'bg-err/10 text-err' }[tone]
+  return <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg ${cls}`}>{pct}%</span>
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface MachineParam { checkKey: string; checkLabel: string; valueNum: number; unit: string; sectionId: string; date: string; shift: string; recordedAt: string; status: string }
+interface PsdRun { id: string; date: string; lotNumber: string; variant: string; product: string; sieveResults: Record<string, any>; bulkDensity: string; passStatus: string; grade: string }
+interface CheckComp { sectionId: string; total: number; ok: number; flagged: number; fail: number; ratePct: number | null }
+interface DailyYield { date: string; label: string; outputKg: number; inputKg: number; sessions: number; yieldPct: number | null }
+interface SectionYield { sectionId: string; inputKg: number; outputKg: number; sessions: number }
+interface TodaySummary { date: string; outputKg: number; inputKg: number; yieldPct: number | null; sessions: number; activeSections: number; complianceRate: number | null }
+
+const SESSION_STATUS: Record<string, { label: string; cls: string }> = {
+  none: { label: 'Idle', cls: 'bg-stone-100 text-stone-500' },
+  draft: { label: 'Capturing', cls: 'bg-warn/10 text-warn' },
+  submitted: { label: 'Submitted', cls: 'bg-info/10 text-info' },
+  approved: { label: 'Signed off', cls: 'bg-ok/10 text-ok' },
+}
 
 export default function ProductionDashboard() {
   const today = format(new Date(), 'yyyy-MM-dd')
-  const [sessions, setSessions] = useState<SessionRow[]>([])
-  const [mb, setMb] = useState<Map<string, MB>>(new Map())
-  const [bagsToday, setBagsToday] = useState<{ section_id: string; weight_kg: number }[]>([])
-  const [breakdowns, setBreakdowns] = useState<Breakdown[]>([])
+  const [windowDays, setWindowDays] = useState(14)
+  const [tab, setTab] = useState<'yields' | 'machine' | 'quality'>('yields')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [tab, setTab] = useState<'output' | 'yield' | 'flow'>('output')
-  const [windowDays, setWindowDays] = useState(14)
+
+  // Data from new manager-kpis API
+  const [todaySummary, setTodaySummary] = useState<TodaySummary | null>(null)
+  const [dailyYield, setDailyYield] = useState<DailyYield[]>([])
+  const [yieldBySection, setYieldBySection] = useState<SectionYield[]>([])
+  const [machineParams, setMachineParams] = useState<MachineParam[]>([])
+  const [checkCompliance, setCheckCompliance] = useState<CheckComp[]>([])
+  const [psdRuns, setPsdRuns] = useState<PsdRun[]>([])
+
+  // Section status (today) — still from direct DB for live view
+  const [todayRows, setTodayRows] = useState<any[]>([])
+  const [breakdowns, setBreakdowns] = useState<any[]>([])
 
   const load = useCallback(async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true)
     const db = getDb()
-    const start = new Date(); start.setDate(start.getDate() - (windowDays - 1))
-    const startStr = format(start, 'yyyy-MM-dd')
-    const todayStart = `${today}T00:00:00`
 
-    const [{ data: sess }, { data: bags }, { data: bd }] = await Promise.all([
-      db.schema('production').from('prod_sessions').select('id,section_id,status,date').gte('date', startStr),
-      db.schema('production').from('bag_tags').select('section_id,weight_kg,created_at').gte('created_at', todayStart),
-      db.schema('maintenance').from('job_cards').select('card_no,area,machine,status,raised_at,workflow').eq('workflow', 'breakdown').neq('status', 'complete'),
+    // Fetch KPI data from API + section status + breakdowns in parallel
+    const [kpiRes, { data: sess }, { data: bags }, { data: bd }] = await Promise.all([
+      fetch(`/api/production/manager-kpis?days=${windowDays}`).then(r => r.json()),
+      db.schema('production').from('prod_sessions').select('id,section_id,status,date').eq('date', today),
+      db.schema('production').from('bag_tags').select('section_id,weight_kg').gte('created_at', `${today}T00:00:00`),
+      db.schema('maintenance').from('job_cards').select('card_no,area,machine,status,raised_at').eq('workflow', 'breakdown').neq('status', 'complete'),
     ])
-    const sessions = (sess as SessionRow[]) ?? []
-    const sessIds = sessions.map(s => s.id)
-    let mbRows: MB[] = []
-    if (sessIds.length) {
-      // chunk to stay clear of URL length limits on large windows
-      for (let i = 0; i < sessIds.length; i += 200) {
-        const { data } = await db.schema('production').from('prod_mass_balance')
-          .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
-          .in('session_id', sessIds.slice(i, i + 200))
-        mbRows = mbRows.concat((data as MB[]) ?? [])
-      }
+
+    // KPI API data
+    if (!kpiRes.error) {
+      setTodaySummary(kpiRes.today)
+      setDailyYield(kpiRes.dailyYield || [])
+      setYieldBySection(kpiRes.yieldBySection || [])
+      setMachineParams(kpiRes.machineParams || [])
+      setCheckCompliance(kpiRes.checkCompliance || [])
+      setPsdRuns(kpiRes.psdRuns || [])
     }
-    setSessions(sessions)
-    setMb(new Map(mbRows.map(m => [m.session_id, m])))
-    setBagsToday(((bags as any[]) ?? []).map(b => ({ section_id: b.section_id, weight_kg: Number(b.weight_kg) || 0 })))
-    setBreakdowns((bd as Breakdown[]) ?? [])
+
+    // Build today's section rows from direct DB data
+    const sessRows: any[] = sess || []
+    const bagsData: any[] = bags || []
+    const sessIds = sessRows.map(s => s.id)
+    let mbRows: any[] = []
+    if (sessIds.length) {
+      const { data } = await db.schema('production').from('prod_mass_balance')
+        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+        .in('session_id', sessIds)
+      mbRows = data || []
+    }
+    const mbMap = new Map(mbRows.map(m => [m.session_id, m]))
+    const outOf = (s: any) => { const m = mbMap.get(s.id); return m ? (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0 }
+    const inOf = (s: any) => { const m = mbMap.get(s.id); return m ? Number(m.total_input_kg) || 0 : 0 }
+    const rank = (s: string) => ({ approved: 3, submitted: 2, draft: 1 } as Record<string, number>)[s] ?? 0
+
+    const rows = SECTION_ORDER.map(id => {
+      const ss = sessRows.filter(s => s.section_id === id)
+      const status = ss.reduce((acc, s) => rank(s.status) > rank(acc) ? s.status : acc, 'none')
+      const kgIn = ss.reduce((t, s) => t + inOf(s), 0)
+      const kgOut = ss.reduce((t, s) => t + outOf(s), 0)
+      const bags = bagsData.filter(b => b.section_id === id).length
+      const yieldPct = kgIn > 0 ? round1(kgOut / kgIn * 100) : null
+      return { id, status, kgIn, kgOut, variance: kgIn - kgOut, bags, yieldPct }
+    })
+
+    setTodayRows(rows)
+    setBreakdowns((bd as any[]) ?? [])
     setLoading(false); setRefreshing(false)
   }, [today, windowDays])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { const t = setInterval(() => load(true), 120_000); return () => clearInterval(t) }, [load])
 
-  const a = useMemo(() => {
-    const outOf = (s: SessionRow) => { const m = mb.get(s.id); return m ? (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0 }
-    const inOf  = (s: SessionRow) => { const m = mb.get(s.id); return m ? Number(m.total_input_kg) || 0 : 0 }
+  // ── Machine KPI derived data ────────────────────────────────────────────────
 
-    // Daily trend over the window
-    const days: { date: string; label: string; outputKg: number; sessions: number; yieldPct: number }[] = []
-    for (let i = windowDays - 1; i >= 0; i--) {
-      const d = new Date(); d.setDate(d.getDate() - i)
-      const ds = format(d, 'yyyy-MM-dd')
-      const ss = sessions.filter(s => s.date === ds)
-      const out = ss.reduce((t, s) => t + outOf(s), 0)
-      const inp = ss.reduce((t, s) => t + inOf(s), 0)
-      days.push({ date: ds, label: format(d, 'EEE d'), outputKg: Math.round(out), sessions: ss.length, yieldPct: inp ? round1(out / inp * 100) : 0 })
+  const vsdReadings = useMemo(() =>
+    machineParams
+      .filter(e => e.checkKey === 'infeed_vsd')
+      .map(e => ({ date: e.date, label: format(new Date(e.date + 'T12:00:00'), 'EEE d'), hz: e.valueNum, status: e.status }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+  , [machineParams])
+
+  // Average VSD per day for trend chart
+  const vsdByDay = useMemo(() => {
+    const grouped: Record<string, { date: string; label: string; values: number[]; flagged: number }> = {}
+    for (const r of vsdReadings) {
+      if (!grouped[r.date]) grouped[r.date] = { date: r.date, label: r.label, values: [], flagged: 0 }
+      grouped[r.date].values.push(r.hz)
+      if (r.status !== 'ok') grouped[r.date].flagged++
     }
+    return Object.values(grouped).map(g => ({
+      date: g.date,
+      label: g.label,
+      avgHz: g.values.length ? round1(g.values.reduce((a, b) => a + b, 0) / g.values.length) : null,
+      minHz: g.values.length ? Math.min(...g.values) : null,
+      maxHz: g.values.length ? Math.max(...g.values) : null,
+      readings: g.values.length,
+      flagged: g.flagged,
+    }))
+  }, [vsdReadings])
 
-    // Yield by section over the window
-    const bySection = SECTION_ORDER.map(id => {
-      const ss = sessions.filter(s => s.section_id === id)
-      const out = ss.reduce((t, s) => t + outOf(s), 0)
-      const inp = ss.reduce((t, s) => t + inOf(s), 0)
-      return { id, name: sectionMeta(id).name, code: sectionMeta(id).code, color: sectionMeta(id).colorHex, outputKg: Math.round(out), yieldPct: inp ? round1(out / inp * 100) : 0 }
+  const screenSettings = useMemo(() =>
+    machineParams
+      .filter(e => e.checkKey === 'indent_screen_angle' || e.checkKey === 'indent_screen_speed')
+      .map(e => ({ date: e.date, label: format(new Date(e.date + 'T12:00:00'), 'd MMM'), shift: e.shift, checkKey: e.checkKey, checkLabel: e.checkLabel, value: e.valueNum, unit: e.unit, status: e.status }))
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 20)
+  , [machineParams])
+
+  // ── Quality integration: correlate PSD runs with machine settings ────────────
+
+  const psdCorrelation = useMemo(() => {
+    return psdRuns.slice(0, 40).map(run => {
+      // Find sieving machine params on the same date
+      const dayParams = machineParams.filter(e => e.date === run.date && e.sectionId === 'sieving')
+      const vsdOnDay = dayParams.filter(e => e.checkKey === 'infeed_vsd').map(e => e.valueNum)
+      const angleOnDay = dayParams.find(e => e.checkKey === 'indent_screen_angle')
+      const speedOnDay = dayParams.find(e => e.checkKey === 'indent_screen_speed')
+      // valueNum is the numeric reading on the MachineParam type
+
+      // Key PSD fractions from sieve_results
+      const sr = run.sieveResults || {}
+      const gt18 = sr['>18 (%)'] ?? sr['gt18'] ?? null
+      const gt12 = sr['>12 (%)'] ?? sr['gt12'] ?? null
+      const gt10 = sr['>10 (%)'] ?? sr['gt10'] ?? null
+
+      return {
+        date: run.date,
+        label: format(new Date(run.date + 'T12:00:00'), 'd MMM'),
+        lot: run.lotNumber,
+        variant: run.variant,
+        product: run.product,
+        grade: run.grade,
+        passStatus: run.passStatus,
+        bulkDensity: run.bulkDensity ? Number(run.bulkDensity) : null,
+        avgVsd: vsdOnDay.length ? round1(vsdOnDay.reduce((a, b) => a + b, 0) / vsdOnDay.length) : null,
+        screenAngle: angleOnDay ? angleOnDay.valueNum : null,
+        screenSpeed: speedOnDay ? speedOnDay.valueNum : null,
+        gt18: gt18 != null ? Number(gt18) : null,
+        gt12: gt12 != null ? Number(gt12) : null,
+        gt10: gt10 != null ? Number(gt10) : null,
+      }
     })
+  }, [psdRuns, machineParams])
 
-    // Today, per section (live status table)
-    const rank = (s: string) => ({ approved: 3, submitted: 2, draft: 1 } as Record<string, number>)[s] ?? 0
-    const todayRows = SECTION_ORDER.map(id => {
-      const ss = sessions.filter(s => s.section_id === id && s.date === today)
-      const status = ss.reduce((acc, s) => rank(s.status) > rank(acc) ? s.status : acc, 'none')
-      const kgIn = ss.reduce((t, s) => t + inOf(s), 0)
-      const kgOut = ss.reduce((t, s) => t + outOf(s), 0)
-      const bags = bagsToday.filter(b => b.section_id === id).length
-      return { id, status, kgIn, kgOut, variance: kgIn - kgOut, bags }
-    })
+  // PSD trend for key fractions over time
+  const psdTrend = useMemo(() => {
+    const byDate: Record<string, { date: string; label: string; gt18: number[]; gt12: number[]; gt10: number[]; pass: number; fail: number }> = {}
+    for (const run of psdRuns) {
+      if (!byDate[run.date]) byDate[run.date] = { date: run.date, label: format(new Date(run.date + 'T12:00:00'), 'd MMM'), gt18: [], gt12: [], gt10: [], pass: 0, fail: 0 }
+      const sr = run.sieveResults || {}
+      const v18 = sr['>18 (%)'] ?? sr['gt18']; if (v18 != null && !isNaN(Number(v18))) byDate[run.date].gt18.push(Number(v18))
+      const v12 = sr['>12 (%)'] ?? sr['gt12']; if (v12 != null && !isNaN(Number(v12))) byDate[run.date].gt12.push(Number(v12))
+      const v10 = sr['>10 (%)'] ?? sr['gt10']; if (v10 != null && !isNaN(Number(v10))) byDate[run.date].gt10.push(Number(v10))
+      if (run.passStatus === 'Pass') byDate[run.date].pass++; else if (run.passStatus === 'Fail') byDate[run.date].fail++
+    }
+    return Object.values(byDate)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(d => ({
+        date: d.date, label: d.label,
+        avg18: d.gt18.length ? round1(d.gt18.reduce((a, b) => a + b, 0) / d.gt18.length) : null,
+        avg12: d.gt12.length ? round1(d.gt12.reduce((a, b) => a + b, 0) / d.gt12.length) : null,
+        avg10: d.gt10.length ? round1(d.gt10.reduce((a, b) => a + b, 0) / d.gt10.length) : null,
+        passRate: (d.pass + d.fail) > 0 ? Math.round((d.pass / (d.pass + d.fail)) * 100) : null,
+      }))
+  }, [psdRuns])
 
-    const todaySessions = sessions.filter(s => s.date === today)
-    const outputToday = Math.round(todaySessions.reduce((t, s) => t + outOf(s), 0))
-    const inputToday  = todaySessions.reduce((t, s) => t + inOf(s), 0)
-    const yieldToday  = inputToday ? round1(outputToday / inputToday * 100) : 0
-    const running     = new Set(todaySessions.filter(s => s.status === 'draft').map(s => s.section_id)).size
-    const pending     = todaySessions.filter(s => s.status === 'submitted').length
-    const flags       = todayRows.filter(r => r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG).length
-    const bagsCount   = bagsToday.length
+  // ── Today summary KPIs ──────────────────────────────────────────────────────
 
-    const statusDist = (['draft', 'submitted', 'approved'] as const)
-      .map(st => ({ status: SESSION_STATUS[st].label, n: sessions.filter(s => s.status === st).length }))
-      .filter(s => s.n > 0)
-
-    const variBySection = bySection.filter(s => s.outputKg > 0)
-
-    return { days, bySection, todayRows, outputToday, yieldToday, running, pending, flags, bagsCount, statusDist, variBySection }
-  }, [sessions, mb, bagsToday, today, windowDays])
-
-  const agg = useMemo(() => ({
-    windowDays: windowDays,
-    today: { date: today, outputKg: a.outputToday, bags: a.bagsCount, yieldPct: a.yieldToday, sectionsRunning: a.running, signOffsPending: a.pending, balanceFlags: a.flags },
-    dailyTrend: a.days.map(d => ({ date: d.date, outputKg: d.outputKg, sessions: d.sessions, yieldPct: d.yieldPct })),
-    yieldBySection: a.bySection.map(s => ({ section: s.name, outputKg: s.outputKg, yieldPct: s.yieldPct })),
-    openBreakdowns: breakdowns.map(b => ({ card: b.card_no, area: b.area, machine: b.machine, status: b.status })),
-  }), [a, breakdowns, today, windowDays])
+  const yieldToday = todaySummary?.yieldPct
+  const outputToday = todaySummary?.outputKg ?? 0
+  const compRate = todaySummary?.complianceRate
+  const activeSections = todaySummary?.activeSections ?? 0
 
   const kpis = [
-    { label: 'Output today', value: a.outputToday.toLocaleString() + ' kg', icon: Scale, tone: 'info' as const },
-    { label: 'Bags today', value: String(a.bagsCount), icon: Package, tone: 'info' as const },
-    { label: 'Yield today', value: a.yieldToday ? a.yieldToday + '%' : '—', icon: Percent, tone: a.yieldToday && a.yieldToday < 70 ? 'warn' as const : 'ok' as const },
-    { label: 'Sections running', value: String(a.running), icon: Activity, tone: 'info' as const },
-    { label: 'Sign-offs pending', value: String(a.pending), icon: CheckCircle2, tone: a.pending ? 'warn' as const : 'ok' as const },
-    { label: 'Balance flags', value: String(a.flags), icon: AlertTriangle, tone: a.flags ? 'warn' as const : 'ok' as const },
-    { label: 'Open breakdowns', value: String(breakdowns.length), icon: Wrench, tone: breakdowns.length ? 'err' as const : 'ok' as const },
+    {
+      label: 'Yield today',
+      value: yieldToday != null ? `${yieldToday}%` : '—',
+      icon: Percent,
+      tone: (yieldToday != null && yieldToday < 70 ? 'warn' : 'ok') as 'ok' | 'warn',
+      info: 'Total output kg ÷ total input kg × 100, across all approved and in-progress sessions today. Calculated from prod_mass_balance (output groups B+C+D divided by total input A).',
+    },
+    {
+      label: 'Output today',
+      value: outputToday ? `${outputToday.toLocaleString()} kg` : '—',
+      icon: Scale,
+      tone: 'info' as const,
+      info: 'Sum of output bags (groups B+C+D) bagged today across all sections, from prod_mass_balance. Does not include sessions still in draft with no mass balance recorded.',
+    },
+    {
+      label: 'Check compliance',
+      value: compRate != null ? `${compRate}%` : '—',
+      icon: CheckCircle2,
+      tone: (compRate != null && compRate < 80 ? 'warn' : 'ok') as 'ok' | 'warn',
+      info: `Check events marked OK ÷ total check events × 100, over the last ${windowDays} days across all sections. Counts all startup, running, and shutdown check entries. Flagged or failed checks reduce this score.`,
+    },
+    {
+      label: 'Active sections',
+      value: String(activeSections),
+      icon: Activity,
+      tone: 'info' as const,
+      info: 'Number of production sections with a capture session currently in "Capturing" (draft) status today.',
+    },
   ]
+
+  const agg = useMemo(() => ({
+    today: todaySummary,
+    dailyYield,
+    yieldBySection,
+    openBreakdowns: breakdowns.map(b => ({ card: b.card_no, area: b.area, machine: b.machine, status: b.status })),
+  }), [todaySummary, dailyYield, yieldBySection, breakdowns])
 
   return (
     <div className="space-y-5">
-      {/* Dashboard leads with the metrics + graphs */}
+
+      {/* Header + refresh */}
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-text">Today · {format(new Date(), 'EEE d MMM')}</h2>
-        <button onClick={() => load(true)} className="inline-flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text">
-          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
-        </button>
+        <h2 className="text-sm font-semibold text-text">Production Dashboard · {format(new Date(), 'EEE d MMM')}</h2>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1">
+            {([7, 14, 30] as const).map(d => (
+              <button key={d} onClick={() => setWindowDays(d)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${windowDays === d ? 'bg-brand text-white' : 'text-text-muted hover:text-text'}`}>
+                {d}d
+              </button>
+            ))}
+          </div>
+          <button onClick={() => load(true)} className="inline-flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text">
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+
+      {/* Hero KPI strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {kpis.map(k => <Kpi key={k.label} {...k} loading={loading} />)}
       </div>
 
-      {/* Trends — segmented + window filter */}
+      {/* Main tab strip */}
       <div className="card p-4">
-        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-          <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit">
-            {([['output', 'Output'], ['yield', 'Yield'], ['flow', 'Flow & status']] as ['output' | 'yield' | 'flow', string][]).map(([k, label]) => (
-              <button key={k} onClick={() => setTab(k)}
-                className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-text-muted">Window</span>
-            <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1">
-              {[7, 14, 30].map(d => (
-                <button key={d} onClick={() => setWindowDays(d)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${windowDays === d ? 'bg-brand text-white' : 'text-text-muted hover:text-text'}`}>{d}d</button>
-              ))}
-            </div>
-          </div>
+        <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit mb-5">
+          {([
+            ['yields', 'Yields', TrendingUp],
+            ['machine', 'Machine KPIs', Cpu],
+            ['quality', 'Quality Integration', FlaskConical],
+          ] as [typeof tab, string, typeof TrendingUp][]).map(([k, label, Icon]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>
+              <Icon size={12} /> {label}
+            </button>
+          ))}
         </div>
 
-        {tab === 'output' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Chart title="Daily output" subtitle={`Kg bagged per day · last ${windowDays} days`}>
-              <BarChart data={a.days} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} /><YAxis tick={{ fontSize: 11 }} /><Tooltip />
-                <Bar dataKey="outputKg" name="kg out" fill={C.accent} radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </Chart>
-            <Chart title="Sessions per day" subtitle="Capture sessions opened">
-              <LineChart data={a.days} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} /><YAxis tick={{ fontSize: 11 }} allowDecimals={false} /><Tooltip />
-                <Line type="monotone" dataKey="sessions" stroke={C.azure} strokeWidth={2} dot={false} />
-              </LineChart>
-            </Chart>
+        {/* ── Yields tab ─────────────────────────────────────────────────────── */}
+        {tab === 'yields' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Chart
+                title="Daily yield %"
+                subtitle={`Output ÷ input per day · last ${windowDays} days`}
+                info="Each day's total output kg (sum of B+C+D output groups) divided by total input kg, expressed as %. The 70% reference line marks the minimum acceptable yield. Days with no sessions show as empty."
+              >
+                <LineChart data={dailyYield} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} />
+                  <YAxis tick={{ fontSize: 11 }} unit="%" domain={[0, 100]} />
+                  <Tooltip formatter={(v: any) => v != null ? `${v}%` : '—'} />
+                  <ReferenceLine y={70} stroke={C.warn} strokeDasharray="4 4" label={{ value: '70% min', fontSize: 9, fill: C.warn }} />
+                  <Line type="monotone" dataKey="yieldPct" name="Yield %" stroke={C.brand} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+                </LineChart>
+              </Chart>
+
+              <Chart
+                title="Yield by section"
+                subtitle={`Average yield % per section · last ${windowDays} days`}
+                info="Total output kg ÷ total input kg per section over the selected window. Only sections with at least one mass balance recorded are shown."
+              >
+                <BarChart
+                  data={yieldBySection.map(s => ({ ...s, name: sectionMeta(s.sectionId).name, code: sectionMeta(s.sectionId).code, color: sectionMeta(s.sectionId).colorHex, yieldPct: s.inputKg > 0 ? round1(s.outputKg / s.inputKg * 100) : 0 })).filter(s => s.inputKg > 0)}
+                  margin={{ top: 8, right: 8, left: -14, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="code" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} unit="%" domain={[0, 100]} />
+                  <Tooltip formatter={(v: any) => `${v}%`} />
+                  <ReferenceLine y={70} stroke={C.warn} strokeDasharray="4 4" />
+                  <Bar dataKey="yieldPct" name="Yield %" radius={[3, 3, 0, 0]}>
+                    {yieldBySection.map((s, i) => <Cell key={i} fill={sectionMeta(s.sectionId).colorHex} />)}
+                  </Bar>
+                </BarChart>
+              </Chart>
+            </div>
+
+            {/* Output throughput */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Chart
+                title="Daily output (kg)"
+                subtitle={`Total bagged output per day · last ${windowDays} days`}
+                info="Total kg of all output bags (groups B, C, D combined) per day across all sections. Reflects completed or in-progress mass balances."
+              >
+                <BarChart data={dailyYield} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="outputKg" name="kg out" fill={C.accent} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </Chart>
+
+              <Chart
+                title="Output vs input (kg)"
+                subtitle="Mass flow per day — input vs output"
+                info="Side-by-side of total input kg (raw material debagged) vs total output kg (product bagged) per day. The gap between the two bars represents moisture loss, dust extraction, and floor waste — all tracked in the mass balance."
+              >
+                <BarChart data={dailyYield} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Bar dataKey="inputKg" name="Input kg" fill={C.gray} radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="outputKg" name="Output kg" fill={C.accent} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </Chart>
+            </div>
           </div>
         )}
 
-        {tab === 'yield' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Chart title="Yield by section" subtitle={`Output ÷ input · last ${windowDays} days`}>
-              <BarChart data={a.bySection} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
-                <XAxis dataKey="code" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" /><Tooltip />
-                <Bar dataKey="yieldPct" name="yield %" radius={[3, 3, 0, 0]}>
-                  {a.bySection.map((s, i) => <Cell key={i} fill={s.color} />)}
-                </Bar>
-              </BarChart>
-            </Chart>
-            <Chart title="Overall yield trend" subtitle="Daily yield % across all sections">
-              <ComposedChart data={a.days} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={1} /><YAxis tick={{ fontSize: 11 }} unit="%" /><Tooltip />
-                <Line type="monotone" dataKey="yieldPct" name="yield %" stroke={C.brand} strokeWidth={2} dot={false} />
-                <ReferenceLine y={70} stroke={C.warn} strokeDasharray="4 4" />
-              </ComposedChart>
-            </Chart>
+        {/* ── Machine KPIs tab ─────────────────────────────────────────────── */}
+        {tab === 'machine' && (
+          <div className="space-y-6">
+
+            {/* VSD trend */}
+            {vsdByDay.length > 0 ? (
+              <Chart
+                title="Infeed VSD frequency — Sieving"
+                subtitle="Average Hz per day from hourly running checks"
+                info="Each hourly 'Infeed speed (VSD)' check reading from production.check_events (check_key = infeed_vsd) is averaged per day. Captured by floor operators during running phase of the sieving shift. Spec range is set by the supervisor in check_specs."
+              >
+                <ComposedChart data={vsdByDay} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} unit=" Hz" />
+                  <Tooltip formatter={(v: any) => v != null ? `${v} Hz` : '—'} />
+                  <Line type="monotone" dataKey="avgHz" name="Avg VSD (Hz)" stroke={C.azure} strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="minHz" name="Min (Hz)" stroke={C.gray} strokeWidth={1} dot={false} strokeDasharray="3 3" />
+                  <Line type="monotone" dataKey="maxHz" name="Max (Hz)" stroke={C.gray} strokeWidth={1} dot={false} strokeDasharray="3 3" />
+                </ComposedChart>
+              </Chart>
+            ) : (
+              <div className="rounded-xl border border-surface-rule p-6 text-center text-[12px] text-text-muted">
+                No VSD readings captured yet for the selected window. VSD readings are recorded hourly by floor operators during the sieving running phase.
+              </div>
+            )}
+
+            {/* Screen angle/speed table + compliance side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+              {/* Screen settings table */}
+              <div>
+                <div className="flex items-center gap-1 mb-3">
+                  <h3 className="text-sm font-semibold text-text">Screen settings — Sieving</h3>
+                  <InfoTip text="Indent screen angle (°) and speed (rpm) captured at startup each shift. Recorded once per session in the startup phase of machine checks. Changes here correlate with particle size distribution results — a shallower angle or lower speed reduces separation efficiency." />
+                </div>
+                {screenSettings.length === 0 ? (
+                  <div className="text-[12px] text-text-muted py-4">No screen settings captured for this window.</div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-surface-rule">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="bg-surface-dim border-b border-surface-rule">
+                          {['Date', 'Shift', 'Check', 'Value', 'Status'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-surface-rule">
+                        {screenSettings.map((r, i) => (
+                          <tr key={i} className="hover:bg-surface-dim/40">
+                            <td className="px-3 py-2 text-text-muted">{r.label}</td>
+                            <td className="px-3 py-2 capitalize text-text-muted">{r.shift || '—'}</td>
+                            <td className="px-3 py-2 text-text">{r.checkLabel}</td>
+                            <td className="px-3 py-2 font-mono font-semibold text-text">{r.value} {r.unit}</td>
+                            <td className="px-3 py-2">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${r.status === 'ok' ? 'bg-ok/10 text-ok' : r.status === 'flagged' ? 'bg-warn/10 text-warn' : 'bg-err/10 text-err'}`}>
+                                {r.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Check compliance by section */}
+              <div>
+                <div className="flex items-center gap-1 mb-3">
+                  <h3 className="text-sm font-semibold text-text">Check compliance by section</h3>
+                  <InfoTip text="For each section, the percentage of all machine check events (startup + running + shutdown) recorded as OK over the selected window. Compliance = OK count ÷ total checks × 100. Flagged checks indicate out-of-spec readings; failed checks trigger maintenance job cards." />
+                </div>
+                {checkCompliance.length === 0 ? (
+                  <div className="text-[12px] text-text-muted py-4">No check data captured for this window.</div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-surface-rule">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="bg-surface-dim border-b border-surface-rule">
+                          {['Section', 'Checks', 'OK', 'Flagged', 'Fail', 'Rate'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-surface-rule">
+                        {checkCompliance.map((r, i) => {
+                          const m = sectionMeta(r.sectionId)
+                          return (
+                            <tr key={i} className="hover:bg-surface-dim/40">
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="w-5 h-5 rounded flex items-center justify-center text-[8px] font-bold text-white" style={{ background: m.colorHex }}>{m.code}</span>
+                                  <span className="text-text">{m.name}</span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 font-mono text-text-muted">{r.total}</td>
+                              <td className="px-3 py-2 font-mono text-ok">{r.ok}</td>
+                              <td className="px-3 py-2 font-mono text-warn">{r.flagged}</td>
+                              <td className="px-3 py-2 font-mono text-err">{r.fail}</td>
+                              <td className="px-3 py-2"><CompBadge pct={r.ratePct} /></td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* VSD readings detail */}
+            {vsdByDay.length > 0 && (
+              <div className="rounded-xl border border-surface-rule p-4 bg-surface-dim/30">
+                <div className="flex items-center gap-1 mb-2">
+                  <h3 className="text-[12px] font-semibold text-text">VSD reading summary</h3>
+                  <InfoTip text="Summary statistics for the infeed VSD (Variable Speed Drive) frequency at the sieving section. The VSD controls how fast material feeds into the sieve. Higher Hz = faster feed rate. This affects throughput and particle separation — too fast reduces separation quality; too slow reduces throughput. Pair with PSD results in the Quality Integration tab." />
+                </div>
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+                  {vsdByDay.slice(-7).map(d => (
+                    <div key={d.date} className="text-center">
+                      <div className="text-[10px] text-text-muted">{d.label}</div>
+                      <div className="text-[16px] font-semibold text-azure" style={{ color: C.azure }}>{d.avgHz ?? '—'}</div>
+                      <div className="text-[9px] text-text-faint">{d.avgHz != null ? 'Hz avg' : 'no data'}</div>
+                      {d.readings > 1 && <div className="text-[9px] text-text-faint">{d.minHz}–{d.maxHz} Hz range</div>}
+                      {d.flagged > 0 && <div className="text-[9px] text-warn">⚠ {d.flagged} flagged</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {tab === 'flow' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Chart title="Where sessions sit" subtitle={`By status · last ${windowDays} days`}>
-              <PieChart>
-                <Pie data={a.statusDist} dataKey="n" nameKey="status" cx="50%" cy="50%" outerRadius={80} label={(e: any) => `${e.status} (${e.n})`} labelLine={false} fontSize={10}>
-                  {a.statusDist.map((_, i) => <Cell key={i} fill={PIE[i % PIE.length]} />)}
-                </Pie><Tooltip />
-              </PieChart>
-            </Chart>
-            <Chart title="Output by section" subtitle={`Kg bagged · last ${windowDays} days`}>
-              <BarChart data={a.variBySection} margin={{ top: 8, right: 8, left: -2, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
-                <XAxis dataKey="code" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} /><Tooltip />
-                <Bar dataKey="outputKg" name="kg out" radius={[3, 3, 0, 0]}>
-                  {a.variBySection.map((s, i) => <Cell key={i} fill={s.color} />)}
-                </Bar>
-              </BarChart>
-            </Chart>
+        {/* ── Quality Integration tab ──────────────────────────────────────── */}
+        {tab === 'quality' && (
+          <div className="space-y-6">
+
+            {/* Methodology note */}
+            <div className="rounded-xl border border-azure/20 bg-info/5 p-4 text-[12px] text-text-muted leading-relaxed" style={{ borderColor: `${C.azure}30`, background: `${C.azure}08` }}>
+              <div className="font-semibold text-text mb-1 flex items-center gap-1">
+                <FlaskConical size={14} style={{ color: C.azure }} />
+                PSD ↔ Machine settings correlation
+                <InfoTip text="Particle Size Distribution (PSD) results from qms.sd_runs are linked to machine settings from production.check_events by matching date and sieving section. VSD frequency and screen angle at startup are the primary machine variables that influence sieve fractions. A higher VSD Hz means faster throughput — which can reduce separation if the screen is not set correctly. Screen angle affects the trajectory of particles across the mesh." />
+              </div>
+              Sieve analysis results from QC (in-process runs) are paired with the sieving machine settings recorded that same day —
+              infeed VSD frequency (Hz) and screen angle (°). If PSD results trend out of spec, trace back to the machine configuration
+              that produced them. Spec ranges are per IPS-SIEV standards; screen parameters are set by the supervisor and validated
+              against traceable calibration records.
+            </div>
+
+            {/* PSD trend */}
+            {psdTrend.length > 0 ? (
+              <Chart
+                title="Particle size trend — sieving QC"
+                subtitle="Mean sieve fractions per day from in-process QC runs"
+                info="Mean % retained on each key sieve mesh per day, averaged across all in-process sieve runs for that day. Source: qms.sd_runs. The >18 mesh fraction is the primary sizing indicator for Coarse Leaf and Fine Leaf product grades. Deviations outside spec should prompt a check of VSD settings and screen configuration."
+              >
+                <LineChart data={psdTrend} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} unit="%" />
+                  <Tooltip formatter={(v: any) => v != null ? `${v}%` : '—'} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Line type="monotone" dataKey="avg18" name=">18 mesh %" stroke={C.accent} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+                  <Line type="monotone" dataKey="avg12" name=">12 mesh %" stroke={C.azure} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+                  <Line type="monotone" dataKey="avg10" name=">10 mesh %" stroke={C.warn} strokeWidth={1.5} dot={{ r: 2 }} connectNulls={false} strokeDasharray="4 2" />
+                </LineChart>
+              </Chart>
+            ) : (
+              <div className="rounded-xl border border-surface-rule p-8 text-center text-[12px] text-text-muted">
+                No PSD sieve analysis runs found for the selected window. QC runs from the Sieving quality page will appear here automatically.
+              </div>
+            )}
+
+            {/* Correlation table */}
+            {psdCorrelation.filter(r => r.avgVsd != null || r.screenAngle != null).length > 0 ? (
+              <div>
+                <div className="flex items-center gap-1 mb-3">
+                  <h3 className="text-sm font-semibold text-text">PSD + machine settings — by run</h3>
+                  <InfoTip text="Each row is one QC sieve analysis run from qms.sd_runs. The Avg VSD (Hz) and Screen Angle columns show the sieving machine settings recorded on the same date via check_events. Use this to identify which machine configurations produced passing or failing PSD results. Traceable to IPS-SIEV standards for sieving parameter calibration." />
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-surface-rule">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="bg-surface-dim border-b border-surface-rule">
+                        {['Date', 'Lot', 'Product', 'Variant', 'Avg VSD (Hz)', 'Screen Angle', '>18 %', '>12 %', 'BD', 'PSD Result'].map(h => (
+                          <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-surface-rule">
+                      {psdCorrelation.slice(0, 30).map((r, i) => (
+                        <tr key={i} className={`hover:bg-surface-dim/40 ${r.passStatus === 'Fail' ? 'bg-err/5' : ''}`}>
+                          <td className="px-3 py-2 text-text-muted whitespace-nowrap">{r.label}</td>
+                          <td className="px-3 py-2 font-mono text-text">{r.lot || '—'}</td>
+                          <td className="px-3 py-2 text-text whitespace-nowrap">{r.product || '—'}</td>
+                          <td className="px-3 py-2 text-text-muted">{r.variant || '—'}</td>
+                          <td className="px-3 py-2 font-mono font-semibold" style={{ color: r.avgVsd ? C.azure : undefined }}>
+                            {r.avgVsd != null ? `${r.avgVsd} Hz` : <span className="text-text-faint text-[10px]">no check data</span>}
+                          </td>
+                          <td className="px-3 py-2 font-mono">{r.screenAngle != null ? `${r.screenAngle}°` : <span className="text-text-faint text-[10px]">—</span>}</td>
+                          <td className="px-3 py-2 font-mono">{r.gt18 != null ? `${r.gt18}%` : '—'}</td>
+                          <td className="px-3 py-2 font-mono">{r.gt12 != null ? `${r.gt12}%` : '—'}</td>
+                          <td className="px-3 py-2 font-mono">{r.bulkDensity != null ? r.bulkDensity : '—'}</td>
+                          <td className="px-3 py-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${r.passStatus === 'Pass' ? 'bg-ok/10 text-ok' : r.passStatus === 'Fail' ? 'bg-err/10 text-err' : 'bg-surface-dim text-text-muted'}`}>
+                              {r.passStatus || '—'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[10px] text-text-faint mt-2">
+                  Machine settings linked by date — if a day has both QC sieve runs and check_events from sieving, they are paired here.
+                  Days without check data show "no check data" — capture will improve this correlation over time.
+                </p>
+              </div>
+            ) : psdRuns.length > 0 ? (
+              <div className="rounded-xl border border-surface-rule p-6 text-center text-[12px] text-text-muted">
+                PSD runs found but no machine check data for the same dates yet. As sieving checks (VSD, screen angle) are captured daily, they will automatically pair with QC sieve runs here.
+              </div>
+            ) : null}
+
           </div>
         )}
       </div>
 
-      {/* Quick links — compact, below the graphs */}
+      {/* Quick links */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] text-text-muted mr-1">Quick links</span>
         <QuickChip href="/production/capture" icon={ClipboardList} label="Capture" />
         <QuickChip href="/supervisor" icon={Users} label="Supervisor Hub" />
-        <QuickChip href="/production/roster" icon={CalendarRange} label="Shift Rosters" />
+        <QuickChip href="/production/roster" icon={CalendarRange} label="Rosters" />
         <QuickChip href="/production/floor-plan" icon={MapIcon} label="Floor Plan" />
+        <QuickChip href="/quality/sieving" icon={FlaskConical} label="Sieving QC" />
       </div>
 
-      {/* Solar + breakdowns */}
+      {/* Energy + breakdowns */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <EnergyWidget />
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-3">
             <Wrench size={15} className="text-text-muted" />
-            <h3 className="text-sm font-semibold text-text">Breakdowns affecting production</h3>
+            <h3 className="text-sm font-semibold text-text">Open breakdowns</h3>
           </div>
           {breakdowns.length === 0 ? (
             <div className="text-[12px] text-text-faint py-6 text-center">No open breakdowns. All clear.</div>
           ) : (
             <div className="space-y-2">
-              {breakdowns.slice(0, 8).map(b => (
+              {breakdowns.slice(0, 6).map((b: any) => (
                 <Link key={b.card_no} href="/maintenance/job-cards" className="flex items-center justify-between rounded-lg border border-err/20 bg-err/5 px-3 py-2 hover:border-err/40 transition">
                   <div>
                     <div className="text-[13px] font-medium text-text">{b.area}{b.machine ? ` · ${b.machine}` : ''}</div>
@@ -285,59 +729,28 @@ export default function ProductionDashboard() {
         </div>
       </div>
 
-      {/* AI analyst */}
-      <AiAnalystPanel
-        agg={agg}
-        insightsUrl="/api/production/dashboard-insights"
-        askUrl="/api/production/ask"
-        title="AI Production Analyst"
-        subtitle="Plain-English insights over your production data"
-        cacheKey="prod-insight"
-      />
-
-      {/* Operational trends — folded-in Analytics (yield · reliability · velocity) */}
-      <div className="card p-4">
-        <div className="mb-3">
-          <h3 className="text-sm font-semibold text-text">Operational trends</h3>
-          <p className="text-[11px] text-text-muted">Yield, count reliability &amp; inventory velocity · last 6 months</p>
-        </div>
-        <OperationalTrends dateFrom={format(subMonths(new Date(), 6), 'yyyy-MM-dd')} dateTo={today} />
-      </div>
-
-      {/* OEE / downtime / scrap — honest placeholder until capture exists */}
-      <div className="card p-4 border-dashed">
-        <div className="flex items-center gap-2 mb-1.5">
-          <GaugeIcon size={15} className="text-text-muted" />
-          <h3 className="text-sm font-semibold text-text">OEE, downtime &amp; scrap rate</h3>
-          <span className="text-[10px] font-medium px-2 py-0.5 rounded-lg bg-info/10 text-info">Coming next</span>
-        </div>
-        <p className="text-[12px] text-text-muted leading-relaxed">
-          Overall Equipment Effectiveness, machine downtime/stoppages and scrap &amp; defect rates need data the floor
-          doesn&apos;t capture yet (machine run-time, stoppage reasons, reject weights). The next phase adds a quick
-          stoppage log and scrap field to the capture screens — then these light up here automatically.
-        </p>
-      </div>
-
-      {/* Section status — at the very bottom */}
+      {/* Section status — today */}
       <div className="card overflow-hidden p-0">
-        <div className="px-4 py-3 border-b border-surface-rule"><h3 className="text-sm font-semibold text-text">Section status · today</h3></div>
+        <div className="px-4 py-3 border-b border-surface-rule flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text">Section status · today</h3>
+          <InfoTip text="Live status of each production section today. kg in/out from prod_mass_balance; yield % = output ÷ input × 100. Variance = input − output; a large positive variance (above tolerance) triggers a ⚠ warning. Status reflects the highest session status across all shifts today." />
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b border-surface-rule bg-surface-dim text-left">
-                {['Section', 'Status', 'kg in', 'kg out', 'Variance', 'Bags', ''].map((h, i) => (
+                {['Section', 'Status', 'kg in', 'kg out', 'Yield %', 'Variance', 'Bags', ''].map((h, i) => (
                   <th key={i} className="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-rule">
-              {a.todayRows.map(r => {
+              {todayRows.map(r => {
                 const m = sectionMeta(r.id)
                 const st = SESSION_STATUS[r.status] ?? SESSION_STATUS.none
                 const flag = r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG
-                const href = `/production/capture/${r.id}?date=${today}`
                 return (
-                  <tr key={r.id} className="hover:bg-surface-dim/60 transition-colors cursor-pointer" onClick={() => { window.location.href = href }}>
+                  <tr key={r.id} className="hover:bg-surface-dim/60 transition-colors cursor-pointer" onClick={() => { window.location.href = `/production/capture/${r.id}?date=${today}` }}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
@@ -349,6 +762,9 @@ export default function ProductionDashboard() {
                     <td className="px-4 py-3"><span className={`text-[10px] font-medium px-2 py-1 rounded-lg ${st.cls}`}>{st.label}</span></td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{r.kgIn ? r.kgIn.toFixed(1) : '—'}</td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text">{r.kgOut ? r.kgOut.toFixed(1) : '—'}</td>
+                    <td className="px-4 py-3 font-mono text-[12px]" style={{ color: r.yieldPct != null && r.yieldPct < 70 ? C.warn : C.ok }}>
+                      {r.yieldPct != null ? `${r.yieldPct}%` : '—'}
+                    </td>
                     <td className={`px-4 py-3 font-mono text-[12px] ${flag ? 'text-warn font-bold' : 'text-text-muted'}`}>
                       {r.kgIn ? `${r.variance > 0 ? '+' : ''}${r.variance.toFixed(1)}` : '—'}{flag ? ' ⚠' : ''}
                     </td>
@@ -360,40 +776,30 @@ export default function ProductionDashboard() {
             </tbody>
           </table>
         </div>
-        <div className="px-4 py-2 border-t border-surface-rule text-[10px] text-text-muted">Auto-refreshes every 2 min · {format(new Date(), 'HH:mm')}</div>
+        <div className="px-4 py-2 border-t border-surface-rule text-[10px] text-text-muted">
+          Auto-refreshes every 2 min · {format(new Date(), 'HH:mm')}
+        </div>
       </div>
-    </div>
-  )
-}
 
-function Kpi({ label, value, icon: Icon, tone, loading }: { label: string; value: string; icon: typeof Package; tone: 'ok' | 'warn' | 'err' | 'info'; loading: boolean }) {
-  const accent = { ok: '#1A7A3C', warn: '#B85C0A', err: '#B81C1C', info: '#2A7CB8' }[tone]
-  const tint   = { ok: 'rgba(26,122,60,0.06)', warn: 'rgba(184,92,10,0.06)', err: 'rgba(184,28,28,0.06)', info: 'rgba(42,124,184,0.05)' }[tone]
-  return (
-    <div className="rounded-xl border border-surface-rule p-4" style={{ borderLeft: `3px solid ${accent}`, background: tint }}>
-      <div className="flex items-center justify-between">
-        <Icon size={14} style={{ color: accent }} />
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: accent }} />
+      {/* AI analyst */}
+      <AiAnalystPanel
+        agg={agg}
+        insightsUrl="/api/production/dashboard-insights"
+        askUrl="/api/production/ask"
+        title="AI Production Analyst"
+        subtitle="Plain-English insights over your production data"
+        cacheKey="prod-insight"
+      />
+
+      {/* Operational trends */}
+      <div className="card p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-text">Operational trends</h3>
+          <p className="text-[11px] text-text-muted">Yield, count reliability &amp; inventory velocity · last 6 months</p>
+        </div>
+        <OperationalTrends dateFrom={format(new Date(new Date().setMonth(new Date().getMonth() - 6)), 'yyyy-MM-dd')} dateTo={today} />
       </div>
-      <div className="text-[22px] leading-none font-semibold mt-2" style={{ color: accent }}>{loading ? '—' : value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-text-muted mt-1">{label}</div>
-    </div>
-  )
-}
 
-function QuickChip({ href, icon: Icon, label }: { href: string; icon: typeof Package; label: string }) {
-  return (
-    <Link href={href} className="inline-flex items-center gap-1.5 rounded-lg border border-surface-rule bg-surface-card px-2.5 py-1.5 text-[12px] text-text hover:border-brand/40 hover:text-brand transition">
-      <Icon size={13} /> {label}
-    </Link>
-  )
-}
-
-function Chart({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactElement }) {
-  return (
-    <div>
-      <div className="mb-2"><h3 className="text-sm font-semibold text-text">{title}</h3><p className="text-[11px] text-text-muted">{subtitle}</p></div>
-      <ResponsiveContainer width="100%" height={240}>{children}</ResponsiveContainer>
     </div>
   )
 }
