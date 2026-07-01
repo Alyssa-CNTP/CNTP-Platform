@@ -1,252 +1,225 @@
 'use client'
 
-// app/(app)/maintenance/technicians/page.tsx
-// Maintenance manager PIN management — view all technicians, set or reset PINs,
-// toggle active status. Only visible to maintenance_manager and IT roles.
-
 import { useState, useEffect } from 'react'
-import { useAuth } from '@/lib/auth/context'
 import { useRouter } from 'next/navigation'
-import { Loader2, KeyRound, CheckCircle, XCircle, RefreshCw, Eye, EyeOff, ShieldCheck, AlertTriangle } from 'lucide-react'
+import {
+  Loader2, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Search, KeyRound,
+} from 'lucide-react'
+import { useAuth } from '@/lib/auth/context'
 
 interface Tech {
-  user_id:      string | null
-  full_name:    string
-  role:         string
-  is_active:    boolean
-  has_pin:      boolean   // whether tech_auth row exists
-  on_shift:     boolean
-  unlinked:     boolean   // on roster but not yet in shared.app_roles
+  full_name: string
+  role:      string
+  has_pin:   boolean
+  is_active: boolean
+  on_shift:  boolean
+  user_id:   string | null
 }
 
 interface FormState {
-  pin:    string
-  saving: boolean
-  error:  string
-  done:   boolean
+  full_name: string
+  pin:       string
+  is_active: boolean
 }
 
-function initForm(): FormState { return { pin: '', saving: false, error: '', done: false } }
+const ROLE_LABELS: Record<string, string> = {
+  maintenance_tech: 'Tech',
+  maintenance_asst: 'Asst',
+}
+
+const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">{label}</label>
+      {children}
+    </div>
+  )
+}
 
 export default function TechnicianPinsPage() {
-  const auth   = useRouter()
-  const { role, department, isFullAdmin, isIT } = useAuth() as any
   const router = useRouter()
-
+  const { role, isFullAdmin, isIT } = useAuth() as any
   const canManage = isFullAdmin || isIT || role === 'maintenance_manager'
 
-  const [techs,   setTechs]   = useState<Tech[]>([])
-  const [loading, setLoading] = useState(true)
-  const [forms,   setForms]   = useState<Record<string, FormState>>({})
-  const [showPin, setShowPin] = useState<Record<string, boolean>>({})
+  const [techs,      setTechs]      = useState<Tech[]>([])
+  const [loading,    setLoading]    = useState(true)
+  const [editing,    setEditing]    = useState<FormState | null>(null)
+  const [saving,     setSaving]     = useState(false)
+  const [error,      setError]      = useState<string | null>(null)
+  const [query,      setQuery]      = useState('')
+  const [activeOnly, setActiveOnly] = useState(true)
 
-  useEffect(() => {
-    if (!canManage) { router.replace('/maintenance/job-cards'); return }
-    fetchTechs()
-  }, [canManage]) // eslint-disable-line react-hooks/exhaustive-deps
+  async function load() {
+    const res  = await fetch('/api/maintenance/technicians/manage')
+    const data = await res.json()
+    setTechs(Array.isArray(data) ? data : [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
 
-  async function fetchTechs() {
-    setLoading(true)
+  function startEdit(tech: Tech) {
+    setError(null)
+    setEditing({ full_name: tech.full_name, pin: '', is_active: tech.is_active })
+  }
+
+  async function save() {
+    if (!editing) return
+    if (!/^\d{4}$/.test(editing.pin)) { setError('PIN must be exactly 4 digits'); return }
+    setSaving(true); setError(null)
     try {
-      const res  = await fetch('/api/maintenance/technicians/manage')
-      const data = await res.json()
-      if (Array.isArray(data)) {
-        setTechs(data)
-        const initial: Record<string, FormState> = {}
-        data.forEach((t: Tech) => { if (t.user_id) initial[t.user_id] = initForm() })
-        setForms(initial)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function setField(userId: string, field: keyof FormState, value: any) {
-    setForms(f => ({ ...f, [userId]: { ...f[userId], [field]: value } }))
-  }
-
-  async function savePin(tech: Tech) {
-    if (!tech.user_id) return
-    const form = forms[tech.user_id]
-    if (!form) return
-    if (!/^\d{4}$/.test(form.pin)) {
-      setField(tech.user_id, 'error', 'PIN must be exactly 4 digits')
-      return
-    }
-    setField(tech.user_id, 'saving', true)
-    setField(tech.user_id, 'error', '')
-
-    const res  = await fetch('/api/maintenance/technicians', {
-      method:  tech.has_pin ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ user_id: tech.user_id, pin: form.pin }),
-    })
-    const json = await res.json()
-
-    if (!res.ok) {
-      setField(tech.user_id, 'error',  json.error ?? 'Save failed')
-      setField(tech.user_id, 'saving', false)
-      return
-    }
-
-    setField(tech.user_id, 'saving', false)
-    setField(tech.user_id, 'done',   true)
-    setField(tech.user_id, 'pin',    '')
-    setTechs(ts => ts.map(t => t.user_id === tech.user_id ? { ...t, has_pin: true } : t))
-    setTimeout(() => setField(tech.user_id, 'done', false), 3000)
+      const res  = await fetch('/api/maintenance/technicians', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ person_name: editing.full_name, pin: editing.pin }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Save failed')
+      setEditing(null)
+      await load()
+    } catch (e: any) { setError(e.message) }
+    setSaving(false)
   }
 
   async function toggleActive(tech: Tech) {
-    const next = !tech.is_active
-    setTechs(ts => ts.map(t => t.user_id === tech.user_id ? { ...t, is_active: next } : t))
+    // Only works for provisioned techs (has user_id).
+    if (!tech.user_id) return
     await fetch('/api/maintenance/technicians', {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ user_id: tech.user_id, active: next }),
-    })
+      body:    JSON.stringify({ person_name: tech.full_name, active: !tech.is_active }),
+    }).catch(() => {})
+    await load()
   }
 
-  if (loading) {
+  const q = query.trim().toLowerCase()
+  const filtered = techs
+    .filter(t => !activeOnly || t.is_active)
+    .filter(t => q === '' || t.full_name.toLowerCase().includes(q))
+
+  if (!canManage) {
     return (
-      <div className="p-6 max-w-3xl mx-auto">
-        <div className="card p-8 flex items-center justify-center">
-          <Loader2 size={22} className="animate-spin text-stone-300" />
-        </div>
+      <div className="flex flex-col items-center justify-center h-64 gap-2 text-center px-4">
+        <ShieldCheck size={24} className="text-stone-400" />
+        <p className="text-[14px] font-medium text-text">Maintenance manager and IT only</p>
+        <button onClick={() => router.push('/maintenance/job-cards')} className="text-[12px] text-brand hover:underline">← Back</button>
       </div>
     )
   }
 
-  const onShift  = techs.filter(t => t.on_shift)
-  const offShift = techs.filter(t => !t.on_shift)
-
   return (
-    <div className="p-4 sm:p-6 max-w-3xl mx-auto">
-      <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-text">Technician PINs</h1>
-          <p className="text-sm text-text-muted mt-1">
-            Set or reset 4-digit PINs for maintenance technician tablet login.
+    <div className="px-4 py-5 max-w-[820px] space-y-5">
+
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <h1 className="font-semibold text-[22px] text-text leading-tight">Technician PINs</h1>
+          <p className="text-[12px] text-text-muted mt-0.5">
+            Technicians sign in with their name + 4-digit PIN. Names are sourced from the shift roster.
           </p>
         </div>
-        <button onClick={fetchTechs} className="btn btn-ghost flex items-center gap-1.5 text-sm">
-          <RefreshCw size={14} /> Refresh
-        </button>
       </div>
 
-      {techs.length === 0 ? (
-        <div className="card p-8 text-center text-sm text-text-muted">
-          No maintenance technicians found in app_roles. Add them via the staff directory first.
+      {!loading && techs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200 bg-white flex-1 min-w-[200px] focus-within:border-brand">
+            <Search size={15} className="text-stone-400" />
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search technicians…"
+              className="flex-1 py-2.5 text-[13px] outline-none bg-transparent" />
+          </div>
+          <button onClick={() => setActiveOnly(a => !a)}
+            className={`px-3 py-2.5 rounded-xl border text-[12px] font-medium transition-colors ${activeOnly ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
+            {activeOnly ? 'Active only' : 'Showing all'}
+          </button>
+          <span className="text-[12px] text-text-muted font-mono">{filtered.length} / {techs.length}</span>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center h-40"><Loader2 size={22} className="animate-spin text-text-muted" /></div>
+      ) : techs.length === 0 ? (
+        <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-[13px] text-text-muted">
+          No maintenance technicians found in the shift roster.
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-[13px] text-text-muted">
+          No technicians match "{query}".
         </div>
       ) : (
-        <div className="space-y-6">
-          {[{ label: 'On shift now', list: onShift }, { label: 'Off shift', list: offShift }].map(group =>
-            group.list.length === 0 ? null : (
-              <div key={group.label}>
-                <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider mb-3">
-                  {group.label}
-                </p>
-                <div className="space-y-3">
-                  {group.list.map(tech => {
-                    const form = forms[tech.user_id] ?? initForm()
-                    const show = !!showPin[tech.user_id]
-                    const key = tech.user_id ?? tech.full_name
-                    return (
-                      <div key={key} className={`card p-4 flex flex-col sm:flex-row sm:items-center gap-4 ${!tech.is_active ? 'opacity-60' : ''}`}>
-                        {/* Identity */}
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <div className="w-10 h-10 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
-                            <span className="font-mono font-bold text-[13px] text-stone-600">
-                              {tech.full_name.slice(0, 2).toUpperCase()}
-                            </span>
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-medium text-[15px] text-text truncate">{tech.full_name}</p>
-                            <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                              <span className="text-[11px] text-text-muted">{tech.role}</span>
-                              {tech.unlinked
-                                ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warn bg-warn/10 rounded-full px-2 py-0.5"><AlertTriangle size={10} /> Not in Users</span>
-                                : tech.has_pin
-                                  ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-ok bg-ok/10 rounded-full px-2 py-0.5"><ShieldCheck size={10} /> PIN set</span>
-                                  : <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warn bg-warn/10 rounded-full px-2 py-0.5"><KeyRound size={10} /> No PIN</span>
-                              }
-                              {tech.on_shift && (
-                                <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">On shift</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* PIN input — disabled for unlinked techs */}
-                        {tech.unlinked ? (
-                          <p className="text-[12px] text-text-muted italic">Add this person in Users & Roles first to assign a PIN.</p>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <div className="relative">
-                              <input
-                                type={show ? 'text' : 'password'}
-                                inputMode="numeric"
-                                maxLength={4}
-                                placeholder="New PIN"
-                                value={form?.pin ?? ''}
-                                onChange={e => {
-                                  const v = e.target.value.replace(/\D/g, '').slice(0, 4)
-                                  setField(tech.user_id!, 'pin', v)
-                                  setField(tech.user_id!, 'error', '')
-                                  setField(tech.user_id!, 'done', false)
-                                }}
-                                className="w-28 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[15px] font-mono text-center focus:outline-none focus:border-brand"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setShowPin(s => ({ ...s, [tech.user_id!]: !show }))}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
-                              >
-                                {show ? <EyeOff size={14} /> : <Eye size={14} />}
-                              </button>
-                            </div>
-                            <button
-                              onClick={() => savePin(tech)}
-                              disabled={!form || form.saving || (form.pin?.length ?? 0) !== 4}
-                              className="bg-brand text-white rounded-lg px-4 py-2 text-[13px] font-semibold disabled:opacity-50 flex items-center gap-1.5"
-                            >
-                              {form?.saving
-                                ? <Loader2 size={13} className="animate-spin" />
-                                : form?.done
-                                  ? <CheckCircle size={13} />
-                                  : <KeyRound size={13} />
-                              }
-                              {form?.done ? 'Saved' : tech.has_pin ? 'Reset' : 'Set PIN'}
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Active toggle — only for linked techs */}
-                        {!tech.unlinked && (
-                          <button
-                            onClick={() => toggleActive(tech)}
-                            title={tech.is_active ? 'Deactivate' : 'Activate'}
-                            className={`shrink-0 rounded-lg px-3 py-2 text-[12px] font-semibold flex items-center gap-1.5 ${
-                              tech.is_active
-                                ? 'text-text-muted bg-stone-100 hover:bg-stone-200'
-                                : 'text-ok bg-ok/10 hover:bg-ok/20'
-                            }`}
-                          >
-                            {tech.is_active ? <XCircle size={13} /> : <CheckCircle size={13} />}
-                            {tech.is_active ? 'Active' : 'Inactive'}
-                          </button>
-                        )}
-
-                        {/* Inline error */}
-                        {form?.error && (
-                          <p className="w-full text-[12px] text-err sm:col-span-full">{form.error}</p>
-                        )}
-                      </div>
-                    )
-                  })}
+        <div className="space-y-2">
+          {filtered.map(tech => (
+            <div key={tech.full_name} className={`flex items-center gap-3 px-4 py-3 bg-white border border-stone-200 rounded-2xl ${!tech.is_active ? 'opacity-50' : ''}`}>
+              <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
+                <span className="font-mono font-bold text-[11px] text-stone-600">
+                  {tech.full_name.slice(0, 2).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-[14px] text-text flex items-center gap-2 flex-wrap">
+                  {tech.full_name}
+                  <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">
+                    {ROLE_LABELS[tech.role] ?? tech.role}
+                  </span>
+                  {tech.on_shift && (
+                    <span className="text-[10px] font-semibold text-brand bg-brand/10 px-1.5 py-0.5 rounded">On shift</span>
+                  )}
+                  {!tech.has_pin && (
+                    <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>
+                  )}
                 </div>
               </div>
-            )
-          )}
+              {tech.user_id && (
+                <button onClick={() => toggleActive(tech)} title={tech.is_active ? 'Deactivate' : 'Activate'} className="p-2 text-stone-400 hover:text-text">
+                  {tech.is_active ? <UserCheck size={16} className="text-ok" /> : <UserX size={16} />}
+                </button>
+              )}
+              <button onClick={() => startEdit(tech)} className="p-2 text-stone-400 hover:text-brand">
+                <Pencil size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-stone-100">
+              <span className="font-semibold text-[16px] text-text">Set PIN — {editing.full_name}</span>
+              <button onClick={() => setEditing(null)} className="p-1.5 rounded-lg hover:bg-stone-100 text-stone-400"><X size={16} /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <Field label="4-digit PIN *">
+                <input
+                  value={editing.pin}
+                  inputMode="numeric"
+                  maxLength={4}
+                  autoFocus
+                  onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                  className={INP + ' font-mono tracking-[0.4em] text-center text-[18px]'}
+                  placeholder="••••"
+                />
+              </Field>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" checked={editing.is_active}
+                  onChange={e => setEditing({ ...editing, is_active: e.target.checked })}
+                  className="w-4 h-4 accent-brand" />
+                <span className="text-[13px] text-text">Active (can sign in)</span>
+              </label>
+
+              {error && <p className="text-[12px] text-err">{error}</p>}
+
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => setEditing(null)} className="flex-1 py-3 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500">Cancel</button>
+                <button onClick={save} disabled={saving} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40">
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />} Save PIN
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
