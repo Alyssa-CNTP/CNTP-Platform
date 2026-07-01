@@ -27,6 +27,7 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
+import { checkOutlier } from '@/lib/utils/outliers'
 import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
@@ -593,19 +594,18 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   const orderViolations = checkSieveOrder(row)
 
   // ── Variation / outlier detection vs the other samples in this batch ──
-  // Mirrors the sieving dashboard logic: flag a value only when the batch
-  // already has real spread (std > floor) AND the new value sits >2.5 std away.
+  // Flag a value only when the batch already has real spread (std > floor)
+  // AND the new value sits >2.5 std away. Non-blocking, but requires an
+  // explicit "confirm anyway" tick before saving — catches typos without
+  // ever fully locking someone out of a genuinely unusual reading.
   const priorSamples = (batch.samples || []).filter((s:any) => s.id !== (initialRow as any)?.id)
   const anomalyWarnings: string[] = (() => {
     const warns: string[] = []
     const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
       const n = parseFloat(cur); if (isNaN(n)) return
       const hist = priorSamples.map((s:any) => parseFloat(s[key])).filter((v:number) => !isNaN(v))
-      if (hist.length < 3) return
-      const mean = hist.reduce((a:number,b:number)=>a+b,0)/hist.length
-      const std  = Math.sqrt(hist.map((v:number)=>(v-mean)**2).reduce((a:number,b:number)=>a+b,0)/hist.length)
-      if (std > stdFloor && Math.abs(n-mean) > 2.5*std)
-        warns.push(`${label}: ${n}${unit} far from batch avg ${mean.toFixed(1)}${unit}`)
+      const result = checkOutlier(n, hist, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from batch avg ${result.mean.toFixed(1)}${unit}`)
     }
     if (row.has_sieve) PAST_SIEVE_COLS.forEach(c => checkField(c.key, c.label, row[c.key], 1.0, '%'))
     if (row.has_mb) {
@@ -615,11 +615,13 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     checkField('hourly_temp', 'Temp', row.hourly_temp, 1.0, '°C')
     return warns
   })()
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   function submit() {
     if (!row.time.trim())     { alert('Time is required'); return }
     if (!row.date)            { alert('Date is required'); return }
     if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
+    if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
     onSave(row)
@@ -791,23 +793,28 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             </div>
           )}
 
-          {/* Variation / outlier warnings (non-blocking) */}
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
           {anomalyWarnings.length > 0 && (
             <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
               <div className="flex items-center gap-2 font-bold text-[12px] text-warn mb-1">
                 <AlertTriangle size={14} /> Unusual variation — please double-check before saving
               </div>
-              <ul className="list-disc pl-5 space-y-0.5">
+              <ul className="list-disc pl-5 space-y-0.5 mb-2">
                 {anomalyWarnings.map((w,i) => (
                   <li key={i} className="text-[11px] text-warn">{w}</li>
                 ))}
               </ul>
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
+                <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
             </div>
           )}
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={submit} className="px-6 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">
+            <button onClick={submit} disabled={anomalyWarnings.length > 0 && !confirmAnomaly}
+              className="px-6 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
               {isEdit ? '✏️ Update Sample' : `💾 Save Sample #${sampleIndex+1}`}
             </button>
           </div>

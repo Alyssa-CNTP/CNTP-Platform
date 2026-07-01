@@ -18,6 +18,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Outlier/typo prevention in pasteuriser, granule, sieving; new sieving Week/Month chart)
+
+**Files changed:**
+- `lib/utils/outliers.ts` (new)
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Added a shared `checkOutlier`/`mean`/`stdDev` helper. A value is flagged only when the comparison history already has real spread (std > a field-specific floor) **and** the new value sits more than 2.5σ from the mean — avoids false positives on tightly-controlled fields.
+- **Outlier warnings now require explicit confirmation before saving** (previously a passive banner you could ignore): a "Yes, these values are correct" checkbox appears next to the warning and the Save button is disabled until it's ticked. Applied to:
+  - **Pasteuriser** (already had moisture/BD/temp/sieve-% checks vs. other samples in the batch) — added the confirm-gate.
+  - **Granule** (had no statistical check at all, only a hard spec-max fail) — added moisture/BD/dryer-temp outlier detection vs. other samples in the run, to both the Add and Edit sample modals, with the confirm-gate.
+  - **Sieving** (only checked sieve mesh %) — extended to also cover Bulk Density and Leaf Shade, with the confirm-gate on Save Run.
+- **New sieving chart** — bounded to **This Week** (by day) or **This Month** (by week-of-month), never the full history, so it can't become unreadable again. Two views: **Mesh Trend** (every sieve fraction as its own line, like the original chart) and **Outliers** (a chosen metric — Bulk Density, Leaf Shade, or a sieve fraction — plotted with a ±2.5σ band; out-of-band points are red and clickable to scroll/highlight the matching table row).
+
+---
+
 ## 2026-07-01 — Alyssa (roster auto-rotation, drag-and-drop, publish to maintenance)
 
 **Files changed:**

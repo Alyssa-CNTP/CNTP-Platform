@@ -7,9 +7,14 @@
 //        comment, pa_level, pass_status, violations[], gram_values{}, sieve_results{})
 
 import React, { useState, useEffect, useCallback } from 'react'
+import {
+  ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  Legend, ResponsiveContainer, ReferenceLine, Cell,
+} from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDate } from '@/lib/utils/formatDate'
+import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -321,6 +326,186 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
   )
 }
 
+// ─── SievingOutlierChart ────────────────────────────────────────────────────
+// Bounded to "This Week" (bucketed by day) or "This Month" (bucketed by
+// week-of-month) — never the full history — so it never becomes the
+// unreadable "all runs" chart it replaced. Two views share that same window:
+//   Mesh Trend — every sieve fraction as its own line (like the old chart)
+//   Outliers   — one chosen metric plotted with a ±2.5σ band, flagging points
+//                 outside it (Bulk Density, Leaf Shade, or a sieve fraction)
+
+const TREND_LINE_COLORS = ['#ef4444','#f97316','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#06b6d4','#6b7280','#84cc16']
+
+function startOfWeek(d: Date): Date {
+  const s = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const dow = s.getDay() || 7 // Monday-based week
+  s.setDate(s.getDate() - dow + 1)
+  return s
+}
+
+function dayBucketsThisWeek(): { key: string; label: string }[] {
+  const start = startOfWeek(new Date())
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start); d.setDate(start.getDate() + i)
+    return { key: isoDate(d), label: d.toLocaleDateString('en-ZA', { weekday: 'short' }) + ' ' + d.getDate() }
+  })
+}
+
+function weekBucketsThisMonth(): { key: string; label: string; from: Date; to: Date }[] {
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  const buckets: { key: string; label: string; from: Date; to: Date }[] = []
+  let cursor = new Date(monthStart)
+  let i = 1
+  while (cursor <= monthEnd) {
+    const from = new Date(cursor)
+    const to   = new Date(Math.min(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 6).getTime(), monthEnd.getTime()))
+    buckets.push({ key: `W${i}`, label: `Week ${i}`, from, to })
+    cursor.setDate(cursor.getDate() + 7)
+    i++
+  }
+  return buckets
+}
+
+function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
+  runs: any[]; activeProduct: string; specDef: any; onPointClick?: (runId: any) => void
+}) {
+  const [view, setView]           = useState<'week' | 'month'>('week')
+  const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
+  const meshOptions = sdGetMesh(activeProduct, 'CON')
+  const metricOptions = [
+    { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
+    ...(specDef.hasLeafShade ? [{ key: 'leafShade', label: 'Leaf Shade', suffix: '' }] : []),
+    ...meshOptions.map(m => ({ key: m, label: m.replace(' (%)', ''), suffix: '%' })),
+  ]
+  const [metric, setMetric] = useState(metricOptions[0].key)
+  const metricDef = metricOptions.find(m => m.key === metric) || metricOptions[0]
+
+  // Bucket definitions for the selected window — day-of-week for "This Week",
+  // week-of-month for "This Month". Runs outside the window are excluded.
+  const dayBuckets  = dayBucketsThisWeek()
+  const weekBuckets = weekBucketsThisMonth()
+  const bucketOf = (dateStr: string): string | null => {
+    if (view === 'week') {
+      const key = dateStr
+      return dayBuckets.some(b => b.key === key) ? key : null
+    }
+    const d = new Date(dateStr + 'T12:00:00')
+    const b = weekBuckets.find(wb => d >= wb.from && d <= wb.to)
+    return b ? b.key : null
+  }
+  const bucketLabels = view === 'week' ? dayBuckets : weekBuckets
+
+  const inWindow = runs.filter((r: any) => r.date && bucketOf(r.date) != null)
+
+  // ── Mesh Trend data: one row per bucket, one column per sieve fraction (mean) ──
+  const trendData = bucketLabels.map(b => {
+    const rows = inWindow.filter((r: any) => r.runType === 'in-process' && bucketOf(r.date) === b.key)
+    const entry: any = { period: b.label }
+    meshOptions.forEach(m => {
+      const vals = rows.map((r: any) => parseFloat(r[m])).filter((v: number) => !isNaN(v))
+      entry[m] = vals.length ? +mean(vals).toFixed(1) : null
+    })
+    return entry
+  })
+  const hasTrendData = trendData.some(row => meshOptions.some(m => row[m] != null))
+
+  // ── Outliers data: every run in the window for the chosen metric, ±2.5σ band ──
+  const points = inWindow
+    .map((r: any) => ({ period: bucketLabels.find(b => b.key === bucketOf(r.date))?.label || '', value: parseFloat(r[metric]), run: r }))
+    .filter((p: any) => !isNaN(p.value))
+  const values = points.map((p: any) => p.value)
+  const m = mean(values), sd = stdDev(values)
+  const upper = m + 2.5 * sd, lower = m - 2.5 * sd
+  const scatterData = points.map((p: any) => ({
+    period: p.period, value: p.value, runId: p.run.id,
+    label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
+    isOutlier: sd > 0 && (p.value > upper || p.value < lower),
+  }))
+  const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
+
+  return (
+    <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
+      <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
+          {(['trend','outliers'] as const).map(t => (
+            <button key={t} onClick={()=>setChartType(t)}
+              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:chartType===t?'#166534':'#fff', color:chartType===t?'#fff':'#374151' }}>
+              {t==='trend'?'📈 Mesh Trend':'⚠ Outliers'}
+            </button>
+          ))}
+        </div>
+        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
+          {(['week','month'] as const).map(v => (
+            <button key={v} onClick={()=>setView(v)}
+              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
+              {v==='week'?'This Week':'This Month'}
+            </button>
+          ))}
+        </div>
+        {chartType==='outliers' && (
+          <select value={metric} onChange={e=>setMetric(e.target.value)}
+            style={{ padding:'4px 8px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6, background:'#fff' }}>
+            {metricOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+        )}
+        {chartType==='outliers' && outlierCount>0 && (
+          <span style={{ fontSize:11, fontWeight:700, color:'#dc2626', marginLeft:'auto' }}>
+            ⚠ {outlierCount} outlier{outlierCount!==1?'s':''} (&gt;2.5σ from mean)
+          </span>
+        )}
+      </div>
+
+      {chartType==='trend' ? (
+        !hasTrendData ? (
+          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+            No in-process sieve results {view==='week'?'this week':'this month'} yet.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={trendData} margin={{ top:8, right:20, left:0, bottom:4 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
+              <XAxis dataKey="period" tick={{ fontSize:10 }} />
+              <YAxis tick={{ fontSize:10 }} unit="%" width={40} />
+              <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
+              <Legend wrapperStyle={{ fontSize:10 }} />
+              {meshOptions.map((m,i) => (
+                <Line key={m} dataKey={m} name={m.replace(' (%)','')} stroke={TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]}
+                  strokeWidth={2} dot={{ r:3 }} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        )
+      ) : (
+        scatterData.length < 3 ? (
+          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+            Not enough {metricDef.label.toLowerCase()} data {view==='week'?'this week':'this month'} to plot outliers.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
+              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} />
+              <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
+              <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
+                labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
+              {!isNaN(m) && <ReferenceLine y={m} stroke="#6b7280" strokeDasharray="4 2" label={{ value:'mean', fontSize:9, fill:'#6b7280' }} />}
+              {sd>0 && <ReferenceLine y={upper} stroke="#f59e0b" strokeDasharray="3 3" />}
+              {sd>0 && <ReferenceLine y={lower} stroke="#f59e0b" strokeDasharray="3 3" />}
+              <Scatter data={scatterData} onClick={(d:any)=>onPointClick?.(d?.runId ?? d?.payload?.runId)} cursor="pointer">
+                {scatterData.map((d:any,i:number) => <Cell key={i} fill={d.isOutlier?'#dc2626':'#3b82f6'} />)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        )
+      )}
+    </div>
+  )
+}
+
 function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void
@@ -504,11 +689,14 @@ export default function SievingPage() {
   const [errors,         setErrors]         = useState<Record<string,string>>({})
   const [isRetest,       setIsRetest]       = useState(false)
   const [anomalyWarn,    setAnomalyWarn]    = useState('')
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
   const [lotMsg,         setLotMsg]         = useState('')
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
   const [rLookup,        setRLookup]        = useState<Record<string,string>>({})
   const [leafShadeLookup,setLeafShadeLookup]= useState<Record<string,number>>({})
   const [tableCollapsed, setTableCollapsed] = useState(false)
+  const [showOutlierChart, setShowOutlierChart] = useState(true)
+  const [chartHighlightId, setChartHighlightId] = useState<any>(null)
 
   // Load PA levels from raw material records for lot auto-fill
   useEffect(() => {
@@ -731,30 +919,36 @@ export default function SievingPage() {
     setGramValues(newGrams)
     const pcts = calcPercents(newGrams)
     setForm((f: any) => ({ ...f, ...pcts }))
-    // Anomaly detection
+    // Simple absolute sanity check on total grams (not a statistical outlier check).
     const meshKeys = activeMesh.map(m => m.replace(' (%)',' (g)'))
     const allVals = meshKeys.map(k=>parseFloat(newGrams[k])).filter(v=>!isNaN(v)&&v>0)
-    const warns: string[] = []
     if (allVals.length>=2) {
       const total = allVals.reduce((a,b)=>a+b,0)
-      if (total>0&&total<50) warns.push(`Total grams only ${total.toFixed(1)}g — very low`)
-      else if (total>500)    warns.push(`Total grams ${total.toFixed(1)}g — unusually high`)
-    }
-    // Per-fraction outlier check against recent similar runs
-    const recentSimilar = productRuns.filter((r:any)=>r.variant===form.variant&&r.runType==='in-process').slice(-20)
-    if (recentSimilar.length>=3 && Object.keys(pcts).length>0) {
-      activeMesh.forEach(m=>{
-        const newPct=parseFloat(pcts[m]); if(isNaN(newPct)) return
-        const hist=recentSimilar.map((r:any)=>parseFloat(r[m])).filter((v:any)=>!isNaN(v)&&v>0)
-        if(hist.length<3) return
-        const mean=hist.reduce((a:number,b:number)=>a+b,0)/hist.length
-        const std=Math.sqrt(hist.map((v:number)=>(v-mean)**2).reduce((a:number,b:number)=>a+b,0)/hist.length)
-        if(std>1.5&&Math.abs(newPct-mean)>2.5*std) warns.push(`${m.replace(' (%)','')}: ${newPct.toFixed(1)}% far from avg ${mean.toFixed(1)}%`)
-      })
-    }
-    setAnomalyWarn(warns.length?`⚠ ${warns.join(' | ')}`:'')
-
+      if (total>0&&total<50) setAnomalyWarn(`⚠ Total grams only ${total.toFixed(1)}g — very low`)
+      else if (total>500)    setAnomalyWarn(`⚠ Total grams ${total.toFixed(1)}g — unusually high`)
+      else setAnomalyWarn('')
+    } else setAnomalyWarn('')
   }
+
+  // ── Variation / outlier detection vs recent similar runs ──
+  // Flags a value only when recent history already has real spread (std >
+  // floor) AND the new value sits >2.5 std away. Covers sieve mesh %
+  // (in-process only), Bulk Density and Leaf Shade (both run types).
+  const outlierWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (hist: any[], key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const histVals = hist.map((r:any)=>parseFloat(r[key])).filter((v:number)=>!isNaN(v)&&v>0)
+      const result = checkOutlier(n, histVals, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from recent avg ${result.mean.toFixed(1)}${unit}`)
+    }
+    const histInProcess = productRuns.filter((r:any)=>r.variant===form.variant&&r.runType==='in-process').slice(-20)
+    const histAny        = productRuns.filter((r:any)=>r.variant===form.variant).slice(-30)
+    if (form.runType!=='final') activeMesh.forEach(m => checkField(histInProcess, m, m.replace(' (%)',''), form[m], 1.5, '%'))
+    checkField(histAny, 'bulkDensity', 'Bulk Density', form.bulkDensity, 5)
+    checkField(histAny, 'leafShade', 'Leaf Shade', form.leafShade, 0.5)
+    return warns
+  })()
 
   function validate(f: any, retest = false) {
     const errs: Record<string,string> = {}
@@ -788,6 +982,7 @@ export default function SievingPage() {
     const errs = validate(form, isRetest)
     setErrors(errs)
     if (Object.keys(errs).length>0) return
+    if (outlierWarnings.length>0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const specRow = activeSpecs[specKey] || {}
     const violations: string[] = []
     activeMesh.forEach(m=>{
@@ -825,7 +1020,7 @@ export default function SievingPage() {
     if (error) { setSdError('Could not save run: '+error.message); setSaving(false); return }
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
-    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setLotMsg('')
+    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg('')
     setLastSaved(new Date()); setSaving(false)
   }
 
@@ -970,7 +1165,7 @@ export default function SievingPage() {
         <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
-            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setLotMsg('')}}
+            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('')}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
 
@@ -993,6 +1188,20 @@ export default function SievingPage() {
           {errors._dupTime&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupTime}</div>}
           {errors._mesh&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10}}>⚠ {errors._mesh}</div>}
           {anomalyWarn&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10,fontWeight:600}}>{anomalyWarn}</div>}
+
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
+          {outlierWarnings.length>0 && (
+            <div style={{padding:'10px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:8,marginBottom:10}}>
+              <div style={{fontWeight:700,fontSize:11,color:'#92400e',marginBottom:4}}>⚠ Unusual variation — please double-check before saving</div>
+              <ul style={{margin:'0 0 8px 18px',padding:0}}>
+                {outlierWarnings.map((w,i)=><li key={i} style={{fontSize:11,color:'#92400e'}}>{w}</li>)}
+              </ul>
+              <label style={{display:'flex',alignItems:'center',gap:8,fontSize:11,fontWeight:600,color:'#92400e',cursor:'pointer'}}>
+                <input type="checkbox" checked={confirmAnomaly} onChange={e=>setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
+            </div>
+          )}
           {lotMsg&&<div style={{padding:'6px 12px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:6,fontSize:10,color:'#166534',marginBottom:10}}>{lotMsg}</div>}
 
           {/* Row 1: basic info */}
@@ -1134,15 +1343,32 @@ export default function SievingPage() {
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setLotMsg('')}}
+              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('')}}
                 style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
-              <button onClick={addRun} disabled={saving}
-                style={{padding:'10px 26px',borderRadius:7,border:'none',background:saving?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:saving?'default':'pointer'}}>
+              <button onClick={addRun} disabled={saving || (outlierWarnings.length>0 && !confirmAnomaly)}
+                style={{padding:'10px 26px',borderRadius:7,border:'none',background:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'default':'pointer'}}>
                 {saving?'Saving…':'✓ Save Run'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* This Week / This Month chart — mesh trend + outlier view. Bounded window, not full history. */}
+      <div style={{marginBottom:8}}>
+        <button onClick={()=>setShowOutlierChart(s=>!s)}
+          style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showOutlierChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showOutlierChart?'#eff6ff':'#fff',color:showOutlierChart?'#1f4e79':'#374151'}}>
+          📈 {showOutlierChart?'Hide':'Show'} Chart
+        </button>
+      </div>
+      {showOutlierChart && productRuns.length>0 && (
+        <SievingOutlierChart runs={productRuns} activeProduct={activeProduct} specDef={specDef}
+          onPointClick={(runId)=>{
+            setChartHighlightId(runId)
+            const el = document.getElementById(`run-row-${runId}`)
+            el?.scrollIntoView({ behavior:'smooth', block:'center' })
+            setTimeout(()=>setChartHighlightId(null), 3000)
+          }} />
       )}
 
       {/* Runs table */}
@@ -1195,13 +1421,14 @@ export default function SievingPage() {
             <tbody>
               {filteredRuns.map((row:any,i:number)=>{
                 const vios: string[] = row.violations||[]
-                const rowBg = vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
+                const isHighlighted = row.id === chartHighlightId
+                const rowBg = isHighlighted?'#fef9c3':vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
                 const mesh  = sdGetMesh(activeProduct, row.variant)
                 const gs    = gradeStyle(row.grade)
                 const sc    = statusColors(row.passStatus)
                 return (
                   <React.Fragment key={row.id}>
-                  <tr id={`run-row-${row.id}`} style={{background:rowBg,borderBottom:'1px solid #f3f4f6'}}>
+                  <tr id={`run-row-${row.id}`} style={{background:rowBg,borderBottom:'1px solid #f3f4f6',transition:'background 0.6s',outline:isHighlighted?'2px solid #fbbf24':'none',outlineOffset:'-2px'}}>
                     {canWrite&&<td style={{padding:'3px 4px',textAlign:'center'}}>
                       <button onClick={()=>setEditRunId(editRunId===row.id?null:row.id)}
                         style={{background:'none',border:`1px solid ${editRunId===row.id?'#166534':'#d1d5db'}`,borderRadius:4,color:editRunId===row.id?'#166534':'#374151',cursor:'pointer',fontSize:11,padding:'2px 6px',marginBottom:2,display:'block'}}>
