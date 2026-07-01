@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (All named roles get cross-department read access by default)
+
+**Files changed:**
+- `lib/auth/permissions.ts`
+
+**Changes:**
+- Introduced `CROSS_DEPT_READ` constant: a shared set of read/export permissions covering quality (`can_view_history`, `can_export_csv`), production (`can_view_ops_dashboard`, `can_view_all_sections`, `can_view_live_history`), maintenance (`can_access_maintenance`), management reporting (`can_view_management`, `can_view_reports`, `can_export_reports`), and staff directory (`can_view_staff`)
+- Every named role (`lab_manager`, `quality_manager`, `production_supervisor`, `warehouse_supervisor`, `stock_controller`, `maintenance_manager`, `maintenance_technician`, `maintenance_qc`, `management_default`, legacy `supervisor`/`operator`) now spreads `CROSS_DEPT_READ` into its defaults
+- Blank-slate roles (`quality_default`, `production_default`, `maintenance_default`, `sales_default`, `marketing_default`) and `floor_operator` remain at zero — admins toggle from scratch for those
+- Updated all role description strings in the users page to mention "read-only access to all other modules"
+- No DB migration needed — resolved at auth time from role + overrides
+
+---
+
 ## 2026-07-03 — Alyssa (Management role — read-only access to all modules by default)
 
 **Files changed:**
