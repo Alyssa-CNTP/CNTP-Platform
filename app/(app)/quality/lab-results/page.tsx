@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDateTime } from '@/lib/utils/formatDate'
 import { exportTableXlsx } from '@/lib/utils/exportExcel'
 import { RefreshCw, History, AlertTriangle, X } from 'lucide-react'
 
@@ -663,7 +664,7 @@ export default function LabResultsPage() {
                 const rows = allRows.map((r:any) => {
                   const o: Record<string, any> = { Batch: r.batch_no ?? '' }
                   cols2.forEach(([k,l]: any) => { o[l] = r[k] ?? '' })
-                  o['Date'] = r.created_at ? new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}) : ''
+                  o['Date'] = r.created_at ? isoDateTime(r.created_at) : ''
                   return o
                 })
                 exportTableXlsx(rows, `lab_${activeTab}_${new Date().toISOString().slice(0,10)}.xlsx`, activeTab)
@@ -809,7 +810,7 @@ export default function LabResultsPage() {
                   })}
                   {r._isFirst && (
                     <td rowSpan={r._span} style={{ padding:'5px 8px', fontSize:10, color:'#9ca3af', verticalAlign:'top', paddingTop:6, whiteSpace:'nowrap' }}>
-                      {r.created_at?new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'—'}
+                      {isoDateTime(r.created_at)}
                     </td>
                   )}
                 </tr>
@@ -844,7 +845,7 @@ export default function LabResultsPage() {
                       <td style={{ padding:'4px 8px', fontFamily:'monospace', fontWeight:700 }}>{r.batch_number||'—'}</td>
                       <td style={{ padding:'4px 8px' }}>{r.workcenter||'—'}</td>
                       <td style={{ padding:'4px 8px' }}>{r.workflow||'—'}</td>
-                      <td style={{ padding:'4px 8px', color:'#6b7280' }}>{r.created_at?new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'—'}</td>
+                      <td style={{ padding:'4px 8px', color:'#6b7280' }}>{isoDateTime(r.created_at)}</td>
                     </tr>
                   ))}
                 </tbody>

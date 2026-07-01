@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { RefreshCw, ChevronDown, ChevronUp, X, ExternalLink } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1216,7 +1217,7 @@ function GlyphosateTable({ records, isAdmin, onRefresh, onComment }: {
                       {d.glufosinate_detected ? <span className="text-warn font-bold">{d.glufosinate_value_mg_kg}</span> : <span className="text-text-faint">ND</span>}
                     </td>
                     <td className="px-4 py-2.5"><StatusBadge status={d.overall_status} /></td>
-                    <td className="px-4 py-2.5 text-[11px] text-text-faint font-mono">{r.created_at ? new Date(r.created_at).toLocaleDateString('en-ZA') : '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-faint font-mono">{isoDate(r.created_at)}</td>
                     <td className="px-4 py-2.5"><CommentCell record={r} onSave={onComment} /></td>
                     {isAdmin && (
                       <td className="px-3 py-2.5">
@@ -2100,7 +2101,7 @@ function LeafShadeTab({ records, canWrite, onRefresh }: {
                 return (
                   <tr key={r.id} className={`hover:bg-surface ${i%2===1?'bg-surface/50':''}`}>
                     <td className="px-4 py-2.5 font-mono font-semibold text-[12px] text-text">{r.batch_number || '—'}</td>
-                    <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">{r.created_at ? new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}) : '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">{isoDateTime(r.created_at)}</td>
                     <td className="px-4 py-2.5 text-[12px] font-semibold text-text">{d.predicted_shade || '—'}</td>
                     <td className="px-4 py-2.5 font-mono text-[11px] text-text-muted">{d.confidence_pct != null ? `${d.confidence_pct}%` : '—'}</td>
                     <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.physical_shade || '—'}</td>
@@ -2222,7 +2223,7 @@ function PhTdsTab({ records, canWrite, onRefresh }: {
                 return (
                   <tr key={r.id} className={`hover:bg-surface ${i%2===1?'bg-surface/50':''}`}>
                     <td className="px-4 py-2.5 font-mono font-semibold text-[12px] text-text">{r.batch_number || '—'}</td>
-                    <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">{r.created_at ? new Date(r.created_at).toLocaleString('en-ZA',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}) : '—'}</td>
+                    <td className="px-4 py-2.5 text-[11px] text-text-muted font-mono">{isoDateTime(r.created_at)}</td>
                     <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.ph != null ? d.ph : '—'}</td>
                     <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.tds != null ? d.tds : '—'}</td>
                     <td className="px-4 py-2.5 text-[11px] text-text-muted max-w-[240px] truncate" title={d.observation || ''}>{d.observation || '—'}</td>

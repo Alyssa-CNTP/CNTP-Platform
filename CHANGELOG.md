@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Quality: scientific/ISO date format everywhere; Sieving: sortable headers + global search)
+
+**Files changed:**
+- `lib/utils/formatDate.ts` (new)
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/raw-material/page.tsx`
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/lab-results/page.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Added a shared `isoDate`/`isoDateTime` helper — scientific/ISO 8601 format (`YYYY-MM-DD` and `YYYY-MM-DD HH:mm`, 24-hour, local time) — and standardised every date/timestamp display across Quality to it: pasteuriser (sample dates, batch date ranges, daily breakdown, history date, sensorial date), raw-material (record date columns), lab-manager (`fmtDateTime`, `todayISO`), lab-results (table + export date column). Also fixed a latent UTC/local timezone bug in two of these (`todayISO`, sieving's period cutoff) that could show the wrong calendar day right around midnight SAST.
+- **Sieving Tower** — replaced the per-column filter-input row with **clickable sortable column headers** (click any header — Date, Lot, Serial, Grade, Variant, Type, QC, Time, BD, Needles, Shade, every sieve %, Status, Violations — to sort ascending/descending, with a ▲/▼ indicator) and a **single search box** above the table that searches across every column's content at once, replacing the per-column inputs.
+
 ## 2026-06-30 — Gustav (Sieving: column filters + period filter, remove trend chart; newest-first ordering)
 
 **Files changed:**
