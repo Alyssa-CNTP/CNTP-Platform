@@ -5,15 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-07-01 — Gustav (Leaf Shade: fix container crash-loop — missing libxcb1)
+## 2026-07-01 — Alyssa (energy totals on production dashboard + production capture cron)
 
 **Files changed:**
-- `ml/leafshade/Dockerfile`
+- `components/production/EnergyTotals.tsx` (new)
+- `app/(app)/production/page.tsx`
+- `.github/workflows/energy-capture-production.yml` (new)
 
 **Changes:**
-- **Bug fix:** after pinning `opencv-python-headless==4.13.0.90` to match the desktop reference, the container crash-looped on startup with `ImportError: libxcb.so.1: cannot open shared object file`. Even the "headless" opencv wheel bundles its own FFmpeg (`libavdevice`) for video I/O, which links against `libxcb` for X11 screen-grab support it never actually uses here — but the base `python:3.11-slim` image doesn't ship that library.
-- Added `libxcb1` to the Dockerfile's apt install list. Its own package dependencies (`libxau6` → `libxdmcp6` → `libbsd0` → `libmd0`) are pulled in automatically by apt, so one line covers the whole chain. Verified against the actual `ldd` output of the pinned opencv wheel — the wheel bundles everything else it needs (ffmpeg codecs, libpng, openblas, etc. are all shipped inside `opencv_python_headless.libs/`); `libxcb1` was the only missing system dependency.
-- **Practically:** the service was never actually serving requests since the version pins landed — it was either running the old pre-fix image (wrong `half_size=True` predictions) or crash-looping (503 "not running"). This should be the last piece; requires a VPS rebuild: `cd ml/leafshade && docker compose up -d --build`.
+- Added a lightweight `EnergyTotals` component to the production dashboard: two stat tiles (Solar today / Grid today in kWh) with a % solar share indicator. No Recharts — plain HTML/CSS only, avoiding the Recharts + Next 16 / React 19 SSR build issue. Renders `null` silently on error so it never breaks the production page.
+- Added `.github/workflows/energy-capture-production.yml`: scheduled cron at 20:00 UTC (22:00 SAST) that POSTs to the production app's `/api/maintenance/energy/capture` endpoint with the `PROD_CRON_SECRET` bearer token. Requires two new GitHub repo secrets: `PROD_APP_URL` and `PROD_CRON_SECRET`.
+
+---
 
 ## 2026-07-01 — Alyssa (maintenance planner: remove add-slot/week calendar/duty-roster, add shift roster card)
 
