@@ -5,74 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-06-30 — Gustav (Quality: scientific/ISO date format everywhere; Sieving: sortable headers + global search)
+## 2026-07-01 — Alyssa (roster auto-rotation, drag-and-drop, publish to maintenance)
 
 **Files changed:**
-- `lib/utils/formatDate.ts` (new)
-- `app/(app)/quality/pasteuriser/page.tsx`
-- `app/(app)/quality/raw-material/page.tsx`
-- `app/(app)/quality/lab-manager/page.tsx`
-- `app/(app)/quality/lab-results/page.tsx`
-- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/production/roster/page.tsx` (major update)
+- `supabase/migrations/20260630_002_roster_publish.sql` (new — run manually in Supabase dashboard)
 
 **Changes:**
-- Added a shared `isoDate`/`isoDateTime` helper — scientific/ISO 8601 format (`YYYY-MM-DD` and `YYYY-MM-DD HH:mm`, 24-hour, local time) — and standardised every date/timestamp display across Quality to it: pasteuriser (sample dates, batch date ranges, daily breakdown, history date, sensorial date), raw-material (record date columns), lab-manager (`fmtDateTime`, `todayISO`), lab-results (table + export date column). Also fixed a latent UTC/local timezone bug in two of these (`todayISO`, sieving's period cutoff) that could show the wrong calendar day right around midnight SAST.
-- **Sieving Tower** — replaced the per-column filter-input row with **clickable sortable column headers** (click any header — Date, Lot, Serial, Grade, Variant, Type, QC, Time, BD, Needles, Shade, every sieve %, Status, Violations — to sort ascending/descending, with a ▲/▼ indicator) and a **single search box** above the table that searches across every column's content at once, replacing the per-column inputs.
-
-## 2026-06-30 — Gustav (Sieving: column filters + period filter, remove trend chart; newest-first ordering)
-
-**Files changed:**
-- `app/(app)/quality/sieving/page.tsx`
-- `app/(app)/quality/pasteuriser/page.tsx`
-- `app/(app)/quality/granule/page.tsx`
-
-**Changes:**
-- **Sieving Tower** — removed the "all runs" trend chart (`SievingChart`) — it became unreadable once enough runs accumulated. Removed the now-unused `recharts` import, `MESH_COLORS`, and the `Show/Hide Chart` toggle.
-- Added a **per-column filter row** under the Runs table header — a text filter for every column (Date, Lot, Serial, Grade, Variant, Type, QC, Time, BD, Needles, Shade, every sieve-mesh %, Status, Violations), case-insensitive substring match, with a "✕ Clear column filters" shortcut when any are active.
-- Added a **period filter** — Daily / Weekly / Monthly / 60 Days / All — replacing the removed chart toggle, so the table itself stays scoped to a manageable window.
-- **Newest-entry-on-top**: fixed sample/tasting display order so the most recently captured entry shows first, without breaking existing chronological numbering ("Sample #N") or the History tab's chart-click-to-row highlighting (which depend on original array position):
-  - Pasteuriser: active-batch sample tables now render newest-first (numbering stays tied to chronological position).
-  - Granule: active-run sample table and inline tastings-per-sample now render newest-first.
-  - Sieving Tower's Runs table was already sorted newest-first by date+time — unchanged.
-
-## 2026-06-30 — Gustav (Lab Manager — Phase 3: granule block layout + allocate→approve)
-
-**Files changed:**
-- `app/(app)/quality/granule/page.tsx`
-- `app/(app)/quality/lab-manager/page.tsx`
-- DB: `qms.granule_runs` + columns `lm_status`, `allocated_by`, `allocated_at`, `approved_by`, `final_reason` (staging)
-
-**Changes:**
-- **Granule active runs now use the pasteuriser-style block layout** — a row of selectable batch blocks (sample count + status); clicking one opens its full card, instead of stacking every run.
-- **New-run warning** — starting a run while open runs exist now prompts a confirm suggesting you add a sample to an existing run instead.
-- **Granule allocate → approve workflow** — QC clicks **📤 Allocate to Lab Manager** (run → `awaiting_approval`); the approver (Lab/Quality Manager or IT) sets **Pass/Fail/Concession** (reason required on Fail/Concession), from the granule card or the Lab Manager dashboard. QC can **↩ Recall** while unapproved.
-- **Lab Manager dashboard now covers granule too** — the pending-approvals queue lists both pasteuriser and granule runs (tagged), each with out-of-spec bag/box highlights (granule OOS derived from sample violations). The daily overview shows granule batches per day with their OOS bags.
-
-## 2026-06-30 — Gustav (Lab Manager — Phase 2: dashboard, approvals queue, daily sign-off)
-
-**Files changed:**
-- `app/(app)/quality/lab-manager/page.tsx` (new)
-- `app/(app)/quality/pasteuriser/page.tsx` (export `computePastOosFlags`, store `oos_flags` on allocate/approve)
-- `components/layout/Sidebar.tsx`
-- DB: new table `qms.daily_signoffs` (staging)
-
-**Changes:**
-- New **Lab Manager** dashboard at `/quality/lab-manager` (sidebar entry gated on `can_approve_runs`):
-  - **Pending Approvals** — pasteuriser runs QC allocated (`awaiting_approval`). Each card shows the out-of-spec bags/boxes (which bag + which field vs spec) and Pass / Concession / Fail buttons (Fail/Concession require a reason). Approving writes the result back to the run.
-  - **Daily Overview & Sign-off** — pick a production day; per station (Pasteuriser, Granule, Sieving) it lists that day's batches/runs and flags out-of-spec bags/boxes, with a per-station **Sign off** button → `qms.daily_signoffs` (one sign-off per station per day, snapshot stored).
-- Pasteuriser now computes and stores `oos_flags` (out-of-spec bag/box list) when a run is allocated and when approved, so the dashboard highlights are accurate as of sign-off.
-- (Phase 3 — granule block-layout redesign + its own allocate→approve + active-run warning — follows.)
-
-## 2026-06-30 — Gustav (Lab Manager approval — Phase 1: roles + pasteuriser allocate→approve)
-
-**Files changed:**
-- `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
-- `app/(app)/quality/pasteuriser/page.tsx`
-
-**Changes:**
-- Added two Quality roles — **Lab Manager** and **Quality Manager** — plus two new permissions: `can_approve_runs` (pass/fail an allocated run) and `can_signoff_day` (daily station sign-off). IT roles (senior_developer/co_developer) inherit both via their all-on defaults, so Lab Manager + Quality Manager + IT can all approve, per request.
-- **Pasteuriser run flow is now two-step:** QC captures and clicks **📤 Allocate to Lab Manager** (run → `awaiting_approval`); the approver (Lab/Quality Manager or IT) then sets **Pass/Fail/Concession** (Fail/Concession require a reason). The run records `allocated_by`, `approved_by` and timestamps. QC can **↩ Recall to QC** while it is unapproved. Re-open still available after approval.
-- (Phase 2 — Lab Manager dashboard with the approval pop-up + daily per-station sign-off — and Phase 3 — granule redesign — follow.)
+- **Wednesday deadline badge:** header of the roster page now shows a countdown to Wednesday (the roster change deadline). Turns amber at 2 days out, red on the day itself.
+- **Generate next week modal:** "Generate next week" button opens a review modal that pre-fills the next 7-day period, rotates every person day↔night (the alternating week rule), checks leave records for the new dates, and highlights conflicts. Generates a new `roster_periods` row with all entries inserted rotated on confirm.
+- **Drag and drop:** every `PersonChip` is now draggable via the HTML5 Drag API. Dragging a chip onto any other cell moves the person to that role/shift (updates DB immediately). Drop target is highlighted with a brand-colour ring.
+- **Publish button + status badge:** period bar now shows a Draft/Published badge. Clicking Publish marks the period `status='published'` and syncs maintenance entries (`maintenance_tech`, `maintenance_asst`) to `maintenance.duty_roster` as daily slots (day shift = 05:00–14:00 UTC, night = 14:00–23:00 UTC) for each day in the period.
+- **DB migration:** `supabase/migrations/20260630_002_roster_publish.sql` adds `status` (draft/published, default draft) and `published_at` columns to `production.roster_periods`. The app gracefully falls back to `status='draft'` if the column is not yet present — run the migration in the Supabase SQL editor to unlock publishing.
 
 ---
 
@@ -147,17 +91,6 @@ Format: date · developer · files changed · description of code changes.
 - The Python service runs as its own pm2 process (`cntp-leafshade`); see `ml/leafshade/README.md` for one-time VPS setup (`bash ml/leafshade/setup.sh` + `pm2 start ml/leafshade/run.sh --name cntp-leafshade`).
 
 ---
-
-## 2026-06-30 — Gustav (Maintenance overhaul round 4: table board, checklist allocation, unified roster, dashboard trends, energy)
-
-**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`, `app/(app)/maintenance/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/planner/page.tsx`, `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/energy/history/route.ts`, `lib/maintenance/roster.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/maintenance/JobCardTable.tsx` (new), `components/maintenance/Spark.tsx` (new), `components/maintenance/TrendsPanel.tsx` (new), `components/maintenance/EnergyHistory.tsx`, `components/maintenance/EnergyWidget.tsx`
-
-- **Job-card board → professional one-line table** (`JobCardTable`): each card is one row that expands to the full job card (allocate / log work / QC / verify) with a live in-row timer. **Per-technician allocation tabs replace the old "by raiser" panel**; added an **urgency filter** (kept search + date-range). Tech / QC / raiser views use the same table.
-- **New-job-card alert** banner on the maintenance dashboard for managers (count + link to allocate).
-- **Checklist allocation:** managers allocate each weekly/monthly checklist to a technician (on-duty suggested first); assignee sees a highlight + badge. (+migration `20260629_002`, applied to staging.)
-- **Roster unified:** the on-duty maintenance technician now comes from the **Operations shift roster** (`production.roster_*`, Maintenance-role rows for the current Day/Night shift) — including breakdown auto-routing. The maintenance duty-roster editor is retired (links to `/production/roster`); the legacy table is only a fallback.
-- **Trends moved to the dashboard:** the water / IP / diesel / compressor trend graphs now live on the Maintenance dashboard (`TrendsPanel`, shared `Spark`) with the window selector; the Scheduled "Readings & Trends" tab is now **capture-only ("Readings")** — removes the duplication.
-- **Energy:** solar charts shrunk; energy-history API + widget gain a **custom From/To date-range filter** over stored data.
 
 ## 2026-06-29 — Gustav (Scheduled maintenance: interactive Overview tiles, required calibration sign-off, required fault choice)
 
