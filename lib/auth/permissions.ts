@@ -98,6 +98,7 @@ export type PermissionKey =
   | 'can_manage_competencies'  // record / assess employee × SOP competencies
   | 'can_manage_sop_catalog'   // add / edit / retire SOPs in the catalogue
   | 'can_allocate_staff'       // Phase 2 — allocate staff & override competency warnings
+  | 'can_delete_staff'         // Delete staff records
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>
 
@@ -122,7 +123,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_view_staff','can_edit_staff_profiles','can_manage_competencies',
-  'can_manage_sop_catalog','can_allocate_staff',
+  'can_manage_sop_catalog','can_allocate_staff','can_delete_staff',
 ]
 
 // ─── Departments ──────────────────────────────────────────────────────────────
@@ -238,6 +239,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // Staff & Competency
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
+    can_delete_staff: true,
   },
 
   warehouse_supervisor: {
@@ -312,6 +314,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // Staff & Competency (FSSC owner — manages SOP catalogue + assesses)
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_manage_sop_catalog: true,
+    can_delete_staff: true,
   },
 
   // ── Management — read-only across platform ─────────────────────────────────
@@ -510,6 +513,7 @@ export const PERMISSION_GROUPS: {
       { key: 'can_manage_competencies', label: 'Record, update & assess staff competencies against SOPs' },
       { key: 'can_manage_sop_catalog',  label: 'Add, edit & retire SOPs in the catalogue' },
       { key: 'can_allocate_staff',      label: 'Allocate staff to floor sections & override competency warnings (Phase 2)' },
+      { key: 'can_delete_staff',        label: 'Delete staff records' },
     ],
   },
 ]
