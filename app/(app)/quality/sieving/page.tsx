@@ -16,6 +16,8 @@ import { getDb } from '@/lib/supabase/db'
 import { isoDate } from '@/lib/utils/formatDate'
 import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
+import { useQcNames } from '@/lib/hooks/useQcNames'
+import QCNameField from '@/components/shared/QCNameField'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -540,9 +542,9 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
   )
 }
 
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
-  onSave: (f: any) => void; onCancel: () => void
+  onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -601,7 +603,11 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
           .map(([label,key,type]) => (
             <div key={key}>
               <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
-              <input type={type} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
+              {key==='qcName' ? (
+                <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
+              ) : (
+                <input type={type} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
+              )}
             </div>
           ))}
         <div>
@@ -701,6 +707,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
 export default function SievingPage() {
   const { p } = useAuth(); const canWrite = p('can_add_sieving_runs'); const isAdmin = p('can_delete_sieving_runs')
   const db = getDb()
+  const qcNames = useQcNames()
 
   const [activeProduct, setActiveProduct] = useState('Fine Leaf')
   const [runs, setRuns] = useState<Record<string,any[]>>({})
@@ -1257,7 +1264,7 @@ export default function SievingPage() {
             </div>
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>QC Controller *</label>
-              <input value={form.qcName} onChange={e=>setF('qcName',e.target.value)} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <QCNameField value={form.qcName} onChange={v=>setF('qcName',v)} names={qcNames} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="qcName"/>
             </div>
             <div>
@@ -1531,6 +1538,7 @@ export default function SievingPage() {
                           setEditRunId(null)
                         }}
                         onCancel={()=>setEditRunId(null)}
+                        qcNames={qcNames}
                       />
                     </td></tr>
                   )}

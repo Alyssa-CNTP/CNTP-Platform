@@ -18,6 +18,8 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { checkOutlier } from '@/lib/utils/outliers'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
+import { useQcNames } from '@/lib/hooks/useQcNames'
+import QCNameField from '@/components/shared/QCNameField'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -244,6 +246,7 @@ function SieveTable({ grams, pcts, focusedSieve, setFocusedSieve, specJson, erro
 
 function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: (f: any) => void; onClose: () => void }) {
   const today = new Date().toISOString().split('T')[0]
+  const qcNames = useQcNames()
 
   const [form, setForm] = useState<{
     batch_number: string; qc_name: string; production_date: string;
@@ -313,8 +316,13 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
             {([['Batch Number *','batch_number','text'],['Quality Controller *','qc_name','text'],['Production Date *','production_date','date']] as const).map(([label, key, type]) => (
               <div key={key}>
                 <label className={`${lbl} ${fieldErr(label.replace(' *',''))?'text-err':''}`}>{label}</label>
-                <input type={type} value={(form as any)[key]} onChange={e => set(key, e.target.value)}
-                  className={`${inp} w-full ${fieldErr(label.replace(' *',''))?'border-err/40':''}`} />
+                {key === 'qc_name' ? (
+                  <QCNameField value={form.qc_name} onChange={v => set('qc_name', v)} names={qcNames}
+                    className={`${inp} w-full ${fieldErr('Quality Controller')?'border-err/40':''}`} />
+                ) : (
+                  <input type={type} value={(form as any)[key]} onChange={e => set(key, e.target.value)}
+                    className={`${inp} w-full ${fieldErr(label.replace(' *',''))?'border-err/40':''}`} />
+                )}
               </div>
             ))}
             <div className="col-span-2">
@@ -399,6 +407,7 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
 // ─── GranuleAddSampleModal ────────────────────────────────────────────────────
 
 function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f: any) => void; onClose: () => void }) {
+  const qcNames = useQcNames()
   const prevSamples  = run.samples || []
   const lastSample   = prevSamples.length > 0 ? prevSamples[prevSamples.length - 1] : null
   const now          = new Date()
@@ -588,7 +597,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
           {isAfterShift && (
             <div className="flex items-center gap-3 px-4 py-2.5 bg-warn/8 border border-warn/30 rounded-xl">
               <span className="text-[11px] font-bold text-warn whitespace-nowrap">🌙 After 16:00 — Night Shift QC Required</span>
-              <input value={form.qc_name} onChange={e => set('qc_name', e.target.value)}
+              <QCNameField value={form.qc_name} onChange={v => set('qc_name', v)} names={qcNames}
                 placeholder="Night shift QC name…"
                 className={`${inp} flex-1 ${errors.some(e => e.startsWith('QC Name')) ? 'border-err/40' : 'border-warn/40'}`} />
             </div>
