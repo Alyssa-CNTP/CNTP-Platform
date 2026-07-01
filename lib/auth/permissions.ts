@@ -172,15 +172,15 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
   ],
   Quality: [
     { role: 'quality_default',  label: 'Quality (Default)', desc: 'All permissions off — toggle on what they need' },
-    { role: 'lab_manager',      label: 'Lab Manager',       desc: 'Approves (pass/fail) allocated runs and signs off daily station overviews' },
-    { role: 'quality_manager',  label: 'Quality Manager',   desc: 'Lab Manager rights plus spec editing and deletes' },
+    { role: 'lab_manager',      label: 'Lab Manager',       desc: 'Approves runs and signs off daily overviews' },
+    { role: 'quality_manager',  label: 'Quality Manager',   desc: 'Full quality access plus specs and deletes' },
   ],
   Production: [
     { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
     { role: 'floor_operator',        label: 'Floor Operator',           desc: 'PIN-based tablet access only — no system login' },
     { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs' },
     { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Stock counts (warehouse side) + live capture history' },
-    { role: 'stock_controller',      label: 'Stock Controller',         desc: 'Stock counts (stock side) — second independent counter' },
+    { role: 'stock_controller',      label: 'Stock Controller',         desc: 'Stock counts (stock side)' },
   ],
   Maintenance: [
     { role: 'maintenance_default',    label: 'Maintenance (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -189,7 +189,7 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'maintenance_qc',         label: 'Maintenance QC',           desc: 'Performs post-maintenance QC checks' },
   ],
   Management: [
-    { role: 'management_default', label: 'Management (Default)', desc: 'All permissions off — toggle on what they need' },
+    { role: 'management_default', label: 'Management (Default)', desc: 'Read-only across all modules — view quality, production, maintenance, reports. Toggle write/delete on per person if needed.' },
   ],
   Sales: [
     { role: 'sales_default',    label: 'Sales (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -200,7 +200,9 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
 }
 
 // ─── Role permission defaults ─────────────────────────────────────────────────
-// IT roles have meaningful defaults. All other roles start at zero.
+// Permissions are explicit — roles only get what their job requires.
+// Cross-department access is granted deliberately per person in the Users page.
+// Blank-slate roles (_default) and floor_operator start at zero.
 // When a role has no entry here, all permissions default to false.
 
 const ALL_ON: Permissions = Object.fromEntries(
@@ -318,7 +320,23 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   },
 
   // ── Management — read-only across platform ─────────────────────────────────
+  // Directors and analysts get view access to every module by default.
+  // Write, delete, and admin actions remain off — toggle those on per person.
   management_default: {
+    // Quality (view + export, no write/delete)
+    can_view_history: true,
+    can_export_csv:   true,
+    // Production (view only)
+    can_view_ops_dashboard: true,
+    can_view_all_sections:  true,
+    can_view_live_history:  true,
+    // Maintenance (view module — no job-card actions)
+    can_access_maintenance: true,
+    // Management & Reporting
+    can_view_management: true,
+    can_view_reports:    true,
+    can_export_reports:  true,
+    // Staff directory (read-only)
     can_view_staff: true,
   },
 
@@ -364,7 +382,7 @@ export const PERMISSION_GROUPS: {
       { key: 'can_save_records',   label: 'Save quality records' },
       { key: 'can_edit_records',   label: 'Edit existing quality records' },
       { key: 'can_delete_records', label: 'Delete quality records' },
-      { key: 'can_view_history',   label: 'View historical (public schema) data' },
+      { key: 'can_view_history',   label: 'View quality pages & records (required for cross-department access)' },
       { key: 'can_export_csv',     label: 'Export data to CSV' },
     ],
   },
