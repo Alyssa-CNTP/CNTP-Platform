@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (Sieving chart: timeline navigator for previous weeks/months)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- The new Mesh Trend / Outliers chart was bounded to only "this week" or "this month" — added a **◀ ▶ timeline navigator** so it can step back through any previous week or month (and a "Today" button to jump back to the current one). The window stays bounded (7 days or one month's worth of weeks) so it never becomes the unreadable "all runs" chart — you just move which window you're looking at. Shows the date range being viewed (e.g. "23 Jun – 29 Jun 2026" or "June 2026").
+
 ## 2026-07-01 — Alyssa (per-dept staged save + fix maintenance duplicates)
 
 **Files changed:**
