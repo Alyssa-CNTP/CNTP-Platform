@@ -28,6 +28,7 @@ import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
 import LmDecisionModal from '@/components/shared/LmDecisionModal'
@@ -424,6 +425,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
     const hasSpecs = batchSpecs.moisture_max !== '' || batchSpecs.bd_min !== '' || batchSpecs.bd_max !== '' ||
       ['gt6','gt10','gt12','gt16','gt20','gt60','dust'].some(k => (batchSpecs as any)[`${k}_min`] !== '' || (batchSpecs as any)[`${k}_max`] !== '')
     if (!hasSpecs) { setErr('Enter at least one spec value (moisture, BD, or sieve) before saving.'); return }
+    if (Object.values(batchSpecs).some(v => isNegative(v))) { setErr('Spec values cannot be negative.'); return }
     onSave({ ...form, type_grade:`${form.product_family} ${form.grade}`, _spec: specPreview, batch_specs: batchSpecs })
   }
 
@@ -633,6 +635,10 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     if (!row.time.trim())     { alert('Time is required'); return }
     if (!row.date)            { alert('Date is required'); return }
     if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
+    // No captured value may be negative.
+    const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'final_weight_1', 'final_weight_2', 'final_weight_3',
+      ...PAST_SIEVE_COLS.flatMap(c => [c.key, c.key + '_g'])]
+    if (negFields.some(k => isNegative(row[k]))) { alert('Values cannot be negative.'); return }
     if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
@@ -677,7 +683,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number']].map(([k,l,t]) => (
               <div key={k}>
                 <label className={`${lbl} ${k==='date'?'text-info':''}`}>{l as string}</label>
-                <input type={t as string} inputMode={t==='number'?'numeric':undefined} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
+                <input type={t as string} min={t==='number'?0:undefined} inputMode={t==='number'?'numeric':undefined} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
@@ -693,7 +699,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 const tempSt = pastChk(row.hourly_temp, tempSpec)
                 return (
                   <>
-                    <input type="number" inputMode="decimal" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
+                    <input type="number" min="0" inputMode="decimal" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
                       className={`${inp} w-full ${tempSt==='fail' ? 'border-err bg-err/5' : tempSt==='pass' ? 'border-ok/50' : ''}`} />
                     {tempSt==='fail' && (
                       <p className="mt-1 text-[10px] font-semibold text-err">
@@ -748,7 +754,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                             {sp ? `${sp.min!=null?sp.min+'–':'≤'}${sp.max??''}%` : '—'}
                           </td>
                           <td className="px-2 py-1.5">
-                            <input type="number" inputMode="decimal" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
+                            <input type="number" min="0" inputMode="decimal" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
                               placeholder="g" className={`${inp} w-24 text-center border-info/40 bg-info/5 text-[15px] py-2`} />
                           </td>
                           <td className="px-2 py-1.5">
@@ -789,7 +795,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                   return (
                     <div key={k as string}>
                       <label className={lbl}>{l as string}{sp && <span className="text-[9px] text-text-faint ml-1">{sp.min!=null?`${sp.min}–${sp.max}`:sp.max!=null?`≤${sp.max}`:''}</span>}</label>
-                      <input type="number" inputMode="decimal" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
+                      <input type="number" min="0" inputMode="decimal" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
                         className={`${inp} w-full ${st==='fail'?'border-err/40 bg-err/8':st==='pass'?'border-ok/40 bg-ok/8':''}`} />
                       {st==='fail' && <div className="text-[9px] text-err mt-0.5">⚠ Out of spec</div>}
                     </div>
@@ -798,7 +804,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 {['1','2','3'].map(n => (
                   <div key={n}>
                     <label className={lbl}>Weight Check {n} (kg)</label>
-                    <input type="number" inputMode="decimal" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" min="0" inputMode="decimal" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
                   </div>
                 ))}
               </div>
@@ -2371,10 +2377,14 @@ function PastSensorialTable({ canWrite }: { canWrite: boolean }) {
 function InlineEditCell({ value, onSave }: { value: any; onSave: (v: any) => void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft]     = useState('')
+  const commit = () => {
+    if (isNegative(draft)) { alert('Value cannot be negative.'); return }
+    onSave(draft); setEditing(false)
+  }
   if (editing) return (
-    <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
-      onBlur={()=>{ onSave(draft); setEditing(false) }}
-      onKeyDown={e=>{ if(e.key==='Enter'){onSave(draft);setEditing(false)} if(e.key==='Escape')setEditing(false) }}
+    <input autoFocus min="0" value={draft} onChange={e=>setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e=>{ if(e.key==='Enter') commit(); if(e.key==='Escape')setEditing(false) }}
       style={{ width:55, padding:'2px 4px', border:'1.5px solid #1f4e79', borderRadius:4, fontSize:10, textAlign:'center' }}/>
   )
   return (

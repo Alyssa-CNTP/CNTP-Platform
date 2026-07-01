@@ -16,6 +16,7 @@ Format: date · developer · files changed · description of code changes.
 - `app/(app)/maintenance/technicians/page.tsx` *(new)*
 - `app/login/page.tsx`
 - `app/floor/page.tsx`
+- `components/layout/Sidebar.tsx`
 
 **Changes:**
 - Maintenance technicians can now sign in with a 4-digit PIN — mirrors the floor-operator system. New `maintenance.tech_auth` table stores a synthetic Supabase email per tech; PIN derives a deterministic password (`mnt_{pin}_{email}`) that never leaves the server.
@@ -24,6 +25,21 @@ Format: date · developer · files changed · description of code changes.
 - New API routes: `GET /api/maintenance/technicians` (public, for login picker), `POST` (provision first-time), `PATCH` (reset PIN or toggle active), `GET /api/maintenance/technicians/manage` (manager-only, enriched with `has_pin` + `on_shift`).
 - Login page redesigned: Microsoft button stays at top; two role cards below replace the old footer link — **Maintenance Tech** (orange icon) and **Floor Operator** (green icon), each with name + "Sign in with your PIN" description.
 - Floor login updated to use the unified roster: queries `roster_entries` for today's shift, sorts on-shift operators to the top with a badge. Same smart behaviour now across both login pages.
+- Sidebar: "Technician PINs" nav item added to Maintenance group, visible to Management + `can_manage_users` only.
+
+---
+
+## 2026-07-02 — Gustav (Sieving: all meshes required for In-Process; no negative values anywhere)
+
+**Files changed:**
+- `lib/utils/validation.ts` (new)
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Sieving: an In-Process run now requires every mesh fraction to be filled in before it can be saved (previously only one was required) — applies to both new-run entry and inline row edits.
+- Sieving, pasteuriser, granule: no captured value can be saved as negative — grams, sieve %, moisture, bulk density, dryer/hourly temperature, weight checks, needle count, leaf shade, and customer spec thresholds. Enforced both as an HTML `min=0` hint and as a hard save-time check (`lib/utils/validation.ts`), so it can't be bypassed by pasting or typing a leading minus.
 
 ---
 

@@ -15,6 +15,7 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDate } from '@/lib/utils/formatDate'
 import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
+import { isNegative } from '@/lib/utils/validation'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
@@ -586,6 +587,18 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
   const setF = (k: string, v: string) => setFields(f => ({...f,[k]:v}))
   const inputSt: React.CSSProperties = { width:'100%', padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:11, boxSizing:'border-box' }
 
+  function handleSaveClick() {
+    if (isNegative(fields.bulkDensity)) { alert('Bulk density cannot be negative.'); return }
+    if (isNegative(fields.needleCount)) { alert('Needle count cannot be negative.'); return }
+    if (Object.keys(gramVals).some(k => isNegative(gramVals[k]))) { alert('Sieve grams cannot be negative.'); return }
+    if (editMesh.some((m: string) => isNegative(pcts[m]))) { alert('Sieve percentages cannot be negative.'); return }
+    if (fields.runType === 'in-process') {
+      const missing = editMesh.filter((m: string) => pcts[m] === '' || pcts[m] == null)
+      if (missing.length > 0) { alert(`All sieve mesh results are required for an In-Process run — missing: ${missing.map((m: string) => m.replace(' (%)', '')).join(', ')}`); return }
+    }
+    onSave({ ...fields, ...pcts, gramValues: gramVals })
+  }
+
   return (
     <div className="bg-ok/5 border-2 border-ok rounded-xl p-4 my-2">
       <div className="text-[12px] font-bold text-ok mb-3">
@@ -606,7 +619,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
               {key==='qcName' ? (
                 <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
               ) : (
-                <input type={type} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
+                <input type={type} min={type==='number'?0:undefined} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
               )}
             </div>
           ))}
@@ -625,7 +638,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
         {specDef.hasNeedleCount && (
           <div>
             <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Needle Count</label>
-            <input type="number" value={fields.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={inputSt}/>
+            <input type="number" min="0" value={fields.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={inputSt}/>
           </div>
         )}
         {specDef.hasLeafShade && (
@@ -660,7 +673,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
         <div style={{ display:'grid', gridTemplateColumns:`repeat(${editMesh.length},1fr)`, gap:6, marginBottom:8 }}>
           {editMesh.map((m: string) => {
             const gKey = m.replace(' (%)',' (g)')
-            return <input key={gKey} type="number" step="0.1" placeholder="g" value={gramVals[gKey]??''}
+            return <input key={gKey} type="number" min="0" step="0.1" placeholder="g" value={gramVals[gKey]??''}
               onChange={e=>handleGram(gKey,e.target.value)}
               style={{ width:'100%', padding:'5px 4px', border:'1px solid #d1d5db', borderRadius:5, fontSize:11, textAlign:'center', boxSizing:'border-box', fontFamily:'monospace' }}/>
           })}
@@ -671,7 +684,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
             const val = pcts[m]??''
             const spec = specRow[m]
             const status = sdChk(val, spec)
-            return <input key={m} type="number" step="0.1" placeholder="%" value={val}
+            return <input key={m} type="number" min="0" step="0.1" placeholder="%" value={val}
               onChange={e=>setPcts(p=>({...p,[m]:e.target.value}))}
               style={{ width:'100%', padding:'5px 4px',
                 border:`1.5px solid ${status==='fail'?'#f87171':status==='pass'?'#86efac':'#d1d5db'}`,
@@ -689,7 +702,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
       </div>
 
       <div style={{ display:'flex', gap:8 }}>
-        <button onClick={()=>onSave({...fields,...pcts,gramValues:gramVals})}
+        <button onClick={handleSaveClick}
           style={{ padding:'6px 20px', borderRadius:6, border:'none', background:'#166534', color:'#fff', fontSize:12, fontWeight:700, cursor:'pointer' }}>
           Save Changes
         </button>
@@ -1009,13 +1022,18 @@ export default function SievingPage() {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
       if (dup) errs._dupTime=`A ${f.runType} run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
     }
-    if (f.runType!=='final') {
-      const hasMesh = activeMesh.some(m=>f[m]!==''&&f[m]!==undefined&&f[m]!==null)
-      if (!hasMesh) errs._mesh='Please enter at least one sieve result'
+    if (f.runType==='in-process') {
+      // In-Process requires every mesh fraction filled in — no partial sieve results.
+      const missing = activeMesh.filter(m=>f[m]===''||f[m]===undefined||f[m]===null)
+      if (missing.length>0) errs._mesh=`All sieve mesh results are required for an In-Process run — missing: ${missing.map(m=>m.replace(' (%)','')).join(', ')}`
     }
     if (!specDef.noBulkDensity&&(f.bulkDensity===''||f.bulkDensity==null)) errs.bulkDensity='Bulk density is required'
     if (specDef.hasLeafShade&&!f.leafShade) errs.leafShade='Leaf shade is required (1–11)'
     if (f.leafShade) { const ls=parseInt(f.leafShade,10); if (isNaN(ls)||ls<1||ls>11) errs.leafShade='Leaf shade must be 1–11' }
+    // No captured value may be negative.
+    if (!errs._mesh && Object.keys(gramValues).some(k=>isNegative(gramValues[k]))) errs._mesh='Sieve grams cannot be negative'
+    if (isNegative(f.bulkDensity)) errs.bulkDensity='Bulk density cannot be negative'
+    if (isNegative(f.needleCount)) errs.needleCount='Needle count cannot be negative'
     return errs
   }
 
@@ -1301,7 +1319,7 @@ export default function SievingPage() {
             </div>
             {!specDef.noBulkDensity&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.bulkDensity?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g) *</label>
-              <input type="number" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,borderColor:errors.bulkDensity?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <input type="number" min="0" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,borderColor:errors.bulkDensity?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="bulkDensity"/>
             </div>}
             <div>
@@ -1322,8 +1340,9 @@ export default function SievingPage() {
               <ErrMsg field="leafShade"/>
             </div>}
             {specDef.hasNeedleCount&&form.runType!=='final'&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Needle Count</label>
-              <input type="number" step="any" value={form.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={{...inputSt,padding:'9px 10px',fontSize:13}}/>
+              <label style={{fontSize:10,fontWeight:700,color:errors.needleCount?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Needle Count</label>
+              <input type="number" min="0" step="any" value={form.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={{...inputSt,borderColor:errors.needleCount?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <ErrMsg field="needleCount"/>
             </div>}
             <div style={{gridColumn:'1 / -1'}}>
               <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Comment</label>
@@ -1353,7 +1372,7 @@ export default function SievingPage() {
                         <tr key={m} style={{background:i%2===0?'#fff':'#f9fafb',borderBottom:'1px solid #f3f4f6'}}>
                           <td style={{padding:'5px 8px',fontWeight:600}}>{m}</td>
                           <td style={{padding:'4px 8px'}}>
-                            <input type="number" step="any" value={gramValues[gKey]||''} onChange={e=>handleGramChange(gKey,e.target.value)}
+                            <input type="number" min="0" step="any" value={gramValues[gKey]||''} onChange={e=>handleGramChange(gKey,e.target.value)}
                               placeholder="g" style={{width:100,padding:'6px 8px',border:'1px solid #bfdbfe',borderRadius:5,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
                           </td>
                           <td style={{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontWeight:700,fontSize:13,color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'#374151'}}>
