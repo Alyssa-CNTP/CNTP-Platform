@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Sieving: all meshes required for In-Process; no negative values anywhere)
+
+**Files changed:**
+- `lib/utils/validation.ts` (new)
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Sieving: an In-Process run now requires every mesh fraction to be filled in before it can be saved (previously only one was required) — applies to both new-run entry and inline row edits.
+- Sieving, pasteuriser, granule: no captured value can be saved as negative — grams, sieve %, moisture, bulk density, dryer/hourly temperature, weight checks, needle count, leaf shade, and customer spec thresholds. Enforced both as an HTML `min=0` hint and as a hard save-time check (`lib/utils/validation.ts`), so it can't be bypassed by pasting or typing a leading minus.
+
+---
+
 ## 2026-07-02 — Alyssa (Skills Matrix redesign + Staff Directory by department)
 
 **Files changed:**
