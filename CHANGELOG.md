@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (Lab Manager: no comment step needed on Pass)
+
+**Files changed:**
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Pass now finalises immediately with no comment modal — one click, no interruption.
+- Fail and Concession still open the comment modal and still require a comment, unchanged.
+
+---
+
 ## 2026-07-01 — Gustav (Lab Manager: comment sent back to QC on duty)
 
 **Files changed:**

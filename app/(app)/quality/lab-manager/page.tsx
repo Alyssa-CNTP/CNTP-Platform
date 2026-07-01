@@ -220,7 +220,7 @@ export default function LabManagerPage() {
                   </div>
                   {canApprove && (
                     <div className="flex gap-2">
-                      <button onClick={() => setDecisionModal({ item, result: 'Pass' })} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
+                      <button onClick={() => decide(item, 'Pass', '')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
                       <button onClick={() => setDecisionModal({ item, result: 'Concession' })} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
                       <button onClick={() => setDecisionModal({ item, result: 'Fail' })} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
                     </div>

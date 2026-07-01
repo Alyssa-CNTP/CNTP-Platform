@@ -1392,7 +1392,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
               </span>
               {canApprove ? (
                 (['Pass', 'Fail', 'Concession'] as const).map(st => (
-                  <button key={st} onClick={() => setDecisionResult(st)}
+                  <button key={st} onClick={() => st === 'Pass' ? onFinalise(run.id, 'Pass') : setDecisionResult(st)}
                     className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border-2"
                     style={{ borderColor: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706', background: st === 'Pass' ? '#f0fdf4' : st === 'Fail' ? '#fef2f2' : '#fffbeb', color: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706' }}>
                     {st}
