@@ -25,7 +25,7 @@ function todaySAST() {
 }
 function currentShift(): 'day' | 'night' {
   const h = parseInt(new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', hour: 'numeric', hour12: false }), 10)
-  return h >= 7 && h < 17 ? 'day' : 'night'
+  return h >= 7 && h < 16 ? 'day' : 'night'
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ export default function PlannerPage() {
           .from('roster_entries')
           .select('id,shift,person_name,role_key')
           .eq('period_id', period.id)
-          .in('role_key', ['maintenance_tech', 'maintenance_asst'])
+          .in('role_key', ['maintenance_tech', 'maintenance_asst', 'maintenance_manager'])
         setRosterEntries((entries as RosterEntry[] | null) ?? [])
       }
       setRosterLoading(false)

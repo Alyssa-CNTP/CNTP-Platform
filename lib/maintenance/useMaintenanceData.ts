@@ -230,7 +230,7 @@ export function useMaintenanceData() {
   // source). Maintenance-role entries for today's period + current shift
   // (Day 07:00–16:00 / Night 16:00–01:00, SAST). Falls back to the legacy
   // maintenance duty_roster only when Operations has no maintenance entries.
-  const MAINT_ROLE_KEYS = ['maintenance_tech', 'maintenance_asst']
+  const MAINT_ROLE_KEYS = ['maintenance_tech', 'maintenance_asst', 'maintenance_manager']
   const opsOnDutyNames = () => {
     const sast = new Date(Date.now() + 2 * 3600_000)
     const hour = sast.getUTCHours()
