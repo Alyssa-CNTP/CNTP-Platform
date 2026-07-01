@@ -51,3 +51,6 @@ ml/leafshade/.venv/
 ml/**/__pycache__/
 *.pyc
 scripts/data/
+
+# ad-hoc session scratch files (temp working data, not app code)
+.scratch_*

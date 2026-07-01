@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python3 -c ' *)",
       "Bash(npx tsc *)",
-      "WebFetch(domain:sxzjjcyuzyfneesnsjna.supabase.co)"
+      "WebFetch(domain:sxzjjcyuzyfneesnsjna.supabase.co)",
+      "mcp__Microsoft_365__sharepoint_search",
+      "mcp__Microsoft_365__read_resource"
     ]
   }
 }
