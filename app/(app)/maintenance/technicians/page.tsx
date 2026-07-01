@@ -7,15 +7,16 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { useRouter } from 'next/navigation'
-import { Loader2, KeyRound, CheckCircle, XCircle, RefreshCw, Eye, EyeOff, ShieldCheck } from 'lucide-react'
+import { Loader2, KeyRound, CheckCircle, XCircle, RefreshCw, Eye, EyeOff, ShieldCheck, AlertTriangle } from 'lucide-react'
 
 interface Tech {
-  user_id:      string
+  user_id:      string | null
   full_name:    string
   role:         string
   is_active:    boolean
   has_pin:      boolean   // whether tech_auth row exists
   on_shift:     boolean
+  unlinked:     boolean   // on roster but not yet in shared.app_roles
 }
 
 interface FormState {
@@ -52,7 +53,7 @@ export default function TechnicianPinsPage() {
       if (Array.isArray(data)) {
         setTechs(data)
         const initial: Record<string, FormState> = {}
-        data.forEach((t: Tech) => { initial[t.user_id] = initForm() })
+        data.forEach((t: Tech) => { if (t.user_id) initial[t.user_id] = initForm() })
         setForms(initial)
       }
     } finally {
@@ -65,6 +66,7 @@ export default function TechnicianPinsPage() {
   }
 
   async function savePin(tech: Tech) {
+    if (!tech.user_id) return
     const form = forms[tech.user_id]
     if (!form) return
     if (!/^\d{4}$/.test(form.pin)) {
@@ -147,8 +149,9 @@ export default function TechnicianPinsPage() {
                   {group.list.map(tech => {
                     const form = forms[tech.user_id] ?? initForm()
                     const show = !!showPin[tech.user_id]
+                    const key = tech.user_id ?? tech.full_name
                     return (
-                      <div key={tech.user_id} className={`card p-4 flex flex-col sm:flex-row sm:items-center gap-4 ${!tech.is_active ? 'opacity-60' : ''}`}>
+                      <div key={key} className={`card p-4 flex flex-col sm:flex-row sm:items-center gap-4 ${!tech.is_active ? 'opacity-60' : ''}`}>
                         {/* Identity */}
                         <div className="flex items-center gap-3 flex-1 min-w-0">
                           <div className="w-10 h-10 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
@@ -160,9 +163,11 @@ export default function TechnicianPinsPage() {
                             <p className="font-medium text-[15px] text-text truncate">{tech.full_name}</p>
                             <div className="flex items-center gap-2 flex-wrap mt-0.5">
                               <span className="text-[11px] text-text-muted">{tech.role}</span>
-                              {tech.has_pin
-                                ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-ok bg-ok/10 rounded-full px-2 py-0.5"><ShieldCheck size={10} /> PIN set</span>
-                                : <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warn bg-warn/10 rounded-full px-2 py-0.5"><KeyRound size={10} /> No PIN</span>
+                              {tech.unlinked
+                                ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warn bg-warn/10 rounded-full px-2 py-0.5"><AlertTriangle size={10} /> Not in Users</span>
+                                : tech.has_pin
+                                  ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-ok bg-ok/10 rounded-full px-2 py-0.5"><ShieldCheck size={10} /> PIN set</span>
+                                  : <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warn bg-warn/10 rounded-full px-2 py-0.5"><KeyRound size={10} /> No PIN</span>
                               }
                               {tech.on_shift && (
                                 <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">On shift</span>
@@ -171,62 +176,68 @@ export default function TechnicianPinsPage() {
                           </div>
                         </div>
 
-                        {/* PIN input */}
-                        <div className="flex items-center gap-2">
-                          <div className="relative">
-                            <input
-                              type={show ? 'text' : 'password'}
-                              inputMode="numeric"
-                              maxLength={4}
-                              placeholder="New PIN"
-                              value={form.pin}
-                              onChange={e => {
-                                const v = e.target.value.replace(/\D/g, '').slice(0, 4)
-                                setField(tech.user_id, 'pin', v)
-                                setField(tech.user_id, 'error', '')
-                                setField(tech.user_id, 'done', false)
-                              }}
-                              className="w-28 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[15px] font-mono text-center focus:outline-none focus:border-brand"
-                            />
+                        {/* PIN input — disabled for unlinked techs */}
+                        {tech.unlinked ? (
+                          <p className="text-[12px] text-text-muted italic">Add this person in Users & Roles first to assign a PIN.</p>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <div className="relative">
+                              <input
+                                type={show ? 'text' : 'password'}
+                                inputMode="numeric"
+                                maxLength={4}
+                                placeholder="New PIN"
+                                value={form?.pin ?? ''}
+                                onChange={e => {
+                                  const v = e.target.value.replace(/\D/g, '').slice(0, 4)
+                                  setField(tech.user_id!, 'pin', v)
+                                  setField(tech.user_id!, 'error', '')
+                                  setField(tech.user_id!, 'done', false)
+                                }}
+                                className="w-28 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[15px] font-mono text-center focus:outline-none focus:border-brand"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowPin(s => ({ ...s, [tech.user_id!]: !show }))}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                              >
+                                {show ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </button>
+                            </div>
                             <button
-                              type="button"
-                              onClick={() => setShowPin(s => ({ ...s, [tech.user_id]: !show }))}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                              onClick={() => savePin(tech)}
+                              disabled={!form || form.saving || (form.pin?.length ?? 0) !== 4}
+                              className="bg-brand text-white rounded-lg px-4 py-2 text-[13px] font-semibold disabled:opacity-50 flex items-center gap-1.5"
                             >
-                              {show ? <EyeOff size={14} /> : <Eye size={14} />}
+                              {form?.saving
+                                ? <Loader2 size={13} className="animate-spin" />
+                                : form?.done
+                                  ? <CheckCircle size={13} />
+                                  : <KeyRound size={13} />
+                              }
+                              {form?.done ? 'Saved' : tech.has_pin ? 'Reset' : 'Set PIN'}
                             </button>
                           </div>
-                          <button
-                            onClick={() => savePin(tech)}
-                            disabled={form.saving || form.pin.length !== 4}
-                            className="bg-brand text-white rounded-lg px-4 py-2 text-[13px] font-semibold disabled:opacity-50 flex items-center gap-1.5"
-                          >
-                            {form.saving
-                              ? <Loader2 size={13} className="animate-spin" />
-                              : form.done
-                                ? <CheckCircle size={13} />
-                                : <KeyRound size={13} />
-                            }
-                            {form.done ? 'Saved' : tech.has_pin ? 'Reset' : 'Set PIN'}
-                          </button>
-                        </div>
+                        )}
 
-                        {/* Active toggle */}
-                        <button
-                          onClick={() => toggleActive(tech)}
-                          title={tech.is_active ? 'Deactivate' : 'Activate'}
-                          className={`shrink-0 rounded-lg px-3 py-2 text-[12px] font-semibold flex items-center gap-1.5 ${
-                            tech.is_active
-                              ? 'text-text-muted bg-stone-100 hover:bg-stone-200'
-                              : 'text-ok bg-ok/10 hover:bg-ok/20'
-                          }`}
-                        >
-                          {tech.is_active ? <XCircle size={13} /> : <CheckCircle size={13} />}
-                          {tech.is_active ? 'Active' : 'Inactive'}
-                        </button>
+                        {/* Active toggle — only for linked techs */}
+                        {!tech.unlinked && (
+                          <button
+                            onClick={() => toggleActive(tech)}
+                            title={tech.is_active ? 'Deactivate' : 'Activate'}
+                            className={`shrink-0 rounded-lg px-3 py-2 text-[12px] font-semibold flex items-center gap-1.5 ${
+                              tech.is_active
+                                ? 'text-text-muted bg-stone-100 hover:bg-stone-200'
+                                : 'text-ok bg-ok/10 hover:bg-ok/20'
+                            }`}
+                          >
+                            {tech.is_active ? <XCircle size={13} /> : <CheckCircle size={13} />}
+                            {tech.is_active ? 'Active' : 'Inactive'}
+                          </button>
+                        )}
 
                         {/* Inline error */}
-                        {form.error && (
+                        {form?.error && (
                           <p className="w-full text-[12px] text-err sm:col-span-full">{form.error}</p>
                         )}
                       </div>
