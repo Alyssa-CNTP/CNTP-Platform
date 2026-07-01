@@ -1,37 +1,26 @@
 'use client'
 
 // app/maintenance-login/page.tsx
-// PIN-based login for maintenance technicians — mirrors app/floor/page.tsx.
-// Techs on the current shift (from production.roster_entries) are highlighted
-// at the top of the picker. After sign-in → /maintenance/job-cards.
+// PIN-based login for maintenance technicians. Names + on_shift status come
+// from /api/maintenance/technicians (server-side, admin bypasses RLS).
+// After sign-in → /maintenance/job-cards.
 
 import { useState, useEffect, useRef } from 'react'
-import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { Loader2, Delete, ChevronLeft, Wrench } from 'lucide-react'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { deriveMaintPassword } from '@/lib/maintenance/tech-auth'
 
-interface Tech { user_id: string; display_name: string; email: string }
-
-function currentShift(): 'day' | 'night' {
-  const h = new Date().getHours()
-  return h >= 7 && h < 16 ? 'day' : 'night'
-}
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+interface Tech { user_id: string; display_name: string; email: string; on_shift: boolean }
 
 export default function MaintenanceLoginPage() {
-  const router   = useRouter()
-  const [techs,      setTechs]      = useState<Tech[]>([])
-  const [onShift,    setOnShift]    = useState<Set<string>>(new Set())
-  const [loading,    setLoading]    = useState(true)
-  const [selected,   setSelected]   = useState<Tech | null>(null)
-  const [pin,        setPin]        = useState('')
-  const [signingIn,  setSigningIn]  = useState(false)
-  const [error,      setError]      = useState('')
+  const router  = useRouter()
+  const [techs,     setTechs]     = useState<Tech[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [selected,  setSelected]  = useState<Tech | null>(null)
+  const [pin,       setPin]       = useState('')
+  const [signingIn, setSigningIn] = useState(false)
+  const [error,     setError]     = useState('')
   const redirected = useRef(false)
 
   useEffect(() => {
@@ -44,27 +33,19 @@ export default function MaintenanceLoginPage() {
   }, [router])
 
   useEffect(() => {
-    async function load() {
-      const [techsRes, rosterRes] = await Promise.all([
-        fetch('/api/maintenance/technicians').then(r => r.json()).catch(() => []),
-        getSupabaseClient()
-          .schema('production' as any)
-          .from('roster_entries')
-          .select('operator_id, roster_periods!inner(start_date, end_date)')
-          .eq('shift', currentShift())
-          .in('role_key', ['maintenance_tech', 'maintenance_asst'])
-          .lte('roster_periods.start_date', todayISO())
-          .gte('roster_periods.end_date',   todayISO())
-          .then(r => r.data ?? [])
-          .catch(() => []),
-      ])
-
-      setTechs(Array.isArray(techsRes) ? techsRes : [])
-      setOnShift(new Set((rosterRes as any[]).map((r: any) => r.operator_id).filter(Boolean)))
-      setLoading(false)
-    }
-    load()
+    fetch('/api/maintenance/technicians')
+      .then(r => r.json())
+      .then(d => setTechs(Array.isArray(d) ? d : []))
+      .catch(() => setTechs([]))
+      .finally(() => setLoading(false))
   }, [])
+
+  // On-shift first, then alphabetical.
+  const sorted = [...techs].sort((a, b) => {
+    if (a.on_shift !== b.on_shift) return a.on_shift ? -1 : 1
+    return a.display_name.localeCompare(b.display_name)
+  })
+  const anyOnShift = techs.some(t => t.on_shift)
 
   async function signIn(p: string) {
     if (!selected || p.length !== 4) return
@@ -73,11 +54,7 @@ export default function MaintenanceLoginPage() {
       email:    selected.email,
       password: deriveMaintPassword(p, selected.email),
     })
-    if (error) {
-      setError('Incorrect PIN — please try again')
-      setPin(''); setSigningIn(false)
-      return
-    }
+    if (error) { setError('Incorrect PIN — please try again'); setPin(''); setSigningIn(false); return }
     router.replace('/maintenance/job-cards')
   }
 
@@ -85,19 +62,8 @@ export default function MaintenanceLoginPage() {
     if (signingIn) return
     setError('')
     if (k === 'del') { setPin(p => p.slice(0, -1)); return }
-    setPin(p => {
-      const next = (p + k).slice(0, 4)
-      if (next.length === 4) signIn(next)
-      return next
-    })
+    setPin(p => { const next = (p + k).slice(0, 4); if (next.length === 4) signIn(next); return next })
   }
-
-  // Sort: on-shift techs first, then alphabetical.
-  const sorted = [...techs].sort((a, b) => {
-    const aShift = onShift.has(a.user_id) ? 0 : 1
-    const bShift = onShift.has(b.user_id) ? 0 : 1
-    return aShift - bShift || a.display_name.localeCompare(b.display_name)
-  })
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-5"
@@ -126,30 +92,18 @@ export default function MaintenanceLoginPage() {
               </p>
             ) : (
               <>
-                {onShift.size > 0 && (
-                  <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2">
-                    On shift now
-                  </p>
-                )}
+                {anyOnShift && <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2">On shift now</p>}
                 <div className="space-y-2 max-h-[52vh] overflow-y-auto">
                   {sorted.map((tech, i) => {
-                    const isShift = onShift.has(tech.user_id)
-                    const prevShift = i > 0 && onShift.has(sorted[i - 1].user_id)
+                    const prevOnShift = i > 0 && sorted[i - 1].on_shift
                     return (
                       <div key={tech.user_id}>
-                        {/* Divider between on-shift and off-shift groups */}
-                        {!isShift && prevShift && onShift.size > 0 && (
-                          <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2 mt-3">
-                            Other technicians
-                          </p>
+                        {!tech.on_shift && prevOnShift && anyOnShift && (
+                          <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2 mt-3">Other technicians</p>
                         )}
                         <button
                           onClick={() => { setSelected(tech); setPin(''); setError('') }}
-                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${
-                            isShift
-                              ? 'border-brand/40 bg-brand/5 hover:border-brand hover:bg-brand/10'
-                              : 'border-stone-200 hover:border-brand hover:bg-brand/5'
-                          }`}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${tech.on_shift ? 'border-brand/40 bg-brand/5 hover:border-brand hover:bg-brand/10' : 'border-stone-200 hover:border-brand hover:bg-brand/5'}`}
                         >
                           <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
                             <span className="font-mono font-bold text-[12px] text-stone-600">
@@ -157,10 +111,8 @@ export default function MaintenanceLoginPage() {
                             </span>
                           </div>
                           <span className="font-medium text-[15px] text-text flex-1">{tech.display_name}</span>
-                          {isShift && (
-                            <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">
-                              On shift
-                            </span>
+                          {tech.on_shift && (
+                            <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">On shift</span>
                           )}
                         </button>
                       </div>
@@ -179,7 +131,6 @@ export default function MaintenanceLoginPage() {
             >
               <ChevronLeft size={14} /> Not {selected.display_name}?
             </button>
-
             <div className="text-center space-y-3">
               <p className="text-[14px] text-text">Hi <strong>{selected.display_name}</strong>, enter your PIN</p>
               <div className="flex justify-center gap-3">
@@ -190,7 +141,6 @@ export default function MaintenanceLoginPage() {
               {error && <p className="text-[12px] text-err">{error}</p>}
               {signingIn && <Loader2 size={18} className="animate-spin text-brand mx-auto" />}
             </div>
-
             <div className="grid grid-cols-3 gap-3">
               {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(k => (
                 <button key={k} onClick={() => pressKey(k)} disabled={signingIn}
@@ -211,7 +161,6 @@ export default function MaintenanceLoginPage() {
           </div>
         )}
       </div>
-
       <p className="mt-5 text-[10px] uppercase tracking-[0.07em] text-stone-400">
         Cape Natural Tea Products · Blackheath
       </p>

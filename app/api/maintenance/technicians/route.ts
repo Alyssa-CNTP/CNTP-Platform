@@ -16,47 +16,98 @@ function canManage(caller: { can: (k: any) => boolean; role?: string | null; dep
   )
 }
 
+const MAINT_ROLE_KEYS = ['maintenance_tech', 'maintenance_asst']
+
+function currentShift() {
+  const h = new Date().getHours()
+  return h >= 7 && h < 16 ? 'day' : 'night'
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function normName(n: string) {
+  return (n ?? '').trim().toLowerCase()
+}
+
 // ─── GET — public list for the login page ────────────────────────────────────
-// Returns only id, display_name, auth_email — never the PIN.
+// Sources names from the shift roster (all periods) so the list matches exactly
+// who's on the roster. On-shift resolution is server-side (admin bypasses RLS).
+// Only returns techs who have a tech_auth row (i.e. a PIN has been set).
 export async function GET() {
   try {
     const admin = getAdminClient()
+    const today = todayISO()
+    const shift = currentShift()
 
-    // Join shared.app_roles (source of truth for active techs) with maintenance.tech_auth
-    // (source of the synthetic email needed for PIN login).
-    const { data, error } = await admin
+    // 1. All unique person_names from roster with a maintenance role (all periods).
+    const { data: rosterAll, error: rosterErr } = await admin
+      .schema('production' as any)
+      .from('roster_entries')
+      .select('person_name')
+      .in('role_key', MAINT_ROLE_KEYS)
+    if (rosterErr) return NextResponse.json({ error: rosterErr.message }, { status: 500 })
+
+    const nameMap = new Map<string, string>()
+    for (const r of rosterAll ?? []) {
+      if (r.person_name) nameMap.set(normName(r.person_name), r.person_name)
+    }
+    if (!nameMap.size) return NextResponse.json([])
+
+    // 2. Match roster names to app_roles to get user_ids.
+    const { data: roleRows } = await admin
       .schema('shared' as any)
       .from('app_roles')
-      .select('user_id, full_name, is_active')
+      .select('user_id, full_name')
       .eq('department', 'Maintenance')
-      .in('role', ['maintenance_technician', 'maintenance_tech', 'tech', 'maintenance_manager', 'maintenance_asst'])
       .eq('is_active', true)
-      .order('full_name')
+    const roleByName = new Map<string, any>()
+    for (const r of roleRows ?? []) roleByName.set(normName(r.full_name), r)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    // 3. tech_auth rows — only techs with a PIN can log in.
+    const linkedUserIds = [...nameMap.keys()]
+      .map(n => roleByName.get(n)?.user_id)
+      .filter(Boolean)
 
-    const userIds = (data ?? []).map((r: any) => r.user_id).filter(Boolean)
-    if (!userIds.length) return NextResponse.json([])
-
-    // Pull auth emails for these users.
     const { data: authRows, error: authErr } = await admin
       .schema('maintenance' as any)
       .from('tech_auth')
       .select('user_id, auth_email')
-      .in('user_id', userIds)
+      .in('user_id', linkedUserIds)
       .eq('active', true)
-
     if (authErr) return NextResponse.json({ error: authErr.message }, { status: 500 })
 
     const emailMap = new Map((authRows ?? []).map((r: any) => [r.user_id, r.auth_email]))
 
-    const techs = (data ?? [])
-      .filter((r: any) => emailMap.has(r.user_id))
-      .map((r: any) => ({
-        user_id:      r.user_id,
-        display_name: r.full_name,
-        email:        emailMap.get(r.user_id),
-      }))
+    // 4. On-shift names for today (server-side, bypasses RLS).
+    const { data: onShiftRows } = await admin
+      .schema('production' as any)
+      .from('roster_entries')
+      .select('person_name, roster_periods!inner(start_date, end_date)')
+      .in('role_key', MAINT_ROLE_KEYS)
+      .eq('shift', shift)
+      .lte('roster_periods.start_date', today)
+      .gte('roster_periods.end_date',   today)
+    const onShiftNames = new Set(
+      (onShiftRows ?? []).map((r: any) => normName(r.person_name)).filter(Boolean)
+    )
+
+    // 5. Assemble — only techs with a PIN set (emailMap has their auth_email).
+    const techs = [...nameMap.entries()]
+      .map(([norm, display]) => {
+        const roleRow = roleByName.get(norm)
+        if (!roleRow) return null
+        const email = emailMap.get(roleRow.user_id)
+        if (!email) return null
+        return {
+          user_id:      roleRow.user_id,
+          display_name: display,
+          email,
+          on_shift:     onShiftNames.has(norm),
+        }
+      })
+      .filter(Boolean)
 
     return NextResponse.json(techs)
   } catch (err: any) {
