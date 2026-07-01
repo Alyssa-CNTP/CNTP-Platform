@@ -246,7 +246,7 @@ export function SievingCapture({
               <div className="grid grid-cols-2 gap-3">
                 {value.spillage.map((r, i) => (
                   <div key={r.id} className="space-y-1">
-                    <label className={LBL}>Spillage {i + 1} (kg)</label>
+                    <label className={LBL}>{i === 0 ? 'Bucket elevator (kg)' : 'Machine spillage (kg)'}</label>
                     <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.kg} disabled={locked}
                       onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
                   </div>
