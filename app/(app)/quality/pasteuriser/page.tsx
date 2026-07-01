@@ -1369,7 +1369,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                           <>
                             <span className="text-[11px] text-text-muted">Approve as:</span>
                             {(['Pass','Fail','Concession'] as const).map(r => (
-                              <button key={r} onClick={() => setDecisionResult(r)}
+                              <button key={r} onClick={() => r === 'Pass' ? finaliseBatch('Pass') : setDecisionResult(r)}
                                 className="px-3 py-1.5 rounded-lg border-2 text-[11px] font-bold transition-colors"
                                 style={{ borderColor:PASS_COLORS[r][2], background:PASS_COLORS[r][0], color:PASS_COLORS[r][1] }}>
                                 {r}
