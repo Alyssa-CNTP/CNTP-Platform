@@ -577,6 +577,7 @@ export default function LabResultsPage() {
   const [dupWarn,     setDupWarn]     = useState<string|null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [historyRecs, setHistoryRecs] = useState<any[]>([])
+  const [searchText,  setSearchText]  = useState('')
 
   const load = useCallback(async (tab: TestType) => {
     setLoading(true); setError('')
@@ -629,7 +630,14 @@ export default function LabResultsPage() {
     setRecords(p=>({...p,[activeTab]:p[activeTab].filter(r=>r.id!==id)}))
   }
 
-  const current  = records[activeTab]
+  // Global search — matches against every field of a record/row (batch, lab,
+  // dates, analyte values, etc.) via a blunt but thorough JSON stringify.
+  const matchesSearch = (row: any) => {
+    if (!searchText.trim()) return true
+    return JSON.stringify(row).toLowerCase().includes(searchText.trim().toLowerCase())
+  }
+
+  const current  = records[activeTab].filter(matchesSearch)
   const allRows  = current.flatMap(expandRecord)
   const cols     = COLS[activeTab] ?? []
 
@@ -652,7 +660,15 @@ export default function LabResultsPage() {
           <div style={{ fontWeight:800, fontSize:20, marginBottom:2 }}>Final Product Lab Results</div>
           <div style={{ fontSize:11, color:'#6b7280' }}>Upload COA PDFs · Gemini extracts structured data</div>
         </div>
-        <div style={{ display:'flex', gap:8, marginLeft:'auto', flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:8, marginLeft:'auto', flexWrap:'wrap', alignItems:'center' }}>
+          <div style={{ position:'relative', minWidth:220 }}>
+            <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
+              style={{ width:'100%', padding:'6px 30px 6px 10px', fontSize:11, border:'1px solid #d1d5db', borderRadius:7, boxSizing:'border-box' }}/>
+            {searchText && (
+              <button onClick={()=>setSearchText('')} title="Clear search"
+                style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:'#9ca3af', cursor:'pointer', fontSize:13 }}>✕</button>
+            )}
+          </div>
           <button onClick={()=>load(activeTab)} style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:11, cursor:'pointer' }}>
             ↻ Refresh
           </button>
@@ -822,7 +838,9 @@ export default function LabResultsPage() {
 
       {!loading && allRows.length === 0 && current.length === 0 && !pending && (
         <div style={{ textAlign:'center', color:'#9ca3af', padding:'24px 0', fontSize:11 }}>
-          No {TEST_TYPES.find(t=>t.key===activeTab)?.label} results yet — drop a PDF above
+          {searchText.trim() && records[activeTab].length > 0
+            ? `No results match "${searchText}"`
+            : `No ${TEST_TYPES.find(t=>t.key===activeTab)?.label} results yet — drop a PDF above`}
         </div>
       )}
 

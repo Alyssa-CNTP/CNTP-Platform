@@ -103,6 +103,26 @@ function computeViolations(b: any, specJson: any): string[] {
   return violations
 }
 
+// Normalises a batch number for duplicate comparison — case, whitespace and
+// hyphen/underscore variants (e.g. "GS-0098" / "GS 0098" / "GS_0098") all
+// collapse to the same key, so a duplicate can't slip through as "different".
+function normBatch(b: string | null | undefined) {
+  return (b ?? '').trim().toLowerCase().replace(/_/g, '-').replace(/\s*-\s*/g, '-')
+}
+
+// Fetches every row of a table, paginating past PostgREST's 1000-row cap so
+// duplicate-batch checks and history views always see the full data set.
+async function fetchAllRows(db: any, table: string, build: (q: any) => any): Promise<any[]> {
+  let all: any[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build(db.schema('qms').from(table).select('*')).range(from, from + 999)
+    if (error) break
+    all = all.concat(data || [])
+    if (!data || data.length < 1000) break
+  }
+  return all
+}
+
 function sortSamples(samples: any[]) {
   return [...samples].sort((a, b) => {
     const da = `${a.sample_date || ''}${a.sample_time || ''}`
@@ -1963,20 +1983,17 @@ export default function GranulePage() {
   const [selectedRunId, setSelectedRunId]       = useState<number | null>(null)
 
   // ── Load runs, samples, tastings, and specs in parallel ──
+  // Paginated — the duplicate-batch-number check depends on ALL history being
+  // loaded, not just the newest page (PostgREST caps a single request at 1000 rows).
   const load = useCallback(async () => {
     setLoading(true)
     // qms is the single source (legacy public granule_* consolidated 2026-06-24)
-    const [runsRes, samplesRes, tastingsRes, specsRes] = await Promise.all([
-      db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }),
-      db.schema('qms').from('granule_samples').select('*').order('sample_date', { ascending: true, nullsFirst: false }).order('sample_time', { ascending: true, nullsFirst: false }),
-      db.schema('qms').from('granule_tastings').select('*').order('created_at', { ascending: true }),
-      db.schema('qms').from('granule_specs').select('*').order('type_grade').order('customer'),
+    const [allRuns, allSamples, allTastings, allSpecs] = await Promise.all([
+      fetchAllRows(db, 'granule_runs', q => q.order('created_at', { ascending: false })),
+      fetchAllRows(db, 'granule_samples', q => q.order('sample_date', { ascending: true, nullsFirst: false }).order('sample_time', { ascending: true, nullsFirst: false })),
+      fetchAllRows(db, 'granule_tastings', q => q.order('created_at', { ascending: true })),
+      fetchAllRows(db, 'granule_specs', q => q.order('type_grade').order('customer')),
     ])
-
-    const allRuns     = runsRes.data || []
-    const allSamples  = samplesRes.data || []
-    const allTastings = tastingsRes.data || []
-    const allSpecs    = specsRes.data || []
 
     const byRun: Record<number, any[]>     = {}
     const tastByRun: Record<number, any[]> = {}
@@ -1996,7 +2013,7 @@ export default function GranulePage() {
   // ── CRUD handlers — all mirror Express server logic ──
 
   async function handleCreateRun(form: any) {
-    const dup = runs.find((r: any) => r.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    const dup = runs.find((r: any) => normBatch(r.batch_number) === normBatch(form.batch_number))
     if (dup) {
       if (!dup.final_status) {
         alert(`⚠ A run for batch "${form.batch_number}" is already open.\n\nPlease add a sample to the existing run instead of starting a new one.`)

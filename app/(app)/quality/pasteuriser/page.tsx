@@ -210,6 +210,13 @@ function getPastSpec(custName: string, field: string, batchSpec: any, batchSpecs
   return PAST_SPEC_DEFAULTS[field] ?? null
 }
 
+// Normalises a batch number for duplicate comparison — case, whitespace and
+// hyphen/underscore variants (e.g. "GS-0098" / "GS 0098" / "GS_0098") all
+// collapse to the same key, so a duplicate can't slip through as "different".
+function normBatch(b: string | null | undefined) {
+  return (b ?? '').trim().toLowerCase().replace(/_/g, '-').replace(/\s*-\s*/g, '-')
+}
+
 function pastChk(value: any, spec: {min:number|null,max:number|null} | null): 'pass'|'fail'|'neutral' {
   if (!spec || value === '' || value == null) return 'neutral'
   const n = parseFloat(value); if (isNaN(n)) return 'neutral'
@@ -969,29 +976,38 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const prevBatchIdRef = useRef<string|null>(null)
 
   // Load batches from qms (single source — legacy public consolidated 2026-06-24)
+  // Paginated — the duplicate-batch-number check depends on ALL history being
+  // loaded, not just the newest page (PostgREST caps a single request at 1000 rows).
   useEffect(() => {
     setDbLoading(true)
-    db.schema('qms').from('quality_records').select('*')
-      .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
-      .order('created_at',{ascending:false})
-      .then(({ data: qmsData }: { data: any }) => {
-        const parseRec = (r: any): any => {
-          let d: any = {}
-          try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
-          if (!d.id) d.id = r.id || r.batch_number || `rec-${Math.random().toString(36).slice(2)}`
-          const b = { ...d, _db_id: r.id }
-          // Chronological order (oldest first) — this order drives "Sample #N"
-          // numbering and the odd/even sieve pattern. Display is reversed
-          // separately where samples are rendered, so newest shows on top.
-          return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
-            const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
-            return da < db2 ? -1 : da > db2 ? 1 : 0
-          })}
-        }
-        const fromQms = (qmsData || []).map((r: any) => parseRec(r)).filter(Boolean)
-        setBatches(fromQms as any)
-        if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
-      }).then(undefined, () => {}).finally(() => setDbLoading(false))
+    ;(async () => {
+      let allData: any[] = []
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await db.schema('qms').from('quality_records').select('*')
+          .eq('workcenter','pasteuriser').eq('workflow','pasteuriser_run')
+          .order('created_at',{ascending:false}).range(from, from + 999)
+        if (error) break
+        allData = allData.concat(data || [])
+        if (!data || data.length < 1000) break
+      }
+      const parseRec = (r: any): any => {
+        let d: any = {}
+        try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
+        if (!d.id) d.id = r.id || r.batch_number || `rec-${Math.random().toString(36).slice(2)}`
+        const b = { ...d, _db_id: r.id }
+        // Chronological order (oldest first) — this order drives "Sample #N"
+        // numbering and the odd/even sieve pattern. Display is reversed
+        // separately where samples are rendered, so newest shows on top.
+        return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
+          const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
+          return da < db2 ? -1 : da > db2 ? 1 : 0
+        })}
+      }
+      const fromQms = allData.map((r: any) => parseRec(r)).filter(Boolean)
+      setBatches(fromQms as any)
+      if (fromQms.length > 0) setActiveBatchId((fromQms[0] as any).id)
+      setDbLoading(false)
+    })()
   }, [])
 
   // "Historical" view — now a qms read (public schema retired)
@@ -1050,7 +1066,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   }
 
   function createBatch(form: any) {
-    const dup = batches.find(b => b.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    const dup = batches.find(b => normBatch(b.batch_number) === normBatch(form.batch_number))
     if (dup) {
       if (!dup.final_result) {
         alert(`⚠ Batch "${form.batch_number}" already has an open run.\n\nPlease add a sample to the existing run instead of starting a new one.`)
