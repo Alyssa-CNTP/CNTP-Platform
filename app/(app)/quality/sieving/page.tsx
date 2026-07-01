@@ -7,10 +7,6 @@
 //        comment, pa_level, pass_status, violations[], gram_values{}, sieve_results{})
 
 import React, { useState, useEffect, useCallback } from 'react'
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, Legend,
-} from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
@@ -324,305 +320,6 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
   )
 }
 
-// ─── MESH_COLORS ─────────────────────────────────────────────────────────────
-
-const MESH_COLORS: Record<string,string> = {
-  '>6 (%)':'#ef4444', '>10 (%)':'#f97316', '>12 (%)':'#f59e0b',
-  '>16 (%)':'#10b981', '>18 (%)':'#3b82f6', '>20 (%)':'#8b5cf6',
-  '>40 (%)':'#ec4899', '>60 (%)':'#06b6d4', 'Dust (%)':'#6b7280',
-  'Fine Leaf (%)':'#84cc16',
-}
-
-// ─── SievingChart ─────────────────────────────────────────────────────────────
-
-function SievingChart({ runs, specDef, activeSpecs, activeProduct, onDotClick }: {
-  runs: any[]; specDef: any; activeSpecs: Record<string,any>
-  activeProduct: string; onDotClick?: (runId: any) => void
-}) {
-  const [selectedMesh, setSelectedMesh] = useState<string|null>(null)
-  const [gradeFilter,  setGradeFilter]  = useState('all')
-  const [chartTab,     setChartTab]     = useState<'sieve'|'density'|'shade'>('sieve')
-  const [lotFilter,    setLotFilter]    = useState('')
-  const [dateMode,     setDateMode]     = useState('all')
-  const [dateFrom,     setDateFrom]     = useState('')
-  const [dateTo,       setDateTo]       = useState('')
-
-  if (!runs || runs.length === 0) return null
-
-  const sortedRuns = [...runs].sort((a,b) => {
-    const da = a.date||'', db2 = b.date||''
-    if (da !== db2) return da < db2 ? -1 : 1
-    const ta = a.timestamp||a.time||'', tb = b.timestamp||b.time||''
-    return ta < tb ? -1 : 1
-  })
-
-  const allMesh     = [...new Set([...(specDef.meshForORG||[]),...(specDef.meshForCON||[])])].sort()
-  const isOrgRun    = (r: any) => sdIsOrg(r.variant)
-  const meshForRun  = (r: any) => isOrgRun(r) ? (specDef.meshForORG||[]) : (specDef.meshForCON||[])
-  const grades      = [...new Set(sortedRuns.map(r => `${r.grade}|${r.variant}`))]
-  const lotNumbers  = [...new Set(sortedRuns.map(r => r.lotNumber).filter(Boolean))].sort()
-
-  const today   = new Date().toISOString().slice(0,10)
-  const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10) }
-  const bounds  = dateMode==='week' ? {from:daysAgo(7),to:today}
-                : dateMode==='2week'? {from:daysAgo(14),to:today}
-                : dateMode==='month'? {from:daysAgo(30),to:today}
-                : dateMode==='3month'?{from:daysAgo(90),to:today}
-                : dateMode==='custom'?{from:dateFrom,to:dateTo}
-                : {from:'',to:''}
-
-  const displayRuns = sortedRuns.filter(r => {
-    if (gradeFilter!=='all' && `${r.grade}|${r.variant}`!==gradeFilter) return false
-    if (lotFilter && r.lotNumber!==lotFilter) return false
-    if (bounds.from && r.date && r.date<bounds.from) return false
-    if (bounds.to   && r.date && r.date>bounds.to)   return false
-    return true
-  })
-
-  const sieveRuns    = displayRuns.filter(r => r.runType!=='final')
-  const physicalRuns = displayRuns
-
-  const buildLabel = (r: any, i: number) => r.date&&r.time ? `${r.date} ${r.time}` : r.date||`Run ${i+1}`
-
-  const chartData = sieveRuns.map((r,i) => {
-    const point: any = { name:buildLabel(r,i), date:r.date, grade:`${r.grade}|${r.variant}`, lotNumber:r.lotNumber||'', _idx:i, _runId:r.id||i }
-    const validMesh = meshForRun(r)
-    allMesh.forEach(m => {
-      if (!validMesh.includes(m)) { point[m]=null; return }
-      const v = parseFloat(r[m])
-      point[m] = isNaN(v) ? null : v
-    })
-    return point
-  })
-
-  const physData = physicalRuns.map((r,i) => ({
-    name:buildLabel(r,i), date:r.date, lotNumber:r.lotNumber||'', runType:r.runType||'in-process',
-    bulkDensity: r.bulkDensity!==''&&r.bulkDensity!=null ? parseFloat(r.bulkDensity)||null : null,
-    leafShade:   r.leafShade!==''&&r.leafShade!=null     ? parseFloat(r.leafShade)||null   : null,
-    _idx:i,
-  }))
-
-  const getSpecLines = (mesh: string) => {
-    if (gradeFilter==='all') return null
-    const spec = activeSpecs[gradeFilter]?.[mesh]
-    if (!spec||(spec[0]===0&&spec[1]===0)) return null
-    return spec as [number,number]
-  }
-
-  const activeMeshes = selectedMesh ? [selectedMesh] : allMesh.filter(m =>
-    sieveRuns.some(r => { const vm = meshForRun(r); return vm.includes(m) && r[m]!==''&&r[m]!=null&&!isNaN(parseFloat(r[m])) })
-  )
-
-  const hasDensityData = physData.some(d => d.bulkDensity!==null)
-  const hasShadeData   = physData.some(d => d.leafShade!==null)
-  const activeFilter   = dateMode!=='all' || gradeFilter!=='all' || !!lotFilter
-  const selSt: React.CSSProperties = { padding:'5px 9px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, background:'#fff' }
-
-  return (
-    <div style={{ background:'#fff', borderRadius:12, border:'1px solid #e5e7eb', padding:18, marginBottom:16 }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, flexWrap:'wrap', gap:6 }}>
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:'#111827' }}>Trend Analysis — {activeProduct}</div>
-          <div style={{ fontSize:10, color:'#9ca3af', marginTop:2 }}>
-            Chronological · spec lines when grade selected ·
-            <span style={{ marginLeft:4, color:activeFilter?'#1d4ed8':'#9ca3af', fontWeight:activeFilter?700:400 }}>
-              {displayRuns.length}/{sortedRuns.length} runs shown
-            </span>
-          </div>
-        </div>
-        {activeFilter && (
-          <button onClick={()=>{ setDateMode('all'); setDateFrom(''); setDateTo(''); setGradeFilter('all'); setLotFilter('') }}
-            style={{ padding:'4px 10px', borderRadius:6, border:'1px solid #fca5a5', background:'#fef2f2', color:'#dc2626', fontSize:11, fontWeight:600, cursor:'pointer' }}>
-            ✕ Clear filters
-          </button>
-        )}
-      </div>
-
-      {/* Filter bar */}
-      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'flex-end', marginBottom:12, padding:'10px 12px', background:'#f8fafc', borderRadius:8, border:'1px solid #e5e7eb' }}>
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          <span style={{ fontSize:9, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>Date Range</span>
-          <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
-            {[['all','All time'],['week','This week'],['2week','2 weeks'],['month','30 days'],['3month','90 days'],['custom','Custom']].map(([mode,label]) => (
-              <button key={mode} onClick={()=>{ setDateMode(mode); if(mode!=='custom'){setDateFrom('');setDateTo('')} }}
-                style={{ padding:'3px 9px', borderRadius:10, border:'1px solid', fontSize:10, cursor:'pointer', fontWeight:600,
-                  background:dateMode===mode?'#1f4e79':'#fff', color:dateMode===mode?'#fff':'#374151', borderColor:dateMode===mode?'#1f4e79':'#e5e7eb' }}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {dateMode==='custom' && (
-            <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
-              <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{ padding:'3px 7px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11 }}/>
-              <span style={{ fontSize:11, color:'#9ca3af' }}>→</span>
-              <input type="date" value={dateTo}   onChange={e=>setDateTo(e.target.value)}   style={{ padding:'3px 7px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11 }}/>
-            </div>
-          )}
-        </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          <span style={{ fontSize:9, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>Grade / Variant</span>
-          <select value={gradeFilter} onChange={e=>setGradeFilter(e.target.value)} style={selSt}>
-            <option value="all">All grades</option>
-            {grades.map(g=><option key={g} value={g}>{g.replace('|',' — ')}</option>)}
-          </select>
-        </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          <span style={{ fontSize:9, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>Lot Number</span>
-          <select value={lotFilter} onChange={e=>setLotFilter(e.target.value)} style={selSt}>
-            <option value="">All lots</option>
-            {lotNumbers.map(l=><option key={l as string} value={l as string}>{l as string}</option>)}
-          </select>
-        </div>
-      </div>
-
-      {/* Chart type tabs */}
-      <div style={{ display:'flex', gap:3, marginBottom:12, borderBottom:'1px solid #e5e7eb', paddingBottom:8 }}>
-        {([['sieve','🔬 Sieve Fractions'],['density','⚖ Bulk Density'],['shade','🍃 Leaf Shade']] as const).map(([tab,label]) => (
-          <button key={tab} onClick={()=>setChartTab(tab)}
-            disabled={(tab==='density'&&!hasDensityData)||(tab==='shade'&&!hasShadeData)}
-            style={{ padding:'5px 12px', borderRadius:'6px 6px 0 0', border:'1px solid',
-              borderBottom:chartTab===tab?'1px solid #fff':'1px solid #e5e7eb', marginBottom:chartTab===tab?-1:0,
-              cursor:((tab==='density'&&!hasDensityData)||(tab==='shade'&&!hasShadeData))?'not-allowed':'pointer',
-              fontSize:11, fontWeight:chartTab===tab?700:500,
-              background:chartTab===tab?'#fff':'#f9fafb', color:chartTab===tab?'#1f4e79':'#9ca3af',
-              borderColor:chartTab===tab?'#e5e7eb':'#f3f4f6',
-              opacity:((tab==='density'&&!hasDensityData)||(tab==='shade'&&!hasShadeData))?0.4:1 }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {chartTab==='sieve' && <>
-        <div style={{ display:'flex', gap:5, marginBottom:12, flexWrap:'wrap' }}>
-          <button onClick={()=>setSelectedMesh(null)}
-            style={{ padding:'3px 10px', borderRadius:12, border:'1px solid', fontSize:10, cursor:'pointer', fontWeight:600,
-              background:selectedMesh===null?'#1f4e79':'#f9fafb', color:selectedMesh===null?'#fff':'#374151', borderColor:selectedMesh===null?'#1f4e79':'#e5e7eb' }}>
-            All fractions
-          </button>
-          {allMesh.map(m => {
-            const hasData = activeMeshes.includes(m)
-            const color   = MESH_COLORS[m]||'#6b7280'
-            return (
-              <button key={m} onClick={()=>hasData?setSelectedMesh(selectedMesh===m?null:m):null}
-                style={{ padding:'3px 10px', borderRadius:12, border:`1px solid ${color}`, fontSize:10,
-                  cursor:hasData?'pointer':'default', fontWeight:600, opacity:hasData?1:0.3,
-                  background:selectedMesh===m?color:`${color}20`, color:selectedMesh===m?'#fff':color }}>
-                {m.replace(' (%)','').replace('>','>')}
-              </button>
-            )
-          })}
-        </div>
-
-        {chartData.length < 2 ? (
-          <div style={{ textAlign:'center', padding:'30px 0', color:'#9ca3af', fontSize:12 }}>
-            {sieveRuns.length===0 ? 'No in-process runs — Final QC runs have no sieve data' : 'Add at least 2 in-process runs to see the trend chart'}
-          </div>
-        ) : (
-          activeMeshes.map(mesh => {
-            const spec    = gradeFilter!=='all' ? getSpecLines(mesh) : null
-            const hasData = chartData.some(d => d[mesh]!==null&&d[mesh]!==undefined)
-            if (!hasData) return null
-            const color = MESH_COLORS[mesh]||'#6b7280'
-            return (
-              <div key={mesh} style={{ marginBottom:selectedMesh?0:20 }}>
-                {!selectedMesh && (
-                  <div style={{ fontSize:11, fontWeight:700, color, marginBottom:4 }}>
-                    {mesh.replace(' (%)','').replace('>','>')}
-                    {spec && <span style={{ fontWeight:400, color:'#9ca3af', marginLeft:6, fontSize:10 }}>spec: {spec[0]}–{spec[1]}%</span>}
-                  </div>
-                )}
-                <ResponsiveContainer width="100%" height={selectedMesh?260:140}>
-                  <LineChart data={chartData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-                    <XAxis dataKey="name" tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-                    <YAxis tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={(v:number)=>`${v}%`}
-                      domain={[spec?Math.max(0,spec[0]-10):'auto', spec?spec[1]+10:'auto']}/>
-                    <Tooltip content={({ active, payload, label }: any) => {
-                      if (!active||!payload?.length) return null
-                      const run = sieveRuns[payload[0]?.payload?._idx]
-                      return (
-                        <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 14px', boxShadow:'0 4px 12px rgba(0,0,0,.1)', fontSize:11 }}>
-                          <div style={{ fontWeight:700, color:'#111827', marginBottom:4 }}>{label}</div>
-                          {run && <div style={{ color:'#6b7280', marginBottom:6, fontSize:10 }}>{run.date} — {run.grade} {run.variant}</div>}
-                          {payload.map((p: any, i: number) => {
-                            if (p.value===null||p.value===undefined) return null
-                            const sp = run ? getSpecLines(p.dataKey) : null
-                            const inSpec = sp ? (p.value>=sp[0]&&p.value<=sp[1]) : null
-                            return (
-                              <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2 }}>
-                                <span style={{ width:10, height:10, borderRadius:'50%', background:p.color, flexShrink:0 }}/>
-                                <span style={{ color:'#374151', minWidth:60 }}>{p.dataKey.replace(' (%)','')}</span>
-                                <span style={{ fontFamily:'monospace', fontWeight:700, color:inSpec===false?'#dc2626':inSpec===true?'#166534':'#111827' }}>
-                                  {p.value.toFixed(1)}%
-                                </span>
-                                {sp && <span style={{ fontSize:9, color:'#9ca3af' }}>spec: {sp[0]}–{sp[1]}%</span>}
-                                {inSpec===false && <span style={{ fontSize:9, color:'#dc2626', fontWeight:700 }}>OUT</span>}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )
-                    }}/>
-                    {spec&&spec[0]>0 && <ReferenceLine y={spec[0]} stroke={color} strokeDasharray="5 3" strokeWidth={1.5} opacity={0.6}
-                      label={{ value:`Min ${spec[0]}%`, position:'insideTopLeft', fontSize:9, fill:color }}/>}
-                    {spec&&spec[1]>0 && <ReferenceLine y={spec[1]} stroke={color} strokeDasharray="5 3" strokeWidth={1.5} opacity={0.6}
-                      label={{ value:`Max ${spec[1]}%`, position:'insideBottomLeft', fontSize:9, fill:color }}/>}
-                    <Line type="monotone" dataKey={mesh} stroke={color} strokeWidth={2.5} connectNulls={false}
-                      dot={(props: any) => {
-                        const { cx, cy, payload } = props
-                        const val = payload[mesh]
-                        const outOfSpec = spec&&val!==null&&(val<spec[0]||val>spec[1])
-                        const rid = payload._runId??payload._idx
-                        return <circle key={`dot-${payload._idx}-${mesh}`} cx={cx} cy={cy}
-                          r={outOfSpec?8:6} fill={outOfSpec?'#dc2626':color} stroke={outOfSpec?'#991b1b':'#fff'}
-                          strokeWidth={outOfSpec?2.5:2} style={{ cursor:'pointer', pointerEvents:'all' }}
-                          onClick={(e: any)=>{ e.stopPropagation(); onDotClick&&onDotClick(rid) }}/>
-                      }}
-                      activeDot={(props: any) => {
-                        const { cx, cy, payload } = props
-                        return <circle key={`adot-${payload._idx}`} cx={cx} cy={cy} r={11}
-                          fill={color} stroke="#fff" strokeWidth={2.5}
-                          style={{ cursor:'pointer', pointerEvents:'all' }}
-                          onClick={(e: any)=>{ e.stopPropagation(); onDotClick&&onDotClick(payload._runId??payload._idx) }}/>
-                      }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )
-          })
-        )}
-      </>}
-
-      {chartTab==='density' && hasDensityData && (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={physData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-            <XAxis dataKey="name" tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-            <YAxis tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-            <Tooltip/>
-            <Line type="monotone" dataKey="bulkDensity" name="Bulk Density" stroke="#1f4e79" strokeWidth={2} dot={{ r:4 }}/>
-          </LineChart>
-        </ResponsiveContainer>
-      )}
-
-      {chartTab==='shade' && hasShadeData && (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={physData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-            <XAxis dataKey="name" tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-            <YAxis tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false} domain={[1,11]}/>
-            <Tooltip/>
-            <Line type="monotone" dataKey="leafShade" name="Leaf Shade" stroke="#166534" strokeWidth={2} dot={{ r:4 }}/>
-          </LineChart>
-        </ResponsiveContainer>
-      )}
-    </div>
-  )
-}
-
-// ─── InlineEditForm ────────────────────────────────────────────────────────────
-
 function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void
@@ -794,18 +491,18 @@ export default function SievingPage() {
   const [saving,    setSaving]    = useState(false)
   const [sdError,   setSdError]   = useState('')
   const [lastSaved, setLastSaved] = useState<Date|null>(null)
-  const [showChart, setShowChart] = useState(true)
 
   const [showForm,       setShowForm]       = useState(false)
   const [showSpecEditor, setShowSpecEditor] = useState(false)
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
+  const [period,         setPeriod]         = useState<'today'|'week'|'month'|'60d'|'all'>('all')
+  const [colFilters,     setColFilters]     = useState<Record<string,string>>({})
   const [editRunId,      setEditRunId]      = useState<any>(null)
   const [errors,         setErrors]         = useState<Record<string,string>>({})
   const [isRetest,       setIsRetest]       = useState(false)
   const [anomalyWarn,    setAnomalyWarn]    = useState('')
   const [lotMsg,         setLotMsg]         = useState('')
-  const [highlightedRunId, setHighlightedRunId] = useState<any>(null)
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
   const [rLookup,        setRLookup]        = useState<Record<string,string>>({})
   const [leafShadeLookup,setLeafShadeLookup]= useState<Record<string,number>>({})
@@ -924,7 +621,41 @@ export default function SievingPage() {
   const specDef     = SIEVING_SPECS_DB[activeProduct]
   const activeSpecs = customSpecs[activeProduct] || specDef.variants
   const productRuns = runs[activeProduct] || []
+
+  // Period cutoff — Daily / Weekly / Monthly / 60 Days / All. Dates are stored
+  // as 'YYYY-MM-DD' so lexicographic comparison against the cutoff works.
+  const periodCutoff = (() => {
+    if (period === 'all') return null
+    const d = new Date()
+    if (period === 'today') return d.toISOString().slice(0,10)
+    if (period === 'week')  d.setDate(d.getDate() - 7)
+    if (period === 'month') d.setMonth(d.getMonth() - 1)
+    if (period === '60d')   d.setDate(d.getDate() - 60)
+    return d.toISOString().slice(0,10)
+  })()
+
+  // Per-column filter row — case-insensitive substring match against each
+  // column's displayed value.
+  const colFilterAccessors: Record<string, (r:any) => string> = {
+    date: r => r.date || '', lotNumber: r => r.lotNumber || '', serialNumber: r => r.serialNumber || '',
+    grade: r => r.grade || '', variant: r => r.variant || '', runType: r => r.runType || '',
+    qcName: r => r.qcName || '', time: r => r.time || '', bulkDensity: r => String(r.bulkDensity ?? ''),
+    needleCount: r => String(r.needleCount ?? ''), leafShade: r => String(r.leafShade ?? ''),
+    passStatus: r => r.passStatus || '',
+    violations: r => (r.violations || []).join('; '),
+  }
+  const matchesColFilters = (row: any) => {
+    for (const [key, val] of Object.entries(colFilters)) {
+      if (!val.trim()) continue
+      const accessor = colFilterAccessors[key] || ((r:any) => String(r[key] ?? ''))
+      if (!accessor(row).toLowerCase().includes(val.trim().toLowerCase())) return false
+    }
+    return true
+  }
+
   const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
+    .filter((r:any) => !periodCutoff || (r.date||'') >= periodCutoff)
+    .filter(matchesColFilters)
     .slice().sort((a:any,b:any) => {
       const da = (a.date||'')+(a.time||''), db2 = (b.date||'')+(b.time||'')
       return da < db2 ? 1 : da > db2 ? -1 : 0
@@ -1197,10 +928,20 @@ export default function SievingPage() {
         ))}
         <span style={{marginLeft:'auto',fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
         <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
-        <button onClick={()=>setShowChart(s=>!s)} style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showChart?'#eff6ff':'#fff',color:showChart?'#1f4e79':'#374151'}}>
-          📈 {showChart?'Hide':'Show'} Chart
-        </button>
         <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
+      </div>
+
+      {/* Period filter — Daily / Weekly / Monthly / 60 Days / All */}
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        <span style={{fontSize:10,fontWeight:700,color:'#6b7280',textTransform:'uppercase'}}>Period:</span>
+        {([['today','Daily'],['week','Weekly'],['month','Monthly'],['60d','60 Days'],['all','All']] as const).map(([k,l])=>(
+          <button key={k} onClick={()=>setPeriod(k)}
+            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
+              background:period===k?'#166534':'#fff',color:period===k?'#fff':'#374151',borderColor:period===k?'#166534':'#e5e7eb'}}>{l}</button>
+        ))}
+        {Object.values(colFilters).some(v=>v.trim()) && (
+          <button onClick={()=>setColFilters({})} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #dc2626',fontSize:11,cursor:'pointer',fontWeight:600,background:'#fef2f2',color:'#dc2626'}}>✕ Clear column filters</button>
+        )}
       </div>
 
       {/* New Run Form */}
@@ -1384,21 +1125,6 @@ export default function SievingPage() {
       )}
 
       {/* Runs table */}
-      {/* Trend chart */}
-      {showChart && filteredRuns.length > 0 && (
-        <SievingChart
-          runs={filteredRuns}
-          specDef={specDef}
-          activeSpecs={activeSpecs}
-          activeProduct={activeProduct}
-          onDotClick={(runId) => {
-            setHighlightedRunId(runId)
-            const el = document.getElementById(`run-row-${runId}`)
-            el?.scrollIntoView({ behavior:'smooth', block:'center' })
-            setTimeout(() => setHighlightedRunId(null), 3000)
-          }}
-        />
-      )}
 
       {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New Run"</div>}
       {!loading&&filteredRuns.length>0&&(
@@ -1428,18 +1154,56 @@ export default function SievingPage() {
                 <th style={{padding:'5px 8px'}}>Status</th>
                 <th style={{padding:'5px 8px',fontSize:9,color:'#bfdbfe'}}>Violations</th>
               </tr>
+              {/* Per-column filter row */}
+              <tr style={{background:'#eef2f7'}}>
+                {canWrite&&<th style={{padding:'2px 4px'}}></th>}
+                {(['date','lotNumber','serialNumber','grade','variant','runType','qcName','time'] as const).map(key => {
+                  if (key==='lotNumber' && specDef.noLotNumber) return null
+                  return (
+                    <th key={key} style={{padding:'2px 4px'}}>
+                      <input value={colFilters[key]||''} onChange={e=>setColFilters(f=>({...f,[key]:e.target.value}))}
+                        placeholder="filter…" style={{width:'100%',minWidth:44,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                    </th>
+                  )
+                })}
+                {!specDef.noBulkDensity&&<th style={{padding:'2px 4px'}}>
+                  <input value={colFilters.bulkDensity||''} onChange={e=>setColFilters(f=>({...f,bulkDensity:e.target.value}))}
+                    placeholder="filter…" style={{width:'100%',minWidth:40,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                </th>}
+                {specDef.hasNeedleCount&&<th style={{padding:'2px 4px'}}>
+                  <input value={colFilters.needleCount||''} onChange={e=>setColFilters(f=>({...f,needleCount:e.target.value}))}
+                    placeholder="filter…" style={{width:'100%',minWidth:40,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                </th>}
+                {specDef.hasLeafShade&&<th style={{padding:'2px 4px'}}>
+                  <input value={colFilters.leafShade||''} onChange={e=>setColFilters(f=>({...f,leafShade:e.target.value}))}
+                    placeholder="filter…" style={{width:'100%',minWidth:40,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                </th>}
+                {sdGetMesh(activeProduct,'CON').map(m=>(
+                  <th key={m} style={{padding:'2px 4px'}}>
+                    <input value={colFilters[m]||''} onChange={e=>setColFilters(f=>({...f,[m]:e.target.value}))}
+                      placeholder="…" style={{width:'100%',minWidth:34,padding:'3px 4px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,textAlign:'center',boxSizing:'border-box'}}/>
+                  </th>
+                ))}
+                <th style={{padding:'2px 4px'}}>
+                  <input value={colFilters.passStatus||''} onChange={e=>setColFilters(f=>({...f,passStatus:e.target.value}))}
+                    placeholder="filter…" style={{width:'100%',minWidth:44,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                </th>
+                <th style={{padding:'2px 4px'}}>
+                  <input value={colFilters.violations||''} onChange={e=>setColFilters(f=>({...f,violations:e.target.value}))}
+                    placeholder="filter…" style={{width:'100%',minWidth:44,padding:'3px 5px',fontSize:10,border:'1px solid #d1d5db',borderRadius:4,fontWeight:400,boxSizing:'border-box'}}/>
+                </th>
+              </tr>
             </thead>
             <tbody>
               {filteredRuns.map((row:any,i:number)=>{
                 const vios: string[] = row.violations||[]
-                const isHighlighted = row.id === highlightedRunId
-                const rowBg = isHighlighted?'#fef9c3':vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
+                const rowBg = vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
                 const mesh  = sdGetMesh(activeProduct, row.variant)
                 const gs    = gradeStyle(row.grade)
                 const sc    = statusColors(row.passStatus)
                 return (
                   <React.Fragment key={row.id}>
-                  <tr id={`run-row-${row.id}`} style={{background:rowBg,borderBottom:'1px solid #f3f4f6',transition:'background 0.6s',outline:isHighlighted?'2px solid #fbbf24':'none',outlineOffset:'-2px'}}>
+                  <tr id={`run-row-${row.id}`} style={{background:rowBg,borderBottom:'1px solid #f3f4f6'}}>
                     {canWrite&&<td style={{padding:'3px 4px',textAlign:'center'}}>
                       <button onClick={()=>setEditRunId(editRunId===row.id?null:row.id)}
                         style={{background:'none',border:`1px solid ${editRunId===row.id?'#166534':'#d1d5db'}`,borderRadius:4,color:editRunId===row.id?'#166534':'#374151',cursor:'pointer',fontSize:11,padding:'2px 6px',marginBottom:2,display:'block'}}>

@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-06-30 — Gustav (Sieving: column filters + period filter, remove trend chart; newest-first ordering)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- **Sieving Tower** — removed the "all runs" trend chart (`SievingChart`) — it became unreadable once enough runs accumulated. Removed the now-unused `recharts` import, `MESH_COLORS`, and the `Show/Hide Chart` toggle.
+- Added a **per-column filter row** under the Runs table header — a text filter for every column (Date, Lot, Serial, Grade, Variant, Type, QC, Time, BD, Needles, Shade, every sieve-mesh %, Status, Violations), case-insensitive substring match, with a "✕ Clear column filters" shortcut when any are active.
+- Added a **period filter** — Daily / Weekly / Monthly / 60 Days / All — replacing the removed chart toggle, so the table itself stays scoped to a manageable window.
+- **Newest-entry-on-top**: fixed sample/tasting display order so the most recently captured entry shows first, without breaking existing chronological numbering ("Sample #N") or the History tab's chart-click-to-row highlighting (which depend on original array position):
+  - Pasteuriser: active-batch sample tables now render newest-first (numbering stays tied to chronological position).
+  - Granule: active-run sample table and inline tastings-per-sample now render newest-first.
+  - Sieving Tower's Runs table was already sorted newest-first by date+time — unchanged.
+
 ## 2026-06-30 — Gustav (Lab Manager — Phase 3: granule block layout + allocate→approve)
 
 **Files changed:**
