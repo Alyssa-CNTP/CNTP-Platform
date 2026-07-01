@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Alyssa (per-dept staged save + fix maintenance duplicates)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- **Per-department staged save**: roster edits (add/edit/delete/drag) now stage in local state and do not write to the DB until "Save [Department]" is clicked on the category header. Save does delete-all + re-insert for that department's role keys only — two supervisors editing different departments simultaneously never overwrite each other. Switching periods discards unsaved local changes.
+- **Fix maintenance duty_roster duplicates**: publish previously deleted only slots where `start_at` fell inside the period dates. Changed to an overlap delete so pre-existing entries for the entire window are cleared before inserting the new slots — eliminates the duplicate chips in the maintenance calendar.
+
+---
+
 ## 2026-07-01 — Alyssa (roster Shift A/B naming with weekly swap)
 
 **Files changed:**
