@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Management role — read-only access to all modules by default)
+
+**Files changed:**
+- `lib/auth/permissions.ts`
+- `lib/auth/context.tsx`
+
+**Changes:**
+- `management_default` role now includes read-only permissions for quality (`can_view_history`, `can_export_csv`), production (`can_view_ops_dashboard`, `can_view_all_sections`, `can_view_live_history`), maintenance (`can_access_maintenance`), and management reporting (`can_view_management`, `can_view_reports`, `can_export_reports`) by default — matching the role's description as "read-only across platform"
+- Management users no longer need manual permission grants to view quality, production, or maintenance pages; write/delete actions remain off and must still be toggled on per person
+- `canAccessQuality` flag now also returns true for `isManagement` so quality appears in the sidebar automatically for all management users
+- Updated `management_default` role description in the users page to reflect the new defaults
+
+---
+
 ## 2026-07-02 — Alyssa (Capture overview — hierarchical tables, cross-shift totals, spillage rename)
 
 **Files changed:**
