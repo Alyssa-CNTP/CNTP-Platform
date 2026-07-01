@@ -343,18 +343,28 @@ function startOfWeek(d: Date): Date {
   return s
 }
 
-function dayBucketsThisWeek(): { key: string; label: string }[] {
-  const start = startOfWeek(new Date())
+// weekOffset/monthOffset: 0 = current, 1 = one week/month back, 2 = two back, etc.
+// Negative values are allowed (future) so "Next" can step back toward today.
+function dayBucketsForWeek(weekOffset: number): { key: string; label: string }[] {
+  const anchor = new Date(); anchor.setDate(anchor.getDate() - weekOffset * 7)
+  const start = startOfWeek(anchor)
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(start); d.setDate(start.getDate() + i)
     return { key: isoDate(d), label: d.toLocaleDateString('en-ZA', { weekday: 'short' }) + ' ' + d.getDate() }
   })
 }
 
-function weekBucketsThisMonth(): { key: string; label: string; from: Date; to: Date }[] {
+function weekRangeLabel(weekOffset: number): string {
+  const buckets = dayBucketsForWeek(weekOffset)
+  const from = new Date(buckets[0].key + 'T12:00:00'), to = new Date(buckets[6].key + 'T12:00:00')
+  const fmt = (d: Date) => d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
+  return `${fmt(from)} – ${fmt(to)}${from.getFullYear() !== new Date().getFullYear() ? ' ' + from.getFullYear() : ', ' + from.getFullYear()}`
+}
+
+function weekBucketsForMonth(monthOffset: number): { key: string; label: string; from: Date; to: Date }[] {
   const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  const monthStart = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
+  const monthEnd   = new Date(now.getFullYear(), now.getMonth() - monthOffset + 1, 0)
   const buckets: { key: string; label: string; from: Date; to: Date }[] = []
   let cursor = new Date(monthStart)
   let i = 1
@@ -368,11 +378,21 @@ function weekBucketsThisMonth(): { key: string; label: string; from: Date; to: D
   return buckets
 }
 
+function monthRangeLabel(monthOffset: number): string {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
+  return d.toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' })
+}
+
 function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
   runs: any[]; activeProduct: string; specDef: any; onPointClick?: (runId: any) => void
 }) {
   const [view, setView]           = useState<'week' | 'month'>('week')
   const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
+  const [weekOffset, setWeekOffset]   = useState(0)   // 0 = this week, 1 = last week, ...
+  const [monthOffset, setMonthOffset] = useState(0)   // 0 = this month, 1 = last month, ...
+  const offset = view === 'week' ? weekOffset : monthOffset
+  const setOffset = view === 'week' ? setWeekOffset : setMonthOffset
   const meshOptions = sdGetMesh(activeProduct, 'CON')
   const metricOptions = [
     { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
@@ -384,8 +404,11 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
 
   // Bucket definitions for the selected window — day-of-week for "This Week",
   // week-of-month for "This Month". Runs outside the window are excluded.
-  const dayBuckets  = dayBucketsThisWeek()
-  const weekBuckets = weekBucketsThisMonth()
+  // weekOffset/monthOffset step the window back in time — a timeline, not
+  // just the current week/month.
+  const dayBuckets  = dayBucketsForWeek(weekOffset)
+  const weekBuckets = weekBucketsForMonth(monthOffset)
+  const rangeLabel  = view === 'week' ? weekRangeLabel(weekOffset) : monthRangeLabel(monthOffset)
   const bucketOf = (dateStr: string): string | null => {
     if (view === 'week') {
       const key = dateStr
@@ -442,9 +465,20 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
             <button key={v} onClick={()=>setView(v)}
               style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
                 background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
-              {v==='week'?'This Week':'This Month'}
+              {v==='week'?'By Week':'By Month'}
             </button>
           ))}
+        </div>
+        {/* Timeline navigator — step back through previous weeks/months */}
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <button onClick={()=>setOffset((o:number)=>o+1)} title={`Previous ${view}`}
+            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
+          <span style={{ fontSize:11, fontWeight:700, color:'#374151', minWidth:120, textAlign:'center' }}>{rangeLabel}</span>
+          <button onClick={()=>setOffset((o:number)=>Math.max(0,o-1))} disabled={offset===0} title={`Next ${view}`}
+            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:offset===0?'#f3f4f6':'#fff', color:offset===0?'#d1d5db':'#374151', cursor:offset===0?'default':'pointer' }}>▶</button>
+          {offset!==0 && (
+            <button onClick={()=>setOffset(0)} style={{ padding:'4px 10px', fontSize:11, fontWeight:600, border:'1px solid #1f4e79', borderRadius:6, background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>Today</button>
+          )}
         </div>
         {chartType==='outliers' && (
           <select value={metric} onChange={e=>setMetric(e.target.value)}
@@ -462,7 +496,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
       {chartType==='trend' ? (
         !hasTrendData ? (
           <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
-            No in-process sieve results {view==='week'?'this week':'this month'} yet.
+            No in-process sieve results for {rangeLabel} yet.
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
@@ -482,7 +516,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
       ) : (
         scatterData.length < 3 ? (
           <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
-            Not enough {metricDef.label.toLowerCase()} data {view==='week'?'this week':'this month'} to plot outliers.
+            Not enough {metricDef.label.toLowerCase()} data for {rangeLabel} to plot outliers.
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
