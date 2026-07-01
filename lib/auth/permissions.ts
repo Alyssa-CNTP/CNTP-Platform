@@ -172,21 +172,21 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
   ],
   Quality: [
     { role: 'quality_default',  label: 'Quality (Default)', desc: 'All permissions off — toggle on what they need' },
-    { role: 'lab_manager',      label: 'Lab Manager',       desc: 'Approves runs and signs off daily overviews — read-only access to all other modules' },
-    { role: 'quality_manager',  label: 'Quality Manager',   desc: 'Full quality access plus specs and deletes — read-only access to all other modules' },
+    { role: 'lab_manager',      label: 'Lab Manager',       desc: 'Approves runs and signs off daily overviews' },
+    { role: 'quality_manager',  label: 'Quality Manager',   desc: 'Full quality access plus specs and deletes' },
   ],
   Production: [
     { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
     { role: 'floor_operator',        label: 'Floor Operator',           desc: 'PIN-based tablet access only — no system login' },
-    { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs — read-only access to all other modules' },
-    { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Stock counts (warehouse side) + live capture history — read-only access to all other modules' },
-    { role: 'stock_controller',      label: 'Stock Controller',         desc: 'Stock counts (stock side) — read-only access to all other modules' },
+    { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs' },
+    { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Stock counts (warehouse side) + live capture history' },
+    { role: 'stock_controller',      label: 'Stock Controller',         desc: 'Stock counts (stock side)' },
   ],
   Maintenance: [
     { role: 'maintenance_default',    label: 'Maintenance (Default)',    desc: 'All permissions off — toggle on what they need' },
-    { role: 'maintenance_manager',    label: 'Maintenance Manager',      desc: 'Allocates job cards, verifies completed work, raises planned & breakdown cards — read-only access to all other modules' },
-    { role: 'maintenance_technician', label: 'Maintenance Technician',   desc: 'Receives & executes assigned job cards — read-only access to all other modules' },
-    { role: 'maintenance_qc',         label: 'Maintenance QC',           desc: 'Performs post-maintenance QC checks — read-only access to all other modules' },
+    { role: 'maintenance_manager',    label: 'Maintenance Manager',      desc: 'Allocates job cards, verifies completed work, raises planned & breakdown cards' },
+    { role: 'maintenance_technician', label: 'Maintenance Technician',   desc: 'Receives & executes assigned job cards' },
+    { role: 'maintenance_qc',         label: 'Maintenance QC',           desc: 'Performs post-maintenance QC checks' },
   ],
   Management: [
     { role: 'management_default', label: 'Management (Default)', desc: 'Read-only across all modules — view quality, production, maintenance, reports. Toggle write/delete on per person if needed.' },
@@ -200,29 +200,14 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
 }
 
 // ─── Role permission defaults ─────────────────────────────────────────────────
-// Cross-department read: every named role gets these by default so that users
-// can view other modules without any manual permission grants. Write, delete,
-// and admin actions stay off — toggle those on per person as needed.
-// Floor-level and "default" (blank-slate) roles deliberately stay at zero.
+// Permissions are explicit — roles only get what their job requires.
+// Cross-department access is granted deliberately per person in the Users page.
+// Blank-slate roles (_default) and floor_operator start at zero.
+// When a role has no entry here, all permissions default to false.
 
 const ALL_ON: Permissions = Object.fromEntries(
   ALL_PERMISSION_KEYS.map(k => [k, true])
 ) as Permissions
-
-// Permissions any named (non-floor, non-blank-slate) role gets regardless of
-// their own department. Grants read-only visibility into every module.
-const CROSS_DEPT_READ: Permissions = {
-  can_view_history:       true,  // unlocks quality pages
-  can_export_csv:         true,  // export in any module
-  can_view_ops_dashboard: true,  // unlocks production overview
-  can_view_all_sections:  true,  // see all production sections
-  can_view_live_history:  true,  // live capture history
-  can_access_maintenance: true,  // unlocks maintenance module
-  can_view_management:    true,  // unlocks management reports
-  can_view_reports:       true,
-  can_export_reports:     true,
-  can_view_staff:         true,  // staff directory & competency matrix
-}
 
 export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
 
@@ -232,15 +217,15 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   // ── Legacy role aliases (for existing Supabase users) ─────────────────────
   admin:            { ...ALL_ON },           // maps to senior_developer
   supervisor:       {                        // maps to production_supervisor
-    ...CROSS_DEPT_READ,
     can_submit_count: true, can_edit_count: true,
+    can_view_all_sections: true, can_view_ops_dashboard: true,
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
-    can_approve_session: true,
+    can_approve_session: true, can_export_csv: true,
   },
   operator:         {                        // maps to warehouse_supervisor
-    ...CROSS_DEPT_READ,
-    can_submit_count: true,
+    can_submit_count: true, can_view_ops_dashboard: true,
+    can_view_live_history: true,
   },
   section_operator: { can_submit_count: true, can_view_ops_dashboard: true },
 
@@ -248,43 +233,41 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   floor_operator: {},   // no system permissions — PIN only
 
   production_supervisor: {
-    ...CROSS_DEPT_READ,
     // Factory floor — runs production capture & sign-off. Does NOT do stock counts.
+    can_view_all_sections: true, can_view_ops_dashboard: true,
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
-    can_approve_session: true,
+    can_approve_session: true, can_export_csv: true,
     // Staff & Competency
-    can_edit_staff_profiles: true, can_manage_competencies: true,
-    can_allocate_staff: true, can_delete_staff: true,
+    can_view_staff: true, can_edit_staff_profiles: true,
+    can_manage_competencies: true, can_allocate_staff: true,
+    can_delete_staff: true,
   },
 
   warehouse_supervisor: {
-    ...CROSS_DEPT_READ,
     // One of the two stock counters (the "Warehouse Supervisor" count side).
-    can_submit_count: true,
+    can_submit_count: true, can_view_ops_dashboard: true,
+    can_view_live_history: true,
   },
 
   stock_controller: {
-    ...CROSS_DEPT_READ,
     // The second stock counter (the "Stock" count side).
-    can_submit_count: true,
+    can_submit_count: true, can_view_ops_dashboard: true,
+    can_view_live_history: true,
   },
 
   // ── Maintenance roles ──────────────────────────────────────────────────────
   maintenance_manager: {
-    ...CROSS_DEPT_READ,
     can_allocate_jobs: true, can_verify_jobs: true,
     can_raise_planned: true, can_raise_breakdown: true,
     can_assign_tickets: true,
     // Staff & Competency (assesses maintenance WIs)
-    can_manage_competencies: true,
+    can_view_staff: true, can_manage_competencies: true,
   },
   maintenance_technician: {
-    ...CROSS_DEPT_READ,
     can_raise_planned: true,
   },
   maintenance_qc: {
-    ...CROSS_DEPT_READ,
     can_qc_jobs: true,
   },
 
@@ -308,20 +291,20 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
 
   // ── Quality — Lab Manager: captures + approves runs and signs off days ─────
   lab_manager: {
-    ...CROSS_DEPT_READ,
+    can_view_history: true, can_export_csv: true,
     can_create_runs: true, can_edit_runs: true, can_finalise_runs: true,
     can_reopen_runs: true, can_add_samples: true, can_edit_samples: true,
     can_add_tastings: true, can_edit_tastings: true,
     can_add_sieving_runs: true,
     can_approve_runs: true, can_signoff_day: true,
     // Staff & Competency (assesses lab staff against lab SOPs)
-    can_manage_competencies: true,
+    can_view_staff: true, can_manage_competencies: true,
   },
 
   // ── Quality — Quality Manager: Lab Manager + specs + deletes ───────────────
   quality_manager: {
-    ...CROSS_DEPT_READ,
     can_save_records: true, can_edit_records: true, can_delete_records: true,
+    can_view_history: true, can_export_csv: true,
     can_edit_customer_specs: true, can_delete_specs: true,
     can_edit_sieve_specs: true, can_edit_granule_specs: true,
     can_create_runs: true, can_edit_runs: true, can_finalise_runs: true,
@@ -331,20 +314,34 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_add_sieving_runs: true, can_delete_sieving_runs: true,
     can_approve_runs: true, can_signoff_day: true,
     // Staff & Competency (FSSC owner — manages SOP catalogue + assesses)
-    can_edit_staff_profiles: true, can_manage_competencies: true,
-    can_manage_sop_catalog: true, can_delete_staff: true,
+    can_view_staff: true, can_edit_staff_profiles: true,
+    can_manage_competencies: true, can_manage_sop_catalog: true,
+    can_delete_staff: true,
   },
 
   // ── Management — read-only across platform ─────────────────────────────────
-  // Directors and analysts: cross-department read is enough — toggle write/delete per person.
+  // Directors and analysts get view access to every module by default.
+  // Write, delete, and admin actions remain off — toggle those on per person.
   management_default: {
-    ...CROSS_DEPT_READ,
+    // Quality (view + export, no write/delete)
+    can_view_history: true,
+    can_export_csv:   true,
+    // Production (view only)
+    can_view_ops_dashboard: true,
+    can_view_all_sections:  true,
+    can_view_live_history:  true,
+    // Maintenance (view module — no job-card actions)
+    can_access_maintenance: true,
+    // Management & Reporting
+    can_view_management: true,
+    can_view_reports:    true,
+    can_export_reports:  true,
+    // Staff directory (read-only)
+    can_view_staff: true,
   },
 
   // ── All other roles: zero defaults — toggle on per person ──────────────────
-  // "quality_default", "production_default", "maintenance_default", "sales_default",
-  // "marketing_default", and any unknown role string resolve to all-false.
-  // floor_operator stays at zero — PIN-only tablet access.
+  // Any role string not listed here resolves to all-false.
 }
 
 // ─── Core resolver ────────────────────────────────────────────────────────────
@@ -385,7 +382,7 @@ export const PERMISSION_GROUPS: {
       { key: 'can_save_records',   label: 'Save quality records' },
       { key: 'can_edit_records',   label: 'Edit existing quality records' },
       { key: 'can_delete_records', label: 'Delete quality records' },
-      { key: 'can_view_history',   label: 'View historical (public schema) data' },
+      { key: 'can_view_history',   label: 'View quality pages & records (required for cross-department access)' },
       { key: 'can_export_csv',     label: 'Export data to CSV' },
     ],
   },
