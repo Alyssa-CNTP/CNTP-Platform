@@ -9,8 +9,13 @@
 FROM python:3.11-slim
 
 # Runtime libs needed by opencv-python-headless / numpy (OpenMP) and rawpy.
+# libxcb1 is required even for the "headless" opencv wheel — it bundles its
+# own FFmpeg (libavdevice) for video I/O, which links against libxcb for its
+# (unused here) X11 screen-grab support. Without it, `import cv2` fails with
+# "ImportError: libxcb.so.1: cannot open shared object file" and the
+# container crash-loops.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 \
+ && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 libxcb1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
