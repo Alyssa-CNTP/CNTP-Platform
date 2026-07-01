@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Alyssa (fix capture autofill — name-based operator fallback)
+
+**Files changed:**
+- `app/(app)/production/capture/assign/page.tsx`
+- `supabase/migrations/20260701_001_roster_entries_backfill_operator_id.sql`
+
+**Changes:**
+- Updated `fillFromRoster()` in the capture assign page to add a third resolution path: when `roster_entries.operator_id` is null and the `employees.operator_id` link is also missing, the function now tries to match `person_name` against `operators.name` (case-insensitive trim). This covers the ~20 floor workers who exist in the employees directory but were never linked to an `operators` record.
+- Updated the back-fill migration to also include a Pass 2 name-match UPDATE (`LOWER(TRIM(roster_entries.person_name)) = LOWER(TRIM(operators.name))`), so existing roster entries pick up the correct `operator_id` when the migration is re-run.
+- Previous Pass 1 (employee link) remains; Pass 2 name-match catches the rest.
+
+---
+
 ## 2026-07-01 — Gustav (QC name autocomplete now sourced from the shift roster)
 
 **Files changed:**
