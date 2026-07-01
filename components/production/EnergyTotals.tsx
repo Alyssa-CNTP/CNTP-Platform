@@ -15,29 +15,28 @@ interface EnergySnap {
 
 export function EnergyTotals() {
   const [data, setData] = useState<EnergySnap | null>(null)
-  const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function load() {
       try {
         const res = await fetch('/api/maintenance/energy')
-        if (!res.ok) { setError(true); return }
-        const json = await res.json()
-        setData({ solar_kwh: json.solar_kwh, grid_kwh: json.grid_kwh, unit: json.unit ?? 'kWh' })
-      } catch {
-        setError(true)
-      }
+        if (res.ok) {
+          const json = await res.json()
+          setData({ solar_kwh: json.solar_kwh, grid_kwh: json.grid_kwh, unit: json.unit ?? 'kWh' })
+        }
+      } catch { /* best-effort */ }
+      setLoading(false)
     }
     load()
     const id = setInterval(load, 5 * 60 * 1000)
     return () => clearInterval(id)
   }, [])
 
-  if (error || !data) return null
-
-  const pct = data.solar_kwh + data.grid_kwh > 0
+  const pct = data && (data.solar_kwh + data.grid_kwh > 0)
     ? Math.round((data.solar_kwh / (data.solar_kwh + data.grid_kwh)) * 100)
-    : 0
+    : null
+  const unit = data?.unit ?? 'kWh'
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -48,10 +47,10 @@ export function EnergyTotals() {
         </div>
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700/70 dark:text-amber-400/70">Solar today</div>
-          <div className="text-[18px] font-bold tabular-nums text-amber-700 dark:text-amber-300 leading-tight">
-            {data.solar_kwh.toFixed(1)} <span className="text-[11px] font-normal">{data.unit}</span>
+          <div className={`text-[18px] font-bold tabular-nums leading-tight ${loading ? 'animate-pulse text-amber-300' : 'text-amber-700 dark:text-amber-300'}`}>
+            {data ? <>{data.solar_kwh.toFixed(1)} <span className="text-[11px] font-normal">{unit}</span></> : '—'}
           </div>
-          {pct > 0 && <div className="text-[10px] text-amber-600/60 dark:text-amber-400/60">{pct}% of consumption</div>}
+          {pct !== null && <div className="text-[10px] text-amber-600/60 dark:text-amber-400/60">{pct}% of consumption</div>}
         </div>
       </div>
 
@@ -62,10 +61,10 @@ export function EnergyTotals() {
         </div>
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-blue-700/70 dark:text-blue-400/70">Grid today</div>
-          <div className="text-[18px] font-bold tabular-nums text-blue-700 dark:text-blue-300 leading-tight">
-            {data.grid_kwh.toFixed(1)} <span className="text-[11px] font-normal">{data.unit}</span>
+          <div className={`text-[18px] font-bold tabular-nums leading-tight ${loading ? 'animate-pulse text-blue-300' : 'text-blue-700 dark:text-blue-300'}`}>
+            {data ? <>{data.grid_kwh.toFixed(1)} <span className="text-[11px] font-normal">{unit}</span></> : '—'}
           </div>
-          {pct > 0 && <div className="text-[10px] text-blue-600/60 dark:text-blue-400/60">{100 - pct}% of consumption</div>}
+          {pct !== null && <div className="text-[10px] text-blue-600/60 dark:text-blue-400/60">{100 - pct}% of consumption</div>}
         </div>
       </div>
     </div>
