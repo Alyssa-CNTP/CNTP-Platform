@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (QC name autocomplete across sieving, pasteuriser, granule)
+
+**Files changed:**
+- `lib/hooks/useQcNames.ts` (new)
+- `components/shared/QCNameField.tsx` (new)
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Added a type-ahead autocomplete to every QC/Quality Controller name field in sieving, pasteuriser, and granule (new run forms, add-sample forms, night/afternoon-shift QC overrides, and inline batch-header edits) to prevent spelling mistakes and name mismatches.
+- Names are sourced from `production.employees` where `department='qc'` — the same staff directory used by the shift roster — via a new shared `useQcNames()` hook, so the roster itself is untouched and remains the single source of names.
+- Autocomplete is assistive, not a hard lock: as the user types, matching names appear in a dropdown (new shared `QCNameField` component); picking one fills the field exactly, but a name not yet in the list can still be typed and saved (e.g. a fill-in QC not yet added to staff).
+
+---
+
 ## 2026-07-01 — Gustav (Duplicate batch guard hardened; search added to Lab Results)
 
 **Files changed:**

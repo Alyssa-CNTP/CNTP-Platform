@@ -28,6 +28,8 @@ import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { useQcNames } from '@/lib/hooks/useQcNames'
+import QCNameField from '@/components/shared/QCNameField'
 import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
@@ -357,6 +359,7 @@ function PastSensorialPanel({ sample, onSave, onClose }: { sample:any; onSave:(d
 function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>void }) {
   const { session } = useAuth()
   const db = getDb()
+  const qcNames = useQcNames()
   // Upload goes to Next.js API route — no external service needed
 
   const [form, setForm] = useState({
@@ -527,7 +530,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
             </div>
             <div>
               <label className={lbl}>QC Controller</label>
-              <input value={form.qc_name} onChange={e => setForm(p => ({ ...p, qc_name: e.target.value }))} className={`${inp} w-full`} />
+              <QCNameField value={form.qc_name} onChange={v => setForm(p => ({ ...p, qc_name: v }))} names={qcNames} className={`${inp} w-full`} />
             </div>
             <div>
               <label className={lbl}>Reference Batch</label>
@@ -565,6 +568,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
 function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   batch:Batch; sampleIndex:number; initialRow?:BatchSample; onSave:(r:any)=>void; onClose:()=>void
 }) {
+  const qcNames  = useQcNames()
   const isOdd    = sampleIndex % 2 === 0
   const now      = new Date()
   const isEdit   = !!initialRow
@@ -678,7 +682,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             ))}
             <div>
               <label className={lbl}>QC Controller *</label>
-              <input value={row.qc_name||''} onChange={e => set('qc_name', e.target.value)}
+              <QCNameField value={row.qc_name||''} onChange={v => set('qc_name', v)} names={qcNames}
                 placeholder="Name" className={`${inp} w-full`} />
             </div>
             <div>
@@ -713,7 +717,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
               <div className="font-bold text-[12px] text-warn mb-2">🌇 Afternoon Shift (16:00+) — Second QC Controller required</div>
               <div>
                 <label className={lbl}>Afternoon QC Controller *</label>
-                <input value={row.afternoon_qc||''} onChange={e => set('afternoon_qc', e.target.value)}
+                <QCNameField value={row.afternoon_qc||''} onChange={v => set('afternoon_qc', v)} names={qcNames}
                   placeholder="Enter afternoon QC controller name" className={`${inp} w-full`} />
               </div>
             </div>
@@ -953,6 +957,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const db     = getDb()
   const { session, p } = useAuth()
   const canApprove = p('can_approve_runs')
+  const qcNames = useQcNames()
 
   const [batches,       setBatches]        = useState<Batch[]>([])
   const [activeBatchId, setActiveBatchId]  = useState<string|null>(null)
@@ -968,6 +973,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [historySearch, setHistorySearch]  = useState('')
   const [expandedHistId,setExpandedHistId] = useState<string|null>(null)
   const [editingField,  setEditingField]   = useState<string|null>(null)
+  const [qcDraft,       setQcDraft]        = useState('')
   const [pubBatches,    setPubBatches]     = useState<any[]>([])
   const [pubLoading,    setPubLoading]     = useState(false)
   const [showPubHistory,setShowPubHistory] = useState(false)
@@ -1319,12 +1325,12 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                       <span>·</span>
                       <span>QC:</span>
                       {editingField === 'qc_name' ? (
-                        <input autoFocus defaultValue={activeBatch.qc_name||''}
-                          onBlur={e => saveBatchField('qc_name', e.target.value)}
-                          onKeyDown={e => { if (e.key==='Enter') (e.target as HTMLInputElement).blur(); if (e.key==='Escape') setEditingField(null) }}
+                        <QCNameField autoFocus value={qcDraft} onChange={setQcDraft} names={qcNames}
+                          onBlur={() => saveBatchField('qc_name', qcDraft)}
+                          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key==='Enter') (e.target as HTMLInputElement).blur(); if (e.key==='Escape') setEditingField(null) }}
                           className="border border-brand rounded px-2 py-0.5 w-32 text-[11px] outline-none" />
                       ) : (
-                        <span onClick={() => setEditingField('qc_name')} className="cursor-text border-b border-dashed border-text-muted font-semibold text-text">{activeBatch.qc_name || '(click to set)'}</span>
+                        <span onClick={() => { setQcDraft(activeBatch.qc_name||''); setEditingField('qc_name') }} className="cursor-text border-b border-dashed border-text-muted font-semibold text-text">{activeBatch.qc_name || '(click to set)'}</span>
                       )}
                       {activeBatch.reference_batch && <><span>·</span><span>Ref: {activeBatch.reference_batch}</span></>}
                       {activeBatch._spec
