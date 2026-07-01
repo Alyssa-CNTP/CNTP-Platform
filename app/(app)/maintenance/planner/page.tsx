@@ -1,56 +1,64 @@
 'use client'
 
 // app/(app)/maintenance/planner/page.tsx
-// Planner & Roster — a proper week calendar for the maintenance team.
-// Top "next" strip surfaces who is on duty now, who is up next on the roster,
-// and the next scheduled job. Below sit three collapsible sections:
-//   • This week — a 7-day Mon–Sun calendar of planner slots + duty windows
-//   • Duty roster — the editable list that auto-routes breakdowns
-//   • QC area map — area → QC officer mapping
-// All data + mutations come from the shared maintenance context unchanged.
-// Editing controls are gated to managers; everyone else sees a read-only view.
+// Planner & Roster — maintenance team at a glance.
+// • "Next" strip — on duty now / up next on roster / next scheduled job
+// • Per-technician status panel
+// • Maintenance on shift — current-period shift assignments from the production roster
+// • QC area map
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  ChevronDown, ChevronRight, CalendarRange, UserCheck, Clock3, Wrench, Plus, Users,
+  ChevronDown, ChevronRight, CalendarRange, UserCheck, Clock3, Wrench, Users,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { useMaintenanceContext } from '../layout'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { AREAS } from '@/lib/maintenance/constants'
-import { fmtD, fmtT, fmtDT } from '@/lib/maintenance/helpers'
+import { fmtT, fmtDT } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
+import { getDb } from '@/lib/supabase/client'
 
-const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
-const PRIMARY = 'bg-brand text-white rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:brightness-110 transition'
-
-function startOfWeek(d: Date) {
-  const x = new Date(d)
-  const day = x.getDay() || 7
-  x.setDate(x.getDate() - day + 1)
-  x.setHours(0, 0, 0, 0)
-  return x
+// ── SAST helpers ──────────────────────────────────────────────────────────────
+function todaySAST() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' }) // yyyy-MM-dd
 }
-const sameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+function hourSAST() {
+  return parseInt(new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', hour: 'numeric', hour12: false }), 10)
+}
+// Day shift 07:00–16:59, night shift otherwise
+function currentShift(): 'day' | 'night' {
+  const h = hourSAST()
+  return h >= 7 && h < 17 ? 'day' : 'night'
+}
 
-// ── Per-technician pastel identity colours ──────────────────────────────────
-// Each technician gets a stable pastel (by name hash) so their duty windows and
-// planner slots are instantly recognisable across the calendar.
-// Maximally-distinct hues (violet → blue → green → amber → rose → cyan → orange →
-// fuchsia) so the first ~8 technicians are each clearly different. Borders/dots
-// are saturated for a "defining" edge; backgrounds stay soft.
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface RosterEntry {
+  id: string
+  shift: 'day' | 'night'
+  person_name: string | null
+  role_key: string
+}
+interface RosterPeriod {
+  id: string
+  start_date: string
+  end_date: string
+  day_label: string | null
+  night_label: string | null
+}
+
+// ── Per-technician pastel identity colours ────────────────────────────────────
 interface Pastel { bg: string; border: string; text: string; dot: string }
 const TECH_PALETTE: Pastel[] = [
-  { bg: '#EDE9FE', border: '#8B5CF6', text: '#5B21B6', dot: '#7C3AED' }, // violet
-  { bg: '#DBEAFE', border: '#3B82F6', text: '#1D4ED8', dot: '#2563EB' }, // blue
-  { bg: '#D1FAE5', border: '#10B981', text: '#047857', dot: '#059669' }, // emerald
-  { bg: '#FEF3C7', border: '#F59E0B', text: '#B45309', dot: '#D97706' }, // amber
-  { bg: '#FFE4E6', border: '#F43F5E', text: '#BE123C', dot: '#E11D48' }, // rose
-  { bg: '#CFFAFE', border: '#06B6D4', text: '#0E7490', dot: '#0891B2' }, // cyan
-  { bg: '#FFEDD5', border: '#F97316', text: '#C2410C', dot: '#EA580C' }, // orange
-  { bg: '#FAE8FF', border: '#D946EF', text: '#A21CAF', dot: '#C026D3' }, // fuchsia
+  { bg: '#EDE9FE', border: '#8B5CF6', text: '#5B21B6', dot: '#7C3AED' },
+  { bg: '#DBEAFE', border: '#3B82F6', text: '#1D4ED8', dot: '#2563EB' },
+  { bg: '#D1FAE5', border: '#10B981', text: '#047857', dot: '#059669' },
+  { bg: '#FEF3C7', border: '#F59E0B', text: '#B45309', dot: '#D97706' },
+  { bg: '#FFE4E6', border: '#F43F5E', text: '#BE123C', dot: '#E11D48' },
+  { bg: '#CFFAFE', border: '#06B6D4', text: '#0E7490', dot: '#0891B2' },
+  { bg: '#FFEDD5', border: '#F97316', text: '#C2410C', dot: '#EA580C' },
+  { bg: '#FAE8FF', border: '#D946EF', text: '#A21CAF', dot: '#C026D3' },
 ]
 function hashName(name: string) {
   let h = 0
@@ -63,53 +71,65 @@ export default function PlannerPage() {
   const role = deriveMaintRole(auth)
   const canManage = role.canManage
   const ctx = useMaintenanceContext()
-  const { loading, data, derived, actions, ui } = ctx
-  const { jcs, slots, roster, staff } = data
-  const { duty, dutyNow, openPlannedCards } = derived
-  const { slotForm, setSlotForm } = ui
+  const { loading, data, derived, actions } = ctx
+  const { jcs, slots, staff } = data
+  const { duty, dutyNow } = derived
 
-  // Technicians come from the live staff directory (falls back to TECHS).
   const techNames = staff.map(s => s.name)
-  const staffByName = (name: string) => staff.find(s => s.name === name)
-  // Stable per-technician colour: assign by position in the staff list so the
-  // first technicians get the most-distinct hues; hash as a fallback.
   const techIndex = new Map(techNames.map((t, i) => [t, i]))
   const colorFor = (name: string) => TECH_PALETTE[(techIndex.has(name) ? techIndex.get(name)! : hashName(name)) % TECH_PALETTE.length]
 
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
-  const [openWeek, setOpenWeek] = useState(true)
-  const [openRoster, setOpenRoster] = useState(true)
   const [openQc, setOpenQc] = useState(false)
-  const [openAddSlot, setOpenAddSlot] = useState(false)
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart); d.setDate(d.getDate() + i); return d
-  })
-  const weekEnd = weekDays[6]
+  // Shift roster state
+  const [rosterPeriod, setRosterPeriod] = useState<RosterPeriod | null>(null)
+  const [rosterEntries, setRosterEntries] = useState<RosterEntry[]>([])
+  const [rosterLoading, setRosterLoading] = useState(true)
 
-  const now = new Date()
-  const nowMs = now.getTime()
+  useEffect(() => {
+    async function load() {
+      setRosterLoading(true)
+      const today = todaySAST()
+      const { data: periods } = await getDb()
+        .schema('production' as any)
+        .from('roster_periods')
+        .select('id,start_date,end_date,day_label,night_label')
+        .lte('start_date', today)
+        .gte('end_date', today)
+        .order('start_date', { ascending: false })
+        .limit(1)
+      const period = (periods as RosterPeriod[] | null)?.[0] ?? null
+      setRosterPeriod(period)
+      if (period) {
+        const { data: entries } = await getDb()
+          .schema('production' as any)
+          .from('roster_entries')
+          .select('id,shift,person_name,role_key')
+          .eq('period_id', period.id)
+          .in('role_key', ['maintenance_tech', 'maintenance_asst'])
+        setRosterEntries((entries as RosterEntry[] | null) ?? [])
+      }
+      setRosterLoading(false)
+    }
+    load()
+  }, [])
 
-  // Slots / roster windows that fall on a given calendar day.
-  const slotsOn = (day: Date) =>
-    slots.filter(s => sameDay(new Date(s.start_at), day))
-      .sort((a, b) => a.start_at.localeCompare(b.start_at))
-  // A roster window shows on every day it overlaps.
-  const rosterOn = (day: Date) => {
-    const ds = new Date(day); ds.setHours(0, 0, 0, 0)
-    const de = new Date(day); de.setHours(23, 59, 59, 999)
-    return roster.filter(r => new Date(r.start_at) <= de && new Date(r.end_at) >= ds)
-      .sort((a, b) => a.start_at.localeCompare(b.start_at))
-  }
+  const nowMs = Date.now()
 
-  // ── "Next" strip selectors ──
-  const upNextRoster = [...roster]
+  // "Next" strip selectors
+  const upNextRoster = [...(data.roster ?? [])]
     .filter(r => new Date(r.start_at).getTime() > nowMs)
     .sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null
   const nextJob = [...slots]
     .filter(s => new Date(s.start_at).getTime() > nowMs)
     .sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null
   const nextJobCard = nextJob ? jcs.find(c => c.id === nextJob.card_id) : null
+
+  const activeShift = currentShift()
+  const dayLabel = rosterPeriod?.day_label ?? 'Day shift'
+  const nightLabel = rosterPeriod?.night_label ?? 'Night shift'
+  const dayEntries = rosterEntries.filter(e => e.shift === 'day')
+  const nightEntries = rosterEntries.filter(e => e.shift === 'night')
 
   if (loading) {
     return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading planner…</div></div>
@@ -120,13 +140,12 @@ export default function PlannerPage() {
       <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-text flex items-center gap-2"><CalendarRange className="w-6 h-6 text-brand" /> Planner &amp; Roster</h1>
-          <p className="text-sm text-text-muted mt-1">Who is on duty, who is up next, and every scheduled slot — on one calendar.</p>
+          <p className="text-sm text-text-muted mt-1">Who is on duty, who is up next, and every scheduled slot — on one page.</p>
         </div>
       </div>
 
-      {/* ── "Next" strip — glanceable, colour-cued ── */}
+      {/* ── "Next" strip ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-        {/* On duty now */}
         <div className={`rounded-xl border p-4 ${duty ? 'border-ok/30 bg-ok/5' : 'border-err/30 bg-err/5'}`}>
           <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
             <UserCheck className={`w-4 h-4 ${duty ? 'text-ok' : 'text-err'}`} /> On duty now
@@ -137,7 +156,6 @@ export default function PlannerPage() {
           <div className="text-[11px] text-text-faint mt-1">Breakdowns auto-route to the on-duty technician.</div>
         </div>
 
-        {/* Up next on roster */}
         <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
           <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
             <Clock3 className="w-4 h-4 text-info" /> Up next on roster
@@ -150,7 +168,6 @@ export default function PlannerPage() {
             : <div className="mt-1.5 text-sm text-text-faint">No upcoming duty slots.</div>}
         </div>
 
-        {/* Next scheduled job */}
         <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
           <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
             <Wrench className="w-4 h-4 text-accent" /> Next scheduled job
@@ -168,7 +185,7 @@ export default function PlannerPage() {
         </div>
       </div>
 
-      {/* ── Per-technician status — what each person is busy with + outstanding ── */}
+      {/* ── Per-technician status ── */}
       {techNames.length > 0 && (
         <div className="card p-4 mb-6">
           <div className="flex items-center gap-2 mb-3">
@@ -223,140 +240,100 @@ export default function PlannerPage() {
         </div>
       )}
 
-      {/* ── Add a planned slot (collapsible, manager only) ── */}
-      {canManage && (
-        <div className="card p-0 mb-4 overflow-hidden">
-          <button onClick={() => setOpenAddSlot(o => !o)}
-            className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-surface-dim/50 transition">
-            <Chevron open={openAddSlot} />
-            <Plus size={15} className="text-brand" />
-            <span className="text-sm font-semibold text-text">Add a planned slot</span>
-            <span className="text-[12px] text-text-muted ml-1">card-linked estimate with note</span>
-          </button>
-          {openAddSlot && (
-            <div className="px-4 pb-4 border-t border-surface-rule pt-3">
-              <div className="flex gap-2 flex-wrap items-end">
-                <div><label className={LB}>Job Card</label>
-                  <select className={`${INP} w-[230px]`} value={slotForm.cardId} onChange={e => setSlotForm(p => ({ ...p, cardId: e.target.value }))}>
-                    <option value="">(no card — general slot)</option>
-                    {openPlannedCards.map(c => <option key={c.id} value={c.id}>{c.card_no} — {c.area}: {c.description.slice(0, 40)}</option>)}
-                  </select>
-                </div>
-                <div><label className={LB}>Technician</label><select className={`${INP} w-28`} value={slotForm.tech} onChange={e => { const s = staffByName(e.target.value); setSlotForm(p => ({ ...p, tech: e.target.value, techId: s?.id ?? null })) }}>{techNames.map(t => <option key={t}>{t}</option>)}</select></div>
-                <div><label className={LB}>Date</label><input className={`${INP} w-36`} type="date" value={slotForm.date} onChange={e => setSlotForm(p => ({ ...p, date: e.target.value }))} /></div>
-                <div><label className={LB}>Start</label><input className={`${INP} w-24`} type="time" value={slotForm.time} onChange={e => setSlotForm(p => ({ ...p, time: e.target.value }))} /></div>
-                <div><label className={LB}>Est. Hours</label><input className={`${INP} w-20`} type="number" min={0.5} step={0.5} value={slotForm.hours} onChange={e => setSlotForm(p => ({ ...p, hours: e.target.value }))} /></div>
-                <div className="flex-1 min-w-[120px]"><label className={LB}>Note</label><input className={INP} value={slotForm.note} onChange={e => setSlotForm(p => ({ ...p, note: e.target.value }))} placeholder="Optional note…" /></div>
-                <button className={PRIMARY} onClick={actions.addSlot}>Add slot</button>
-              </div>
-              <div className="text-[11px] text-text-faint mt-2">Slots are estimates — actual durations come from the job-card timer.</div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── This week (calendar) ── */}
-      <Section title="This week" subtitle={`${fmtD(weekStart.toISOString())} – ${fmtD(weekEnd.toISOString())}`} open={openWeek} onToggle={() => setOpenWeek(o => !o)}>
-        <div className="flex gap-1.5 items-center mb-3 flex-wrap">
-          <NavBtn onClick={() => setWeekStart(d => { const n = new Date(d); n.setDate(n.getDate() - 7); return n })}>← Prev</NavBtn>
-          <NavBtn onClick={() => setWeekStart(startOfWeek(new Date()))}>Today</NavBtn>
-          <NavBtn onClick={() => setWeekStart(d => { const n = new Date(d); n.setDate(n.getDate() + 7); return n })}>Next →</NavBtn>
-          <span className="text-[12px] text-text-muted ml-1">{fmtD(weekStart.toISOString())} – {fmtD(weekEnd.toISOString())}</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2">
-          {weekDays.map(day => {
-            const isToday = sameDay(day, now)
-            const daySlots = slotsOn(day)
-            const dayRoster = rosterOn(day)
-            return (
-              <div key={day.toISOString()} className={`rounded-lg border shadow-sm ${isToday ? 'border-brand/50 bg-brand/[0.04] ring-1 ring-brand/20' : 'border-surface-rule bg-surface-card'} flex flex-col min-h-[120px]`}>
-                <div className={`px-2 py-1.5 border-b ${isToday ? 'border-brand/30' : 'border-surface-rule'} flex items-baseline justify-between`}>
-                  <span className={`text-[11px] font-semibold flex items-center gap-1 ${isToday ? 'text-brand' : 'text-text'}`}>{day.toLocaleDateString('en-ZA', { weekday: 'short' })}{isToday && <span className="text-[8px] font-bold uppercase bg-brand text-white rounded px-1 py-0.5">today</span>}</span>
-                  <span className="text-[11px] text-text-muted tabular-nums">{day.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}</span>
-                </div>
-                <div className="p-1.5 flex-1 space-y-1">
-                  {/* Roster duty windows — per-tech pastel, dashed border, on-duty glow */}
-                  {dayRoster.map(r => {
-                    const onNow = new Date(r.start_at).getTime() <= nowMs && nowMs <= new Date(r.end_at).getTime()
-                    const tc = colorFor(r.technician)
-                    return (
-                      <div key={'r' + r.id}
-                        style={{ background: tc.bg, borderColor: onNow ? '#1A7A3C' : tc.border, color: tc.text, boxShadow: onNow ? '0 0 0 2px rgba(26,122,60,0.25)' : undefined }}
-                        className="rounded-md px-1.5 py-1 text-[10px] border border-dashed shadow-sm" title={`Duty: ${r.technician}`}>
-                        <div className="font-semibold flex items-center gap-1">{r.technician}{onNow && <span className="text-[9px] font-bold text-ok">● ON DUTY</span>}</div>
-                        <div className="opacity-70">{fmtT(r.start_at)}–{fmtT(r.end_at)} · duty</div>
-                      </div>
-                    )
-                  })}
-                  {/* Planner slots — per-tech pastel, solid, removable (manager) */}
-                  {daySlots.map(s => {
-                    const c = jcs.find(x => x.id === s.card_id)
-                    const tc = colorFor(s.technician)
-                    return (
-                      <div key={'s' + s.id}
-                        style={{ background: tc.bg, borderColor: tc.border, color: tc.text }}
-                        className={`rounded-md px-1.5 py-1 text-[10px] border shadow-sm ${canManage ? 'cursor-pointer hover:shadow transition' : ''}`}
-                        onClick={canManage ? () => actions.delSlot(s.id) : undefined}
-                        title={canManage ? `${s.technician} — tap to remove` : s.technician}>
-                        <div className="font-semibold">{fmtT(s.start_at)}–{fmtT(s.end_at)}</div>
-                        <div className="flex items-center gap-1 font-medium"><span style={{ background: tc.dot }} className="w-1.5 h-1.5 rounded-full inline-block shrink-0" />{s.technician}</div>
-                        {c && <div className="font-semibold opacity-90">{c.card_no}</div>}
-                        {(s.note || c) && <div className="opacity-70 truncate">{s.note || c?.description.slice(0, 24)}</div>}
-                      </div>
-                    )
-                  })}
-                  {/* Empty-day add affordance — manager only */}
-                  {canManage && daySlots.length === 0 && dayRoster.length === 0 && (
-                    <button
-                      onClick={() => actions.addSlotFor(slotForm.tech, staffByName(slotForm.tech)?.id ?? null, day)}
-                      className="w-full min-h-[44px] rounded border border-dashed border-surface-rule text-[11px] text-text-faint hover:border-brand hover:text-brand transition flex items-center justify-center gap-1"
-                      title={`Add a 2-hour slot for ${slotForm.tech}`}>
-                      <Plus size={12} /> add
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        {/* Technician colour legend */}
-        {techNames.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 mt-3">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint mr-0.5">Technicians</span>
-            {techNames.map(t => {
-              const tc = colorFor(t)
-              return (
-                <span key={t} className="inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full border px-2 py-0.5"
-                  style={{ background: tc.bg, borderColor: tc.border, color: tc.text }}>
-                  <span className="w-2 h-2 rounded-full" style={{ background: tc.dot }} /> {t}
-                </span>
-              )
-            })}
-          </div>
-        )}
-        <div className="text-[11px] text-text-faint mt-2">
-          Each technician has their own colour. Dashed chips are duty-roster windows; solid chips are planned slots.
-          {canManage && ' Tap an empty day to add a quick 2-hour slot for the planner-form technician, or tap a slot chip to remove it.'}
-        </div>
-      </Section>
-
-      {/* ── Duty roster (now sourced from the Operations shift roster) ── */}
-      <Section title="Duty roster" subtitle="Sourced from the Operations shift roster" open={openRoster} onToggle={() => setOpenRoster(o => !o)}>
-        <div className="rounded-lg bg-info/10 border border-info/20 p-3 text-[12px] text-text space-y-2">
-          <div>
-            The on-duty maintenance technician is now read from the <strong>Operations shift roster</strong> —
-            the Maintenance-role rows for the current Day / Night shift. Breakdowns auto-route to whoever is on
-            shift there, so the roster is managed in one place.
-          </div>
-          <div>Currently on duty: <strong className={duty ? 'text-ok' : 'text-err'}>{duty ?? 'NOBODY'}</strong>
-            {dutyNow.length > 1 && <span className="text-text-muted"> (+{dutyNow.length - 1} more on shift)</span>}
+      {/* ── Maintenance on shift — from the production roster ── */}
+      <div className="card p-4 mb-6">
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <CalendarRange size={16} className="text-brand" />
+            <h2 className="text-sm font-semibold text-text">Maintenance on shift</h2>
+            {rosterPeriod && (
+              <span className="text-[11px] text-text-muted">
+                {new Date(rosterPeriod.start_date + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}
+                {' – '}
+                {new Date(rosterPeriod.end_date + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </span>
+            )}
           </div>
           <Link href="/production/roster"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-brand text-white px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition">
-            <CalendarRange size={14} /> Open the shift roster
+            className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-brand hover:underline">
+            Edit in Shift Roster →
           </Link>
         </div>
-      </Section>
+
+        {rosterLoading ? (
+          <div className="text-sm text-text-muted">Loading roster…</div>
+        ) : !rosterPeriod ? (
+          <div className="rounded-lg border border-warn/20 bg-warn/5 p-3 text-[12px] text-text-muted">
+            No active roster period found for today. <Link href="/production/roster" className="text-brand font-semibold hover:underline">Open the shift roster</Link> to create one.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Day shift */}
+            <div className={`rounded-xl border p-4 ${activeShift === 'day' ? 'border-brand/40 bg-brand/5 ring-1 ring-brand/20' : 'border-surface-rule bg-surface-card'}`}>
+              <div className="flex items-center gap-2 mb-3">
+                <span className={`text-[11px] font-bold uppercase tracking-wide ${activeShift === 'day' ? 'text-brand' : 'text-text-muted'}`}>
+                  {dayLabel}
+                </span>
+                {activeShift === 'day' && (
+                  <span className="text-[9px] font-bold bg-brand text-white rounded px-1.5 py-0.5 uppercase tracking-wide">Active now</span>
+                )}
+                <span className="text-[10px] text-text-faint ml-auto">07:00 – 16:59</span>
+              </div>
+              {dayEntries.length === 0 ? (
+                <div className="text-[12px] text-text-faint">No maintenance staff on day shift.</div>
+              ) : (
+                <div className="space-y-2">
+                  {dayEntries.map(e => {
+                    const name = e.person_name ?? '—'
+                    const tc = colorFor(name)
+                    const onDuty = dutyNow.includes(name)
+                    return (
+                      <div key={e.id} className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: tc.dot }} />
+                        <span className="text-[13px] font-medium text-text flex-1">{name}</span>
+                        <span className="text-[10px] text-text-faint">{e.role_key === 'maintenance_tech' ? 'Technician' : 'Assistant'}</span>
+                        {onDuty && <span className="badge badge-ok text-[9px]">ON DUTY</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Night shift */}
+            <div className={`rounded-xl border p-4 ${activeShift === 'night' ? 'border-brand/40 bg-brand/5 ring-1 ring-brand/20' : 'border-surface-rule bg-surface-card'}`}>
+              <div className="flex items-center gap-2 mb-3">
+                <span className={`text-[11px] font-bold uppercase tracking-wide ${activeShift === 'night' ? 'text-brand' : 'text-text-muted'}`}>
+                  {nightLabel}
+                </span>
+                {activeShift === 'night' && (
+                  <span className="text-[9px] font-bold bg-brand text-white rounded px-1.5 py-0.5 uppercase tracking-wide">Active now</span>
+                )}
+                <span className="text-[10px] text-text-faint ml-auto">17:00 – 06:59</span>
+              </div>
+              {nightEntries.length === 0 ? (
+                <div className="text-[12px] text-text-faint">No maintenance staff on night shift.</div>
+              ) : (
+                <div className="space-y-2">
+                  {nightEntries.map(e => {
+                    const name = e.person_name ?? '—'
+                    const tc = colorFor(name)
+                    const onDuty = dutyNow.includes(name)
+                    return (
+                      <div key={e.id} className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: tc.dot }} />
+                        <span className="text-[13px] font-medium text-text flex-1">{name}</span>
+                        <span className="text-[10px] text-text-faint">{e.role_key === 'maintenance_tech' ? 'Technician' : 'Assistant'}</span>
+                        {onDuty && <span className="badge badge-ok text-[9px]">ON DUTY</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── QC area map ── */}
       <Section title="QC area map" subtitle="Completed jobs route to the QC mapped to their area" open={openQc} onToggle={() => setOpenQc(o => !o)}>
@@ -410,14 +387,5 @@ function Section({ title, subtitle, open, onToggle, children }: {
       </button>
       {open && <div className="px-4 pb-4 border-t border-surface-rule pt-3">{children}</div>}
     </div>
-  )
-}
-
-function NavBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick}
-      className="px-3 py-2 min-h-[40px] rounded-lg text-[12px] font-semibold border border-surface-rule text-text-muted hover:border-text/30 hover:text-text transition">
-      {children}
-    </button>
   )
 }
