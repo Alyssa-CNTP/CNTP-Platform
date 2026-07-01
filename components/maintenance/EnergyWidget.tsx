@@ -208,14 +208,11 @@ export function EnergyWidget() {
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">Source</span>
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">Energy</span>
                   </div>
-                  <SourceRow color={CHART_STYLE.solar} label="PV Energy"               value={data.solar_kwh}         unit={unit} />
-                  <SourceRow                            label="Solar total"              value={data.solar_kwh}         unit={unit} bold />
-                  <SourceRow color={CHART_STYLE.bat}   label="Battery Discharge Energy" value={data.bat_discharge_kwh} unit={unit} />
-                  <SourceRow color="#e11d48"            label="Battery Charge Energy"    value={-data.bat_charge_kwh}   unit={unit} />
-                  <SourceRow                            label="Battery total"            value={data.bat_discharge_kwh - data.bat_charge_kwh} unit={unit} bold />
-                  <SourceRow color={CHART_STYLE.grid}  label="Daily Grid Intake"        value={data.grid_kwh}          unit={unit} />
-                  <SourceRow color="#a78bfa"            label="Daily Grid Feedback"      value={-data.grid_export_kwh}  unit={unit} />
-                  <SourceRow                            label="Grid total"               value={data.grid_kwh - data.grid_export_kwh} unit={unit} bold />
+                  <SourceRow color={CHART_STYLE.solar} label="PV Energy"        value={data.solar_kwh}                        unit={unit} />
+                  <SourceRow                            label="Solar total"     value={data.solar_kwh}                        unit={unit} bold />
+                  <SourceRow color={CHART_STYLE.grid}  label="Grid Intake"     value={data.grid_kwh}                         unit={unit} />
+                  <SourceRow color="#a78bfa"            label="Grid Feedback"   value={-data.grid_export_kwh}                 unit={unit} />
+                  <SourceRow                            label="Grid total"      value={data.grid_kwh - data.grid_export_kwh}  unit={unit} bold />
                   {data.generator_kwh > 0 && (
                     <>
                       <SourceRow color={CHART_STYLE.gen} label="Generator" value={data.generator_kwh} unit={unit} />
