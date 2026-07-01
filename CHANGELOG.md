@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Capture overview — hierarchical tables, cross-shift totals, spillage rename)
+
+**Files changed:**
+- `components/production/capture/CaptureOverview.tsx`
+- `components/production/capture/SievingCapture.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+
+**Changes:**
+- Debagging table restructured: rows grouped by lot/batch with expand/collapse, subtotal per lot, bucket elevator and machine spillage shown as separate named rows, total excl. spillage and total incl. spillage at bottom
+- Bagging table restructured: 3-level hierarchy (product → lot → individual bag) — tap product row to see lot breakdown with subtotals, tap lot row to see individual bags; product-level totals in each product row header
+- Spillage fields renamed: Spillage 1 → "Bucket elevator", Spillage 2 → "Machine spillage" in the capture debagging step
+- Production order (from Acumatica shift assignment) now shown at top of overview
+- Overview loads the other shift's session and combines it — same variant+grade+lot bags from morning and afternoon shift merge into shared totals
+- Mass balance now uses total incl. both spillage types as the "in" figure
+
+---
+
 ## 2026-07-02 — Alyssa (Maintenance tech PIN login + unified roster shift highlight)
 
 **Files changed:**
