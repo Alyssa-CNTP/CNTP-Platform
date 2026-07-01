@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (Lab Manager: comment sent back to QC on duty)
+
+**Files changed:**
+- `components/shared/LmDecisionModal.tsx` (new)
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Replaced the browser `prompt()` used to capture a Pass/Fail/Concession reason with a proper comment modal (`LmDecisionModal`), used consistently across the Lab Manager dashboard's Pending Approvals tab and the inline approve buttons on the pasteuriser and granule run pages.
+- The comment is now optional on Pass (previously no comment was possible) and still required on Fail/Concession, and is written back to the existing `final_reason` field (already present on both `qms.granule_runs` and pasteuriser's run data).
+- The comment now surfaces directly on the batch/run the QC on duty is looking at — a "💬 Lab Manager comment" banner on the pasteuriser batch header and the granule run card — instead of only being visible buried in the History tab.
+
+---
+
 ## 2026-07-01 — Alyssa (fix capture autofill — name-based operator fallback)
 
 **Files changed:**
