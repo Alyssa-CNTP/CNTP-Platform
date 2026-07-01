@@ -5,6 +5,37 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Staff Profiles + Skills/Competency Matrix — Phase 1)
+
+**Files changed:**
+- `supabase/migrations/20260702_001_competency_matrix.sql` (new)
+- `lib/production/competency-config.ts` (new)
+- `lib/auth/permissions.ts`
+- `lib/auth/permission-registry.ts`
+- `components/layout/Sidebar.tsx`
+- `components/production/StaffTabs.tsx` (new)
+- `app/(app)/layout.tsx`
+- `app/(app)/production/staff/page.tsx`
+- `app/(app)/production/staff/[id]/page.tsx` (new)
+- `app/(app)/production/staff/matrix/page.tsx` (new)
+- `app/(app)/production/staff/sops/page.tsx` (new)
+- `app/api/staff/competencies/route.ts` (new)
+- `scripts/import-competency-matrix.cjs` (new)
+
+**Changes:**
+- New **Staff & Skills** page in the Operations sidebar group (own entry, not under Shift Roster).
+- 4 new DB tables: `production.sops`, `production.employee_competencies`, `production.competency_history` (FSSC audit trail), `production.role_required_sops` (Phase-2 allocation).
+- `production.employees` extended with profile columns: position, position_code, department_code, employee_code, start_date, years_of_service, email, photo_url.
+- Full staff profile page (`/production/staff/[id]`): header with avatar/codes/years, competency panel grouped by SOP area, inline edit modal per SOP, collapsible history feed.
+- Skills Matrix page (`/production/staff/matrix`): employees × SOPs grid coloured by status (COMP/TRN/TBA/NC/—), filter by department and SOP area.
+- SOP Catalogue page (`/production/staff/sops`): list of all SOPs grouped by area, add/edit gated by `can_manage_sop_catalog`.
+- 5 new permission keys wired into Users & Roles: `can_view_staff`, `can_edit_staff_profiles`, `can_manage_competencies`, `can_manage_sop_catalog`, `can_allocate_staff`.
+- API route `POST /api/staff/competencies` with server-side permission check, upsert, and dual audit trail (competency_history + axis.audit_log).
+- Import script (`scripts/import-competency-matrix.cjs`) reads `Copy of CNTP Employees.xlsx` and `SOP_Matrix_Final.xlsx`, matches names 4 ways, upserts employees/SOPs/competencies idempotently, prints end-of-run report.
+- **To activate:** run migration SQL in Supabase SQL editor, then `node scripts/import-competency-matrix.cjs` (with Excel files in `scripts/data/`).
+
+---
+
 ## 2026-07-01 — Gustav (Lab Manager: no comment step needed on Pass)
 
 **Files changed:**
@@ -189,6 +220,30 @@ Format: date · developer · files changed · description of code changes.
 - **Bug fix:** the web service decoded the CR3 with `half_size=True`, which halves resolution and skips demosaic interpolation, shifting the 30 colour features away from what the model was trained on → wrong leaf shade. Removed `half_size=True` so the RAW decode is full-resolution, matching the desktop training pipeline (Blackheath).
 - Pinned the Python deps to the desktop reference versions so the demosaic + feature extraction reproduce training values exactly: `rawpy==0.25.1` (was 0.27.0), `opencv-python-headless==4.13.0.90` (was 4.13.0.92), `numpy==2.2.6` (was 2.4.6). scikit-learn stays 1.7.2 and joblib 1.5.3 (already matched).
 - Requires a container rebuild on the VPS: `cd ml/leafshade && docker compose up -d --build`.
+
+---
+
+## 2026-07-01 — Alyssa (full staff directory sync from employee spreadsheet)
+
+**Files changed:**
+- `supabase/migrations/20260623_001_staff_directory.sql` (data only — no schema change)
+
+**Changes:**
+- Synced all 125 employees from the canonical CNTP Employees spreadsheet into `production.employees` on both staging and production DBs.
+- 48 new employees inserted (staging) / 47 (production); remaining updated with correct name, department, job title, and skill certifications inferred from the roster.
+- Fixed 21 name spelling inconsistencies in `roster_entries.person_name` to match the canonical spreadsheet (e.g. "Grant Alexandra" → "Grant Alexander", "Shuaib Davids" → "Shuaib Sentso", "Ezetu Siminga" → "Amoretta Louw", and 18 others).
+- Employees not in the spreadsheet (test operators, "Alyssa", "Cyril", etc.) were left untouched.
+
+---
+
+## 2026-07-01 — Alyssa (roster period selector date duplication fix)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- Fixed period dropdown showing the date range twice (e.g. "29 Jun – 3 Jul · 29 Jun – 3 Jul 2026") when the period name already matches the formatted date range. Now only appends the range if the name differs.
+- Seeded July 2026 roster (4 weekly periods, 286 entries) into production DB.
 
 ---
 

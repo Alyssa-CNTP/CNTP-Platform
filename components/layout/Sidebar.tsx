@@ -46,6 +46,7 @@ const NAV: NavItem[] = [
 
   // ── Operations — cross-role, universal entries ──
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations' },
+  { href: '/production/staff',          label: 'Staff & Skills',             icon: Users,           group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
 
   // ── Quality ──
