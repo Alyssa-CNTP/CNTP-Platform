@@ -5,6 +5,28 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Maintenance tech PIN login + unified roster shift highlight)
+
+**Files changed:**
+- `supabase/migrations/20260702_001_maintenance_tech_auth.sql` *(new)*
+- `lib/maintenance/tech-auth.ts` *(new)*
+- `app/api/maintenance/technicians/route.ts` *(new)*
+- `app/api/maintenance/technicians/manage/route.ts` *(new)*
+- `app/maintenance-login/page.tsx` *(new)*
+- `app/(app)/maintenance/technicians/page.tsx` *(new)*
+- `app/login/page.tsx`
+- `app/floor/page.tsx`
+
+**Changes:**
+- Maintenance technicians can now sign in with a 4-digit PIN — mirrors the floor-operator system. New `maintenance.tech_auth` table stores a synthetic Supabase email per tech; PIN derives a deterministic password (`mnt_{pin}_{email}`) that never leaves the server.
+- New `/maintenance-login` page: name picker + numeric PIN pad. Techs on the current shift (queried from `production.roster_entries`) are highlighted at the top with an "On shift" badge. After sign-in → `/maintenance/job-cards` (already filtered to assigned cards when role = `maintenance_technician`).
+- New `/maintenance/technicians` manager page: shows all maintenance techs grouped by on-shift / off-shift. Maintenance manager can set or reset any tech's PIN (4-digit input, show/hide toggle), toggle active status. Indicates whether a PIN has been provisioned yet.
+- New API routes: `GET /api/maintenance/technicians` (public, for login picker), `POST` (provision first-time), `PATCH` (reset PIN or toggle active), `GET /api/maintenance/technicians/manage` (manager-only, enriched with `has_pin` + `on_shift`).
+- Login page redesigned: Microsoft button stays at top; two role cards below replace the old footer link — **Maintenance Tech** (orange icon) and **Floor Operator** (green icon), each with name + "Sign in with your PIN" description.
+- Floor login updated to use the unified roster: queries `roster_entries` for today's shift, sorts on-shift operators to the top with a badge. Same smart behaviour now across both login pages.
+
+---
+
 ## 2026-07-02 — Alyssa (Skills Matrix redesign + Staff Directory by department)
 
 **Files changed:**
