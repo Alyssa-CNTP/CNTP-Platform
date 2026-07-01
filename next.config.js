@@ -8,6 +8,7 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  serverExternalPackages: ['xlsx'],
   // Note: eslint key was removed in Next.js 15+. ESLint is disabled via --no-lint in build script.
 };
 
