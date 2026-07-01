@@ -20,6 +20,7 @@ import { checkOutlier } from '@/lib/utils/outliers'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
+import LmDecisionModal from '@/components/shared/LmDecisionModal'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -1316,6 +1317,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
   const [editingBatch, setEditingBatch] = useState(false)
   const [batchDraft, setBatchDraft]     = useState(run.batch_number)
   const [batchSaving, setBatchSaving]   = useState(false)
+  const [decisionResult, setDecisionResult] = useState<'Pass'|'Fail'|'Concession'|null>(null)
 
   const handleBatchSave = async () => {
     const trimmed = batchDraft.trim()
@@ -1333,6 +1335,14 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
     <div className={`bg-surface-card rounded-xl mb-4 overflow-hidden border-2 ${hasViolations ? 'border-err/40' : 'border-surface-rule'}`}>
       {editingSpec && <GranuleEditSpecModal run={run} onSave={onUpdateSpec} onClose={() => setEditingSpec(false)} />}
       {editingSample && <GranuleEditSampleModal sample={editingSample} run={run} onSave={onEditSample} onClose={() => setEditingSample(null)} />}
+      {decisionResult && (
+        <LmDecisionModal
+          result={decisionResult}
+          batchLabel={run.batch_number}
+          onClose={() => setDecisionResult(null)}
+          onConfirm={comment => { onFinalise(run.id, decisionResult, comment); setDecisionResult(null) }}
+        />
+      )}
 
       {/* Header */}
       <div className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${hasViolations ? 'bg-err/5' : 'bg-surface'}`} onClick={() => setExpanded(e => !e)}>
@@ -1366,6 +1376,11 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
             <span>·</span><span>{run.tastings?.length || 0} tasting{run.tastings?.length !== 1 ? 's' : ''}</span>
             {hasViolations && <span className="font-bold text-err ml-1">⚠ Violations</span>}
           </div>
+          {run.final_reason && (
+            <div className="text-[10px] text-warn bg-warn/8 border border-warn/20 rounded-lg px-2 py-1 mt-1 inline-block">
+              💬 <span className="font-semibold">Lab Manager comment:</span> {run.final_reason}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
@@ -1377,14 +1392,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
               </span>
               {canApprove ? (
                 (['Pass', 'Fail', 'Concession'] as const).map(st => (
-                  <button key={st}
-                    onClick={() => {
-                      if (st === 'Pass') { onFinalise(run.id, 'Pass'); return }
-                      const reason = prompt(`Reason for "${st}" (required):`, '')
-                      if (reason === null) return
-                      if (!reason.trim()) { alert('A reason is required'); return }
-                      onFinalise(run.id, st, reason.trim())
-                    }}
+                  <button key={st} onClick={() => st === 'Pass' ? onFinalise(run.id, 'Pass') : setDecisionResult(st)}
                     className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border-2"
                     style={{ borderColor: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706', background: st === 'Pass' ? '#f0fdf4' : st === 'Fail' ? '#fef2f2' : '#fffbeb', color: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706' }}>
                     {st}

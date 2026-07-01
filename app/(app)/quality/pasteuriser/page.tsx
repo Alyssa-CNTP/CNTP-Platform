@@ -30,6 +30,7 @@ import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
+import LmDecisionModal from '@/components/shared/LmDecisionModal'
 import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
@@ -974,6 +975,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [expandedHistId,setExpandedHistId] = useState<string|null>(null)
   const [editingField,  setEditingField]   = useState<string|null>(null)
   const [qcDraft,       setQcDraft]        = useState('')
+  const [decisionResult,setDecisionResult] = useState<'Pass'|'Fail'|'Concession'|null>(null)
   const [pubBatches,    setPubBatches]     = useState<any[]>([])
   const [pubLoading,    setPubLoading]     = useState(false)
   const [showPubHistory,setShowPubHistory] = useState(false)
@@ -1351,6 +1353,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         </span>
                         {activeBatch.approved_by && <span className="text-[10px] text-text-muted">approved by {activeBatch.approved_by}</span>}
                         <button onClick={reopenBatch} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔓 Re-open</button>
+                        {activeBatch.final_reason && (
+                          <div className="w-full text-[11px] text-warn bg-warn/8 border border-warn/20 rounded-lg px-3 py-1.5 mt-1">
+                            💬 <span className="font-semibold">Lab Manager comment:</span> {activeBatch.final_reason}
+                          </div>
+                        )}
                       </div>
                     ) : activeBatch.batch_status === 'awaiting_approval' ? (
                       /* ── Allocated to Lab Manager, awaiting pass/fail ── */
@@ -1362,15 +1369,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                           <>
                             <span className="text-[11px] text-text-muted">Approve as:</span>
                             {(['Pass','Fail','Concession'] as const).map(r => (
-                              <button key={r}
-                                onClick={() => {
-                                  if (r === 'Fail' || r === 'Concession') {
-                                    const reason = prompt(`Reason for "${r}" (required):`, '')
-                                    if (reason === null) return
-                                    if (!reason.trim()) { alert('A reason is required'); return }
-                                    finaliseBatch(r, reason.trim())
-                                  } else finaliseBatch(r)
-                                }}
+                              <button key={r} onClick={() => r === 'Pass' ? finaliseBatch('Pass') : setDecisionResult(r)}
                                 className="px-3 py-1.5 rounded-lg border-2 text-[11px] font-bold transition-colors"
                                 style={{ borderColor:PASS_COLORS[r][2], background:PASS_COLORS[r][0], color:PASS_COLORS[r][1] }}>
                                 {r}
@@ -1891,6 +1890,14 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       )}
 
       {/* Modals */}
+      {decisionResult && activeBatch && (
+        <LmDecisionModal
+          result={decisionResult}
+          batchLabel={activeBatch.batch_number}
+          onClose={() => setDecisionResult(null)}
+          onConfirm={comment => { finaliseBatch(decisionResult, comment); setDecisionResult(null) }}
+        />
+      )}
       {showNewBatch && <NewBatchModal onSave={createBatch} onClose={() => setShowNewBatch(false)} />}
       {showAddRow && activeBatch && (
         <AddSampleModal batch={activeBatch} sampleIndex={activeBatch.samples.length} onSave={addSample} onClose={() => setShowAddRow(false)} />

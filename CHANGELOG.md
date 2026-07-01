@@ -5,6 +5,65 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Staff Profiles + Skills/Competency Matrix — Phase 1)
+
+**Files changed:**
+- `supabase/migrations/20260702_001_competency_matrix.sql` (new)
+- `lib/production/competency-config.ts` (new)
+- `lib/auth/permissions.ts`
+- `lib/auth/permission-registry.ts`
+- `components/layout/Sidebar.tsx`
+- `components/production/StaffTabs.tsx` (new)
+- `app/(app)/layout.tsx`
+- `app/(app)/production/staff/page.tsx`
+- `app/(app)/production/staff/[id]/page.tsx` (new)
+- `app/(app)/production/staff/matrix/page.tsx` (new)
+- `app/(app)/production/staff/sops/page.tsx` (new)
+- `app/api/staff/competencies/route.ts` (new)
+- `scripts/import-competency-matrix.cjs` (new)
+
+**Changes:**
+- New **Staff & Skills** page in the Operations sidebar group (own entry, not under Shift Roster).
+- 4 new DB tables: `production.sops`, `production.employee_competencies`, `production.competency_history` (FSSC audit trail), `production.role_required_sops` (Phase-2 allocation).
+- `production.employees` extended with profile columns: position, position_code, department_code, employee_code, start_date, years_of_service, email, photo_url.
+- Full staff profile page (`/production/staff/[id]`): header with avatar/codes/years, competency panel grouped by SOP area, inline edit modal per SOP, collapsible history feed.
+- Skills Matrix page (`/production/staff/matrix`): employees × SOPs grid coloured by status (COMP/TRN/TBA/NC/—), filter by department and SOP area.
+- SOP Catalogue page (`/production/staff/sops`): list of all SOPs grouped by area, add/edit gated by `can_manage_sop_catalog`.
+- 5 new permission keys wired into Users & Roles: `can_view_staff`, `can_edit_staff_profiles`, `can_manage_competencies`, `can_manage_sop_catalog`, `can_allocate_staff`.
+- API route `POST /api/staff/competencies` with server-side permission check, upsert, and dual audit trail (competency_history + axis.audit_log).
+- Import script (`scripts/import-competency-matrix.cjs`) reads `Copy of CNTP Employees.xlsx` and `SOP_Matrix_Final.xlsx`, matches names 4 ways, upserts employees/SOPs/competencies idempotently, prints end-of-run report.
+- **To activate:** run migration SQL in Supabase SQL editor, then `node scripts/import-competency-matrix.cjs` (with Excel files in `scripts/data/`).
+
+---
+
+## 2026-07-01 — Gustav (Lab Manager: no comment step needed on Pass)
+
+**Files changed:**
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Pass now finalises immediately with no comment modal — one click, no interruption.
+- Fail and Concession still open the comment modal and still require a comment, unchanged.
+
+---
+
+## 2026-07-01 — Gustav (Lab Manager: comment sent back to QC on duty)
+
+**Files changed:**
+- `components/shared/LmDecisionModal.tsx` (new)
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Replaced the browser `prompt()` used to capture a Pass/Fail/Concession reason with a proper comment modal (`LmDecisionModal`), used consistently across the Lab Manager dashboard's Pending Approvals tab and the inline approve buttons on the pasteuriser and granule run pages.
+- The comment is now optional on Pass (previously no comment was possible) and still required on Fail/Concession, and is written back to the existing `final_reason` field (already present on both `qms.granule_runs` and pasteuriser's run data).
+- The comment now surfaces directly on the batch/run the QC on duty is looking at — a "💬 Lab Manager comment" banner on the pasteuriser batch header and the granule run card — instead of only being visible buried in the History tab.
+
+---
+
 ## 2026-07-01 — Alyssa (fix capture autofill — name-based operator fallback)
 
 **Files changed:**
