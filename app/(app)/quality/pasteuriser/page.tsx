@@ -972,6 +972,9 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
           try { d = typeof r.data_json === 'string' ? JSON.parse(r.data_json) : (r.data_json || {}) } catch {}
           if (!d.id) d.id = r.id || r.batch_number || `rec-${Math.random().toString(36).slice(2)}`
           const b = { ...d, _db_id: r.id }
+          // Chronological order (oldest first) — this order drives "Sample #N"
+          // numbering and the odd/even sieve pattern. Display is reversed
+          // separately where samples are rendered, so newest shows on top.
           return { ...b, samples: [...(b.samples||[])].sort((a:any,x:any) => {
             const da = `${a.date||''}${a.time||''}`, db2 = `${x.date||''}${x.time||''}`
             return da < db2 ? -1 : da > db2 ? 1 : 0
@@ -1439,7 +1442,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             </tr>
                           </thead>
                           <tbody>
-                            {activeBatch.samples.map((s, i) => {
+                            {activeBatch.samples.map((s, i) => ({ s, i })).slice().reverse().map(({ s, i }) => {
                               const total = PAST_SIEVE_COLS.reduce((sum,c) => sum+(parseFloat(s[c.key as keyof BatchSample] as string)||0), 0)
                               const rowBg = i%2===0 ? '' : 'bg-surface/50'
                               return (
@@ -1556,7 +1559,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                   {activeBatch.samples.some(s => PAST_SIEVE_COLS.some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(activeBatch.customer,c.key,activeBatch._spec,activeBatch.batch_specs)) === 'fail') || pastChk(s.moisture, getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs)) === 'fail') && (
                     <div className="px-4 py-3 bg-err/5 border border-err/20 rounded-xl">
                       <div className="font-bold text-[12px] text-err mb-2">⚠ Out-of-spec results detected</div>
-                      {activeBatch.samples.map(s => {
+                      {activeBatch.samples.slice().reverse().map(s => {
                         const fails = [
                           ...PAST_SIEVE_COLS.filter(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(activeBatch.customer,c.key,activeBatch._spec,activeBatch.batch_specs)) === 'fail').map(c => `${c.label}: ${s[c.key as keyof BatchSample]}%`),
                           pastChk(s.moisture, getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs))==='fail' ? `Moisture: ${s.moisture}%` : null,

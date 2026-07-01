@@ -1356,7 +1356,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                   </tr>
                 </thead>
                 <tbody>
-                  {run.samples.map((s: any, i: number) => {
+                  {run.samples.slice().reverse().map((s: any, i: number) => {
                     const vios       = s.violations || []
                     const moistVio   = sp.moisture_max && parseFloat(s.moisture) > parseFloat(sp.moisture_max)
                     return (
@@ -1412,8 +1412,8 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                             </div>
                           </td>
                         </tr>
-                        {/* Inline tastings */}
-                        {(run.tastings || []).filter((t: any) => t.sample_id === s.id).map((t: any, ti: number) => (
+                        {/* Inline tastings — newest first */}
+                        {(run.tastings || []).filter((t: any) => t.sample_id === s.id).slice().reverse().map((t: any, ti: number) => (
                           <GranuleInlineTastingRow key={t.id} tasting={t} colCount={colCount} rowBg={ti % 2 === 0 ? '#fdf8f5' : '#faf5f0'} onSave={onEditTasting} />
                         ))}
                         {/* Add tasting */}
