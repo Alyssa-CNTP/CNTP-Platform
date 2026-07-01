@@ -8,12 +8,16 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, Legend,
+  ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  Legend, ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDate } from '@/lib/utils/formatDate'
+import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
+import { useQcNames } from '@/lib/hooks/useQcNames'
+import QCNameField from '@/components/shared/QCNameField'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -324,308 +328,223 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
   )
 }
 
-// ─── MESH_COLORS ─────────────────────────────────────────────────────────────
+// ─── SievingOutlierChart ────────────────────────────────────────────────────
+// Bounded to "This Week" (bucketed by day) or "This Month" (bucketed by
+// week-of-month) — never the full history — so it never becomes the
+// unreadable "all runs" chart it replaced. Two views share that same window:
+//   Mesh Trend — every sieve fraction as its own line (like the old chart)
+//   Outliers   — one chosen metric plotted with a ±2.5σ band, flagging points
+//                 outside it (Bulk Density, Leaf Shade, or a sieve fraction)
 
-const MESH_COLORS: Record<string,string> = {
-  '>6 (%)':'#ef4444', '>10 (%)':'#f97316', '>12 (%)':'#f59e0b',
-  '>16 (%)':'#10b981', '>18 (%)':'#3b82f6', '>20 (%)':'#8b5cf6',
-  '>40 (%)':'#ec4899', '>60 (%)':'#06b6d4', 'Dust (%)':'#6b7280',
-  'Fine Leaf (%)':'#84cc16',
+const TREND_LINE_COLORS = ['#ef4444','#f97316','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#06b6d4','#6b7280','#84cc16']
+
+function startOfWeek(d: Date): Date {
+  const s = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const dow = s.getDay() || 7 // Monday-based week
+  s.setDate(s.getDate() - dow + 1)
+  return s
 }
 
-// ─── SievingChart ─────────────────────────────────────────────────────────────
-
-function SievingChart({ runs, specDef, activeSpecs, activeProduct, onDotClick }: {
-  runs: any[]; specDef: any; activeSpecs: Record<string,any>
-  activeProduct: string; onDotClick?: (runId: any) => void
-}) {
-  const [selectedMesh, setSelectedMesh] = useState<string|null>(null)
-  const [gradeFilter,  setGradeFilter]  = useState('all')
-  const [chartTab,     setChartTab]     = useState<'sieve'|'density'|'shade'>('sieve')
-  const [lotFilter,    setLotFilter]    = useState('')
-  const [dateMode,     setDateMode]     = useState('all')
-  const [dateFrom,     setDateFrom]     = useState('')
-  const [dateTo,       setDateTo]       = useState('')
-
-  if (!runs || runs.length === 0) return null
-
-  const sortedRuns = [...runs].sort((a,b) => {
-    const da = a.date||'', db2 = b.date||''
-    if (da !== db2) return da < db2 ? -1 : 1
-    const ta = a.timestamp||a.time||'', tb = b.timestamp||b.time||''
-    return ta < tb ? -1 : 1
+// weekOffset/monthOffset: 0 = current, 1 = one week/month back, 2 = two back, etc.
+// Negative values are allowed (future) so "Next" can step back toward today.
+function dayBucketsForWeek(weekOffset: number): { key: string; label: string }[] {
+  const anchor = new Date(); anchor.setDate(anchor.getDate() - weekOffset * 7)
+  const start = startOfWeek(anchor)
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start); d.setDate(start.getDate() + i)
+    return { key: isoDate(d), label: d.toLocaleDateString('en-ZA', { weekday: 'short' }) + ' ' + d.getDate() }
   })
+}
 
-  const allMesh     = [...new Set([...(specDef.meshForORG||[]),...(specDef.meshForCON||[])])].sort()
-  const isOrgRun    = (r: any) => sdIsOrg(r.variant)
-  const meshForRun  = (r: any) => isOrgRun(r) ? (specDef.meshForORG||[]) : (specDef.meshForCON||[])
-  const grades      = [...new Set(sortedRuns.map(r => `${r.grade}|${r.variant}`))]
-  const lotNumbers  = [...new Set(sortedRuns.map(r => r.lotNumber).filter(Boolean))].sort()
+function weekRangeLabel(weekOffset: number): string {
+  const buckets = dayBucketsForWeek(weekOffset)
+  const from = new Date(buckets[0].key + 'T12:00:00'), to = new Date(buckets[6].key + 'T12:00:00')
+  const fmt = (d: Date) => d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
+  return `${fmt(from)} – ${fmt(to)}${from.getFullYear() !== new Date().getFullYear() ? ' ' + from.getFullYear() : ', ' + from.getFullYear()}`
+}
 
-  const today   = new Date().toISOString().slice(0,10)
-  const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10) }
-  const bounds  = dateMode==='week' ? {from:daysAgo(7),to:today}
-                : dateMode==='2week'? {from:daysAgo(14),to:today}
-                : dateMode==='month'? {from:daysAgo(30),to:today}
-                : dateMode==='3month'?{from:daysAgo(90),to:today}
-                : dateMode==='custom'?{from:dateFrom,to:dateTo}
-                : {from:'',to:''}
-
-  const displayRuns = sortedRuns.filter(r => {
-    if (gradeFilter!=='all' && `${r.grade}|${r.variant}`!==gradeFilter) return false
-    if (lotFilter && r.lotNumber!==lotFilter) return false
-    if (bounds.from && r.date && r.date<bounds.from) return false
-    if (bounds.to   && r.date && r.date>bounds.to)   return false
-    return true
-  })
-
-  const sieveRuns    = displayRuns.filter(r => r.runType!=='final')
-  const physicalRuns = displayRuns
-
-  const buildLabel = (r: any, i: number) => r.date&&r.time ? `${r.date} ${r.time}` : r.date||`Run ${i+1}`
-
-  const chartData = sieveRuns.map((r,i) => {
-    const point: any = { name:buildLabel(r,i), date:r.date, grade:`${r.grade}|${r.variant}`, lotNumber:r.lotNumber||'', _idx:i, _runId:r.id||i }
-    const validMesh = meshForRun(r)
-    allMesh.forEach(m => {
-      if (!validMesh.includes(m)) { point[m]=null; return }
-      const v = parseFloat(r[m])
-      point[m] = isNaN(v) ? null : v
-    })
-    return point
-  })
-
-  const physData = physicalRuns.map((r,i) => ({
-    name:buildLabel(r,i), date:r.date, lotNumber:r.lotNumber||'', runType:r.runType||'in-process',
-    bulkDensity: r.bulkDensity!==''&&r.bulkDensity!=null ? parseFloat(r.bulkDensity)||null : null,
-    leafShade:   r.leafShade!==''&&r.leafShade!=null     ? parseFloat(r.leafShade)||null   : null,
-    _idx:i,
-  }))
-
-  const getSpecLines = (mesh: string) => {
-    if (gradeFilter==='all') return null
-    const spec = activeSpecs[gradeFilter]?.[mesh]
-    if (!spec||(spec[0]===0&&spec[1]===0)) return null
-    return spec as [number,number]
+function weekBucketsForMonth(monthOffset: number): { key: string; label: string; from: Date; to: Date }[] {
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
+  const monthEnd   = new Date(now.getFullYear(), now.getMonth() - monthOffset + 1, 0)
+  const buckets: { key: string; label: string; from: Date; to: Date }[] = []
+  let cursor = new Date(monthStart)
+  let i = 1
+  while (cursor <= monthEnd) {
+    const from = new Date(cursor)
+    const to   = new Date(Math.min(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 6).getTime(), monthEnd.getTime()))
+    buckets.push({ key: `W${i}`, label: `Week ${i}`, from, to })
+    cursor.setDate(cursor.getDate() + 7)
+    i++
   }
+  return buckets
+}
 
-  const activeMeshes = selectedMesh ? [selectedMesh] : allMesh.filter(m =>
-    sieveRuns.some(r => { const vm = meshForRun(r); return vm.includes(m) && r[m]!==''&&r[m]!=null&&!isNaN(parseFloat(r[m])) })
-  )
+function monthRangeLabel(monthOffset: number): string {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
+  return d.toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' })
+}
 
-  const hasDensityData = physData.some(d => d.bulkDensity!==null)
-  const hasShadeData   = physData.some(d => d.leafShade!==null)
-  const activeFilter   = dateMode!=='all' || gradeFilter!=='all' || !!lotFilter
-  const selSt: React.CSSProperties = { padding:'5px 9px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, background:'#fff' }
+function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
+  runs: any[]; activeProduct: string; specDef: any; onPointClick?: (runId: any) => void
+}) {
+  const [view, setView]           = useState<'week' | 'month'>('week')
+  const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
+  const [weekOffset, setWeekOffset]   = useState(0)   // 0 = this week, 1 = last week, ...
+  const [monthOffset, setMonthOffset] = useState(0)   // 0 = this month, 1 = last month, ...
+  const offset = view === 'week' ? weekOffset : monthOffset
+  const setOffset = view === 'week' ? setWeekOffset : setMonthOffset
+  const meshOptions = sdGetMesh(activeProduct, 'CON')
+  const metricOptions = [
+    { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
+    ...(specDef.hasLeafShade ? [{ key: 'leafShade', label: 'Leaf Shade', suffix: '' }] : []),
+    ...meshOptions.map(m => ({ key: m, label: m.replace(' (%)', ''), suffix: '%' })),
+  ]
+  const [metric, setMetric] = useState(metricOptions[0].key)
+  const metricDef = metricOptions.find(m => m.key === metric) || metricOptions[0]
+
+  // Bucket definitions for the selected window — day-of-week for "This Week",
+  // week-of-month for "This Month". Runs outside the window are excluded.
+  // weekOffset/monthOffset step the window back in time — a timeline, not
+  // just the current week/month.
+  const dayBuckets  = dayBucketsForWeek(weekOffset)
+  const weekBuckets = weekBucketsForMonth(monthOffset)
+  const rangeLabel  = view === 'week' ? weekRangeLabel(weekOffset) : monthRangeLabel(monthOffset)
+  const bucketOf = (dateStr: string): string | null => {
+    if (view === 'week') {
+      const key = dateStr
+      return dayBuckets.some(b => b.key === key) ? key : null
+    }
+    const d = new Date(dateStr + 'T12:00:00')
+    const b = weekBuckets.find(wb => d >= wb.from && d <= wb.to)
+    return b ? b.key : null
+  }
+  const bucketLabels = view === 'week' ? dayBuckets : weekBuckets
+
+  const inWindow = runs.filter((r: any) => r.date && bucketOf(r.date) != null)
+
+  // ── Mesh Trend data: one row per bucket, one column per sieve fraction (mean) ──
+  const trendData = bucketLabels.map(b => {
+    const rows = inWindow.filter((r: any) => r.runType === 'in-process' && bucketOf(r.date) === b.key)
+    const entry: any = { period: b.label }
+    meshOptions.forEach(m => {
+      const vals = rows.map((r: any) => parseFloat(r[m])).filter((v: number) => !isNaN(v))
+      entry[m] = vals.length ? +mean(vals).toFixed(1) : null
+    })
+    return entry
+  })
+  const hasTrendData = trendData.some(row => meshOptions.some(m => row[m] != null))
+
+  // ── Outliers data: every run in the window for the chosen metric, ±2.5σ band ──
+  const points = inWindow
+    .map((r: any) => ({ period: bucketLabels.find(b => b.key === bucketOf(r.date))?.label || '', value: parseFloat(r[metric]), run: r }))
+    .filter((p: any) => !isNaN(p.value))
+  const values = points.map((p: any) => p.value)
+  const m = mean(values), sd = stdDev(values)
+  const upper = m + 2.5 * sd, lower = m - 2.5 * sd
+  const scatterData = points.map((p: any) => ({
+    period: p.period, value: p.value, runId: p.run.id,
+    label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
+    isOutlier: sd > 0 && (p.value > upper || p.value < lower),
+  }))
+  const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
 
   return (
-    <div style={{ background:'#fff', borderRadius:12, border:'1px solid #e5e7eb', padding:18, marginBottom:16 }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, flexWrap:'wrap', gap:6 }}>
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:'#111827' }}>Trend Analysis — {activeProduct}</div>
-          <div style={{ fontSize:10, color:'#9ca3af', marginTop:2 }}>
-            Chronological · spec lines when grade selected ·
-            <span style={{ marginLeft:4, color:activeFilter?'#1d4ed8':'#9ca3af', fontWeight:activeFilter?700:400 }}>
-              {displayRuns.length}/{sortedRuns.length} runs shown
-            </span>
-          </div>
+    <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
+      <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
+          {(['trend','outliers'] as const).map(t => (
+            <button key={t} onClick={()=>setChartType(t)}
+              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:chartType===t?'#166534':'#fff', color:chartType===t?'#fff':'#374151' }}>
+              {t==='trend'?'📈 Mesh Trend':'⚠ Outliers'}
+            </button>
+          ))}
         </div>
-        {activeFilter && (
-          <button onClick={()=>{ setDateMode('all'); setDateFrom(''); setDateTo(''); setGradeFilter('all'); setLotFilter('') }}
-            style={{ padding:'4px 10px', borderRadius:6, border:'1px solid #fca5a5', background:'#fef2f2', color:'#dc2626', fontSize:11, fontWeight:600, cursor:'pointer' }}>
-            ✕ Clear filters
-          </button>
-        )}
-      </div>
-
-      {/* Filter bar */}
-      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'flex-end', marginBottom:12, padding:'10px 12px', background:'#f8fafc', borderRadius:8, border:'1px solid #e5e7eb' }}>
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          <span style={{ fontSize:9, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>Date Range</span>
-          <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
-            {[['all','All time'],['week','This week'],['2week','2 weeks'],['month','30 days'],['3month','90 days'],['custom','Custom']].map(([mode,label]) => (
-              <button key={mode} onClick={()=>{ setDateMode(mode); if(mode!=='custom'){setDateFrom('');setDateTo('')} }}
-                style={{ padding:'3px 9px', borderRadius:10, border:'1px solid', fontSize:10, cursor:'pointer', fontWeight:600,
-                  background:dateMode===mode?'#1f4e79':'#fff', color:dateMode===mode?'#fff':'#374151', borderColor:dateMode===mode?'#1f4e79':'#e5e7eb' }}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {dateMode==='custom' && (
-            <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
-              <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{ padding:'3px 7px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11 }}/>
-              <span style={{ fontSize:11, color:'#9ca3af' }}>→</span>
-              <input type="date" value={dateTo}   onChange={e=>setDateTo(e.target.value)}   style={{ padding:'3px 7px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11 }}/>
-            </div>
+        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
+          {(['week','month'] as const).map(v => (
+            <button key={v} onClick={()=>setView(v)}
+              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
+              {v==='week'?'By Week':'By Month'}
+            </button>
+          ))}
+        </div>
+        {/* Timeline navigator — step back through previous weeks/months */}
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <button onClick={()=>setOffset((o:number)=>o+1)} title={`Previous ${view}`}
+            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
+          <span style={{ fontSize:11, fontWeight:700, color:'#374151', minWidth:120, textAlign:'center' }}>{rangeLabel}</span>
+          <button onClick={()=>setOffset((o:number)=>Math.max(0,o-1))} disabled={offset===0} title={`Next ${view}`}
+            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:offset===0?'#f3f4f6':'#fff', color:offset===0?'#d1d5db':'#374151', cursor:offset===0?'default':'pointer' }}>▶</button>
+          {offset!==0 && (
+            <button onClick={()=>setOffset(0)} style={{ padding:'4px 10px', fontSize:11, fontWeight:600, border:'1px solid #1f4e79', borderRadius:6, background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>Today</button>
           )}
         </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          <span style={{ fontSize:9, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>Grade / Variant</span>
-          <select value={gradeFilter} onChange={e=>setGradeFilter(e.target.value)} style={selSt}>
-            <option value="all">All grades</option>
-            {grades.map(g=><option key={g} value={g}>{g.replace('|',' — ')}</option>)}
+        {chartType==='outliers' && (
+          <select value={metric} onChange={e=>setMetric(e.target.value)}
+            style={{ padding:'4px 8px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6, background:'#fff' }}>
+            {metricOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
           </select>
-        </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-          <span style={{ fontSize:9, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>Lot Number</span>
-          <select value={lotFilter} onChange={e=>setLotFilter(e.target.value)} style={selSt}>
-            <option value="">All lots</option>
-            {lotNumbers.map(l=><option key={l as string} value={l as string}>{l as string}</option>)}
-          </select>
-        </div>
+        )}
+        {chartType==='outliers' && outlierCount>0 && (
+          <span style={{ fontSize:11, fontWeight:700, color:'#dc2626', marginLeft:'auto' }}>
+            ⚠ {outlierCount} outlier{outlierCount!==1?'s':''} (&gt;2.5σ from mean)
+          </span>
+        )}
       </div>
 
-      {/* Chart type tabs */}
-      <div style={{ display:'flex', gap:3, marginBottom:12, borderBottom:'1px solid #e5e7eb', paddingBottom:8 }}>
-        {([['sieve','🔬 Sieve Fractions'],['density','⚖ Bulk Density'],['shade','🍃 Leaf Shade']] as const).map(([tab,label]) => (
-          <button key={tab} onClick={()=>setChartTab(tab)}
-            disabled={(tab==='density'&&!hasDensityData)||(tab==='shade'&&!hasShadeData)}
-            style={{ padding:'5px 12px', borderRadius:'6px 6px 0 0', border:'1px solid',
-              borderBottom:chartTab===tab?'1px solid #fff':'1px solid #e5e7eb', marginBottom:chartTab===tab?-1:0,
-              cursor:((tab==='density'&&!hasDensityData)||(tab==='shade'&&!hasShadeData))?'not-allowed':'pointer',
-              fontSize:11, fontWeight:chartTab===tab?700:500,
-              background:chartTab===tab?'#fff':'#f9fafb', color:chartTab===tab?'#1f4e79':'#9ca3af',
-              borderColor:chartTab===tab?'#e5e7eb':'#f3f4f6',
-              opacity:((tab==='density'&&!hasDensityData)||(tab==='shade'&&!hasShadeData))?0.4:1 }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {chartTab==='sieve' && <>
-        <div style={{ display:'flex', gap:5, marginBottom:12, flexWrap:'wrap' }}>
-          <button onClick={()=>setSelectedMesh(null)}
-            style={{ padding:'3px 10px', borderRadius:12, border:'1px solid', fontSize:10, cursor:'pointer', fontWeight:600,
-              background:selectedMesh===null?'#1f4e79':'#f9fafb', color:selectedMesh===null?'#fff':'#374151', borderColor:selectedMesh===null?'#1f4e79':'#e5e7eb' }}>
-            All fractions
-          </button>
-          {allMesh.map(m => {
-            const hasData = activeMeshes.includes(m)
-            const color   = MESH_COLORS[m]||'#6b7280'
-            return (
-              <button key={m} onClick={()=>hasData?setSelectedMesh(selectedMesh===m?null:m):null}
-                style={{ padding:'3px 10px', borderRadius:12, border:`1px solid ${color}`, fontSize:10,
-                  cursor:hasData?'pointer':'default', fontWeight:600, opacity:hasData?1:0.3,
-                  background:selectedMesh===m?color:`${color}20`, color:selectedMesh===m?'#fff':color }}>
-                {m.replace(' (%)','').replace('>','>')}
-              </button>
-            )
-          })}
-        </div>
-
-        {chartData.length < 2 ? (
-          <div style={{ textAlign:'center', padding:'30px 0', color:'#9ca3af', fontSize:12 }}>
-            {sieveRuns.length===0 ? 'No in-process runs — Final QC runs have no sieve data' : 'Add at least 2 in-process runs to see the trend chart'}
+      {chartType==='trend' ? (
+        !hasTrendData ? (
+          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+            No in-process sieve results for {rangeLabel} yet.
           </div>
         ) : (
-          activeMeshes.map(mesh => {
-            const spec    = gradeFilter!=='all' ? getSpecLines(mesh) : null
-            const hasData = chartData.some(d => d[mesh]!==null&&d[mesh]!==undefined)
-            if (!hasData) return null
-            const color = MESH_COLORS[mesh]||'#6b7280'
-            return (
-              <div key={mesh} style={{ marginBottom:selectedMesh?0:20 }}>
-                {!selectedMesh && (
-                  <div style={{ fontSize:11, fontWeight:700, color, marginBottom:4 }}>
-                    {mesh.replace(' (%)','').replace('>','>')}
-                    {spec && <span style={{ fontWeight:400, color:'#9ca3af', marginLeft:6, fontSize:10 }}>spec: {spec[0]}–{spec[1]}%</span>}
-                  </div>
-                )}
-                <ResponsiveContainer width="100%" height={selectedMesh?260:140}>
-                  <LineChart data={chartData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-                    <XAxis dataKey="name" tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-                    <YAxis tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={(v:number)=>`${v}%`}
-                      domain={[spec?Math.max(0,spec[0]-10):'auto', spec?spec[1]+10:'auto']}/>
-                    <Tooltip content={({ active, payload, label }: any) => {
-                      if (!active||!payload?.length) return null
-                      const run = sieveRuns[payload[0]?.payload?._idx]
-                      return (
-                        <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 14px', boxShadow:'0 4px 12px rgba(0,0,0,.1)', fontSize:11 }}>
-                          <div style={{ fontWeight:700, color:'#111827', marginBottom:4 }}>{label}</div>
-                          {run && <div style={{ color:'#6b7280', marginBottom:6, fontSize:10 }}>{run.date} — {run.grade} {run.variant}</div>}
-                          {payload.map((p: any, i: number) => {
-                            if (p.value===null||p.value===undefined) return null
-                            const sp = run ? getSpecLines(p.dataKey) : null
-                            const inSpec = sp ? (p.value>=sp[0]&&p.value<=sp[1]) : null
-                            return (
-                              <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2 }}>
-                                <span style={{ width:10, height:10, borderRadius:'50%', background:p.color, flexShrink:0 }}/>
-                                <span style={{ color:'#374151', minWidth:60 }}>{p.dataKey.replace(' (%)','')}</span>
-                                <span style={{ fontFamily:'monospace', fontWeight:700, color:inSpec===false?'#dc2626':inSpec===true?'#166534':'#111827' }}>
-                                  {p.value.toFixed(1)}%
-                                </span>
-                                {sp && <span style={{ fontSize:9, color:'#9ca3af' }}>spec: {sp[0]}–{sp[1]}%</span>}
-                                {inSpec===false && <span style={{ fontSize:9, color:'#dc2626', fontWeight:700 }}>OUT</span>}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )
-                    }}/>
-                    {spec&&spec[0]>0 && <ReferenceLine y={spec[0]} stroke={color} strokeDasharray="5 3" strokeWidth={1.5} opacity={0.6}
-                      label={{ value:`Min ${spec[0]}%`, position:'insideTopLeft', fontSize:9, fill:color }}/>}
-                    {spec&&spec[1]>0 && <ReferenceLine y={spec[1]} stroke={color} strokeDasharray="5 3" strokeWidth={1.5} opacity={0.6}
-                      label={{ value:`Max ${spec[1]}%`, position:'insideBottomLeft', fontSize:9, fill:color }}/>}
-                    <Line type="monotone" dataKey={mesh} stroke={color} strokeWidth={2.5} connectNulls={false}
-                      dot={(props: any) => {
-                        const { cx, cy, payload } = props
-                        const val = payload[mesh]
-                        const outOfSpec = spec&&val!==null&&(val<spec[0]||val>spec[1])
-                        const rid = payload._runId??payload._idx
-                        return <circle key={`dot-${payload._idx}-${mesh}`} cx={cx} cy={cy}
-                          r={outOfSpec?8:6} fill={outOfSpec?'#dc2626':color} stroke={outOfSpec?'#991b1b':'#fff'}
-                          strokeWidth={outOfSpec?2.5:2} style={{ cursor:'pointer', pointerEvents:'all' }}
-                          onClick={(e: any)=>{ e.stopPropagation(); onDotClick&&onDotClick(rid) }}/>
-                      }}
-                      activeDot={(props: any) => {
-                        const { cx, cy, payload } = props
-                        return <circle key={`adot-${payload._idx}`} cx={cx} cy={cy} r={11}
-                          fill={color} stroke="#fff" strokeWidth={2.5}
-                          style={{ cursor:'pointer', pointerEvents:'all' }}
-                          onClick={(e: any)=>{ e.stopPropagation(); onDotClick&&onDotClick(payload._runId??payload._idx) }}/>
-                      }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )
-          })
-        )}
-      </>}
-
-      {chartTab==='density' && hasDensityData && (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={physData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-            <XAxis dataKey="name" tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-            <YAxis tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-            <Tooltip/>
-            <Line type="monotone" dataKey="bulkDensity" name="Bulk Density" stroke="#1f4e79" strokeWidth={2} dot={{ r:4 }}/>
-          </LineChart>
-        </ResponsiveContainer>
-      )}
-
-      {chartTab==='shade' && hasShadeData && (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={physData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-            <XAxis dataKey="name" tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false}/>
-            <YAxis tick={{ fontSize:9, fill:'#9ca3af' }} tickLine={false} axisLine={false} domain={[1,11]}/>
-            <Tooltip/>
-            <Line type="monotone" dataKey="leafShade" name="Leaf Shade" stroke="#166534" strokeWidth={2} dot={{ r:4 }}/>
-          </LineChart>
-        </ResponsiveContainer>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={trendData} margin={{ top:8, right:20, left:0, bottom:4 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
+              <XAxis dataKey="period" tick={{ fontSize:10 }} />
+              <YAxis tick={{ fontSize:10 }} unit="%" width={40} />
+              <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
+              <Legend wrapperStyle={{ fontSize:10 }} />
+              {meshOptions.map((m,i) => (
+                <Line key={m} dataKey={m} name={m.replace(' (%)','')} stroke={TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]}
+                  strokeWidth={2} dot={{ r:3 }} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        )
+      ) : (
+        scatterData.length < 3 ? (
+          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+            Not enough {metricDef.label.toLowerCase()} data for {rangeLabel} to plot outliers.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
+              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} />
+              <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
+              <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
+                labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
+              {!isNaN(m) && <ReferenceLine y={m} stroke="#6b7280" strokeDasharray="4 2" label={{ value:'mean', fontSize:9, fill:'#6b7280' }} />}
+              {sd>0 && <ReferenceLine y={upper} stroke="#f59e0b" strokeDasharray="3 3" />}
+              {sd>0 && <ReferenceLine y={lower} stroke="#f59e0b" strokeDasharray="3 3" />}
+              <Scatter data={scatterData} onClick={(d:any)=>onPointClick?.(d?.runId ?? d?.payload?.runId)} cursor="pointer">
+                {scatterData.map((d:any,i:number) => <Cell key={i} fill={d.isOutlier?'#dc2626':'#3b82f6'} />)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        )
       )}
     </div>
   )
 }
 
-// ─── InlineEditForm ────────────────────────────────────────────────────────────
-
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
-  onSave: (f: any) => void; onCancel: () => void
+  onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -684,7 +603,11 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
           .map(([label,key,type]) => (
             <div key={key}>
               <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
-              <input type={type} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
+              {key==='qcName' ? (
+                <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
+              ) : (
+                <input type={type} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
+              )}
             </div>
           ))}
         <div>
@@ -784,6 +707,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel }: {
 export default function SievingPage() {
   const { p } = useAuth(); const canWrite = p('can_add_sieving_runs'); const isAdmin = p('can_delete_sieving_runs')
   const db = getDb()
+  const qcNames = useQcNames()
 
   const [activeProduct, setActiveProduct] = useState('Fine Leaf')
   const [runs, setRuns] = useState<Record<string,any[]>>({})
@@ -794,22 +718,26 @@ export default function SievingPage() {
   const [saving,    setSaving]    = useState(false)
   const [sdError,   setSdError]   = useState('')
   const [lastSaved, setLastSaved] = useState<Date|null>(null)
-  const [showChart, setShowChart] = useState(true)
 
   const [showForm,       setShowForm]       = useState(false)
   const [showSpecEditor, setShowSpecEditor] = useState(false)
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
+  const [period,         setPeriod]         = useState<'today'|'week'|'month'|'60d'|'all'>('all')
+  const [searchText,     setSearchText]     = useState('')
+  const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
   const [errors,         setErrors]         = useState<Record<string,string>>({})
   const [isRetest,       setIsRetest]       = useState(false)
   const [anomalyWarn,    setAnomalyWarn]    = useState('')
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
   const [lotMsg,         setLotMsg]         = useState('')
-  const [highlightedRunId, setHighlightedRunId] = useState<any>(null)
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
   const [rLookup,        setRLookup]        = useState<Record<string,string>>({})
   const [leafShadeLookup,setLeafShadeLookup]= useState<Record<string,number>>({})
   const [tableCollapsed, setTableCollapsed] = useState(false)
+  const [showOutlierChart, setShowOutlierChart] = useState(true)
+  const [chartHighlightId, setChartHighlightId] = useState<any>(null)
 
   // Load PA levels from raw material records for lot auto-fill
   useEffect(() => {
@@ -924,10 +852,58 @@ export default function SievingPage() {
   const specDef     = SIEVING_SPECS_DB[activeProduct]
   const activeSpecs = customSpecs[activeProduct] || specDef.variants
   const productRuns = runs[activeProduct] || []
+
+  // Period cutoff — Daily / Weekly / Monthly / 60 Days / All. Dates are stored
+  // as 'YYYY-MM-DD' so lexicographic comparison against the cutoff works.
+  const periodCutoff = (() => {
+    if (period === 'all') return null
+    const d = new Date()
+    if (period === 'today') return isoDate(d)
+    if (period === 'week')  d.setDate(d.getDate() - 7)
+    if (period === 'month') d.setMonth(d.getMonth() - 1)
+    if (period === '60d')   d.setDate(d.getDate() - 60)
+    return isoDate(d)
+  })()
+
+  // Global search — case-insensitive substring match across every displayed
+  // field (date, lot, serial, grade, variant, type, QC, time, BD, needles,
+  // shade, every sieve %, status, violations).
+  const rowSearchText = (row: any) => [
+    row.date, row.lotNumber, row.serialNumber, row.grade, row.variant, row.runType,
+    row.qcName, row.time, row.bulkDensity, row.needleCount, row.leafShade, row.passStatus,
+    ...sdGetMesh(activeProduct, row.variant).map(m => row[m]),
+    ...(row.violations || []),
+  ].filter(Boolean).join(' ').toLowerCase()
+
+  // Column sort — click a header to sort by it (toggles asc/desc).
+  const sortKeyVal = (row: any, key: string): string|number => {
+    switch (key) {
+      case 'date':        return (row.date||'')+(row.time||'')
+      case 'lotNumber':   return (row.lotNumber||'').toLowerCase()
+      case 'serialNumber':return (row.serialNumber||'').toLowerCase()
+      case 'grade':       return (row.grade||'').toLowerCase()
+      case 'variant':     return (row.variant||'').toLowerCase()
+      case 'runType':     return (row.runType||'').toLowerCase()
+      case 'qcName':      return (row.qcName||'').toLowerCase()
+      case 'time':        return row.time||''
+      case 'bulkDensity': { const v = parseFloat(row.bulkDensity); return isNaN(v) ? -Infinity : v }
+      case 'needleCount': { const v = parseFloat(row.needleCount); return isNaN(v) ? -Infinity : v }
+      case 'leafShade':   { const v = parseFloat(row.leafShade); return isNaN(v) ? -Infinity : v }
+      case 'passStatus':  return (row.passStatus||'').toLowerCase()
+      case 'violations':  return (row.violations||[]).length
+      default: { const v = parseFloat(row[key]); return isNaN(v) ? -Infinity : v }   // sieve mesh columns
+    }
+  }
+  const toggleSort = (key: string) =>
+    setSdSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
+
   const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
+    .filter((r:any) => !periodCutoff || (r.date||'') >= periodCutoff)
+    .filter((r:any) => !searchText.trim() || rowSearchText(r).includes(searchText.trim().toLowerCase()))
     .slice().sort((a:any,b:any) => {
-      const da = (a.date||'')+(a.time||''), db2 = (b.date||'')+(b.time||'')
-      return da < db2 ? 1 : da > db2 ? -1 : 0
+      const va = sortKeyVal(a, sdSort.key), vb = sortKeyVal(b, sdSort.key)
+      const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
+      return sdSort.dir === 'asc' ? cmp : -cmp
     })
   const activeMesh  = sdGetMesh(activeProduct, form.variant)
   const specKey     = `${form.grade}|${form.variant}`
@@ -984,30 +960,36 @@ export default function SievingPage() {
     setGramValues(newGrams)
     const pcts = calcPercents(newGrams)
     setForm((f: any) => ({ ...f, ...pcts }))
-    // Anomaly detection
+    // Simple absolute sanity check on total grams (not a statistical outlier check).
     const meshKeys = activeMesh.map(m => m.replace(' (%)',' (g)'))
     const allVals = meshKeys.map(k=>parseFloat(newGrams[k])).filter(v=>!isNaN(v)&&v>0)
-    const warns: string[] = []
     if (allVals.length>=2) {
       const total = allVals.reduce((a,b)=>a+b,0)
-      if (total>0&&total<50) warns.push(`Total grams only ${total.toFixed(1)}g — very low`)
-      else if (total>500)    warns.push(`Total grams ${total.toFixed(1)}g — unusually high`)
-    }
-    // Per-fraction outlier check against recent similar runs
-    const recentSimilar = productRuns.filter((r:any)=>r.variant===form.variant&&r.runType==='in-process').slice(-20)
-    if (recentSimilar.length>=3 && Object.keys(pcts).length>0) {
-      activeMesh.forEach(m=>{
-        const newPct=parseFloat(pcts[m]); if(isNaN(newPct)) return
-        const hist=recentSimilar.map((r:any)=>parseFloat(r[m])).filter((v:any)=>!isNaN(v)&&v>0)
-        if(hist.length<3) return
-        const mean=hist.reduce((a:number,b:number)=>a+b,0)/hist.length
-        const std=Math.sqrt(hist.map((v:number)=>(v-mean)**2).reduce((a:number,b:number)=>a+b,0)/hist.length)
-        if(std>1.5&&Math.abs(newPct-mean)>2.5*std) warns.push(`${m.replace(' (%)','')}: ${newPct.toFixed(1)}% far from avg ${mean.toFixed(1)}%`)
-      })
-    }
-    setAnomalyWarn(warns.length?`⚠ ${warns.join(' | ')}`:'')
-
+      if (total>0&&total<50) setAnomalyWarn(`⚠ Total grams only ${total.toFixed(1)}g — very low`)
+      else if (total>500)    setAnomalyWarn(`⚠ Total grams ${total.toFixed(1)}g — unusually high`)
+      else setAnomalyWarn('')
+    } else setAnomalyWarn('')
   }
+
+  // ── Variation / outlier detection vs recent similar runs ──
+  // Flags a value only when recent history already has real spread (std >
+  // floor) AND the new value sits >2.5 std away. Covers sieve mesh %
+  // (in-process only), Bulk Density and Leaf Shade (both run types).
+  const outlierWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (hist: any[], key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const histVals = hist.map((r:any)=>parseFloat(r[key])).filter((v:number)=>!isNaN(v)&&v>0)
+      const result = checkOutlier(n, histVals, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from recent avg ${result.mean.toFixed(1)}${unit}`)
+    }
+    const histInProcess = productRuns.filter((r:any)=>r.variant===form.variant&&r.runType==='in-process').slice(-20)
+    const histAny        = productRuns.filter((r:any)=>r.variant===form.variant).slice(-30)
+    if (form.runType!=='final') activeMesh.forEach(m => checkField(histInProcess, m, m.replace(' (%)',''), form[m], 1.5, '%'))
+    checkField(histAny, 'bulkDensity', 'Bulk Density', form.bulkDensity, 5)
+    checkField(histAny, 'leafShade', 'Leaf Shade', form.leafShade, 0.5)
+    return warns
+  })()
 
   function validate(f: any, retest = false) {
     const errs: Record<string,string> = {}
@@ -1041,6 +1023,7 @@ export default function SievingPage() {
     const errs = validate(form, isRetest)
     setErrors(errs)
     if (Object.keys(errs).length>0) return
+    if (outlierWarnings.length>0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const specRow = activeSpecs[specKey] || {}
     const violations: string[] = []
     activeMesh.forEach(m=>{
@@ -1078,7 +1061,7 @@ export default function SievingPage() {
     if (error) { setSdError('Could not save run: '+error.message); setSaving(false); return }
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
-    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setLotMsg('')
+    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg('')
     setLastSaved(new Date()); setSaving(false)
   }
 
@@ -1197,10 +1180,25 @@ export default function SievingPage() {
         ))}
         <span style={{marginLeft:'auto',fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
         <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
-        <button onClick={()=>setShowChart(s=>!s)} style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showChart?'#eff6ff':'#fff',color:showChart?'#1f4e79':'#374151'}}>
-          📈 {showChart?'Hide':'Show'} Chart
-        </button>
         <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
+      </div>
+
+      {/* Period filter — Daily / Weekly / Monthly / 60 Days / All */}
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        <span style={{fontSize:10,fontWeight:700,color:'#6b7280',textTransform:'uppercase'}}>Period:</span>
+        {([['today','Daily'],['week','Weekly'],['month','Monthly'],['60d','60 Days'],['all','All']] as const).map(([k,l])=>(
+          <button key={k} onClick={()=>setPeriod(k)}
+            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
+              background:period===k?'#166534':'#fff',color:period===k?'#fff':'#374151',borderColor:period===k?'#166534':'#e5e7eb'}}>{l}</button>
+        ))}
+        <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
+          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
+            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
+          {searchText && (
+            <button onClick={()=>setSearchText('')} title="Clear search"
+              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
+          )}
+        </div>
       </div>
 
       {/* New Run Form */}
@@ -1208,7 +1206,7 @@ export default function SievingPage() {
         <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
-            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setLotMsg('')}}
+            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('')}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
 
@@ -1231,6 +1229,20 @@ export default function SievingPage() {
           {errors._dupTime&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupTime}</div>}
           {errors._mesh&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10}}>⚠ {errors._mesh}</div>}
           {anomalyWarn&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10,fontWeight:600}}>{anomalyWarn}</div>}
+
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
+          {outlierWarnings.length>0 && (
+            <div style={{padding:'10px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:8,marginBottom:10}}>
+              <div style={{fontWeight:700,fontSize:11,color:'#92400e',marginBottom:4}}>⚠ Unusual variation — please double-check before saving</div>
+              <ul style={{margin:'0 0 8px 18px',padding:0}}>
+                {outlierWarnings.map((w,i)=><li key={i} style={{fontSize:11,color:'#92400e'}}>{w}</li>)}
+              </ul>
+              <label style={{display:'flex',alignItems:'center',gap:8,fontSize:11,fontWeight:600,color:'#92400e',cursor:'pointer'}}>
+                <input type="checkbox" checked={confirmAnomaly} onChange={e=>setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
+            </div>
+          )}
           {lotMsg&&<div style={{padding:'6px 12px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:6,fontSize:10,color:'#166534',marginBottom:10}}>{lotMsg}</div>}
 
           {/* Row 1: basic info */}
@@ -1252,7 +1264,7 @@ export default function SievingPage() {
             </div>
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>QC Controller *</label>
-              <input value={form.qcName} onChange={e=>setF('qcName',e.target.value)} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <QCNameField value={form.qcName} onChange={v=>setF('qcName',v)} names={qcNames} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="qcName"/>
             </div>
             <div>
@@ -1372,10 +1384,10 @@ export default function SievingPage() {
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setLotMsg('')}}
+              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('')}}
                 style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
-              <button onClick={addRun} disabled={saving}
-                style={{padding:'10px 26px',borderRadius:7,border:'none',background:saving?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:saving?'default':'pointer'}}>
+              <button onClick={addRun} disabled={saving || (outlierWarnings.length>0 && !confirmAnomaly)}
+                style={{padding:'10px 26px',borderRadius:7,border:'none',background:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'default':'pointer'}}>
                 {saving?'Saving…':'✓ Save Run'}
               </button>
             </div>
@@ -1383,22 +1395,24 @@ export default function SievingPage() {
         </div>
       )}
 
-      {/* Runs table */}
-      {/* Trend chart */}
-      {showChart && filteredRuns.length > 0 && (
-        <SievingChart
-          runs={filteredRuns}
-          specDef={specDef}
-          activeSpecs={activeSpecs}
-          activeProduct={activeProduct}
-          onDotClick={(runId) => {
-            setHighlightedRunId(runId)
+      {/* This Week / This Month chart — mesh trend + outlier view. Bounded window, not full history. */}
+      <div style={{marginBottom:8}}>
+        <button onClick={()=>setShowOutlierChart(s=>!s)}
+          style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showOutlierChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showOutlierChart?'#eff6ff':'#fff',color:showOutlierChart?'#1f4e79':'#374151'}}>
+          📈 {showOutlierChart?'Hide':'Show'} Chart
+        </button>
+      </div>
+      {showOutlierChart && productRuns.length>0 && (
+        <SievingOutlierChart runs={productRuns} activeProduct={activeProduct} specDef={specDef}
+          onPointClick={(runId)=>{
+            setChartHighlightId(runId)
             const el = document.getElementById(`run-row-${runId}`)
             el?.scrollIntoView({ behavior:'smooth', block:'center' })
-            setTimeout(() => setHighlightedRunId(null), 3000)
-          }}
-        />
+            setTimeout(()=>setChartHighlightId(null), 3000)
+          }} />
       )}
+
+      {/* Runs table */}
 
       {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New Run"</div>}
       {!loading&&filteredRuns.length>0&&(
@@ -1413,26 +1427,42 @@ export default function SievingPage() {
             <thead>
               <tr style={{background:'#1f4e79',color:'#fff',position:'sticky',top:0,zIndex:2}}>
                 {canWrite&&<th style={{padding:'5px 4px',width:22}}></th>}
-                <th style={{padding:'5px 8px',textAlign:'left',whiteSpace:'nowrap'}}>Date</th>
-                {!specDef.noLotNumber&&<th style={{padding:'5px 8px',textAlign:'left'}}>Lot</th>}
-                <th style={{padding:'5px 8px',textAlign:'left'}}>Serial</th>
-                <th style={{padding:'5px 8px'}}>Grade</th>
-                <th style={{padding:'5px 8px'}}>Var.</th>
-                <th style={{padding:'5px 8px'}}>Type</th>
-                <th style={{padding:'5px 8px'}}>QC</th>
-                <th style={{padding:'5px 8px'}}>Time</th>
-                {!specDef.noBulkDensity&&<th style={{padding:'5px 8px'}}>BD</th>}
-                {specDef.hasNeedleCount&&<th style={{padding:'5px 8px',fontSize:9}}>Needles</th>}
-                {specDef.hasLeafShade&&<th style={{padding:'5px 8px',fontSize:9}}>Shade</th>}
-                {sdGetMesh(activeProduct,'CON').map(m=><th key={m} style={{padding:'5px 6px',textAlign:'center',fontSize:9}}>{m.replace(' (%)','')}</th>)}
-                <th style={{padding:'5px 8px'}}>Status</th>
-                <th style={{padding:'5px 8px',fontSize:9,color:'#bfdbfe'}}>Violations</th>
+                {([
+                  ['date','Date',true],
+                  ...(specDef.noLotNumber?[]:[['lotNumber','Lot',true]]),
+                  ['serialNumber','Serial',true],
+                  ['grade','Grade',false],
+                  ['variant','Var.',false],
+                  ['runType','Type',false],
+                  ['qcName','QC',false],
+                  ['time','Time',false],
+                  ...(specDef.noBulkDensity?[]:[['bulkDensity','BD',false]]),
+                  ...(specDef.hasNeedleCount?[['needleCount','Needles',false]]:[]),
+                  ...(specDef.hasLeafShade?[['leafShade','Shade',false]]:[]),
+                ] as [string,string,boolean][]).map(([key,label,left])=>(
+                  <th key={key} onClick={()=>toggleSort(key)}
+                    style={{padding:'5px 8px',textAlign:left?'left':'center',whiteSpace:'nowrap',cursor:'pointer',userSelect:'none'}}
+                    title="Click to sort">
+                    {label}{sdSort.key===key?(sdSort.dir==='asc'?' ▲':' ▼'):''}
+                  </th>
+                ))}
+                {sdGetMesh(activeProduct,'CON').map(m=>(
+                  <th key={m} onClick={()=>toggleSort(m)} style={{padding:'5px 6px',textAlign:'center',fontSize:9,cursor:'pointer',userSelect:'none'}} title="Click to sort">
+                    {m.replace(' (%)','')}{sdSort.key===m?(sdSort.dir==='asc'?' ▲':' ▼'):''}
+                  </th>
+                ))}
+                <th onClick={()=>toggleSort('passStatus')} style={{padding:'5px 8px',cursor:'pointer',userSelect:'none'}} title="Click to sort">
+                  Status{sdSort.key==='passStatus'?(sdSort.dir==='asc'?' ▲':' ▼'):''}
+                </th>
+                <th onClick={()=>toggleSort('violations')} style={{padding:'5px 8px',fontSize:9,color:'#bfdbfe',cursor:'pointer',userSelect:'none'}} title="Click to sort">
+                  Violations{sdSort.key==='violations'?(sdSort.dir==='asc'?' ▲':' ▼'):''}
+                </th>
               </tr>
             </thead>
             <tbody>
               {filteredRuns.map((row:any,i:number)=>{
                 const vios: string[] = row.violations||[]
-                const isHighlighted = row.id === highlightedRunId
+                const isHighlighted = row.id === chartHighlightId
                 const rowBg = isHighlighted?'#fef9c3':vios.length>0?(i%2===0?'#fff5f5':'#fff0f0'):(i%2===0?'#fafafa':'#fff')
                 const mesh  = sdGetMesh(activeProduct, row.variant)
                 const gs    = gradeStyle(row.grade)
@@ -1508,6 +1538,7 @@ export default function SievingPage() {
                           setEditRunId(null)
                         }}
                         onCancel={()=>setEditRunId(null)}
+                        qcNames={qcNames}
                       />
                     </td></tr>
                   )}

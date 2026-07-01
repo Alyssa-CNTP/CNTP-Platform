@@ -9,8 +9,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Printer } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
+import { printJobCardDetail } from '@/lib/maintenance/exporters'
 import { useMaintenanceContext } from '../../layout'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { JobCardItem } from '@/components/maintenance/JobCardItem'
@@ -21,7 +22,7 @@ export default function JobCardDetailPage() {
   const params = useParams()
   const auth = useAuth()
   const role = deriveMaintRole(auth)
-  const { loading, data, actor } = useMaintenanceContext()
+  const { loading, data, derived, actor } = useMaintenanceContext()
 
   const cardId = Number(Array.isArray(params.cardId) ? params.cardId[0] : params.cardId)
   const card = data.jcs.find(j => j.id === cardId)
@@ -83,10 +84,16 @@ export default function JobCardDetailPage() {
 
   return (
     <div className="p-4 sm:p-6 max-w-[900px] mx-auto space-y-4">
-      <div>
-        <Link href="/maintenance/job-cards" className="inline-flex items-center gap-1.5 text-[13px] text-text-muted hover:text-text transition"><ArrowLeft size={15} /> Back to job cards</Link>
-        <h1 className="text-2xl font-semibold text-text mt-2">{card.card_no}</h1>
-        <p className="text-sm text-text-muted mt-0.5">{card.area}{card.machine ? ' · ' + card.machine : ''} — raised by {card.raised_by}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <Link href="/maintenance/job-cards" className="inline-flex items-center gap-1.5 text-[13px] text-text-muted hover:text-text transition"><ArrowLeft size={15} /> Back to job cards</Link>
+          <h1 className="text-2xl font-semibold text-text mt-2">{card.card_no}</h1>
+          <p className="text-sm text-text-muted mt-0.5">{card.area}{card.machine ? ' · ' + card.machine : ''} — raised by {card.raised_by}</p>
+        </div>
+        <button onClick={() => printJobCardDetail(card, derived.cardLogs(card.id), derived.cardSpares(card.id))}
+          className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition shrink-0">
+          <Printer size={14} /> Print job card
+        </button>
       </div>
 
       <JobCardItem j={card} roles={cardRoles} compact={false} />

@@ -27,13 +27,14 @@ export default function MaintenanceDashboard() {
   const { jcs, sparesUsed, templates, completions } = data
   const [drill, setDrill] = useState<{ title: string; rows: JobCard[] } | null>(null)
   const [tab, setTab] = useState<Tab>('reliability')
+  const [monthsBack, setMonthsBack] = useState(6) // trend window for the charts
 
   const a = useMemo(() => {
     const completed = jcs.filter(j => j.status === 'complete')
     const breakdowns = jcs.filter(j => j.workflow === 'breakdown')
     const now = new Date()
     const months: { label: string; start: number; end: number }[] = []
-    for (let i = 5; i >= 0; i--) {
+    for (let i = monthsBack - 1; i >= 0; i--) {
       const s = new Date(now.getFullYear(), now.getMonth() - i, 1)
       const e = new Date(now.getFullYear(), now.getMonth() - i + 1, 1)
       months.push({ label: s.toLocaleDateString('en-ZA', { month: 'short' }), start: s.getTime(), end: e.getTime() })
@@ -93,7 +94,7 @@ export default function MaintenanceDashboard() {
       mttrNow: mttrTrend[mttrTrend.length - 1]?.mttr ?? 0,
       reactiveNow: reactiveTrend[reactiveTrend.length - 1]?.reactivePct ?? 0,
     }
-  }, [jcs, sparesUsed, templates, completions, data.stock, derived.statuses, weekKey, moKey])
+  }, [jcs, sparesUsed, templates, completions, data.stock, derived.statuses, weekKey, moKey, monthsBack])
 
   const agg = useMemo(() => ({
     period: `${weekKey} / ${moKey}`,
@@ -124,11 +125,20 @@ export default function MaintenanceDashboard() {
 
       {/* Charts — segmented to avoid overload */}
       <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
-        <div className="flex items-center gap-1 mb-4 bg-surface-dim rounded-lg p-1 w-fit">
-          {([['reliability', 'Reliability'], ['people', 'People'], ['spares', 'Spares & compliance']] as [Tab, string][]).map(([k, label]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
-          ))}
+        <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+          <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit">
+            {([['reliability', 'Reliability'], ['people', 'People'], ['spares', 'Spares & compliance']] as [Tab, string][]).map(([k, label]) => (
+              <button key={k} onClick={() => setTab(k)}
+                className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit">
+            <span className="text-[11px] text-text-muted px-1.5">Range</span>
+            {([['3m', 3], ['6m', 6], ['12m', 12]] as [string, number][]).map(([l, n]) => (
+              <button key={n} onClick={() => setMonthsBack(n)}
+                className={`px-2.5 py-1 rounded-md text-[12px] font-semibold transition ${monthsBack === n ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{l}</button>
+            ))}
+          </div>
         </div>
 
         {tab === 'reliability' && (

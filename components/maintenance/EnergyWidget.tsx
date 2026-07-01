@@ -185,7 +185,7 @@ export function EnergyWidget() {
               {chartRows.some(r => r.solar > 0) && (
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted mb-2">Solar Production</p>
-                  <ResponsiveContainer width="100%" height={140}>
+                  <ResponsiveContainer width="100%" height={100}>
                     <BarChart data={chartRows} margin={{ top: 4, right: 4, left: -16, bottom: 0 }} barSize={14}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                       <XAxis dataKey="hour" tick={{ fontSize: 9, fill: 'var(--color-text-faint, #888)' }} tickLine={false} />
@@ -208,14 +208,11 @@ export function EnergyWidget() {
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">Source</span>
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">Energy</span>
                   </div>
-                  <SourceRow color={CHART_STYLE.solar} label="PV Energy"               value={data.solar_kwh}         unit={unit} />
-                  <SourceRow                            label="Solar total"              value={data.solar_kwh}         unit={unit} bold />
-                  <SourceRow color={CHART_STYLE.bat}   label="Battery Discharge Energy" value={data.bat_discharge_kwh} unit={unit} />
-                  <SourceRow color="#e11d48"            label="Battery Charge Energy"    value={-data.bat_charge_kwh}   unit={unit} />
-                  <SourceRow                            label="Battery total"            value={data.bat_discharge_kwh - data.bat_charge_kwh} unit={unit} bold />
-                  <SourceRow color={CHART_STYLE.grid}  label="Daily Grid Intake"        value={data.grid_kwh}          unit={unit} />
-                  <SourceRow color="#a78bfa"            label="Daily Grid Feedback"      value={-data.grid_export_kwh}  unit={unit} />
-                  <SourceRow                            label="Grid total"               value={data.grid_kwh - data.grid_export_kwh} unit={unit} bold />
+                  <SourceRow color={CHART_STYLE.solar} label="PV Energy"        value={data.solar_kwh}                        unit={unit} />
+                  <SourceRow                            label="Solar total"     value={data.solar_kwh}                        unit={unit} bold />
+                  <SourceRow color={CHART_STYLE.grid}  label="Grid Intake"     value={data.grid_kwh}                         unit={unit} />
+                  <SourceRow color="#a78bfa"            label="Grid Feedback"   value={-data.grid_export_kwh}                 unit={unit} />
+                  <SourceRow                            label="Grid total"      value={data.grid_kwh - data.grid_export_kwh}  unit={unit} bold />
                   {data.generator_kwh > 0 && (
                     <>
                       <SourceRow color={CHART_STYLE.gen} label="Generator" value={data.generator_kwh} unit={unit} />

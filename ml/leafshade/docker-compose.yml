@@ -1,0 +1,22 @@
+# Leaf Shade Classifier — Docker Compose service
+# ===============================================
+# Start on the VPS:
+#   cd /home/cntpdev/apps/staging/app/cntp-ops/ml/leafshade
+#   docker compose up -d --build
+#
+# Uses host networking so the Flask service (which binds 127.0.0.1:5001) is
+# reachable by the Next.js app on the same host, and ONLY on localhost — the
+# UFW firewall only opens 2022/80/443, so it is never internet-facing.
+#
+# restart: unless-stopped → survives reboots and crashes. After updating the
+# model or leaf_shade_api.py, re-run `docker compose up -d --build`.
+
+services:
+  leafshade:
+    build: .
+    image: cntp-leafshade:latest
+    container_name: cntp-leafshade
+    network_mode: host
+    environment:
+      - LEAF_SHADE_PORT=5001
+    restart: unless-stopped

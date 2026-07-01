@@ -5,6 +5,260 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (QC name autocomplete now sourced from the shift roster)
+
+**Files changed:**
+- `lib/hooks/useQcNames.ts`
+
+**Changes:**
+- Replaced the `production.employees` (`department='qc'`) lookup with distinct `person_name` values from `production.roster_entries`, filtered to role keys in the roster's "Quality" category (QC Supervisor, QC, Lab Analyst, Incoming Goods QC Inspector), across both day and night shift.
+- Reason: the employees-table department flag no longer matched who is actually rostered onto QC roles — the autocomplete now mirrors exactly who shows up under "QUALITY" on the shift roster's on-duty card.
+
+---
+
+## 2026-07-01 — Gustav (QC name autocomplete across sieving, pasteuriser, granule)
+
+**Files changed:**
+- `lib/hooks/useQcNames.ts` (new)
+- `components/shared/QCNameField.tsx` (new)
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Added a type-ahead autocomplete to every QC/Quality Controller name field in sieving, pasteuriser, and granule (new run forms, add-sample forms, night/afternoon-shift QC overrides, and inline batch-header edits) to prevent spelling mistakes and name mismatches.
+- Names are sourced from `production.employees` where `department='qc'` — the same staff directory used by the shift roster — via a new shared `useQcNames()` hook, so the roster itself is untouched and remains the single source of names.
+- Autocomplete is assistive, not a hard lock: as the user types, matching names appear in a dropdown (new shared `QCNameField` component); picking one fills the field exactly, but a name not yet in the list can still be typed and saved (e.g. a fill-in QC not yet added to staff).
+
+---
+
+## 2026-07-01 — Gustav (Duplicate batch guard hardened; search added to Lab Results)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/lab-results/page.tsx`
+
+**Changes:**
+- Pasteuriser and granule already blocked creating a new run with a batch number that matches an **active or finalised/historical** run — but two gaps could let a real duplicate slip through:
+  - **Normalisation**: the comparison was `.trim().toLowerCase()` only, so "GS-0098" vs "GS 0098" vs "GS_0098" were treated as different batch numbers. Added a shared `normBatch()` (same rule raw-material already used) so all common formatting variants collapse to the same key.
+  - **Row cap**: the batches/runs used for the check were loaded with a single query, silently capped at PostgREST's 1000-row limit — a very old batch number beyond that cap could go undetected. Both pages now paginate through the full history (same pattern already used in Sieving), so the whole history is always loaded.
+  - Messaging is unchanged: an active duplicate says to add a sample to the existing run instead; a finalised duplicate says to use a different batch number.
+- **Lab Results**: added a single search box above the table (works across every tab — Micro, Residue, Heavy Metals, EtO, Aflatoxins, MOSH/MOAH, PAs, Glyphosate) that matches against every field of a record, not just the visible columns.
+
+## 2026-07-01 — Alyssa (energy totals on production dashboard + production capture cron)
+
+**Files changed:**
+- `components/production/EnergyTotals.tsx` (new)
+- `app/(app)/production/page.tsx`
+- `.github/workflows/energy-capture-production.yml` (new)
+
+**Changes:**
+- Added a lightweight `EnergyTotals` component to the production dashboard: two stat tiles (Solar today / Grid today in kWh) with a % solar share indicator. No Recharts — plain HTML/CSS only, avoiding the Recharts + Next 16 / React 19 SSR build issue. Renders `null` silently on error so it never breaks the production page.
+- Added `.github/workflows/energy-capture-production.yml`: scheduled cron at 20:00 UTC (22:00 SAST) that POSTs to the production app's `/api/maintenance/energy/capture` endpoint with the `PROD_CRON_SECRET` bearer token. Requires two new GitHub repo secrets: `PROD_APP_URL` and `PROD_CRON_SECRET`.
+
+---
+
+## 2026-07-01 — Alyssa (maintenance planner: remove add-slot/week calendar/duty-roster, add shift roster card)
+
+**Files changed:**
+- `app/(app)/maintenance/planner/page.tsx`
+
+**Changes:**
+- Removed "Add a planned slot" collapsible section (was writing to `maintenance.slots`).
+- Removed "This week" weekly calendar section (was reading from `maintenance.duty_roster` which showed every maintenance person on duty every day — inaccurate).
+- Removed "Duty roster" collapsible section (was a static info panel linking to `/production/roster`).
+- Replaced all three with a single **"Maintenance on shift"** card that queries `production.roster_periods` and `production.roster_entries` directly, showing who is assigned to the Day shift and Night shift for the current period. The active shift (07:00–16:59 = day, otherwise night) is highlighted. Shows role label (Technician / Assistant), per-person ON DUTY badge where applicable, and a direct link to edit in the shift roster.
+- Removed now-unused state (`openWeek`, `openAddSlot`, `openRoster`, `weekStart`), functions (`slotsOn`, `rosterOn`), and imports (`Plus`, `NavBtn`, `INP` from add-slot form, `PRIMARY` constant).
+
+---
+
+## 2026-07-01 — Gustav (Sieving chart: timeline navigator for previous weeks/months)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- The new Mesh Trend / Outliers chart was bounded to only "this week" or "this month" — added a **◀ ▶ timeline navigator** so it can step back through any previous week or month (and a "Today" button to jump back to the current one). The window stays bounded (7 days or one month's worth of weeks) so it never becomes the unreadable "all runs" chart — you just move which window you're looking at. Shows the date range being viewed (e.g. "23 Jun – 29 Jun 2026" or "June 2026").
+
+## 2026-07-01 — Alyssa (per-dept staged save + fix maintenance duplicates)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- **Per-department staged save**: roster edits (add/edit/delete/drag) now stage in local state and do not write to the DB until "Save [Department]" is clicked on the category header. Save does delete-all + re-insert for that department's role keys only — two supervisors editing different departments simultaneously never overwrite each other. Switching periods discards unsaved local changes.
+- **Fix maintenance duty_roster duplicates**: publish previously deleted only slots where `start_at` fell inside the period dates. Changed to an overlap delete so pre-existing entries for the entire window are cleared before inserting the new slots — eliminates the duplicate chips in the maintenance calendar.
+
+---
+
+## 2026-07-01 — Alyssa (roster Shift A/B naming with weekly swap)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- Roster grid columns now display **Shift A / Shift B** (drawn from `day_label`/`night_label` on the period) instead of generic "Day/Night". Times remain as subtitle.
+- "New period" modal includes a **Day = Shift A / Day = Shift B** toggle. Defaults to the opposite of the previous period (auto-alternates). First ever period defaults to Day = Shift A.
+- "Generate next week" modal **auto-swaps labels**: if this week's day = Shift A, next week's day = Shift B (the shift letter follows the people, not the clock slot).
+- "On duty" toggle buttons also show Shift A/B names.
+
+---
+
+## 2026-06-30 — Gustav (Outlier/typo prevention in pasteuriser, granule, sieving; new sieving Week/Month chart)
+
+**Files changed:**
+- `lib/utils/outliers.ts` (new)
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Added a shared `checkOutlier`/`mean`/`stdDev` helper. A value is flagged only when the comparison history already has real spread (std > a field-specific floor) **and** the new value sits more than 2.5σ from the mean — avoids false positives on tightly-controlled fields.
+- **Outlier warnings now require explicit confirmation before saving** (previously a passive banner you could ignore): a "Yes, these values are correct" checkbox appears next to the warning and the Save button is disabled until it's ticked. Applied to:
+  - **Pasteuriser** (already had moisture/BD/temp/sieve-% checks vs. other samples in the batch) — added the confirm-gate.
+  - **Granule** (had no statistical check at all, only a hard spec-max fail) — added moisture/BD/dryer-temp outlier detection vs. other samples in the run, to both the Add and Edit sample modals, with the confirm-gate.
+  - **Sieving** (only checked sieve mesh %) — extended to also cover Bulk Density and Leaf Shade, with the confirm-gate on Save Run.
+- **New sieving chart** — bounded to **This Week** (by day) or **This Month** (by week-of-month), never the full history, so it can't become unreadable again. Two views: **Mesh Trend** (every sieve fraction as its own line, like the original chart) and **Outliers** (a chosen metric — Bulk Density, Leaf Shade, or a sieve fraction — plotted with a ±2.5σ band; out-of-band points are red and clickable to scroll/highlight the matching table row).
+
+---
+
+## 2026-07-01 — Alyssa (roster auto-rotation, drag-and-drop, publish to maintenance)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx` (major update)
+- `supabase/migrations/20260630_002_roster_publish.sql` (new — run manually in Supabase dashboard)
+
+**Changes:**
+- **Wednesday deadline badge:** header of the roster page now shows a countdown to Wednesday (the roster change deadline). Turns amber at 2 days out, red on the day itself.
+- **Generate next week modal:** "Generate next week" button opens a review modal that pre-fills the next 7-day period, rotates every person day↔night (the alternating week rule), checks leave records for the new dates, and highlights conflicts. Generates a new `roster_periods` row with all entries inserted rotated on confirm.
+- **Drag and drop:** every `PersonChip` is now draggable via the HTML5 Drag API. Dragging a chip onto any other cell moves the person to that role/shift (updates DB immediately). Drop target is highlighted with a brand-colour ring.
+- **Publish button + status badge:** period bar now shows a Draft/Published badge. Clicking Publish marks the period `status='published'` and syncs maintenance entries (`maintenance_tech`, `maintenance_asst`) to `maintenance.duty_roster` as daily slots (day shift = 05:00–14:00 UTC, night = 14:00–23:00 UTC) for each day in the period.
+- **DB migration:** `supabase/migrations/20260630_002_roster_publish.sql` adds `status` (draft/published, default draft) and `published_at` columns to `production.roster_periods`. The app gracefully falls back to `status='draft'` if the column is not yet present — run the migration in the Supabase SQL editor to unlock publishing.
+
+---
+
+## 2026-06-30 — Gustav (Leaf Shade: fix wrong predictions — match desktop pipeline)
+
+**Files changed:**
+- `ml/leafshade/leaf_shade_api.py`
+- `ml/leafshade/requirements.txt`
+
+**Changes:**
+- **Bug fix:** the web service decoded the CR3 with `half_size=True`, which halves resolution and skips demosaic interpolation, shifting the 30 colour features away from what the model was trained on → wrong leaf shade. Removed `half_size=True` so the RAW decode is full-resolution, matching the desktop training pipeline (Blackheath).
+- Pinned the Python deps to the desktop reference versions so the demosaic + feature extraction reproduce training values exactly: `rawpy==0.25.1` (was 0.27.0), `opencv-python-headless==4.13.0.90` (was 4.13.0.92), `numpy==2.2.6` (was 2.4.6). scikit-learn stays 1.7.2 and joblib 1.5.3 (already matched).
+- Requires a container rebuild on the VPS: `cd ml/leafshade && docker compose up -d --build`.
+
+---
+
+## 2026-06-30 — Alyssa (July 2026 roster seed)
+
+**Files changed:**
+- `supabase/migrations/20260630_001_roster_july2026.sql` (new)
+
+**Changes:**
+- Seeded all 4 July 2026 weekly roster periods to the database: 29 Jun–3 Jul, 6–10 Jul, 13–17 Jul, 20–24 Jul. Each period has day (07h00–16h00) and night (16h00–01h00) shifts with 286 entries total across Production, Store, QC, Cleaning, Maintenance, and H&S roles. Skill tags (FL, ER, FF, FA, II, FM, SHER, SS, H&S, C) parsed directly from the source spreadsheet. Data is live in `production.roster_periods` and `production.roster_entries` on staging.
+
+---
+
+## 2026-06-30 — Alyssa (Production Orders page, expandable capture overview, date-scoped serials, maintenance escalation)
+
+**Files changed:**
+- `app/(app)/production/orders/page.tsx` (new)
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/layout/Sidebar.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+- `components/production/capture/TimesheetConfirm.tsx`
+
+**Changes:**
+- **Production Orders page** (`/production/orders`): lists all `prod_sessions` across every section, grouped by date, with status badge (in progress / awaiting sign-off / signed off), shift, variant, operator names, lot number, kg in → kg out, and variance badge (green/amber vs. tolerance). Filterable by section, status, shift, and date range. Each card links directly into the capture page for that session. Visible to Production + Management.
+- **Sidebar**: added Production Orders nav entry under the Production group (FileText icon).
+- **Capture overview — expandable grouped rows**: bagging rows grouped by product (10 bags of Fine Leaf = 1 row with count + total kg). Click any group to expand and see individual bag rows with serial number, time logged, and weight. Expand all / Collapse all buttons. Active filter badge. Filter bar: product text search, variant select, grade select, clear button.
+- **Serial counter date-scoped**: `bag_tags` serial lookup now uses a `like('serial_number', 'ST-DDMMYY-%')` prefix so the counter resets to 001 each day instead of continuing from the previous day's last number.
+- **Timesheet maintenance escalation**: maintenance break entries now require a description — confirm button is blocked and a warning is shown until notes are filled in. On timesheet confirm, each maintenance stoppage fires a `line_messages` alert to the section channel with operator name, section, shift, description, and duration for immediate supervisor visibility.
+
+---
+
+## 2026-06-29 — Gustav (Leaf Shade: Docker deployment for the Python service)
+
+**Files changed:**
+- `ml/leafshade/Dockerfile` (new), `ml/leafshade/docker-compose.yml` (new), `ml/leafshade/.dockerignore` (new)
+- `ml/leafshade/README.md`
+
+**Changes:**
+- The staging VPS (Ubuntu 26.04) has Docker 29.5 but no Python 3.11. Added a `python:3.11-slim` Docker image + compose service so the Leaf Shade classifier runs in a container with the exact pinned deps (scikit-learn 1.7.2) without installing Python on the host.
+- Uses `network_mode: host` so the Flask service keeps its original `127.0.0.1:5001` bind (localhost only, never internet-facing) and the Next.js proxy route reaches it unchanged — **no change to `leaf_shade_api.py`**.
+- `restart: unless-stopped` keeps it alive across reboots. One-time start: `cd ml/leafshade && docker compose up -d --build`. README updated with Docker as the primary path (venv/pm2 kept as an alternative).
+
+---
+
+## 2026-06-29 — Gustav (Raw Material: Leaf Shade ML classifier + pH/TDS tab — ported from CNTPquality)
+
+**Files changed:**
+- `ml/leafshade/` (new) — `leaf_shade_api.py`, `leaf_shade_models/*.pkl`, `requirements.txt`, `setup.sh`, `run.sh`, `README.md`, `.python-version`
+- `app/api/leaf-shade/predict/route.ts` (new)
+- `app/(app)/quality/raw-material/page.tsx`
+- `.gitignore`
+
+**Changes:**
+- Ported the **Leaf Shade Classifier** from the old `CNTPquality` Express app (`server/leafShade.js` + `server/leaf_shade_api.py`). It is a Flask micro-service that takes a Canon **CR3** RAW photo, extracts 30 colour features (OpenCV/rawpy) and predicts the leaf shade (Shade 0–11) with an MLPClassifier + StandardScaler + LabelEncoder.
+- The three model pickles were saved with **scikit-learn 1.7.2**; `requirements.txt` pins the exact Python versions (validated: model loads, 30-feature pipeline runs end-to-end). **No Next.js `package.json` module versions were changed.**
+- Added **`POST /api/leaf-shade/predict`** — a Next.js route that proxies the CR3 to the Python service on `127.0.0.1:5001` (not internet-facing) and returns prediction + top-5 + camera-compliance.
+- Added a **🍃 Leaf Shade** tab in Raw Material: CR3 upload → model prediction, plus the lab's **physically observed shade (1–11)** and a **free-text observation** note. Saves to `qms.quality_records` (`workflow='leaf_shade'`).
+- Added a separate **💧 pH / TDS** tab in Raw Material for manual pH + TDS entry per batch. Saves to `qms.quality_records` (`workflow='ph_tds'`). No schema migration needed — `data_json` is jsonb.
+- The Python service runs as its own pm2 process (`cntp-leafshade`); see `ml/leafshade/README.md` for one-time VPS setup (`bash ml/leafshade/setup.sh` + `pm2 start ml/leafshade/run.sh --name cntp-leafshade`).
+
+---
+
+## 2026-06-29 — Gustav (Scheduled maintenance: interactive Overview tiles, required calibration sign-off, required fault choice)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`
+
+- **Overview tiles are now buttons:** clicking *Weekly outstanding*, *Monthly outstanding*, *Calibrations overdue / ≤30d* or *Services due* jumps straight to the relevant sub-tab.
+- **No one-click "Done today":** the Overview quick-complete buttons were removed — *Mark calibrated →* now routes to the register and *Record service →* to Readings, so nothing is closed off without capturing the detail.
+- **Calibration sign-off requires a person:** the full calibration register and the annual register both now have a required "Who did it?" selector (starts empty, highlighted); *Set / Today / ✓ Calibrated* are disabled until someone is chosen. `calDone`/`calDoneOn` record the chosen person.
+- **Monthly fault choice is required and starts blank:** the Fault selector no longer defaults to "No Fault" — it opens on a "Fault? …" placeholder, and a monthly task **cannot be ticked done until Fault or No Fault is explicitly chosen** (the box is highlighted until then).
+
+## 2026-06-29 — Gustav (Maintenance round 2: editable annual register, interactive trends, job-card filters/sort, individual prints)
+
+**Files changed:**
+- `supabase/migrations/20260629_001_maintenance_annual_calibration.sql` (new — applied to staging DB)
+- `lib/maintenance/types.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/exporters.ts`
+- `app/(app)/maintenance/scheduled/page.tsx`
+- `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`
+
+**Changes:**
+- **DB (additive, staging):** added `interval_days` and `last_done_by` to `maintenance.annual_items` to complete the calibrated-on / by / cycle stamp.
+- **Annual / Calibration tab cleaned up:** removed the duplicate "due ≤60d" card list that repeated the table below it (now a single at-a-glance count strip). Every field in the register is **editable inline** (category, asset, serial, supplier, cycle days, next due). Added a **Mark calibrated** action per row — pick the date it was done + who did it; the next-due date recomputes from last-done + cycle. The last-done date and person are shown as a "✓ calibrated" stamp.
+- **Readings & Trends graphs are interactive:** the table is gone — each trend point is now **clickable to reveal that reading's date and value** (with units). Diesel run-hours and compressor-hours points carry exact dates; the weekly trend-window filter (8w / quarter / 6mo / year) is retained.
+- **Job cards — filters in every view:** the search bar plus a **raised-date range filter** now apply across the manager board, technician, QC and raiser views (previously search was manager-only). **High urgency always sorts to the top** of every list (manager-set urgency, then derived priority, then age).
+- **Individual prints:** a **Print job card** button on the job-card detail page renders a full single-card document (header, work done, root cause, spares, activity log). A **per-checklist print** button renders one checklist with its who/when audit trail. (`printJobCardDetail`, `printChecklistOne` in exporters.)
+
+## 2026-06-29 — Gustav (Maintenance overhaul: accept/start, urgency, edit/cancel, reactive filters, search, exports, calibration cycle, per-tech status)
+
+**Files changed:**
+- `supabase/migrations/20260625_001_maintenance_jobcard_overhaul.sql` (new — applied to staging DB)
+- `lib/maintenance/types.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/helpers.ts`
+- `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/exporters.ts` (new)
+- `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceDashboard.tsx`
+- `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/planner/page.tsx`
+- `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/job-cards/[id]/assign/route.ts`
+
+**Changes:**
+- **DB (additive, staging):** added `urgency`, `started_at`, `cancelled_at`, `cancelled_by` to `maintenance.job_cards`; widened the status CHECK to allow `cancelled`; added an urgency CHECK.
+- **Allocate panel:** one technician picker only — on-duty chips (auto-ticked least-busy) with a single tick; off-duty staff move to a secondary dropdown (removes the confusing double tick). Manager can set an **urgency label** (low/medium/high/critical, or Auto) at allocation. The **Forward** button moved to the bottom of the panel, after the clarify/comment row.
+- **Accept → Start split:** the technician now *accepts* first, then taps *Start job*; the work **timer only starts on Start** (`started_at`). Breakdowns still time from raise.
+- **Finish gating:** a job cannot be completed until both Work Done and Root Cause are filled (button disabled + server-side guard).
+- **Spares request pauses the timer:** requesting a part puts the job on hold (timer frozen) with a generalised Resume; the same pause/resume now covers breakdown interrupts and spares/problem holds.
+- **Edit / cancel:** managers can edit a card's area/machine/description/urgency and cancel it (terminal `cancelled`). Technicians cannot delete/cancel — manager-only.
+- **Breakdown routing:** breakdowns and the allocate suggestion now route to the **least-busy on-duty technician** (not just the most-recent shift); machine-criticality ranking added (pasteurizer → sieving → granule → refining 1/2).
+- **Job-cards board:** Shift-summary tiles, the per-raiser tiles, and the personal-view tiles are now **reactive filter buttons**; added a **search bar**, a **By-technician** (assignee) filter, **CSV export** + **print**, and a 2-column card layout for a denser overview. Cancelled cards excluded from active lists.
+- **Scheduled:** editable **calibration finalize date** that recomputes the next cycle (`calDoneOn`); **forklift run-hour rows ordered by forklift number**; a **trend window** selector (8w/quarter/6mo/year) on Readings & Trends sparks; **print/export** for weekly & monthly checklists.
+- **Analytics:** dashboard graphs gained a 3/6/12-month range selector.
+- **Planner:** new **per-technician status** panel showing who is busy with which card, who is available, and each person's outstanding cards.
+
+---
+
 ## 2026-06-26 — Alyssa (fix: cross-department Quality access via permissions)
 
 **Files changed:** `app/(app)/layout.tsx`, `lib/auth/context.tsx`

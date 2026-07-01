@@ -1,30 +1,79 @@
 'use client'
 
 // app/(app)/maintenance/job-cards/page.tsx
-// Role-aware job-card board. Manager sees new cards + a priority-grouped active
-// board (High / Medium / Low) + status filter + history. Planner and Roster/QC
-// map now live at /maintenance/planner. Tech sees assigned-open; QC sees the
-// qc_check queue; raiser (default) sees their own cards + summary tiles. Each
-// card row links to job-cards/[cardId].
+// Role-aware job-card board built around a professional one-line table
+// (JobCardTable): every card is a single row that expands to the full
+// JobCardItem for allocation / work-logging / QC / verification. Manager sees a
+// shift summary, an "awaiting allocation" table, the active board grouped by a
+// technician tab strip, and history. Tech / QC / raiser see their own tables.
 
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { Plus, AlertTriangle, ChevronDown, ChevronRight, Users } from 'lucide-react'
+import { Plus, AlertTriangle, Search, Download, Printer } from 'lucide-react'
+import { exportJobCardsCsv, printJobCards } from '@/lib/maintenance/exporters'
 import { useAuth } from '@/lib/auth/context'
 import BottomSheet from '@/components/ui/BottomSheet'
 import { useMaintenanceContext } from '../layout'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
-import { JobCardItem } from '@/components/maintenance/JobCardItem'
+import { JobCardTable } from '@/components/maintenance/JobCardTable'
 import { RaiseJobCardForm } from '@/components/maintenance/RaiseJobCardForm'
-import { STATUSES } from '@/lib/maintenance/constants'
-import { fmtD, fmtT, diffDays, diffM, priorityOf, PRIORITY_META, type Priority } from '@/lib/maintenance/helpers'
+import { STATUSES, URGENCIES, URGENCY_META } from '@/lib/maintenance/constants'
+import { fmtD, fmtT, diffDays, diffM, priorityOf } from '@/lib/maintenance/helpers'
 import { INP } from '@/components/production/shared/ui'
-import type { JobCard } from '@/lib/maintenance/types'
+import type { JobCard, Urgency } from '@/lib/maintenance/types'
 
 const SEG = (active: boolean) =>
   `px-3.5 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap ${active ? 'bg-brand text-white' : 'text-text-muted hover:bg-surface-dim'}`
 
-const PRIO_ORDER: Priority[] = ['high', 'medium', 'low']
+// Effective urgency = manager-set label, else the derived priority (high/med/low).
+const effUrg = (j: JobCard): Urgency => (j.urgency ?? priorityOf(j) as Urgency)
+
+// Sort rank: manager-set urgency (critical→low) wins, else the derived priority.
+// Lower = more urgent, so high urgency always floats to the top of any list.
+const urgencyRank = (j: JobCard) => {
+  if (j.urgency) return URGENCY_META[j.urgency].rank // 0 critical … 3 low
+  const p = priorityOf(j)
+  return p === 'high' ? 1 : p === 'medium' ? 2 : 3
+}
+const byUrgencyThenAge = (a: JobCard, b: JobCard) => urgencyRank(a) - urgencyRank(b) || a.raised_at.localeCompare(b.raised_at)
+
+// Shared filter: free-text search across human fields + a raised-date range.
+function makeCardFilter(search: string, from: string, to: string) {
+  const q = search.trim().toLowerCase()
+  return (j: JobCard) => {
+    const day = (j.raised_at ?? '').slice(0, 10)
+    if (from && day < from) return false
+    if (to && day > to) return false
+    if (!q) return true
+    return [j.card_no, j.area, j.machine, j.description, j.long_desc, j.raised_by, j.assigned_to]
+      .some(v => (v ?? '').toLowerCase().includes(q))
+  }
+}
+
+// Reusable search + date-range + urgency bar, shared by every job-card view.
+function FilterBar({ search, setSearch, dateFrom, setDateFrom, dateTo, setDateTo, urg, setUrg }: {
+  search: string; setSearch: (v: string) => void
+  dateFrom: string; setDateFrom: (v: string) => void
+  dateTo: string; setDateTo: (v: string) => void
+  urg: string; setUrg: (v: string) => void
+}) {
+  const active = !!(search || dateFrom || dateTo || urg !== 'all')
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="relative flex-1 min-w-[220px]">
+        <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
+        <input className={`${INP} w-full pl-8`} placeholder="Search job cards — number, machine, description, person…" value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      <select className={`${INP} w-auto`} value={urg} onChange={e => setUrg(e.target.value)} title="Filter by urgency">
+        <option value="all">All urgencies</option>
+        {URGENCIES.slice().reverse().map(u => <option key={u} value={u}>{URGENCY_META[u].label}</option>)}
+      </select>
+      <label className="text-[11px] text-text-muted">From <input className={`${INP} w-auto inline-block ml-1`} type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label>
+      <label className="text-[11px] text-text-muted">To <input className={`${INP} w-auto inline-block ml-1`} type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label>
+      {active && <button onClick={() => { setSearch(''); setDateFrom(''); setDateTo(''); setUrg('all') }} className="text-[12px] text-text-muted hover:text-text underline">Clear</button>}
+    </div>
+  )
+}
 
 export default function JobCardsPage() {
   const auth = useAuth()
@@ -35,34 +84,43 @@ export default function JobCardsPage() {
   const { cnt, newCards, hist } = derived
 
   // IT / full admin get the full view of every profile via a "View as" switcher.
-  // Everyone else keeps their single derived role.
   const [viewAs, setViewAs] = useState<'manager' | 'tech' | 'qc' | 'raiser'>('manager')
   const role = baseRole.isAdminView
     ? { ...baseRole, canManage: viewAs === 'manager', isTech: viewAs === 'tech', isQc: viewAs === 'qc', isRaiser: viewAs === 'raiser' }
     : baseRole
 
   const [filt, setFilt] = useState('all')
+  const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [urg, setUrg] = useState('all')
+  const [techFilt, setTechFilt] = useState('all') // 'all' | '__unassigned__' | technician name
   const [raiseOpen, setRaiseOpen] = useState(false)
   const [raiseMode, setRaiseMode] = useState<'breakdown' | 'planned'>('planned')
-  // Priority groups: High & Medium open by default, Low collapsed.
-  const [openPrio, setOpenPrio] = useState<Record<Priority, boolean>>({ high: true, medium: true, low: false })
   const canRaiseBreakdown = auth.isProduction || auth.p('can_raise_breakdown')
   const openRaise = (mode: 'breakdown' | 'planned') => { setRaiseMode(mode); setRaiseOpen(true) }
-  // IT (admin view) and the maintenance manager may browse every raiser's cards;
-  // everyone else only ever sees their own.
-  const canSeeAllRaisers = baseRole.isAdminView || auth.role === 'maintenance_manager'
 
   const cardRoles = { canManage: role.canManage, isTech: role.isTech, isQc: role.isQc, isRaiser: role.isRaiser }
   const cardHref = (j: JobCard) => `/maintenance/job-cards/${j.id}`
 
-  // Active cards = not complete, excluding the freshly-raised ones (shown above in
-  // "Awaiting allocation"). When a status filter is selected, narrow to it.
-  const activeCards = jcs
-    .filter(j => j.status !== 'complete' && j.status !== 'raised')
+  // Shared free-text + date-range + urgency filter, applied across every view.
+  const cardFilter = makeCardFilter(search, dateFrom, dateTo)
+  const matchUrg = (j: JobCard) => urg === 'all' || effUrg(j) === urg
+  const passes = (j: JobCard) => cardFilter(j) && matchUrg(j)
+
+  // Technicians who have active cards — drives the technician tab strip + counts.
+  const activeAll = jcs.filter(j => j.status !== 'complete' && j.status !== 'cancelled' && j.status !== 'raised')
+  const techNames = useMemo(
+    () => Array.from(new Set(activeAll.map(j => j.assigned_to).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b)),
+    [jcs]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Active board = not complete/cancelled/raised, narrowed by status / technician /
+  // search / date / urgency, then high-urgency first.
+  const activeCards = activeAll
     .filter(j => filt === 'all' || j.status === filt)
-  // Group by derived priority, oldest-first within each group.
-  const byPriority = (p: Priority) =>
-    activeCards.filter(j => priorityOf(j) === p).sort((a, b) => a.raised_at.localeCompare(b.raised_at))
+    .filter(j => techFilt === 'all' || (techFilt === '__unassigned__' ? !j.assigned_to : j.assigned_to === techFilt))
+    .filter(passes)
+    .sort(byUrgencyThenAge)
 
   if (loading) {
     return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading job cards…</div></div>
@@ -113,55 +171,58 @@ export default function JobCardsPage() {
         </div>
       )}
 
-      {/* ── MANAGER: BOARD (priority-grouped) ── */}
+      {/* Shared search + date-range + urgency filter — available in every view */}
+      <FilterBar search={search} setSearch={setSearch} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} urg={urg} setUrg={setUrg} />
+
+      {/* ── MANAGER: BOARD ── */}
       {role.canManage && (
         <div>
           <ShiftSummary jcs={jcs} completions={data.completions} cardHref={cardHref} />
 
-          {canSeeAllRaisers && <RaisersPanel jcs={jcs} cardRoles={cardRoles} />}
-
-          {newCards.length > 0 && (
+          {/* Awaiting allocation — newly raised cards, most urgent first */}
+          {newCards.filter(passes).length > 0 && (
             <div className="mb-6">
               <div className="flex items-center gap-2 mb-2">
-                <span className="w-2 h-2 rounded-full bg-warn" />
+                <span className="w-2 h-2 rounded-full bg-warn animate-pulse" />
                 <h2 className="text-sm font-semibold text-text">Awaiting allocation</h2>
-                <span className="text-[11px] text-text-muted tabular-nums">{newCards.length}</span>
+                <span className="text-[11px] text-text-muted tabular-nums">{newCards.filter(passes).length}</span>
               </div>
-              <div className="stagger">{newCards.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
+              <JobCardTable cards={newCards.filter(passes).sort(byUrgencyThenAge)} roles={cardRoles} />
             </div>
           )}
 
-          {/* Light, clickable status filter — narrows which cards show in each group */}
+          {/* Active board header + export */}
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-text">Active board <span className="text-[11px] text-text-muted tabular-nums">{activeCards.length}</span></h2>
+            <div className="flex gap-2">
+              <button onClick={() => exportJobCardsCsv(activeCards)} title="Export visible cards to CSV"
+                className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition"><Download size={14} /> Export</button>
+              <button onClick={() => printJobCards(activeCards, 'Active job cards')} title="Print visible cards"
+                className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition"><Printer size={14} /> Print</button>
+            </div>
+          </div>
+
+          {/* Per-technician allocation tabs (replaces the old "by raiser" view) */}
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            <button onClick={() => setTechFilt('all')} className={SEG(techFilt === 'all')}>All <span className="opacity-70 tabular-nums">{activeAll.filter(passes).length}</span></button>
+            <button onClick={() => setTechFilt('__unassigned__')} className={SEG(techFilt === '__unassigned__')}>Unassigned <span className="opacity-70 tabular-nums">{activeAll.filter(j => !j.assigned_to).filter(passes).length}</span></button>
+            {techNames.map(t => (
+              <button key={t} onClick={() => setTechFilt(t)} className={SEG(techFilt === t)}>
+                {t} <span className="opacity-70 tabular-nums">{activeAll.filter(j => j.assigned_to === t).filter(passes).length}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Status filter chips */}
           <div className="flex flex-wrap gap-1.5 mb-4">
-            <Chip active={filt === 'all'} onClick={() => setFilt('all')} label="Active" count={jcs.filter(j => j.status !== 'complete').length} />
+            <Chip active={filt === 'all'} onClick={() => setFilt('all')} label="Active" count={jcs.filter(j => j.status !== 'complete' && j.status !== 'cancelled').length} />
             {STATUSES.map(s => <Chip key={s} active={filt === s} onClick={() => setFilt(f => (f === s ? 'all' : s))} label={s.replace(/_/g, ' ')} count={cnt(s)} />)}
           </div>
 
-          {/* Priority sections — High & Medium open, Low collapsed */}
-          {PRIO_ORDER.map(p => {
-            const cards = byPriority(p)
-            const meta = PRIORITY_META[p]
-            const open = openPrio[p]
-            return (
-              <div key={p} className="mb-3">
-                <button onClick={() => setOpenPrio(s => ({ ...s, [p]: !s[p] }))}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg hover:bg-surface-dim/60 transition text-left">
-                  {open ? <ChevronDown size={16} className="text-text-muted shrink-0" /> : <ChevronRight size={16} className="text-text-muted shrink-0" />}
-                  <span className={`w-2 h-2 rounded-full ${meta.dot}`} />
-                  <span className="text-sm font-semibold text-text">{meta.label} priority</span>
-                  <span className="text-[11px] text-text-muted tabular-nums">{cards.length}</span>
-                </button>
-                {open && (
-                  cards.length > 0
-                    ? <div className="stagger mt-1">{cards.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
-                    : <div className="text-[12px] text-text-faint px-3 py-2">No {meta.label.toLowerCase()}-priority cards{filt !== 'all' ? ' for this status' : ''}.</div>
-                )}
-              </div>
-            )
-          })}
+          <JobCardTable cards={activeCards} roles={cardRoles} empty="No active job cards match these filters." />
 
           {/* Historical */}
-          <div className="card p-4 mt-2">
+          <div className="card p-4 mt-6">
             <div className="text-sm font-semibold text-text mb-3">Historical Job Cards (Last 20)</div>
             <div className="overflow-x-auto">
               <table className="data-table">
@@ -192,12 +253,12 @@ export default function JobCardsPage() {
       {!role.canManage && role.isTech && (
         <div>
           <div className="card p-3 text-[12px] text-text-muted mb-3">
-            Showing job cards assigned to <strong className="text-text">{actor}</strong>. Breakdown cards run their timer from the moment they were raised.
+            Your job cards, <strong className="text-text">{actor}</strong>. Click a row to log work — the timer shows while a job is running. Breakdowns time from the moment they were raised.
           </div>
-          <div className="stagger">
-            {jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}
-          </div>
-          {jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">No open job cards assigned to {actor}.</div>}
+          <JobCardTable
+            cards={jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
+            roles={cardRoles}
+            empty={`No open job cards assigned to ${actor}.`} />
         </div>
       )}
 
@@ -205,18 +266,18 @@ export default function JobCardsPage() {
       {!role.canManage && !role.isTech && role.isQc && (
         <div>
           <div className="card p-3 text-[12px] text-text-muted mb-3">
-            Job cards awaiting QC post-maintenance checks — answer YES / NO / N/A; any YES returns the card to the technician with your comment.
+            Job cards awaiting QC post-maintenance checks — click a row to answer YES / NO / N/A; any YES returns the card to the technician with your comment.
           </div>
-          <div className="stagger">
-            {[...jcs.filter(j => j.status === 'qc_check')].sort((a, b) => (actions.qcFor(b.area) === actor ? 1 : 0) - (actions.qcFor(a.area) === actor ? 1 : 0)).map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}
-          </div>
-          {jcs.filter(j => j.status === 'qc_check').length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">Nothing waiting for QC.</div>}
+          <JobCardTable
+            cards={jcs.filter(j => j.status === 'qc_check').filter(passes).sort((a, b) => (actions.qcFor(b.area) === actor ? 1 : 0) - (actions.qcFor(a.area) === actor ? 1 : 0) || byUrgencyThenAge(a, b))}
+            roles={cardRoles}
+            empty="Nothing waiting for QC." />
         </div>
       )}
 
       {/* ── RAISER DASHBOARD (default) ── */}
       {!role.canManage && !role.isTech && !role.isQc && (
-        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} canSeeAll={canSeeAllRaisers} />
+        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} passes={passes} />
       )}
 
       <BottomSheet open={raiseOpen} onClose={() => setRaiseOpen(false)} center={false}>
@@ -246,8 +307,22 @@ function ShiftSummary({ jcs, completions, cardHref }: { jcs: JobCard[]; completi
   const raised = jcs.filter(j => inShift(j.raised_at))
   const breakdowns = raised.filter(j => j.workflow === 'breakdown')
   const finished = jcs.filter(j => inShift(j.completed_at) || inShift(j.verified_at))
-  const accepted = jcs.filter(j => inShift(j.accepted_at))
+  const accepted = jcs.filter(j => inShift(j.accepted_at) || inShift(j.started_at))
   const checklists = completions.filter(c => inShift(c.updated_at)).length
+
+  // Reactive tile filter — clicking a tile narrows the activity list below.
+  const [sf, setSf] = useState<'all' | 'breakdowns' | 'raised' | 'accepted' | 'finished'>('all')
+  const tiles = [
+    { k: 'breakdowns' as const, l: 'Breakdowns raised', v: breakdowns.length, hot: breakdowns.length > 0 },
+    { k: 'raised' as const, l: 'Job cards raised', v: raised.length },
+    { k: 'accepted' as const, l: 'Accepted / started', v: accepted.length },
+    { k: 'finished' as const, l: 'Finished', v: finished.length },
+    { k: null, l: 'Checklists worked', v: checklists },
+  ]
+  const showBreakdowns = sf === 'all' || sf === 'breakdowns'
+  const showRaised = sf === 'all' || sf === 'raised'
+  const showAccepted = sf === 'accepted'
+  const showFinished = sf === 'all' || sf === 'finished'
 
   return (
     <div className="card p-4 mb-6">
@@ -260,24 +335,25 @@ function ShiftSummary({ jcs, completions, cardHref }: { jcs: JobCard[]; completi
         </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
-        {[
-          { l: 'Breakdowns raised', v: breakdowns.length, hot: breakdowns.length > 0 },
-          { l: 'Job cards raised', v: raised.length },
-          { l: 'Accepted / started', v: accepted.length },
-          { l: 'Finished', v: finished.length },
-          { l: 'Checklists worked', v: checklists },
-        ].map(t => (
-          <div key={t.l} className="bg-surface-raised rounded-lg p-2.5 text-center">
-            <div className={`text-xl font-semibold tabular-nums ${t.hot ? 'text-err' : 'text-text'}`}>{t.v}</div>
-            <div className="text-[10px] text-text-muted uppercase tracking-wide mt-0.5">{t.l}</div>
-          </div>
-        ))}
+        {tiles.map(t => {
+          const active = t.k !== null && sf === t.k
+          const clickable = t.k !== null
+          return (
+            <button key={t.l} disabled={!clickable}
+              onClick={() => clickable && setSf(s => (s === t.k ? 'all' : t.k!))}
+              className={`rounded-lg p-2.5 text-center transition ${clickable ? 'cursor-pointer hover:border-text/30' : 'cursor-default'} ${active ? 'bg-brand/10 border border-brand/30' : 'bg-surface-raised border border-transparent'}`}>
+              <div className={`text-xl font-semibold tabular-nums ${t.hot ? 'text-err' : 'text-text'}`}>{t.v}</div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wide mt-0.5">{t.l}</div>
+            </button>
+          )
+        })}
       </div>
-      {(raised.length > 0 || finished.length > 0) ? (
+      {(raised.length > 0 || finished.length > 0 || accepted.length > 0) ? (
         <div className="space-y-1 text-[12px]">
-          {breakdowns.map(j => <div key={'b' + j.id}><span className="badge badge-err mr-1.5">BREAKDOWN</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({fmtT(j.raised_at)}, by {j.raised_by}{j.assigned_to ? ', → ' + j.assigned_to : ''})</span></div>)}
-          {raised.filter(j => j.workflow !== 'breakdown').map(j => <div key={'r' + j.id}><span className="badge badge-warn mr-1.5">RAISED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({fmtT(j.raised_at)}, by {j.raised_by})</span></div>)}
-          {finished.map(j => <div key={'c' + j.id}><span className="badge badge-ok mr-1.5">FINISHED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({j.assigned_to ?? '—'}, {diffM(j.workflow === 'breakdown' ? j.raised_at : j.accepted_at, j.completed_at)} min)</span></div>)}
+          {showBreakdowns && breakdowns.map(j => <div key={'b' + j.id}><span className="badge badge-err mr-1.5">BREAKDOWN</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({fmtT(j.raised_at)}, by {j.raised_by}{j.assigned_to ? ', → ' + j.assigned_to : ''})</span></div>)}
+          {showRaised && raised.filter(j => j.workflow !== 'breakdown').map(j => <div key={'r' + j.id}><span className="badge badge-warn mr-1.5">RAISED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({fmtT(j.raised_at)}, by {j.raised_by})</span></div>)}
+          {showAccepted && accepted.map(j => <div key={'a' + j.id}><span className="badge badge-info mr-1.5">ACCEPTED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({j.assigned_to ?? '—'}, {fmtT(j.started_at ?? j.accepted_at)})</span></div>)}
+          {showFinished && finished.map(j => <div key={'c' + j.id}><span className="badge badge-ok mr-1.5">FINISHED</span><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link> {j.area} — {j.description} <span className="text-text-faint">({j.assigned_to ?? '—'}, {diffM(j.workflow === 'breakdown' ? j.raised_at : (j.started_at ?? j.accepted_at), j.completed_at)} min)</span></div>)}
         </div>
       ) : <div className="text-[12px] text-text-faint">Nothing recorded in this shift window.</div>}
     </div>
@@ -296,103 +372,38 @@ function Chip({ active, onClick, label, count }: { active: boolean; onClick: () 
 
 type CardRoles = { canManage: boolean; isTech: boolean; isQc: boolean; isRaiser: boolean }
 
-// Summary tiles for a set of cards (re-used by the personal raiser view and the
-// per-raiser tabs).
-function RaiserTiles({ cards }: { cards: JobCard[] }) {
-  const tiles = [
-    { label: 'Outstanding', value: cards.filter(j => j.status !== 'complete').length },
-    { label: 'Needs input', value: cards.filter(j => j.status === 'clarify' || j.status === 'verify').length },
-    { label: 'In progress', value: cards.filter(j => ['assigned', 'in_progress', 'qc_check'].includes(j.status)).length },
-    { label: 'Completed', value: cards.filter(j => j.status === 'complete').length },
-  ]
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {tiles.map(t => (
-        <div key={t.label} className="card p-3 text-center">
-          <div className="text-2xl font-semibold text-text tabular-nums">{t.value}</div>
-          <div className="text-[10px] text-text-muted uppercase tracking-wide mt-1">{t.label}</div>
-        </div>
-      ))}
-    </div>
-  )
-}
+// Reactive tile definitions — clicking a tile filters the card list below it.
+const TILE_DEFS: { key: string; label: string; test: (j: JobCard) => boolean }[] = [
+  { key: 'outstanding', label: 'Outstanding', test: j => j.status !== 'complete' && j.status !== 'cancelled' },
+  { key: 'needsinput', label: 'Needs input', test: j => j.status === 'clarify' || j.status === 'verify' },
+  { key: 'inprogress', label: 'In progress', test: j => ['assigned', 'in_progress', 'qc_check'].includes(j.status) },
+  { key: 'completed', label: 'Completed', test: j => j.status === 'complete' },
+]
+const tilePredicate = (key: string | null) => key ? (TILE_DEFS.find(d => d.key === key)?.test ?? (() => true)) : () => true
 
-// IT / maintenance-manager view: a tab per person who has raised job cards, plus
-// an "All" tab. Selecting a tab shows that raiser's summary tiles + their cards.
-function RaisersPanel({ jcs, cardRoles }: { jcs: JobCard[]; cardRoles: CardRoles }) {
-  const raisers = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const j of jcs) {
-      const r = (j.raised_by ?? '').trim()
-      if (r) counts.set(r, (counts.get(r) ?? 0) + 1)
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([name, count]) => ({ name, count }))
-  }, [jcs])
-
-  const [sel, setSel] = useState<string>('__all__')
-  const withRaiser = jcs.filter(j => (j.raised_by ?? '').trim())
-  const cards = (sel === '__all__' ? withRaiser : jcs.filter(j => (j.raised_by ?? '').trim() === sel))
-    .slice()
-    .sort((a, b) => b.raised_at.localeCompare(a.raised_at))
-
-  return (
-    <div className="card p-4 mb-6">
-      <div className="flex items-center gap-2 mb-3">
-        <Users size={16} className="text-text-muted" />
-        <h2 className="text-sm font-semibold text-text">By raiser</h2>
-        <span className="text-[11px] text-text-muted">{raisers.length} {raisers.length === 1 ? 'person' : 'people'}</span>
-      </div>
-
-      {raisers.length === 0 ? (
-        <div className="text-[12px] text-text-faint">No job cards have been raised yet.</div>
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-1.5 mb-4">
-            <button onClick={() => setSel('__all__')} className={SEG(sel === '__all__')}>
-              All <span className="opacity-70 tabular-nums">{withRaiser.length}</span>
-            </button>
-            {raisers.map(r => (
-              <button key={r.name} onClick={() => setSel(r.name)} className={SEG(sel === r.name)}>
-                {r.name} <span className="opacity-70 tabular-nums">{r.count}</span>
-              </button>
-            ))}
-          </div>
-          <RaiserTiles cards={cards} />
-          <div className="stagger">{cards.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
-        </>
-      )}
-    </div>
-  )
-}
-
-function RaiserView({ actor, jcs, cardRoles, canSeeAll }: { actor: string; jcs: JobCard[]; cardRoles: CardRoles; canSeeAll: boolean }) {
-  // IT / maintenance manager browse everyone via the per-raiser tabs.
-  if (canSeeAll) return <RaisersPanel jcs={jcs} cardRoles={cardRoles} />
-
-  const mine = jcs.filter(j => j.raised_by === actor)
-  const tiles: { label: string; value: number }[] = [
-    { label: 'Outstanding', value: mine.filter(j => j.status !== 'complete').length },
-    { label: 'Needs my input', value: mine.filter(j => j.status === 'clarify' || j.status === 'verify').length },
-    { label: 'In progress', value: mine.filter(j => ['assigned', 'in_progress', 'qc_check'].includes(j.status)).length },
-    { label: 'Completed', value: mine.filter(j => j.status === 'complete').length },
-  ]
+// Personal raiser view: summary tiles (reactive filters) + a table of their cards.
+function RaiserView({ actor, jcs, cardRoles, passes }: { actor: string; jcs: JobCard[]; cardRoles: CardRoles; passes: (j: JobCard) => boolean }) {
+  const [tf, setTf] = useState<string | null>(null)
+  const mine = jcs.filter(j => j.raised_by === actor).filter(passes)
+  const shown = mine.filter(tilePredicate(tf)).sort(byUrgencyThenAge)
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        {tiles.map(t => (
-          <div key={t.label} className="card p-3 text-center">
-            <div className="text-2xl font-semibold text-text tabular-nums">{t.value}</div>
-            <div className="text-[10px] text-text-muted uppercase tracking-wide mt-1">{t.label}</div>
-          </div>
-        ))}
+        {TILE_DEFS.map(t => {
+          const on = tf === t.key
+          return (
+            <button key={t.key} onClick={() => setTf(on ? null : t.key)}
+              className={`card p-3 text-center transition ${on ? 'border-brand bg-brand/5 ring-1 ring-brand/30' : 'hover:border-text/30'}`}>
+              <div className="text-2xl font-semibold text-text tabular-nums">{mine.filter(t.test).length}</div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wide mt-1">{t.key === 'needsinput' ? 'Needs my input' : t.label}</div>
+            </button>
+          )
+        })}
       </div>
       <div className="card p-3 text-[12px] text-text-muted mb-3">
-        Your job cards, <strong className="text-text">{actor}</strong>. Actions appear when a card needs your clarification or final verification.
+        Your job cards, <strong className="text-text">{actor}</strong>. Tap a tile to filter; click a row to see detail. Actions appear when a card needs your clarification or final verification.
       </div>
-      <div className="stagger">{mine.map(j => <JobCardItem key={j.id} j={j} roles={cardRoles} />)}</div>
-      {mine.length === 0 && <div className="card p-4 text-center text-[12px] text-text-faint">No job cards raised by {actor}.</div>}
+      <JobCardTable cards={shown} roles={cardRoles} empty={`No job cards raised by ${actor}.`} />
     </div>
   )
 }

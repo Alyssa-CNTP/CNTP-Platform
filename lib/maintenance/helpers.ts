@@ -84,7 +84,11 @@ export const addDays = (d: string, n: number) => { const x = new Date(d); x.setD
 export type Priority = 'high' | 'medium' | 'low'
 
 export function priorityOf(j: JobCard): Priority {
-  if (j.status === 'complete') return 'low'
+  if (j.status === 'complete' || j.status === 'cancelled') return 'low'
+  // Manager-set urgency wins over the derived heuristic when present.
+  if (j.urgency === 'critical' || j.urgency === 'high') return 'high'
+  if (j.urgency === 'medium') return 'medium'
+  if (j.urgency === 'low') return 'low'
   if (j.workflow === 'breakdown') return 'high'
   if ((j.reopen_count ?? 0) > 0) return 'high'
   const age = diffDays(j.raised_at, new Date().toISOString())

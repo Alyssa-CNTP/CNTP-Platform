@@ -54,9 +54,10 @@ const BAG_ORANGE = '#d97706'
 const DEST_LABEL: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
 
 export function sievingTotals(d: SievingData) {
-  const totalIn  = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
-  const totalOut = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
+  const debagIn  = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
   const spillage = (d.spillage ?? []).reduce((s, r) => s + n(r.kg), 0)
+  const totalIn  = debagIn + spillage   // bucket elevator is part of total input
+  const totalOut = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
   return { totalIn, totalOut, spillage }
 }
 
@@ -64,7 +65,7 @@ const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 
 export function SievingCapture({
-  assignment, variantWord, gradeLetter = 'A', locked, value, onChange, genSerial,
+  assignment, variantWord, gradeLetter = 'A', locked, value, onChange, genSerial, operatorId,
 }: {
   assignment: ShiftAssignment
   variantWord: string
@@ -73,6 +74,7 @@ export function SievingCapture({
   value: SievingData
   onChange: (d: SievingData) => void
   genSerial: () => string
+  operatorId?: string | null
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
@@ -146,7 +148,7 @@ export function SievingCapture({
       // Event tracking — log the bagging-out once, when the bag is created.
       await getDb().schema('production').from('scan_events').insert({
         serial_number: serial, action: 'bagging_out', section_id: 'sieving',
-        weight_kg: n(p.weight),
+        weight_kg: n(p.weight), operator_id: operatorId ?? null,
       } as any)
     } catch { /* session save retries */ }
 

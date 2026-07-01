@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
-import { resolveOnDutyTechnician } from '@/lib/maintenance/roster'
+import { resolveOnDutyTechnician, listOnDutyTechnicians } from '@/lib/maintenance/roster'
 import { notify } from '@/lib/notifications'
 import { resolveRecipients, getMaintenanceManagerIds } from '@/lib/notifications/recipients'
 
@@ -27,7 +27,24 @@ export async function POST(req: NextRequest) {
 
     const db = await getSessionClient()
     const isBd = workflow === 'breakdown'
-    const duty = isBd ? await resolveOnDutyTechnician(db) : null
+    // Route a breakdown to the on-duty technician who is NOT already busy. Falls
+    // back to the most-recent shift (resolveOnDutyTechnician) when no one is free
+    // or only one tech is on duty.
+    let duty = isBd ? await resolveOnDutyTechnician(db) : null
+    if (isBd) {
+      // On-duty techs come from the Operations roster (single source); pick the
+      // one carrying the least active load.
+      const onDuty = await listOnDutyTechnicians(db)
+      if (onDuty.length) {
+        const { data: openCards } = await db.schema('maintenance' as any).from('job_cards')
+          .select('assigned_to, status, paused').in('status', ['assigned', 'in_progress'])
+        const load = (name: string) => (openCards ?? []).filter((c: any) => c.assigned_to === name && !(c.status === 'in_progress' && c.paused)).length
+        const ranked = onDuty
+          .map(r => ({ userId: r.userId, name: r.name, load: load(r.name) }))
+          .sort((a, b) => a.load - b.load)
+        if (ranked[0]) duty = { userId: ranked[0].userId, name: ranked[0].name }
+      }
+    }
 
     const row: any = {
       workflow, area: b.area, machine: b.machine || null,

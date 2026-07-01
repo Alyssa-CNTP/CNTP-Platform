@@ -16,7 +16,10 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { checkOutlier } from '@/lib/utils/outliers'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
+import { useQcNames } from '@/lib/hooks/useQcNames'
+import QCNameField from '@/components/shared/QCNameField'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -100,6 +103,26 @@ function computeViolations(b: any, specJson: any): string[] {
     if (sp.max != null && pct > sp.max) violations.push(`${frac} ${parseFloat(pct).toFixed(1)}% > ${sp.max}%`)
   })
   return violations
+}
+
+// Normalises a batch number for duplicate comparison — case, whitespace and
+// hyphen/underscore variants (e.g. "GS-0098" / "GS 0098" / "GS_0098") all
+// collapse to the same key, so a duplicate can't slip through as "different".
+function normBatch(b: string | null | undefined) {
+  return (b ?? '').trim().toLowerCase().replace(/_/g, '-').replace(/\s*-\s*/g, '-')
+}
+
+// Fetches every row of a table, paginating past PostgREST's 1000-row cap so
+// duplicate-batch checks and history views always see the full data set.
+async function fetchAllRows(db: any, table: string, build: (q: any) => any): Promise<any[]> {
+  let all: any[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build(db.schema('qms').from(table).select('*')).range(from, from + 999)
+    if (error) break
+    all = all.concat(data || [])
+    if (!data || data.length < 1000) break
+  }
+  return all
 }
 
 function sortSamples(samples: any[]) {
@@ -223,6 +246,7 @@ function SieveTable({ grams, pcts, focusedSieve, setFocusedSieve, specJson, erro
 
 function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: (f: any) => void; onClose: () => void }) {
   const today = new Date().toISOString().split('T')[0]
+  const qcNames = useQcNames()
 
   const [form, setForm] = useState<{
     batch_number: string; qc_name: string; production_date: string;
@@ -292,8 +316,13 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
             {([['Batch Number *','batch_number','text'],['Quality Controller *','qc_name','text'],['Production Date *','production_date','date']] as const).map(([label, key, type]) => (
               <div key={key}>
                 <label className={`${lbl} ${fieldErr(label.replace(' *',''))?'text-err':''}`}>{label}</label>
-                <input type={type} value={(form as any)[key]} onChange={e => set(key, e.target.value)}
-                  className={`${inp} w-full ${fieldErr(label.replace(' *',''))?'border-err/40':''}`} />
+                {key === 'qc_name' ? (
+                  <QCNameField value={form.qc_name} onChange={v => set('qc_name', v)} names={qcNames}
+                    className={`${inp} w-full ${fieldErr('Quality Controller')?'border-err/40':''}`} />
+                ) : (
+                  <input type={type} value={(form as any)[key]} onChange={e => set(key, e.target.value)}
+                    className={`${inp} w-full ${fieldErr(label.replace(' *',''))?'border-err/40':''}`} />
+                )}
               </div>
             ))}
             <div className="col-span-2">
@@ -378,6 +407,7 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
 // ─── GranuleAddSampleModal ────────────────────────────────────────────────────
 
 function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f: any) => void; onClose: () => void }) {
+  const qcNames = useQcNames()
   const prevSamples  = run.samples || []
   const lastSample   = prevSamples.length > 0 ? prevSamples[prevSamples.length - 1] : null
   const now          = new Date()
@@ -398,9 +428,27 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
   const [focusedSieve, setFocusedSieve] = useState(GRANULE_SIEVES[0].key)
   const [errors, setErrors]             = useState<string[]>([])
   const [warnings, setWarnings]         = useState<string[]>([])
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   const isAfterShift = (() => { const [hh] = (form.sample_time || '').split(':').map(Number); return !isNaN(hh) && hh >= 16 })()
   const serialPrefix = buildSerialPrefix(form.sample_date)
+
+  // ── Variation / outlier detection vs the other samples in this run ──
+  // Flags moisture/BD/temp only when this run already has real spread AND
+  // the new value sits >2.5 std away — same convention as pasteuriser.
+  const outlierWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const hist = prevSamples.map((s: any) => parseFloat(s[key])).filter((v: number) => !isNaN(v))
+      const result = checkOutlier(n, hist, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from run avg ${result.mean.toFixed(1)}${unit}`)
+    }
+    checkField('moisture', 'Moisture', form.moisture, 0.3, '%')
+    checkField('bulk_density', 'Bulk Density', form.bulk_density, 5, '')
+    checkField('dryer_temp', 'Dryer Temp', form.dryer_temp, 1.0, '°C')
+    return warns
+  })()
 
   const set = (k: string, v: any) => {
     setForm(f => {
@@ -497,6 +545,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
 
   function handleSave() {
     if (!validate()) return
+    if (outlierWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const effectiveQcName = isAfterShift && form.qc_name.trim() ? form.qc_name : run.qc_name
     onSave({ ...form, qc_name: effectiveQcName, run_id: run.id, spec_json: run.spec_json })
   }
@@ -530,11 +579,25 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
           {errors.length > 0 && <div className="px-4 py-2 bg-err/8 border border-err/20 rounded-xl text-[11px] text-err">⚠ {errors.join(' · ')}</div>}
           {warnings.length > 0 && <div className="px-4 py-2 bg-warn/8 border border-warn/30 rounded-xl text-[11px] text-warn">⚠ {warnings.join(' · ')}</div>}
 
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
+          {outlierWarnings.length > 0 && (
+            <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
+              <div className="font-bold text-[12px] text-warn mb-1">⚠ Unusual variation — please double-check before saving</div>
+              <ul className="list-disc pl-5 space-y-0.5 mb-2">
+                {outlierWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
+              </ul>
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
+                <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
+            </div>
+          )}
+
           {/* After-shift QC */}
           {isAfterShift && (
             <div className="flex items-center gap-3 px-4 py-2.5 bg-warn/8 border border-warn/30 rounded-xl">
               <span className="text-[11px] font-bold text-warn whitespace-nowrap">🌙 After 16:00 — Night Shift QC Required</span>
-              <input value={form.qc_name} onChange={e => set('qc_name', e.target.value)}
+              <QCNameField value={form.qc_name} onChange={v => set('qc_name', v)} names={qcNames}
                 placeholder="Night shift QC name…"
                 className={`${inp} flex-1 ${errors.some(e => e.startsWith('QC Name')) ? 'border-err/40' : 'border-warn/40'}`} />
             </div>
@@ -685,7 +748,8 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={handleSave} className="px-6 py-2 rounded-xl text-white text-[12px] font-bold" style={{ background: '#166534' }}>💾 Save Sample</button>
+            <button onClick={handleSave} disabled={outlierWarnings.length > 0 && !confirmAnomaly}
+              className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#166534' }}>💾 Save Sample</button>
           </div>
         </div>
       </div>
@@ -709,10 +773,27 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
   })
   const [saving, setSaving]  = useState(false)
   const [errors, setErrors]  = useState<string[]>([])
+  const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
   const totalG = GRANULE_SIEVES.reduce((s, f) => s + (parseFloat(grams[f.key]) || 0), 0)
   const pcts   = Object.fromEntries(GRANULE_SIEVES.map(f => { const g = parseFloat(grams[f.key]) || 0; return [f.key, totalG > 0 ? Math.round((g / totalG) * 1000) / 10 : 0] }))
+
+  // ── Variation / outlier detection vs the other samples in this run ──
+  const otherSamples = (run.samples || []).filter((s: any) => s.id !== sample.id)
+  const outlierWarnings: string[] = (() => {
+    const warns: string[] = []
+    const checkField = (key: string, label: string, cur: any, stdFloor: number, unit = '') => {
+      const n = parseFloat(cur); if (isNaN(n)) return
+      const hist = otherSamples.map((s: any) => parseFloat(s[key])).filter((v: number) => !isNaN(v))
+      const result = checkOutlier(n, hist, stdFloor)
+      if (result?.flagged) warns.push(`${label}: ${n}${unit} far from run avg ${result.mean.toFixed(1)}${unit}`)
+    }
+    checkField('moisture', 'Moisture', form.moisture, 0.3, '%')
+    checkField('bulk_density', 'Bulk Density', form.bulk_density, 5, '')
+    checkField('dryer_temp', 'Dryer Temp', form.dryer_temp, 1.0, '°C')
+    return warns
+  })()
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -749,6 +830,7 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
 
   async function handleSave() {
     if (!validate()) return
+    if (outlierWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     setSaving(true)
     await onSave(sample.id, { ...form, sieve_g: form.sieving_done ? grams : {}, sieve_pct: form.sieving_done ? pcts : {}, run_id: sample.run_id, spec_json: sp })
     setSaving(false)
@@ -777,6 +859,21 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
         </div>
         <div className="p-5 space-y-4">
           {errors.length > 0 && <div className="px-4 py-2 bg-err/8 border border-err/20 rounded-xl text-[11px] text-err">⚠ Missing: {errors.join(' · ')}</div>}
+
+          {/* Variation / outlier warnings — require explicit confirmation before saving */}
+          {outlierWarnings.length > 0 && (
+            <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
+              <div className="font-bold text-[12px] text-warn mb-1">⚠ Unusual variation — please double-check before saving</div>
+              <ul className="list-disc pl-5 space-y-0.5 mb-2">
+                {outlierWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
+              </ul>
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
+                <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
+                Yes, these values are correct
+              </label>
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-3">
             {([['Date *','sample_date','date'],['Time *','sample_time','text'],['Dryer Number *','dryer_number','text'],['Bulk Bag Serial *','bulk_bag_serial','text'],['Moisture (%) *','moisture','number'],['Bulk Density *','bulk_density','number'],['Dryer Temp (°C) *','dryer_temp','number']] as const).map(([label, key, type]) => (
               <div key={key}>
@@ -831,7 +928,8 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
           </div>
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={handleSave} disabled={saving} className="px-6 py-2 rounded-xl text-white text-[12px] font-bold" style={{ background: '#1d4ed8' }}>{saving ? 'Saving…' : '✓ Save Changes'}</button>
+            <button onClick={handleSave} disabled={saving || (outlierWarnings.length > 0 && !confirmAnomaly)}
+              className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#1d4ed8' }}>{saving ? 'Saving…' : '✓ Save Changes'}</button>
           </div>
         </div>
       </div>
@@ -1199,16 +1297,19 @@ interface RunCardProps {
   onAddSample: (r: any) => void
   onAddTasting: (r: any, sid: number | null) => void
   onDelete: (id: number) => void
-  onFinalise: (id: number, status: string) => void
+  onFinalise: (id: number, status: string, reason?: string) => void
   onUpdateSpec: (id: number, spec: any) => void
   onRecheckSample: (id: number, f: any) => void
   onEditSample: (id: number, f: any) => void
   onCommentSample: (id: number, f: any) => void
   onEditTasting: (id: number, f: any) => void
   onUpdateBatch: (id: number, bn: string) => void
+  onAllocate: (id: number) => void
+  onRecall: (id: number) => void
+  canApprove: boolean
 }
 
-function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onCommentSample, onEditTasting, onUpdateBatch }: RunCardProps) {
+function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
   const [expanded, setExpanded]         = useState(true)
   const [editingSpec, setEditingSpec]   = useState(false)
   const [editingSample, setEditingSample] = useState<any>(null)
@@ -1269,13 +1370,39 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
           <button onClick={() => onAddTasting(run, null)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">🍵 Tasting</button>
-          <button
-            onClick={() => { if (noTastings) { alert('Cannot finalise: at least one tasting record is required before finalising a run.'); return } onFinalise(run.id, 'Pass') }}
-            className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer"
-            style={{ border: noTastings ? '1px solid #d1d5db' : '1px solid #166534', background: noTastings ? '#f3f4f6' : '#f0fdf4', color: noTastings ? '#9ca3af' : '#166534', cursor: noTastings ? 'not-allowed' : 'pointer' }}
-            title={noTastings ? 'Add at least one tasting before finalising' : 'Mark as complete and move to History'}>
-            ✓ Finalise{noTastings ? ' 🍵?' : ''}
-          </button>
+          {run.lm_status === 'awaiting_approval' ? (
+            <>
+              <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold border-2 border-warn/40 bg-warn/10 text-warn">
+                ⏳ Awaiting Lab Manager{run.allocated_by ? ` · ${run.allocated_by}` : ''}
+              </span>
+              {canApprove ? (
+                (['Pass', 'Fail', 'Concession'] as const).map(st => (
+                  <button key={st}
+                    onClick={() => {
+                      if (st === 'Pass') { onFinalise(run.id, 'Pass'); return }
+                      const reason = prompt(`Reason for "${st}" (required):`, '')
+                      if (reason === null) return
+                      if (!reason.trim()) { alert('A reason is required'); return }
+                      onFinalise(run.id, st, reason.trim())
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border-2"
+                    style={{ borderColor: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706', background: st === 'Pass' ? '#f0fdf4' : st === 'Fail' ? '#fef2f2' : '#fffbeb', color: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706' }}>
+                    {st}
+                  </button>
+                ))
+              ) : (
+                <button onClick={() => onRecall(run.id)} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold cursor-pointer">↩ Recall to QC</button>
+              )}
+            </>
+          ) : (
+            <button
+              onClick={() => { if (noTastings) { alert('Cannot allocate: at least one tasting record is required first.'); return } onAllocate(run.id) }}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer"
+              style={{ border: noTastings ? '1px solid #d1d5db' : '1px solid #1f4e79', background: noTastings ? '#f3f4f6' : '#1f4e79', color: noTastings ? '#9ca3af' : '#fff', cursor: noTastings ? 'not-allowed' : 'pointer' }}
+              title={noTastings ? 'Add at least one tasting before allocating' : 'Send to the Lab Manager for pass/fail approval'}>
+              📤 Allocate to Lab Manager{noTastings ? ' 🍵?' : ''}
+            </button>
+          )}
           <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer">⬇ Excel</button>
           {isAdmin && <button onClick={() => onDelete(run.id)} className="px-2 py-1.5 rounded-lg border-none bg-err/10 text-err text-[12px] cursor-pointer">🗑</button>}
         </div>
@@ -1327,7 +1454,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                   </tr>
                 </thead>
                 <tbody>
-                  {run.samples.map((s: any, i: number) => {
+                  {run.samples.slice().reverse().map((s: any, i: number) => {
                     const vios       = s.violations || []
                     const moistVio   = sp.moisture_max && parseFloat(s.moisture) > parseFloat(sp.moisture_max)
                     return (
@@ -1383,8 +1510,8 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                             </div>
                           </td>
                         </tr>
-                        {/* Inline tastings */}
-                        {(run.tastings || []).filter((t: any) => t.sample_id === s.id).map((t: any, ti: number) => (
+                        {/* Inline tastings — newest first */}
+                        {(run.tastings || []).filter((t: any) => t.sample_id === s.id).slice().reverse().map((t: any, ti: number) => (
                           <GranuleInlineTastingRow key={t.id} tasting={t} colCount={colCount} rowBg={ti % 2 === 0 ? '#fdf8f5' : '#faf5f0'} onSave={onEditTasting} />
                         ))}
                         {/* Add tasting */}
@@ -1849,8 +1976,10 @@ function GranuleSpecsTab({ isAdmin }: { isAdmin: boolean }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function GranulePage() {
-  const { p } = useAuth()
-  const isAdmin = p('can_delete_runs')
+  const { p, session } = useAuth()
+  const isAdmin    = p('can_delete_runs')
+  const canApprove = p('can_approve_runs')
+  const whoAmI     = () => session?.user?.email?.split('@')[0] || 'unknown'
   const db           = getDb()
 
   const [tab, setTab]                           = useState<'dashboard'|'history'|'specs'>('dashboard')
@@ -1860,22 +1989,20 @@ export default function GranulePage() {
   const [showNewRun, setShowNewRun]             = useState(false)
   const [sampleTarget, setSampleTarget]         = useState<any>(null)
   const [tastingTarget, setTastingTarget]       = useState<any>(null) // { run, sampleId }
+  const [selectedRunId, setSelectedRunId]       = useState<number | null>(null)
 
   // ── Load runs, samples, tastings, and specs in parallel ──
+  // Paginated — the duplicate-batch-number check depends on ALL history being
+  // loaded, not just the newest page (PostgREST caps a single request at 1000 rows).
   const load = useCallback(async () => {
     setLoading(true)
     // qms is the single source (legacy public granule_* consolidated 2026-06-24)
-    const [runsRes, samplesRes, tastingsRes, specsRes] = await Promise.all([
-      db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }),
-      db.schema('qms').from('granule_samples').select('*').order('sample_date', { ascending: true, nullsFirst: false }).order('sample_time', { ascending: true, nullsFirst: false }),
-      db.schema('qms').from('granule_tastings').select('*').order('created_at', { ascending: true }),
-      db.schema('qms').from('granule_specs').select('*').order('type_grade').order('customer'),
+    const [allRuns, allSamples, allTastings, allSpecs] = await Promise.all([
+      fetchAllRows(db, 'granule_runs', q => q.order('created_at', { ascending: false })),
+      fetchAllRows(db, 'granule_samples', q => q.order('sample_date', { ascending: true, nullsFirst: false }).order('sample_time', { ascending: true, nullsFirst: false })),
+      fetchAllRows(db, 'granule_tastings', q => q.order('created_at', { ascending: true })),
+      fetchAllRows(db, 'granule_specs', q => q.order('type_grade').order('customer')),
     ])
-
-    const allRuns     = runsRes.data || []
-    const allSamples  = samplesRes.data || []
-    const allTastings = tastingsRes.data || []
-    const allSpecs    = specsRes.data || []
 
     const byRun: Record<number, any[]>     = {}
     const tastByRun: Record<number, any[]> = {}
@@ -1895,7 +2022,7 @@ export default function GranulePage() {
   // ── CRUD handlers — all mirror Express server logic ──
 
   async function handleCreateRun(form: any) {
-    const dup = runs.find((r: any) => r.batch_number.trim().toLowerCase() === form.batch_number.trim().toLowerCase())
+    const dup = runs.find((r: any) => normBatch(r.batch_number) === normBatch(form.batch_number))
     if (dup) {
       if (!dup.final_status) {
         alert(`⚠ A run for batch "${form.batch_number}" is already open.\n\nPlease add a sample to the existing run instead of starting a new one.`)
@@ -1957,10 +2084,30 @@ export default function GranulePage() {
     setRuns(prev => prev.filter(r => r.id !== id))
   }
 
-  async function handleFinaliseRun(id: number, status: string) {
-    const { error } = await db.schema('qms').from('granule_runs').update({ final_status: status, overall_status: status }).eq('id', id)
+  // QC allocates a captured run to the Lab Manager for pass/fail approval.
+  async function handleAllocateRun(id: number) {
+    const run = runs.find(r => r.id === id)
+    if (!run || (run.samples || []).length === 0) { alert('Add at least one sample before allocating to the Lab Manager.'); return }
+    if (!confirm('Allocate this run to the Lab Manager for pass/fail approval?')) return
+    const who = whoAmI(), at = new Date().toISOString()
+    const { error } = await db.schema('qms').from('granule_runs').update({ lm_status: 'awaiting_approval', allocated_by: who, allocated_at: at }).eq('id', id)
+    if (error) { alert(error.message); return }
+    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, lm_status: 'awaiting_approval', allocated_by: who, allocated_at: at }))
+  }
+
+  // QC pulls a run back from the Lab Manager queue while unapproved.
+  async function handleRecallRun(id: number) {
+    const { error } = await db.schema('qms').from('granule_runs').update({ lm_status: null, allocated_by: null, allocated_at: null }).eq('id', id)
+    if (error) { alert(error.message); return }
+    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, lm_status: null, allocated_by: null, allocated_at: null }))
+  }
+
+  // Lab Manager / Quality Manager / IT approves the allocated run.
+  async function handleFinaliseRun(id: number, status: string, reason = '') {
+    const who = whoAmI()
+    const { error } = await db.schema('qms').from('granule_runs').update({ final_status: status, overall_status: status, approved_by: who, final_reason: reason || null, lm_status: 'complete' }).eq('id', id)
     if (error) { alert('Failed to finalise run'); return }
-    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, final_status: status, overall_status: status }))
+    setRuns(prev => prev.map(r => r.id !== id ? r : { ...r, final_status: status, overall_status: status, approved_by: who, final_reason: reason || null, lm_status: 'complete' }))
   }
 
   async function handleRecheckSample(sampleId: number, recheckData: any) {
@@ -2028,6 +2175,16 @@ export default function GranulePage() {
 
   const currentRuns   = runs.filter(r => !r.final_status)
   const finalisedRuns = runs.filter(r => !!r.final_status)
+  const selectedRun   = currentRuns.find(r => r.id === selectedRunId) || currentRuns[0] || null
+
+  // Warn the QC if there are already open runs before starting another.
+  function openNewRun() {
+    if (currentRuns.length > 0 &&
+        !confirm(`⚠ There ${currentRuns.length === 1 ? 'is' : 'are'} already ${currentRuns.length} open granule run${currentRuns.length !== 1 ? 's' : ''}.\n\nAdd a sample to an existing run instead of starting a new one?\n\nClick OK to start a NEW run anyway, or Cancel to go back.`)) {
+      return
+    }
+    setShowNewRun(true)
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -2059,9 +2216,28 @@ export default function GranulePage() {
                 </div>
               </div>
             )}
-            <div className="flex items-center gap-3 flex-wrap">
-              <button onClick={() => setShowNewRun(true)} title="Start when a new batch has been completed or begun" className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
-              <span className="font-bold text-[12px]">Active Runs · {currentRuns.length} run{currentRuns.length !== 1 ? 's' : ''}</span>
+
+            {/* Batch selector — blocks (click to open), matching the pasteuriser layout */}
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={openNewRun} title="Start when a new batch has been completed or begun"
+                className="px-4 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
+              {currentRuns.length === 0 && (
+                <span className="text-[12px] text-text-muted italic">No active runs — click "New Run" to start</span>
+              )}
+              {currentRuns.map(run => {
+                const sel = selectedRun?.id === run.id
+                const awaiting = run.lm_status === 'awaiting_approval'
+                return (
+                  <button key={run.id} onClick={() => setSelectedRunId(run.id)}
+                    className={`px-3 py-1.5 rounded-xl border-2 text-[12px] font-semibold transition-colors ${sel ? 'border-brand bg-info/5 text-brand' : 'border-surface-rule bg-surface-card text-text-muted'}`}>
+                    {run.batch_number}
+                    <span className="ml-1 text-[9px] opacity-60">({(run.samples || []).length})</span>
+                    <span className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-full font-bold ${awaiting ? 'bg-warn/15 text-warn' : 'bg-info/10 text-info'}`}>
+                      {awaiting ? '⏳ Awaiting LM' : '🔶 In Progress'}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
 
             {currentRuns.length === 0 ? (
@@ -2069,23 +2245,24 @@ export default function GranulePage() {
                 <div className="text-[28px] mb-2">🔶</div>
                 <div className="font-bold text-[13px] mb-1">No active runs</div>
                 <div className="text-[11px] text-text-muted mb-4">Click "New Run" to start a granule production run</div>
-                <button onClick={() => setShowNewRun(true)} className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
+                <button onClick={openNewRun} className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">+ New Run</button>
               </div>
-            ) : (
-              currentRuns.map(run => (
-                <GranuleRunCard key={run.id} run={run} isAdmin={isAdmin}
-                  onAddSample={r => setSampleTarget(r)}
-                  onAddTasting={(r, sid) => setTastingTarget({ run: r, sampleId: sid })}
-                  onDelete={handleDeleteRun}
-                  onFinalise={handleFinaliseRun}
-                  onUpdateSpec={handleUpdateSpec}
-                  onRecheckSample={handleRecheckSample}
-                  onEditSample={handleEditSample}
-                  onCommentSample={handleCommentSample}
-                  onEditTasting={handleEditTasting}
-                  onUpdateBatch={handleUpdateBatch} />
-              ))
-            )}
+            ) : selectedRun ? (
+              <GranuleRunCard key={selectedRun.id} run={selectedRun} isAdmin={isAdmin}
+                onAddSample={r => setSampleTarget(r)}
+                onAddTasting={(r, sid) => setTastingTarget({ run: r, sampleId: sid })}
+                onDelete={handleDeleteRun}
+                onFinalise={handleFinaliseRun}
+                onUpdateSpec={handleUpdateSpec}
+                onRecheckSample={handleRecheckSample}
+                onEditSample={handleEditSample}
+                onCommentSample={handleCommentSample}
+                onEditTasting={handleEditTasting}
+                onUpdateBatch={handleUpdateBatch}
+                onAllocate={handleAllocateRun}
+                onRecall={handleRecallRun}
+                canApprove={canApprove} />
+            ) : null}
           </div>
         ) : tab === 'history' ? (
           <GranuleHistoryTab runs={runs} onReopen={handleReopenRun} onUpdateBatch={handleUpdateBatch} />
