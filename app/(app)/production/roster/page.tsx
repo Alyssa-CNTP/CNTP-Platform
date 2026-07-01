@@ -385,7 +385,7 @@ export default function RosterPage() {
             >
               {periods.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.status === 'published' ? '✓ ' : ''}{p.name} · {fmtRange(p)}
+                  {p.status === 'published' ? '✓ ' : ''}{p.name}{p.name !== fmtRange(p) ? ` · ${fmtRange(p)}` : ''}
                 </option>
               ))}
             </select>
