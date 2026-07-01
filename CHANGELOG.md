@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Gustav (Leaf Shade: fix container crash-loop — missing libxcb1)
+
+**Files changed:**
+- `ml/leafshade/Dockerfile`
+
+**Changes:**
+- **Bug fix:** after pinning `opencv-python-headless==4.13.0.90` to match the desktop reference, the container crash-looped on startup with `ImportError: libxcb.so.1: cannot open shared object file`. Even the "headless" opencv wheel bundles its own FFmpeg (`libavdevice`) for video I/O, which links against `libxcb` for X11 screen-grab support it never actually uses here — but the base `python:3.11-slim` image doesn't ship that library.
+- Added `libxcb1` to the Dockerfile's apt install list. Its own package dependencies (`libxau6` → `libxdmcp6` → `libbsd0` → `libmd0`) are pulled in automatically by apt, so one line covers the whole chain. Verified against the actual `ldd` output of the pinned opencv wheel — the wheel bundles everything else it needs (ffmpeg codecs, libpng, openblas, etc. are all shipped inside `opencv_python_headless.libs/`); `libxcb1` was the only missing system dependency.
+- **Practically:** the service was never actually serving requests since the version pins landed — it was either running the old pre-fix image (wrong `half_size=True` predictions) or crash-looping (503 "not running"). This should be the last piece; requires a VPS rebuild: `cd ml/leafshade && docker compose up -d --build`.
+
 ## 2026-07-01 — Alyssa (maintenance planner: remove add-slot/week calendar/duty-roster, add shift roster card)
 
 **Files changed:**
