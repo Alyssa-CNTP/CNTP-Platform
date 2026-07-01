@@ -549,6 +549,11 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
     ]
     negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
     if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
+    // Hard ceiling — moisture above 10% is implausible for granules and is
+    // almost always a typo. Cannot be bypassed.
+    ;[[form.moisture, 'Moisture'], [form.dryer2_moisture, 'Dryer 2 Moisture']].forEach(([v, label]) => {
+      const n = parseFloat(v as any); if (!isNaN(n) && n > 10) errs.push(`${label} ${n}% exceeds the 10% ceiling — check for a typo`)
+    })
     setErrors(errs); setWarnings(warns)
     return errs.length === 0
   }
@@ -838,6 +843,10 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
     const negFields: [any, string][] = [[form.moisture, 'Moisture'], [form.bulk_density, 'Bulk Density'], [form.dryer_temp, 'Dryer Temperature']]
     negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
     if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
+    // Hard ceiling — moisture above 10% is implausible for granules and is
+    // almost always a typo. Cannot be bypassed.
+    const moist = parseFloat(form.moisture as any)
+    if (!isNaN(moist) && moist > 10) errs.push(`Moisture ${moist}% exceeds the 10% ceiling — check for a typo`)
     setErrors(errs)
     return errs.length === 0
   }

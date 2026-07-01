@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Granule: hard moisture ceiling on samples)
+
+**Files changed:**
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Granule sample entry (add + edit, both dryers) now hard-blocks moisture readings above 10% — a value that high is implausible for granules and almost always a typo. Cannot be bypassed, same as the sanity-bound approach added for pasteuriser.
+
+---
+
 ## 2026-07-02 — Gustav (Pasteuriser required fields + typo guard; granule sample delete; final-product upload routing fix)
 
 **Files changed:**
