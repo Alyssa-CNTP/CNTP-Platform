@@ -92,6 +92,13 @@ export type PermissionKey =
   | 'can_allocate_jobs'
   | 'can_qc_jobs'
   | 'can_verify_jobs'
+  // Staff & Competency
+  | 'can_view_staff'           // directory + profiles + matrix (read-only)
+  | 'can_edit_staff_profiles'  // edit profile fields, leave, skills
+  | 'can_manage_competencies'  // record / assess employee × SOP competencies
+  | 'can_manage_sop_catalog'   // add / edit / retire SOPs in the catalogue
+  | 'can_allocate_staff'       // Phase 2 — allocate staff & override competency warnings
+  | 'can_delete_staff'         // Delete staff records
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>
 
@@ -115,6 +122,8 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_assign_tickets', 'can_access_workspace',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
+  'can_view_staff','can_edit_staff_profiles','can_manage_competencies',
+  'can_manage_sop_catalog','can_allocate_staff','can_delete_staff',
 ]
 
 // ─── Departments ──────────────────────────────────────────────────────────────
@@ -227,6 +236,10 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
     can_approve_session: true, can_export_csv: true,
+    // Staff & Competency
+    can_view_staff: true, can_edit_staff_profiles: true,
+    can_manage_competencies: true, can_allocate_staff: true,
+    can_delete_staff: true,
   },
 
   warehouse_supervisor: {
@@ -246,6 +259,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_allocate_jobs: true, can_verify_jobs: true,
     can_raise_planned: true, can_raise_breakdown: true,
     can_assign_tickets: true,
+    // Staff & Competency (assesses maintenance WIs)
+    can_view_staff: true, can_manage_competencies: true,
   },
   maintenance_technician: {
     can_raise_planned: true,
@@ -280,6 +295,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_add_tastings: true, can_edit_tastings: true,
     can_add_sieving_runs: true,
     can_approve_runs: true, can_signoff_day: true,
+    // Staff & Competency (assesses lab staff against lab SOPs)
+    can_view_staff: true, can_manage_competencies: true,
   },
 
   // ── Quality — Quality Manager: Lab Manager + specs + deletes ───────────────
@@ -294,6 +311,15 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_add_tastings: true, can_edit_tastings: true,
     can_add_sieving_runs: true, can_delete_sieving_runs: true,
     can_approve_runs: true, can_signoff_day: true,
+    // Staff & Competency (FSSC owner — manages SOP catalogue + assesses)
+    can_view_staff: true, can_edit_staff_profiles: true,
+    can_manage_competencies: true, can_manage_sop_catalog: true,
+    can_delete_staff: true,
+  },
+
+  // ── Management — read-only across platform ─────────────────────────────────
+  management_default: {
+    can_view_staff: true,
   },
 
   // ── All other roles: zero defaults — toggle on per person ──────────────────
@@ -476,6 +502,18 @@ export const PERMISSION_GROUPS: {
       { key: 'can_allocate_jobs',   label: 'Allocate job cards to technicians' },
       { key: 'can_qc_jobs',         label: 'Perform post-maintenance QC checks' },
       { key: 'can_verify_jobs',     label: 'Verify completed work / bounce back' },
+    ],
+  },
+  {
+    group: 'Staff & Competency',
+    // No single department — visible across all roles (grayed if not applicable)
+    permissions: [
+      { key: 'can_view_staff',          label: 'View staff directory, profiles & competency matrix' },
+      { key: 'can_edit_staff_profiles', label: 'Edit staff profiles, leave & skills/certifications' },
+      { key: 'can_manage_competencies', label: 'Record, update & assess staff competencies against SOPs' },
+      { key: 'can_manage_sop_catalog',  label: 'Add, edit & retire SOPs in the catalogue' },
+      { key: 'can_allocate_staff',      label: 'Allocate staff to floor sections & override competency warnings (Phase 2)' },
+      { key: 'can_delete_staff',        label: 'Delete staff records' },
     ],
   },
 ]

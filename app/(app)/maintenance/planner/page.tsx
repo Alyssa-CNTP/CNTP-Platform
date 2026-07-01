@@ -9,7 +9,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  ChevronDown, ChevronRight, CalendarRange, Wrench, Users,
+  ChevronDown, ChevronRight, CalendarRange, Wrench, Users, KeyRound,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { useMaintenanceContext } from '../layout'
@@ -145,6 +145,14 @@ export default function PlannerPage() {
           </h1>
           <p className="text-sm text-text-muted mt-1">Maintenance team status and shift assignments.</p>
         </div>
+        {canManage && (
+          <Link
+            href="/maintenance/technicians"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-stone-200 text-text font-medium text-[13px] hover:bg-stone-50 transition-colors"
+          >
+            <KeyRound size={15} /> Technician PINs
+          </Link>
+        )}
       </div>
 
       {/* ── Next scheduled job (only non-redundant "next" info) ── */}

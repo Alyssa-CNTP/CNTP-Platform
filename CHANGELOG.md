@@ -5,6 +5,137 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Capture overview — hierarchical tables, cross-shift totals, spillage rename)
+
+**Files changed:**
+- `components/production/capture/CaptureOverview.tsx`
+- `components/production/capture/SievingCapture.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+
+**Changes:**
+- Debagging table restructured: rows grouped by lot/batch with expand/collapse, subtotal per lot, bucket elevator and machine spillage shown as separate named rows, total excl. spillage and total incl. spillage at bottom
+- Bagging table restructured: 3-level hierarchy (product → lot → individual bag) — tap product row to see lot breakdown with subtotals, tap lot row to see individual bags; product-level totals in each product row header
+- Spillage fields renamed: Spillage 1 → "Bucket elevator", Spillage 2 → "Machine spillage" in the capture debagging step
+- Production order (from Acumatica shift assignment) now shown at top of overview
+- Overview loads the other shift's session and combines it — same variant+grade+lot bags from morning and afternoon shift merge into shared totals
+- Mass balance now uses total incl. both spillage types as the "in" figure
+
+---
+
+## 2026-07-02 — Alyssa (Maintenance tech PIN login + unified roster shift highlight)
+
+**Files changed:**
+- `supabase/migrations/20260702_001_maintenance_tech_auth.sql` *(new)*
+- `lib/maintenance/tech-auth.ts` *(new)*
+- `app/api/maintenance/technicians/route.ts` *(new)*
+- `app/api/maintenance/technicians/manage/route.ts` *(new)*
+- `app/maintenance-login/page.tsx` *(new)*
+- `app/(app)/maintenance/technicians/page.tsx` *(new)*
+- `app/login/page.tsx`
+- `app/floor/page.tsx`
+- `components/layout/Sidebar.tsx`
+
+**Changes:**
+- Maintenance technicians can now sign in with a 4-digit PIN — mirrors the floor-operator system. New `maintenance.tech_auth` table stores a synthetic Supabase email per tech; PIN derives a deterministic password (`mnt_{pin}_{email}`) that never leaves the server.
+- New `/maintenance-login` page: name picker + numeric PIN pad. Techs on the current shift (queried from `production.roster_entries`) are highlighted at the top with an "On shift" badge. After sign-in → `/maintenance/job-cards` (already filtered to assigned cards when role = `maintenance_technician`).
+- New `/maintenance/technicians` manager page: shows all maintenance techs grouped by on-shift / off-shift. Maintenance manager can set or reset any tech's PIN (4-digit input, show/hide toggle), toggle active status. Indicates whether a PIN has been provisioned yet.
+- New API routes: `GET /api/maintenance/technicians` (public, for login picker), `POST` (provision first-time), `PATCH` (reset PIN or toggle active), `GET /api/maintenance/technicians/manage` (manager-only, enriched with `has_pin` + `on_shift`).
+- Login page redesigned: Microsoft button stays at top; two role cards below replace the old footer link — **Maintenance Tech** (orange icon) and **Floor Operator** (green icon), each with name + "Sign in with your PIN" description.
+- Floor login updated to use the unified roster: queries `roster_entries` for today's shift, sorts on-shift operators to the top with a badge. Same smart behaviour now across both login pages.
+- Sidebar: "Technician PINs" nav item added to Maintenance group, visible to Management + `can_manage_users` only.
+
+---
+
+## 2026-07-02 — Gustav (Sieving: all meshes required for In-Process; no negative values anywhere)
+
+**Files changed:**
+- `lib/utils/validation.ts` (new)
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Sieving: an In-Process run now requires every mesh fraction to be filled in before it can be saved (previously only one was required) — applies to both new-run entry and inline row edits.
+- Sieving, pasteuriser, granule: no captured value can be saved as negative — grams, sieve %, moisture, bulk density, dryer/hourly temperature, weight checks, needle count, leaf shade, and customer spec thresholds. Enforced both as an HTML `min=0` hint and as a hard save-time check (`lib/utils/validation.ts`), so it can't be bypassed by pasting or typing a leading minus.
+
+---
+
+## 2026-07-02 — Alyssa (Skills Matrix redesign + Staff Directory by department)
+
+**Files changed:**
+- `app/(app)/production/staff/matrix/page.tsx`
+- `app/(app)/production/staff/page.tsx`
+- `components/production/WorkforceTabs.tsx`
+- `lib/auth/permissions.ts`
+- `lib/auth/permission-registry.ts`
+
+**Changes:**
+- Skills Matrix completely redesigned — 3 operational views replace the raw Excel-style grid: **By Person** (dept-grouped collapsibles, competency progress bar, floor-section qualification badges), **By Section** (6 floor section cards each showing qualified/in-training/not-started counts + clickable name chips), **SOP Gaps** (SOPs sorted worst coverage first, coverage bars, <30% flagged red). Summary stats always visible at top.
+- Staff Directory redesigned: grouped by department (accordion, all expanded by default), names alphabetical within each dept. Rows show position, employee code, competency chip, leave badge. Full add/edit/delete from here — inline delete confirmation (no modal). Edit modal extended with employee_code, position, position_code, start_date fields.
+- New `can_delete_staff` permission key — defaults true for production_supervisor and quality_manager; wired into Users & Roles UI under Staff & Competency.
+- WorkforceTabs (Shift Roster page sub-nav): removed Staff Directory tab; replaced with "Staff & Skills →" cross-reference link.
+
+---
+
+## 2026-07-02 — Alyssa (Staff Profiles + Skills/Competency Matrix — Phase 1)
+
+**Files changed:**
+- `supabase/migrations/20260702_001_competency_matrix.sql` (new)
+- `lib/production/competency-config.ts` (new)
+- `lib/auth/permissions.ts`
+- `lib/auth/permission-registry.ts`
+- `components/layout/Sidebar.tsx`
+- `components/production/StaffTabs.tsx` (new)
+- `app/(app)/layout.tsx`
+- `app/(app)/production/staff/page.tsx`
+- `app/(app)/production/staff/[id]/page.tsx` (new)
+- `app/(app)/production/staff/matrix/page.tsx` (new)
+- `app/(app)/production/staff/sops/page.tsx` (new)
+- `app/api/staff/competencies/route.ts` (new)
+- `scripts/import-competency-matrix.cjs` (new)
+
+**Changes:**
+- New **Staff & Skills** page in the Operations sidebar group (own entry, not under Shift Roster).
+- 4 new DB tables: `production.sops`, `production.employee_competencies`, `production.competency_history` (FSSC audit trail), `production.role_required_sops` (Phase-2 allocation).
+- `production.employees` extended with profile columns: position, position_code, department_code, employee_code, start_date, years_of_service, email, photo_url.
+- Full staff profile page (`/production/staff/[id]`): header with avatar/codes/years, competency panel grouped by SOP area, inline edit modal per SOP, collapsible history feed.
+- Skills Matrix page (`/production/staff/matrix`): employees × SOPs grid coloured by status (COMP/TRN/TBA/NC/—), filter by department and SOP area.
+- SOP Catalogue page (`/production/staff/sops`): list of all SOPs grouped by area, add/edit gated by `can_manage_sop_catalog`.
+- 5 new permission keys wired into Users & Roles: `can_view_staff`, `can_edit_staff_profiles`, `can_manage_competencies`, `can_manage_sop_catalog`, `can_allocate_staff`.
+- API route `POST /api/staff/competencies` with server-side permission check, upsert, and dual audit trail (competency_history + axis.audit_log).
+- Import script (`scripts/import-competency-matrix.cjs`) reads `Copy of CNTP Employees.xlsx` and `SOP_Matrix_Final.xlsx`, matches names 4 ways, upserts employees/SOPs/competencies idempotently, prints end-of-run report.
+- **To activate:** run migration SQL in Supabase SQL editor, then `node scripts/import-competency-matrix.cjs` (with Excel files in `scripts/data/`).
+
+---
+
+## 2026-07-01 — Gustav (Lab Manager: no comment step needed on Pass)
+
+**Files changed:**
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Pass now finalises immediately with no comment modal — one click, no interruption.
+- Fail and Concession still open the comment modal and still require a comment, unchanged.
+
+---
+
+## 2026-07-01 — Gustav (Lab Manager: comment sent back to QC on duty)
+
+**Files changed:**
+- `components/shared/LmDecisionModal.tsx` (new)
+- `app/(app)/quality/lab-manager/page.tsx`
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Replaced the browser `prompt()` used to capture a Pass/Fail/Concession reason with a proper comment modal (`LmDecisionModal`), used consistently across the Lab Manager dashboard's Pending Approvals tab and the inline approve buttons on the pasteuriser and granule run pages.
+- The comment is now optional on Pass (previously no comment was possible) and still required on Fail/Concession, and is written back to the existing `final_reason` field (already present on both `qms.granule_runs` and pasteuriser's run data).
+- The comment now surfaces directly on the batch/run the QC on duty is looking at — a "💬 Lab Manager comment" banner on the pasteuriser batch header and the granule run card — instead of only being visible buried in the History tab.
+
+---
+
 ## 2026-07-01 — Alyssa (fix capture autofill — name-based operator fallback)
 
 **Files changed:**
@@ -161,6 +292,30 @@ Format: date · developer · files changed · description of code changes.
 - **Bug fix:** the web service decoded the CR3 with `half_size=True`, which halves resolution and skips demosaic interpolation, shifting the 30 colour features away from what the model was trained on → wrong leaf shade. Removed `half_size=True` so the RAW decode is full-resolution, matching the desktop training pipeline (Blackheath).
 - Pinned the Python deps to the desktop reference versions so the demosaic + feature extraction reproduce training values exactly: `rawpy==0.25.1` (was 0.27.0), `opencv-python-headless==4.13.0.90` (was 4.13.0.92), `numpy==2.2.6` (was 2.4.6). scikit-learn stays 1.7.2 and joblib 1.5.3 (already matched).
 - Requires a container rebuild on the VPS: `cd ml/leafshade && docker compose up -d --build`.
+
+---
+
+## 2026-07-01 — Alyssa (full staff directory sync from employee spreadsheet)
+
+**Files changed:**
+- `supabase/migrations/20260623_001_staff_directory.sql` (data only — no schema change)
+
+**Changes:**
+- Synced all 125 employees from the canonical CNTP Employees spreadsheet into `production.employees` on both staging and production DBs.
+- 48 new employees inserted (staging) / 47 (production); remaining updated with correct name, department, job title, and skill certifications inferred from the roster.
+- Fixed 21 name spelling inconsistencies in `roster_entries.person_name` to match the canonical spreadsheet (e.g. "Grant Alexandra" → "Grant Alexander", "Shuaib Davids" → "Shuaib Sentso", "Ezetu Siminga" → "Amoretta Louw", and 18 others).
+- Employees not in the spreadsheet (test operators, "Alyssa", "Cyril", etc.) were left untouched.
+
+---
+
+## 2026-07-01 — Alyssa (roster period selector date duplication fix)
+
+**Files changed:**
+- `app/(app)/production/roster/page.tsx`
+
+**Changes:**
+- Fixed period dropdown showing the date range twice (e.g. "29 Jun – 3 Jul · 29 Jun – 3 Jul 2026") when the period name already matches the formatted date range. Now only appends the range if the name differs.
+- Seeded July 2026 roster (4 weekly periods, 286 entries) into production DB.
 
 ---
 

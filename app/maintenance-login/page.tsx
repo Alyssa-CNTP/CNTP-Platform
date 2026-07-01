@@ -1,19 +1,23 @@
 'use client'
 
+// app/maintenance-login/page.tsx
+// PIN-based login for maintenance technicians. Names + on_shift status come
+// from /api/maintenance/technicians (server-side, admin bypasses RLS).
+// After sign-in → /maintenance/job-cards.
+
 import { useState, useEffect, useRef } from 'react'
-import Image from 'next/image'
 import { useRouter } from 'next/navigation'
-import { Loader2, Delete, ChevronLeft } from 'lucide-react'
+import { Loader2, Delete, ChevronLeft, Wrench } from 'lucide-react'
 import { getSupabaseClient } from '@/lib/supabase/client'
-import { deriveAuthPassword } from '@/lib/production/operator-auth'
+import { deriveMaintPassword } from '@/lib/maintenance/tech-auth'
 
-interface FloorOperator { id: string; display_name: string; email: string; section_ids: string[]; on_shift: boolean }
+interface Tech { user_id: string; display_name: string; email: string; on_shift: boolean }
 
-export default function FloorLoginPage() {
-  const router = useRouter()
-  const [operators, setOperators] = useState<FloorOperator[]>([])
+export default function MaintenanceLoginPage() {
+  const router  = useRouter()
+  const [techs,     setTechs]     = useState<Tech[]>([])
   const [loading,   setLoading]   = useState(true)
-  const [selected,  setSelected]  = useState<FloorOperator | null>(null)
+  const [selected,  setSelected]  = useState<Tech | null>(null)
   const [pin,       setPin]       = useState('')
   const [signingIn, setSigningIn] = useState(false)
   const [error,     setError]     = useState('')
@@ -21,34 +25,37 @@ export default function FloorLoginPage() {
 
   useEffect(() => {
     getSupabaseClient().auth.getSession().then(({ data }: any) => {
-      if (data.session && !redirected.current) { redirected.current = true; router.replace('/production/capture') }
+      if (data.session && !redirected.current) {
+        redirected.current = true
+        router.replace('/maintenance/job-cards')
+      }
     })
   }, [router])
 
   useEffect(() => {
-    fetch('/api/floor/operators')
+    fetch('/api/maintenance/technicians')
       .then(r => r.json())
-      .then(d => setOperators(Array.isArray(d) ? d : []))
-      .catch(() => setOperators([]))
+      .then(d => setTechs(Array.isArray(d) ? d : []))
+      .catch(() => setTechs([]))
       .finally(() => setLoading(false))
   }, [])
 
   // On-shift first, then alphabetical.
-  const sorted = [...operators].sort((a, b) => {
+  const sorted = [...techs].sort((a, b) => {
     if (a.on_shift !== b.on_shift) return a.on_shift ? -1 : 1
     return a.display_name.localeCompare(b.display_name)
   })
-  const anyOnShift = operators.some(o => o.on_shift)
+  const anyOnShift = techs.some(t => t.on_shift)
 
   async function signIn(p: string) {
     if (!selected || p.length !== 4) return
     setSigningIn(true); setError('')
     const { error } = await getSupabaseClient().auth.signInWithPassword({
       email:    selected.email,
-      password: deriveAuthPassword(p, selected.email),
+      password: deriveMaintPassword(p, selected.email),
     })
     if (error) { setError('Incorrect PIN — please try again'); setPin(''); setSigningIn(false); return }
-    router.replace('/production/capture')
+    router.replace('/maintenance/job-cards')
   }
 
   function pressKey(k: string) {
@@ -59,45 +66,54 @@ export default function FloorLoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-5" style={{ background: 'linear-gradient(150deg,#EDF2FB,#F0F7EE 50%,#FDF4F0)' }}>
+    <div className="min-h-screen flex flex-col items-center justify-center p-5"
+      style={{ background: 'linear-gradient(150deg,#EDF2FB,#F0F7EE 50%,#FDF4F0)' }}>
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden">
 
         {/* Header */}
         <div className="flex flex-col items-center gap-2 px-6 pt-7 pb-5 border-b border-stone-100">
-          <Image src="/logo.png" alt="CNTP" width={56} height={56} style={{ objectFit: 'contain' }} priority />
-          <h1 className="font-semibold text-[18px] text-text">Production Capture</h1>
-          <p className="text-[12px] text-text-muted">Sign in with your name and PIN</p>
+          <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-brand/10">
+            <Wrench size={26} className="text-brand" />
+          </div>
+          <h1 className="font-semibold text-[18px] text-text">Maintenance</h1>
+          <p className="text-[12px] text-text-muted">Select your name and enter your PIN</p>
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
+          <div className="flex items-center justify-center py-16">
+            <Loader2 size={22} className="animate-spin text-stone-300" />
+          </div>
         ) : !selected ? (
-          /* ── Operator picker ── */
+          /* ── Technician picker ── */
           <div className="p-4">
             {sorted.length === 0 ? (
               <p className="text-center text-[13px] text-text-muted py-10">
-                No operators set up yet. Ask your supervisor to add you.
+                No technicians set up yet. Ask your maintenance manager.
               </p>
             ) : (
               <>
                 {anyOnShift && <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2">On shift now</p>}
-                <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                  {sorted.map((op, i) => {
+                <div className="space-y-2 max-h-[52vh] overflow-y-auto">
+                  {sorted.map((tech, i) => {
                     const prevOnShift = i > 0 && sorted[i - 1].on_shift
                     return (
-                      <div key={op.id}>
-                        {!op.on_shift && prevOnShift && anyOnShift && (
-                          <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2 mt-3">Other operators</p>
+                      <div key={tech.user_id}>
+                        {!tech.on_shift && prevOnShift && anyOnShift && (
+                          <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2 mt-3">Other technicians</p>
                         )}
                         <button
-                          onClick={() => { setSelected(op); setPin(''); setError('') }}
-                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${op.on_shift ? 'border-brand/40 bg-brand/5 hover:border-brand hover:bg-brand/10' : 'border-stone-200 hover:border-brand hover:bg-brand/5'}`}
+                          onClick={() => { setSelected(tech); setPin(''); setError('') }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${tech.on_shift ? 'border-brand/40 bg-brand/5 hover:border-brand hover:bg-brand/10' : 'border-stone-200 hover:border-brand hover:bg-brand/5'}`}
                         >
                           <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
-                            <span className="font-mono font-bold text-[12px] text-stone-600">{op.display_name.slice(0, 2).toUpperCase()}</span>
+                            <span className="font-mono font-bold text-[12px] text-stone-600">
+                              {tech.display_name.slice(0, 2).toUpperCase()}
+                            </span>
                           </div>
-                          <span className="font-medium text-[15px] text-text flex-1">{op.display_name}</span>
-                          {op.on_shift && <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">On shift</span>}
+                          <span className="font-medium text-[15px] text-text flex-1">{tech.display_name}</span>
+                          {tech.on_shift && (
+                            <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">On shift</span>
+                          )}
                         </button>
                       </div>
                     )
@@ -109,7 +125,10 @@ export default function FloorLoginPage() {
         ) : (
           /* ── PIN pad ── */
           <div className="p-6 space-y-5">
-            <button onClick={() => { setSelected(null); setPin(''); setError('') }} className="flex items-center gap-1.5 text-[12px] text-text-muted hover:text-text">
+            <button
+              onClick={() => { setSelected(null); setPin(''); setError('') }}
+              className="flex items-center gap-1.5 text-[12px] text-text-muted hover:text-text"
+            >
               <ChevronLeft size={14} /> Not {selected.display_name}?
             </button>
             <div className="text-center space-y-3">
@@ -142,7 +161,9 @@ export default function FloorLoginPage() {
           </div>
         )}
       </div>
-      <p className="mt-5 text-[10px] uppercase tracking-[0.07em] text-stone-400">Cape Natural Tea Products · Blackheath</p>
+      <p className="mt-5 text-[10px] uppercase tracking-[0.07em] text-stone-400">
+        Cape Natural Tea Products · Blackheath
+      </p>
     </div>
   )
 }

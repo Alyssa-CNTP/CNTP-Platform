@@ -17,9 +17,11 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { isNegative } from '@/lib/utils/validation'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
+import LmDecisionModal from '@/components/shared/LmDecisionModal'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -539,6 +541,19 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
       if (form.dryer2_bulk_density === '' || form.dryer2_bulk_density == null) errs.push('Dryer 2 Bulk Density')
       if (form.dryer2_dryer_temp === '' || form.dryer2_dryer_temp == null) errs.push('Dryer 2 Temp')
     }
+    // No captured value may be negative.
+    const negFields: [any, string][] = [
+      [form.moisture, 'Moisture'], [form.bulk_density, 'Bulk Density'], [form.dryer_temp, 'Dryer Temperature'],
+      [form.weight_1, 'Weight 1'], [form.weight_2, 'Weight 2'], [form.weight_3, 'Weight 3'],
+      [form.dryer2_moisture, 'Dryer 2 Moisture'], [form.dryer2_bulk_density, 'Dryer 2 Bulk Density'], [form.dryer2_dryer_temp, 'Dryer 2 Temp'],
+    ]
+    negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
+    if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
+    // Hard ceiling — moisture above 10% is implausible for granules and is
+    // almost always a typo. Cannot be bypassed.
+    ;[[form.moisture, 'Moisture'], [form.dryer2_moisture, 'Dryer 2 Moisture']].forEach(([v, label]) => {
+      const n = parseFloat(v as any); if (!isNaN(n) && n > 10) errs.push(`${label} ${n}% exceeds the 10% ceiling — check for a typo`)
+    })
     setErrors(errs); setWarnings(warns)
     return errs.length === 0
   }
@@ -608,7 +623,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
             {([['Date *','sample_date','date',''],['Time *','sample_time','text','HH:MM'],['Dryer Number *','dryer_number','text','e.g. D1'],['Moisture (%) *','moisture','number','%'],['Bulk Density (cc/100g) *','bulk_density','number','cc/100g'],['Dryer Temp (°C) *','dryer_temp','number','°C']] as const).map(([label, key, type, ph]) => (
               <div key={key}>
                 <label className={`${lbl} ${errors.some(e => e.startsWith(label.replace(' *',''))) ? 'text-err' : ''}`}>{label}</label>
-                <input type={type} step="any" value={(form as any)[key]} placeholder={ph} onChange={e => set(key, e.target.value)}
+                <input type={type} min={type==='number'?0:undefined} step="any" value={(form as any)[key]} placeholder={ph} onChange={e => set(key, e.target.value)}
                   className={`${inp} w-full ${errors.some(e => e.startsWith(label.replace(' *',''))) ? 'border-err/40' : ''}`} />
               </div>
             ))}
@@ -644,7 +659,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
             {form.bag_type === 'bulk' && (
               <div>
                 <label className={`${lbl} ${errors.some(e => e.startsWith('Bulk Bag Weight')) ? 'text-err' : ''}`}>Bulk Bag Weight (kg) *</label>
-                <input type="number" step="any" value={form.weight_1} onChange={e => set('weight_1', e.target.value)}
+                <input type="number" min="0" step="any" value={form.weight_1} onChange={e => set('weight_1', e.target.value)}
                   placeholder="e.g. 498.5" className={`${inp} w-36`} />
               </div>
             )}
@@ -653,7 +668,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
                 {(['weight_1','weight_2','weight_3'] as const).map((k, i) => (
                   <div key={k}>
                     <label className={lbl}>Check {i + 1} (kg) *</label>
-                    <input type="number" step="any" value={form[k]} onChange={e => set(k, e.target.value)}
+                    <input type="number" min="0" step="any" value={form[k]} onChange={e => set(k, e.target.value)}
                       placeholder="e.g. 20.1" className={`${inp} w-full`} />
                   </div>
                 ))}
@@ -673,7 +688,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
                 {([['Moisture % *','dryer2_moisture'],['BD (cc/100g) *','dryer2_bulk_density'],['Dryer Temp (°C) *','dryer2_dryer_temp']] as const).map(([label, key]) => (
                   <div key={key}>
                     <label className={`${lbl} ${errors.some(e => e.startsWith(label.replace(' *',''))) ? 'text-err' : ''}`}>{label}</label>
-                    <input type="number" step="any" value={(form as any)[key]} onChange={e => set(key, e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" min="0" step="any" value={(form as any)[key]} onChange={e => set(key, e.target.value)} className={`${inp} w-full`} />
                   </div>
                 ))}
               </div>
@@ -824,6 +839,14 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
     if (form.bulk_density === '' || form.bulk_density == null) errs.push('Bulk Density')
     if (form.dryer_temp === '' || form.dryer_temp == null) errs.push('Dryer Temperature')
     if (form.sieving_done && !GRANULE_SIEVES.every(s => grams[s.key] !== '')) errs.push('Sieve Data (all fractions required)')
+    // No captured value may be negative.
+    const negFields: [any, string][] = [[form.moisture, 'Moisture'], [form.bulk_density, 'Bulk Density'], [form.dryer_temp, 'Dryer Temperature']]
+    negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
+    if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
+    // Hard ceiling — moisture above 10% is implausible for granules and is
+    // almost always a typo. Cannot be bypassed.
+    const moist = parseFloat(form.moisture as any)
+    if (!isNaN(moist) && moist > 10) errs.push(`Moisture ${moist}% exceeds the 10% ceiling — check for a typo`)
     setErrors(errs)
     return errs.length === 0
   }
@@ -1228,6 +1251,9 @@ function GranuleEditSpecModal({ run, onSave, onClose }: { run: any; onSave: (id:
   const setSieve  = (frac: string, bound: string, v: string) => setForm(f => ({ ...f, [`sieve_${frac}`]: { ...(f[`sieve_${frac}`] as any), [bound]: v } }))
 
   const handleSave = async () => {
+    const negScalar = ['moisture_max', 'bd_min', 'bd_max'].find(k => isNegative(form[k]))
+    const negSieve = GRANULE_SIEVES.some(s => isNegative((form[`sieve_${s.key}`] as any)?.min) || isNegative((form[`sieve_${s.key}`] as any)?.max))
+    if (negScalar || negSieve) { alert('Spec values cannot be negative.'); return }
     setSaving(true)
     const spec_json: any = {
       moisture_max: form.moisture_max !== '' ? parseFloat(form.moisture_max as string) : null,
@@ -1301,6 +1327,7 @@ interface RunCardProps {
   onUpdateSpec: (id: number, spec: any) => void
   onRecheckSample: (id: number, f: any) => void
   onEditSample: (id: number, f: any) => void
+  onDeleteSample: (id: number) => void
   onCommentSample: (id: number, f: any) => void
   onEditTasting: (id: number, f: any) => void
   onUpdateBatch: (id: number, bn: string) => void
@@ -1309,13 +1336,14 @@ interface RunCardProps {
   canApprove: boolean
 }
 
-function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
+function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onDeleteSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
   const [expanded, setExpanded]         = useState(true)
   const [editingSpec, setEditingSpec]   = useState(false)
   const [editingSample, setEditingSample] = useState<any>(null)
   const [editingBatch, setEditingBatch] = useState(false)
   const [batchDraft, setBatchDraft]     = useState(run.batch_number)
   const [batchSaving, setBatchSaving]   = useState(false)
+  const [decisionResult, setDecisionResult] = useState<'Pass'|'Fail'|'Concession'|null>(null)
 
   const handleBatchSave = async () => {
     const trimmed = batchDraft.trim()
@@ -1333,6 +1361,14 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
     <div className={`bg-surface-card rounded-xl mb-4 overflow-hidden border-2 ${hasViolations ? 'border-err/40' : 'border-surface-rule'}`}>
       {editingSpec && <GranuleEditSpecModal run={run} onSave={onUpdateSpec} onClose={() => setEditingSpec(false)} />}
       {editingSample && <GranuleEditSampleModal sample={editingSample} run={run} onSave={onEditSample} onClose={() => setEditingSample(null)} />}
+      {decisionResult && (
+        <LmDecisionModal
+          result={decisionResult}
+          batchLabel={run.batch_number}
+          onClose={() => setDecisionResult(null)}
+          onConfirm={comment => { onFinalise(run.id, decisionResult, comment); setDecisionResult(null) }}
+        />
+      )}
 
       {/* Header */}
       <div className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${hasViolations ? 'bg-err/5' : 'bg-surface'}`} onClick={() => setExpanded(e => !e)}>
@@ -1366,6 +1402,11 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
             <span>·</span><span>{run.tastings?.length || 0} tasting{run.tastings?.length !== 1 ? 's' : ''}</span>
             {hasViolations && <span className="font-bold text-err ml-1">⚠ Violations</span>}
           </div>
+          {run.final_reason && (
+            <div className="text-[10px] text-warn bg-warn/8 border border-warn/20 rounded-lg px-2 py-1 mt-1 inline-block">
+              💬 <span className="font-semibold">Lab Manager comment:</span> {run.final_reason}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
@@ -1377,14 +1418,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
               </span>
               {canApprove ? (
                 (['Pass', 'Fail', 'Concession'] as const).map(st => (
-                  <button key={st}
-                    onClick={() => {
-                      if (st === 'Pass') { onFinalise(run.id, 'Pass'); return }
-                      const reason = prompt(`Reason for "${st}" (required):`, '')
-                      if (reason === null) return
-                      if (!reason.trim()) { alert('A reason is required'); return }
-                      onFinalise(run.id, st, reason.trim())
-                    }}
+                  <button key={st} onClick={() => st === 'Pass' ? onFinalise(run.id, 'Pass') : setDecisionResult(st)}
                     className="px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border-2"
                     style={{ borderColor: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706', background: st === 'Pass' ? '#f0fdf4' : st === 'Fail' ? '#fef2f2' : '#fffbeb', color: st === 'Pass' ? '#166534' : st === 'Fail' ? '#dc2626' : '#d97706' }}>
                     {st}
@@ -1483,6 +1517,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                           </td>
                           <td className="px-2 py-2 text-center whitespace-nowrap">
                             <button onClick={() => setEditingSample(s)} className="text-[11px] px-1.5 py-0.5 rounded border border-surface-rule bg-surface-card cursor-pointer" title="Edit">✏️</button>
+                            <button onClick={() => onDeleteSample(s.id)} className="text-[11px] px-1.5 py-0.5 rounded border border-err/30 bg-err/8 text-err cursor-pointer ml-1" title="Delete sample">🗑</button>
                           </td>
                         </tr>
                         {moistVio && (
@@ -2135,6 +2170,17 @@ export default function GranulePage() {
     setRuns(prev => prev.map(r => ({ ...r, tastings: (r.tastings || []).map((t: any) => t.id === tastingId ? { ...t, ...data } : t) })))
   }
 
+  async function handleDeleteSample(sampleId: number) {
+    if (!confirm('Delete this sample?')) return
+    const run = runs.find(r => (r.samples || []).some((s: any) => s.id === sampleId))
+    const { error } = await db.schema('qms').from('granule_samples').delete().eq('id', sampleId)
+    if (error) { alert(error.message); return }
+    const remaining = (run?.samples || []).filter((s: any) => s.id !== sampleId)
+    const anyVio = remaining.some((s: any) => (s.violations || []).length > 0)
+    if (run) await db.schema('qms').from('granule_runs').update({ overall_status: anyVio ? 'Fail' : 'Pass' }).eq('id', run.id)
+    setRuns(prev => prev.map(r => r.id !== run?.id ? r : { ...r, samples: remaining, overall_status: anyVio ? 'Fail' : 'Pass' }))
+  }
+
   async function handleCommentSample(sampleId: number, data: any) {
     const { data: saved, error } = await db.schema('qms').from('granule_samples').update({ qc_comment: data.qc_comment }).eq('id', sampleId).select('qc_comment').single()
     if (error) { alert(error.message); return }
@@ -2256,6 +2302,7 @@ export default function GranulePage() {
                 onUpdateSpec={handleUpdateSpec}
                 onRecheckSample={handleRecheckSample}
                 onEditSample={handleEditSample}
+                onDeleteSample={handleDeleteSample}
                 onCommentSample={handleCommentSample}
                 onEditTasting={handleEditTasting}
                 onUpdateBatch={handleUpdateBatch}

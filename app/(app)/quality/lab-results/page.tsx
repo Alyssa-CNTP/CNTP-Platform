@@ -137,7 +137,7 @@ function PdfDropZone({ testType, onExtracted }: { testType:TestType; onExtracted
 
   async function upload(file: File) {
     const fd = new FormData()
-    fd.append('pdf', file); fd.append('workcenter','rawMaterial'); fd.append('workflow', testType)
+    fd.append('pdf', file); fd.append('workcenter','pasteuriser'); fd.append('workflow', testType)
     const res  = await fetch('/api/upload', { method:'POST', body:fd })
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || 'Upload failed')

@@ -141,6 +141,22 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Cross-department — no single department owns this.
+    module: 'Staff & Competency',
+    resources: [
+      { key: 'staff.directory', label: 'Staff directory & profiles',
+        read: 'can_view_staff', write: 'can_edit_staff_profiles',
+        manage: [{ key: 'can_delete_staff', label: 'Delete staff records' }] },
+      { key: 'staff.competency', label: 'Competency matrix & assessments',
+        read: 'can_view_staff', write: 'can_manage_competencies',
+        manage: [
+          { key: 'can_allocate_staff', label: 'Allocate staff to sections & override competency warnings (Phase 2)' },
+        ] },
+      { key: 'staff.sops', label: 'SOP / Work-Instruction catalogue',
+        read: 'can_view_staff', write: 'can_manage_sop_catalog' },
+    ],
+  },
+  {
     module: 'Administration', department: 'IT',
     resources: [
       { key: 'admin.users', label: 'User administration',

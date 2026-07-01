@@ -80,14 +80,47 @@ export default function LoginPage() {
               </div>
             )}
 
+            {/* Divider */}
+            <div className="login-divider">
+              <div className="login-divider-line" />
+              <span className="login-divider-text">or sign in as</span>
+              <div className="login-divider-line" />
+            </div>
+
+            {/* Role cards */}
+            <div className="login-role-cards">
+              <a href="/maintenance-login" className="login-role-card">
+                <div className="login-role-icon login-role-icon--maint">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                  </svg>
+                </div>
+                <div className="login-role-text">
+                  <span className="login-role-name">Maintenance Tech</span>
+                  <span className="login-role-desc">Sign in with your PIN</span>
+                </div>
+                <svg className="login-role-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+              </a>
+
+              <a href="/floor" className="login-role-card">
+                <div className="login-role-icon login-role-icon--floor">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+                  </svg>
+                </div>
+                <div className="login-role-text">
+                  <span className="login-role-name">Floor Operator</span>
+                  <span className="login-role-desc">Sign in with your PIN</span>
+                </div>
+                <svg className="login-role-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+              </a>
+            </div>
+
             {/* Footer */}
             <div className="login-footer-note">
               <p>
                 Sign in with your <strong>@rooibostea.co.za</strong> Microsoft account.<br/>
                 Trouble signing in? Contact your IT administrator.
-              </p>
-              <p style={{ marginTop: 10 }}>
-                Floor operator? <a href="/floor" style={{ color: '#1A3A0E', fontWeight: 600 }}>Sign in with your PIN →</a>
               </p>
             </div>
 
@@ -249,6 +282,61 @@ export default function LoginPage() {
           font-family: inherit;
         }
         .login-submit:disabled { background: #2A5416; opacity: 0.8; cursor: not-allowed; }
+
+        /* ── Role cards ── */
+        .login-role-cards {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin-bottom: 16px;
+        }
+        .login-role-card {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px 14px;
+          border: 1.5px solid #E5E7EB;
+          border-radius: 10px;
+          text-decoration: none;
+          cursor: pointer;
+          transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+          background: #FAFAFA;
+        }
+        .login-role-card:hover {
+          border-color: #1A3A0E;
+          background: #F5F8F4;
+          box-shadow: 0 2px 8px rgba(26,58,14,0.08);
+        }
+        .login-role-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          shrink: 0;
+          flex-shrink: 0;
+        }
+        .login-role-icon--maint { background: #FFF7ED; color: #C2410C; }
+        .login-role-icon--floor { background: #F0FDF4; color: #15803D; }
+        .login-role-text {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .login-role-name {
+          font-size: 14px;
+          font-weight: 600;
+          color: #111827;
+          line-height: 1.2;
+        }
+        .login-role-desc {
+          font-size: 12px;
+          color: #9CA3AF;
+        }
+        .login-role-arrow { color: #D1D5DB; flex-shrink: 0; }
+        .login-role-card:hover .login-role-arrow { color: #6B7280; }
 
         /* ── Footer note ── */
         .login-footer-note {

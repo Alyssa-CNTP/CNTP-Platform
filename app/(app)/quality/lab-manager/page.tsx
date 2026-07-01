@@ -14,6 +14,7 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { computePastOosFlags } from '../pasteuriser/page'
+import LmDecisionModal from '@/components/shared/LmDecisionModal'
 
 const STATIONS = [
   { key: 'pasteuriser', label: '🫗 Pasteuriser' },
@@ -74,24 +75,20 @@ export default function LabManagerPage() {
 
   useEffect(() => { loadPending() }, [loadPending])
 
-  async function decide(item: any, result: 'Pass' | 'Fail' | 'Concession') {
-    let reason = ''
-    if (result !== 'Pass') {
-      const r = prompt(`Reason for "${result}" (required):`, '')
-      if (r === null) return
-      if (!r.trim()) { alert('A reason is required'); return }
-      reason = r.trim()
-    }
+  const [decisionModal, setDecisionModal] = useState<{ item: any; result: 'Pass' | 'Fail' | 'Concession' } | null>(null)
+
+  async function decide(item: any, result: 'Pass' | 'Fail' | 'Concession', comment: string) {
     if (item.kind === 'pasteuriser') {
       const d = item.raw.d
-      const newData = { ...d, final_result: result, finalised_at: new Date().toISOString(), batch_status: 'complete', final_reason: reason || undefined, approved_by: whoAmI, oos_flags: d.oos_flags ?? computePastOosFlags(d) }
+      const newData = { ...d, final_result: result, finalised_at: new Date().toISOString(), batch_status: 'complete', final_reason: comment || undefined, approved_by: whoAmI, oos_flags: d.oos_flags ?? computePastOosFlags(d) }
       const { error } = await db.schema('qms').from('quality_records').update({ data_json: newData }).eq('id', item.id)
       if (error) { alert('Save failed: ' + error.message); return }
     } else {
-      const { error } = await db.schema('qms').from('granule_runs').update({ final_status: result, overall_status: result, approved_by: whoAmI, final_reason: reason || null, lm_status: 'complete' }).eq('id', item.id)
+      const { error } = await db.schema('qms').from('granule_runs').update({ final_status: result, overall_status: result, approved_by: whoAmI, final_reason: comment || null, lm_status: 'complete' }).eq('id', item.id)
       if (error) { alert('Save failed: ' + error.message); return }
     }
     setPending(prev => prev.filter(x => !(x.kind === item.kind && x.id === item.id)))
+    setDecisionModal(null)
   }
 
   // ── Daily overview ─────────────────────────────────────────────────────────
@@ -175,6 +172,14 @@ export default function LabManagerPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="p-5 max-w-[1400px] mx-auto">
+      {decisionModal && (
+        <LmDecisionModal
+          result={decisionModal.result}
+          batchLabel={decisionModal.item.batch}
+          onClose={() => setDecisionModal(null)}
+          onConfirm={comment => decide(decisionModal.item, decisionModal.result, comment)}
+        />
+      )}
       <div className="mb-4">
         <h1 className="font-display font-bold text-[22px] text-text">Lab Manager</h1>
         <p className="text-[12px] text-text-muted">Approve allocated runs and sign off the daily station overview.</p>
@@ -215,9 +220,9 @@ export default function LabManagerPage() {
                   </div>
                   {canApprove && (
                     <div className="flex gap-2">
-                      <button onClick={() => decide(item, 'Pass')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
-                      <button onClick={() => decide(item, 'Concession')} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
-                      <button onClick={() => decide(item, 'Fail')} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
+                      <button onClick={() => decide(item, 'Pass', '')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
+                      <button onClick={() => setDecisionModal({ item, result: 'Concession' })} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
+                      <button onClick={() => setDecisionModal({ item, result: 'Fail' })} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
                     </div>
                   )}
                 </div>

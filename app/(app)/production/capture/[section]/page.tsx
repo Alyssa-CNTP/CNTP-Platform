@@ -71,6 +71,7 @@ function CaptureScreen() {
   const [status, setStatus]       = useState<'new' | 'draft' | 'submitted' | 'approved'>('new')
   const [productions, setProductions] = useState<Production[]>([])
   const [activeIdx, setActiveIdx]     = useState(0)
+  const [otherShiftProductions, setOtherShiftProductions] = useState<Production[]>([])
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   const [tab, setTab]             = useState<Tab>(() => {
@@ -219,6 +220,18 @@ function CaptureScreen() {
         const fresh = (sessStatus === 'new' || sessStatus === 'draft') && !hasCapture
         if (!sp.get('tab') && fresh && !signed) setTab('checks')
       } catch { /* routing is best-effort */ }
+
+      // Load other shift's session so the overview can show combined cross-shift totals.
+      try {
+        const otherShift = shift === 'morning' ? 'afternoon' : 'morning'
+        const { data: otherSess } = await db.schema('production').from('prod_sessions')
+          .select('draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', otherShift)
+          .order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const otherProds = (otherSess as any)?.draft_data?.productions
+        if (Array.isArray(otherProds) && otherProds.length > 0) {
+          setOtherShiftProductions(otherProds as Production[])
+        }
+      } catch { /* cross-shift load is best-effort */ }
 
       setLoading(false)
     }
@@ -759,15 +772,17 @@ function CaptureScreen() {
             <>
               <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
                 <Info size={14} className="shrink-0 mt-0.5" />
-                <span>This is your captured total, grouped and ready for Acumatica. It updates live and is saved automatically — copy or print it for data entry.</span>
+                <span>Totals are grouped and combined across both shifts where variant and grade match. Copy or print for Acumatica data entry.</span>
               </div>
               <CaptureOverview
-                productions={productions}
+                productions={[...productions, ...otherShiftProductions]}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
                 date={dateParam}
                 shift={shift}
                 showSerials={isIT}
+                productionOrders={assignment?.production_orders}
+                locked={locked}
               />
             </>
           )}

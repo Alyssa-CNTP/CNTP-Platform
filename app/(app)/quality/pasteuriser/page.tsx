@@ -28,8 +28,10 @@ import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import QCNameField from '@/components/shared/QCNameField'
+import LmDecisionModal from '@/components/shared/LmDecisionModal'
 import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
@@ -69,6 +71,15 @@ const PAST_SPEC_DEFAULTS: Record<string,{min:number|null,max:number|null}> = {
   gt16: { min:10,  max:20 }, gt20: { min:20,  max:35 }, gt60: { min:35,  max:50 },
   dust: { min:null, max:1 }, moisture: { min:null, max:8.5 }, untapped_bd: { min:280, max:340 },
   hourly_temp: { min: 85, max: null },
+}
+
+// Hard physical-plausibility ceilings/floors — distinct from PAST_SPEC_DEFAULTS
+// (which is customer pass/fail spec). These catch typos (e.g. "25" instead of
+// "2.5") and can never be bypassed by ticking "confirm anyway".
+const PAST_SANITY_BOUNDS: Record<string,[number,number]> = {
+  moisture:    [0, 15],
+  untapped_bd: [150, 450],
+  hourly_temp: [60, 150],
 }
 
 const PASS_COLORS: Record<string,[string,string,string]> = {
@@ -423,6 +434,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
     const hasSpecs = batchSpecs.moisture_max !== '' || batchSpecs.bd_min !== '' || batchSpecs.bd_max !== '' ||
       ['gt6','gt10','gt12','gt16','gt20','gt60','dust'].some(k => (batchSpecs as any)[`${k}_min`] !== '' || (batchSpecs as any)[`${k}_max`] !== '')
     if (!hasSpecs) { setErr('Enter at least one spec value (moisture, BD, or sieve) before saving.'); return }
+    if (Object.values(batchSpecs).some(v => isNegative(v))) { setErr('Spec values cannot be negative.'); return }
     onSave({ ...form, type_grade:`${form.product_family} ${form.grade}`, _spec: specPreview, batch_specs: batchSpecs })
   }
 
@@ -632,6 +644,27 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     if (!row.time.trim())     { alert('Time is required'); return }
     if (!row.date)            { alert('Date is required'); return }
     if (!row.qc_name?.trim()) { alert('QC Controller name is required'); return }
+    if (!row.serial_bin?.trim()) { alert('Bin/Bag No. is required'); return }
+    if (row.has_mb && !row.untapped_bd?.toString().trim()) { alert('Untapped BD is required'); return }
+    if (row.has_mb && !row.moisture?.toString().trim())    { alert('Moisture is required'); return }
+    if (row.has_sieve) {
+      const missingSieve = PAST_SIEVE_COLS.filter(c => !row[c.key]?.toString().trim())
+      if (missingSieve.length) { alert(`All sieve fields are required — missing: ${missingSieve.map(c => c.label).join(', ')}`); return }
+    }
+    // Hard sanity bounds — physically implausible values (typos) are blocked
+    // outright, unlike the statistical anomalyWarnings below which can be
+    // confirmed past.
+    for (const [key, [lo, hi]] of Object.entries(PAST_SANITY_BOUNDS)) {
+      const n = parseFloat(row[key])
+      if (!isNaN(n) && (n < lo || n > hi)) {
+        alert(`${key.replace('_',' ')} value ${n} is outside the plausible range (${lo}–${hi}) — check for a typo.`)
+        return
+      }
+    }
+    // No captured value may be negative.
+    const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'final_weight_1', 'final_weight_2', 'final_weight_3',
+      ...PAST_SIEVE_COLS.flatMap(c => [c.key, c.key + '_g'])]
+    if (negFields.some(k => isNegative(row[k]))) { alert('Values cannot be negative.'); return }
     if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
@@ -676,7 +709,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             {[['time','Time *','text'],['date','Date *','date'],['serial_bin','Bin/Bag No.','text'],['needle_count','Needle Count','number']].map(([k,l,t]) => (
               <div key={k}>
                 <label className={`${lbl} ${k==='date'?'text-info':''}`}>{l as string}</label>
-                <input type={t as string} inputMode={t==='number'?'numeric':undefined} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
+                <input type={t as string} min={t==='number'?0:undefined} inputMode={t==='number'?'numeric':undefined} value={row[k]??''} onChange={e => set(k as string, e.target.value)}
                   className={`${inp} w-full ${k==='date'?'border-info/40 bg-info/5':''}`} />
               </div>
             ))}
@@ -692,7 +725,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 const tempSt = pastChk(row.hourly_temp, tempSpec)
                 return (
                   <>
-                    <input type="number" inputMode="decimal" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
+                    <input type="number" min="0" inputMode="decimal" step="0.1" value={row.hourly_temp??''} onChange={e => set('hourly_temp', e.target.value)}
                       className={`${inp} w-full ${tempSt==='fail' ? 'border-err bg-err/5' : tempSt==='pass' ? 'border-ok/50' : ''}`} />
                     {tempSt==='fail' && (
                       <p className="mt-1 text-[10px] font-semibold text-err">
@@ -747,7 +780,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                             {sp ? `${sp.min!=null?sp.min+'–':'≤'}${sp.max??''}%` : '—'}
                           </td>
                           <td className="px-2 py-1.5">
-                            <input type="number" inputMode="decimal" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
+                            <input type="number" min="0" inputMode="decimal" step="0.1" value={row[c.key+'_g']} onChange={e => calcPct(c.key+'_g', e.target.value)}
                               placeholder="g" className={`${inp} w-24 text-center border-info/40 bg-info/5 text-[15px] py-2`} />
                           </td>
                           <td className="px-2 py-1.5">
@@ -788,7 +821,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                   return (
                     <div key={k as string}>
                       <label className={lbl}>{l as string}{sp && <span className="text-[9px] text-text-faint ml-1">{sp.min!=null?`${sp.min}–${sp.max}`:sp.max!=null?`≤${sp.max}`:''}</span>}</label>
-                      <input type="number" inputMode="decimal" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
+                      <input type="number" min="0" inputMode="decimal" step="0.01" value={row[k as string]} onChange={e => set(k as string, e.target.value)}
                         className={`${inp} w-full ${st==='fail'?'border-err/40 bg-err/8':st==='pass'?'border-ok/40 bg-ok/8':''}`} />
                       {st==='fail' && <div className="text-[9px] text-err mt-0.5">⚠ Out of spec</div>}
                     </div>
@@ -797,7 +830,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                 {['1','2','3'].map(n => (
                   <div key={n}>
                     <label className={lbl}>Weight Check {n} (kg)</label>
-                    <input type="number" inputMode="decimal" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" min="0" inputMode="decimal" step="0.1" value={row[`final_weight_${n}`]} onChange={e => set(`final_weight_${n}`, e.target.value)} className={`${inp} w-full`} />
                   </div>
                 ))}
               </div>
@@ -974,6 +1007,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [expandedHistId,setExpandedHistId] = useState<string|null>(null)
   const [editingField,  setEditingField]   = useState<string|null>(null)
   const [qcDraft,       setQcDraft]        = useState('')
+  const [decisionResult,setDecisionResult] = useState<'Pass'|'Fail'|'Concession'|null>(null)
   const [pubBatches,    setPubBatches]     = useState<any[]>([])
   const [pubLoading,    setPubLoading]     = useState(false)
   const [showPubHistory,setShowPubHistory] = useState(false)
@@ -1351,6 +1385,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         </span>
                         {activeBatch.approved_by && <span className="text-[10px] text-text-muted">approved by {activeBatch.approved_by}</span>}
                         <button onClick={reopenBatch} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔓 Re-open</button>
+                        {activeBatch.final_reason && (
+                          <div className="w-full text-[11px] text-warn bg-warn/8 border border-warn/20 rounded-lg px-3 py-1.5 mt-1">
+                            💬 <span className="font-semibold">Lab Manager comment:</span> {activeBatch.final_reason}
+                          </div>
+                        )}
                       </div>
                     ) : activeBatch.batch_status === 'awaiting_approval' ? (
                       /* ── Allocated to Lab Manager, awaiting pass/fail ── */
@@ -1362,15 +1401,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                           <>
                             <span className="text-[11px] text-text-muted">Approve as:</span>
                             {(['Pass','Fail','Concession'] as const).map(r => (
-                              <button key={r}
-                                onClick={() => {
-                                  if (r === 'Fail' || r === 'Concession') {
-                                    const reason = prompt(`Reason for "${r}" (required):`, '')
-                                    if (reason === null) return
-                                    if (!reason.trim()) { alert('A reason is required'); return }
-                                    finaliseBatch(r, reason.trim())
-                                  } else finaliseBatch(r)
-                                }}
+                              <button key={r} onClick={() => r === 'Pass' ? finaliseBatch('Pass') : setDecisionResult(r)}
                                 className="px-3 py-1.5 rounded-lg border-2 text-[11px] font-bold transition-colors"
                                 style={{ borderColor:PASS_COLORS[r][2], background:PASS_COLORS[r][0], color:PASS_COLORS[r][1] }}>
                                 {r}
@@ -1891,6 +1922,14 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       )}
 
       {/* Modals */}
+      {decisionResult && activeBatch && (
+        <LmDecisionModal
+          result={decisionResult}
+          batchLabel={activeBatch.batch_number}
+          onClose={() => setDecisionResult(null)}
+          onConfirm={comment => { finaliseBatch(decisionResult, comment); setDecisionResult(null) }}
+        />
+      )}
       {showNewBatch && <NewBatchModal onSave={createBatch} onClose={() => setShowNewBatch(false)} />}
       {showAddRow && activeBatch && (
         <AddSampleModal batch={activeBatch} sampleIndex={activeBatch.samples.length} onSave={addSample} onClose={() => setShowAddRow(false)} />
@@ -2364,10 +2403,14 @@ function PastSensorialTable({ canWrite }: { canWrite: boolean }) {
 function InlineEditCell({ value, onSave }: { value: any; onSave: (v: any) => void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft]     = useState('')
+  const commit = () => {
+    if (isNegative(draft)) { alert('Value cannot be negative.'); return }
+    onSave(draft); setEditing(false)
+  }
   if (editing) return (
-    <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
-      onBlur={()=>{ onSave(draft); setEditing(false) }}
-      onKeyDown={e=>{ if(e.key==='Enter'){onSave(draft);setEditing(false)} if(e.key==='Escape')setEditing(false) }}
+    <input autoFocus min="0" value={draft} onChange={e=>setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e=>{ if(e.key==='Enter') commit(); if(e.key==='Escape')setEditing(false) }}
       style={{ width:55, padding:'2px 4px', border:'1.5px solid #1f4e79', borderRadius:4, fontSize:10, textAlign:'center' }}/>
   )
   return (
