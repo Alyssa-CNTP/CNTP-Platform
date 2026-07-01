@@ -2,15 +2,14 @@
 
 // app/(app)/maintenance/planner/page.tsx
 // Planner & Roster — maintenance team at a glance.
-// • "Next" strip — on duty now / up next on roster / next scheduled job
-// • Per-technician status panel
-// • Maintenance on shift — current-period shift assignments from the production roster
+// • "Next scheduled job" card (unique info only)
+// • Team on shift — per-person card merged with shift assignment + job status
 // • QC area map
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  ChevronDown, ChevronRight, CalendarRange, UserCheck, Clock3, Wrench, Users,
+  ChevronDown, ChevronRight, CalendarRange, Wrench, Users,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { useMaintenanceContext } from '../layout'
@@ -22,14 +21,10 @@ import { getDb } from '@/lib/supabase/db'
 
 // ── SAST helpers ──────────────────────────────────────────────────────────────
 function todaySAST() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' }) // yyyy-MM-dd
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' })
 }
-function hourSAST() {
-  return parseInt(new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', hour: 'numeric', hour12: false }), 10)
-}
-// Day shift 07:00–16:59, night shift otherwise
 function currentShift(): 'day' | 'night' {
-  const h = hourSAST()
+  const h = parseInt(new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', hour: 'numeric', hour12: false }), 10)
   return h >= 7 && h < 17 ? 'day' : 'night'
 }
 
@@ -73,15 +68,13 @@ export default function PlannerPage() {
   const ctx = useMaintenanceContext()
   const { loading, data, derived, actions } = ctx
   const { jcs, slots, staff } = data
-  const { duty, dutyNow } = derived
+  const { dutyNow } = derived
 
   const techNames = staff.map(s => s.name)
   const techIndex = new Map(techNames.map((t, i) => [t, i]))
   const colorFor = (name: string) => TECH_PALETTE[(techIndex.has(name) ? techIndex.get(name)! : hashName(name)) % TECH_PALETTE.length]
 
   const [openQc, setOpenQc] = useState(false)
-
-  // Shift roster state
   const [rosterPeriod, setRosterPeriod] = useState<RosterPeriod | null>(null)
   const [rosterEntries, setRosterEntries] = useState<RosterEntry[]>([])
   const [rosterLoading, setRosterLoading] = useState(true)
@@ -115,11 +108,6 @@ export default function PlannerPage() {
   }, [])
 
   const nowMs = Date.now()
-
-  // "Next" strip selectors
-  const upNextRoster = [...(data.roster ?? [])]
-    .filter(r => new Date(r.start_at).getTime() > nowMs)
-    .sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null
   const nextJob = [...slots]
     .filter(s => new Date(s.start_at).getTime() > nowMs)
     .sort((a, b) => a.start_at.localeCompare(b.start_at))[0] ?? null
@@ -128,8 +116,21 @@ export default function PlannerPage() {
   const activeShift = currentShift()
   const dayLabel = rosterPeriod?.day_label ?? 'Day shift'
   const nightLabel = rosterPeriod?.night_label ?? 'Night shift'
-  const dayEntries = rosterEntries.filter(e => e.shift === 'day')
-  const nightEntries = rosterEntries.filter(e => e.shift === 'night')
+
+  // Build a map of person_name → shift for quick lookup
+  const shiftOf = new Map(rosterEntries.map(e => [e.person_name, e.shift]))
+  const shiftLabelOf = (name: string) => {
+    const s = shiftOf.get(name)
+    if (!s) return null
+    return s === 'day' ? dayLabel : nightLabel
+  }
+
+  // All names that appear in the roster — merge with staff list, roster first
+  const rosterNames = rosterEntries
+    .map(e => e.person_name)
+    .filter((n): n is string => !!n)
+  const extraStaff = techNames.filter(n => !rosterNames.includes(n))
+  const allNames = [...new Set([...rosterNames, ...extraStaff])]
 
   if (loading) {
     return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading planner…</div></div>
@@ -139,114 +140,37 @@ export default function PlannerPage() {
     <div className="p-4 sm:p-6 max-w-[1400px] mx-auto">
       <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-text flex items-center gap-2"><CalendarRange className="w-6 h-6 text-brand" /> Planner &amp; Roster</h1>
-          <p className="text-sm text-text-muted mt-1">Who is on duty, who is up next, and every scheduled slot — on one page.</p>
+          <h1 className="text-2xl font-semibold text-text flex items-center gap-2">
+            <CalendarRange className="w-6 h-6 text-brand" /> Planner &amp; Roster
+          </h1>
+          <p className="text-sm text-text-muted mt-1">Maintenance team status and shift assignments.</p>
         </div>
       </div>
 
-      {/* ── "Next" strip ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-        <div className={`rounded-xl border p-4 ${duty ? 'border-ok/30 bg-ok/5' : 'border-err/30 bg-err/5'}`}>
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-            <UserCheck className={`w-4 h-4 ${duty ? 'text-ok' : 'text-err'}`} /> On duty now
-          </div>
-          {duty
-            ? <div className="mt-1.5 text-lg font-semibold text-ok flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorFor(duty).dot }} />{duty}</div>
-            : <div className="mt-1.5 text-sm font-semibold text-err">Nobody — breakdowns will wait</div>}
-          <div className="text-[11px] text-text-faint mt-1">Breakdowns auto-route to the on-duty technician.</div>
+      {/* ── Next scheduled job (only non-redundant "next" info) ── */}
+      <div className="rounded-xl border border-surface-rule bg-surface-card p-4 mb-6">
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted mb-2">
+          <Wrench className="w-4 h-4 text-accent" /> Next scheduled job
         </div>
-
-        <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-            <Clock3 className="w-4 h-4 text-info" /> Up next on roster
-          </div>
-          {upNextRoster
-            ? <>
-                <div className="mt-1.5 text-lg font-semibold text-text flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorFor(upNextRoster.technician).dot }} />{upNextRoster.technician}</div>
-                <div className="text-[12px] text-text-muted mt-0.5">{fmtDT(upNextRoster.start_at)} → {fmtT(upNextRoster.end_at)}</div>
-              </>
-            : <div className="mt-1.5 text-sm text-text-faint">No upcoming duty slots.</div>}
-        </div>
-
-        <div className="rounded-xl border border-surface-rule bg-surface-card p-4">
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-            <Wrench className="w-4 h-4 text-accent" /> Next scheduled job
-          </div>
-          {nextJob
-            ? <>
-                <div className="mt-1.5 text-sm font-semibold text-text">
-                  {nextJobCard ? <span className="text-accent">{nextJobCard.card_no}</span> : 'General slot'}
-                  <span className="text-text-muted font-normal"> · {nextJob.technician}</span>
-                </div>
-                <div className="text-[12px] text-text-muted mt-0.5">{fmtDT(nextJob.start_at)} → {fmtT(nextJob.end_at)}</div>
-                {(nextJob.note || nextJobCard) && <div className="text-[11px] text-text-faint mt-0.5 truncate">{nextJob.note || nextJobCard?.description}</div>}
-              </>
-            : <div className="mt-1.5 text-sm text-text-faint">Nothing scheduled ahead.</div>}
-        </div>
+        {nextJob
+          ? <>
+              <div className="text-sm font-semibold text-text">
+                {nextJobCard ? <span className="text-accent">{nextJobCard.card_no}</span> : 'General slot'}
+                <span className="text-text-muted font-normal"> · {nextJob.technician}</span>
+              </div>
+              <div className="text-[12px] text-text-muted mt-0.5">{fmtDT(nextJob.start_at)} → {fmtT(nextJob.end_at)}</div>
+              {(nextJob.note || nextJobCard) && <div className="text-[11px] text-text-faint mt-0.5 truncate">{nextJob.note || nextJobCard?.description}</div>}
+            </>
+          : <div className="text-sm text-text-faint">Nothing scheduled ahead.</div>}
       </div>
 
-      {/* ── Per-technician status ── */}
-      {techNames.length > 0 && (
-        <div className="card p-4 mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Users size={16} className="text-text-muted" />
-            <h2 className="text-sm font-semibold text-text">Per-technician status</h2>
-            <span className="text-[11px] text-text-muted">what each person is doing now &amp; what is outstanding</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {techNames.map(t => {
-              const open = jcs.filter(j => j.assigned_to === t && j.status !== 'complete' && j.status !== 'cancelled')
-              const active = open.find(j => j.status === 'in_progress' && !j.paused)
-              const paused = open.filter(j => j.status === 'in_progress' && j.paused)
-              const waitingAccept = open.filter(j => j.status === 'assigned')
-              const onDuty = dutyNow.includes(t)
-              const tc = colorFor(t)
-              return (
-                <div key={t} className="rounded-lg border border-surface-rule bg-surface-raised p-3">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: tc.dot }} />
-                      <strong className="text-[13px] text-text truncate">{t}</strong>
-                    </div>
-                    <span className={`badge ${onDuty ? 'badge-ok' : 'badge-gray'}`}>{onDuty ? 'ON DUTY' : 'OFF'}</span>
-                  </div>
-                  <div className="text-[12px] mb-1.5">
-                    {active
-                      ? <span className="text-warn font-medium">● Busy: <Link href={`/maintenance/job-cards/${active.id}`} className="text-accent">{active.card_no}</Link> — {active.area}</span>
-                      : paused.length
-                        ? <span className="text-text-muted">⏸ On hold ({paused.length}) — free to take work</span>
-                        : <span className="text-ok">○ Available</span>}
-                  </div>
-                  <div className="flex gap-3 text-[11px] text-text-muted mb-1.5">
-                    <span><strong className="text-text tabular-nums">{open.length}</strong> outstanding</span>
-                    <span><strong className="text-text tabular-nums">{waitingAccept.length}</strong> to accept</span>
-                  </div>
-                  {open.length > 0 && (
-                    <div className="space-y-0.5">
-                      {open.slice(0, 4).map(j => (
-                        <div key={j.id} className="text-[11px] truncate">
-                          <Link href={`/maintenance/job-cards/${j.id}`} className="text-accent">{j.card_no}</Link>
-                          <span className="text-text-faint"> · {j.status.replace(/_/g, ' ')}</span>
-                          <span className="text-text-muted"> — {j.description}</span>
-                        </div>
-                      ))}
-                      {open.length > 4 && <div className="text-[10px] text-text-faint">+{open.length - 4} more</div>}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── Maintenance on shift — from the production roster ── */}
+      {/* ── Team on shift — shift assignment + duty + job status in one place ── */}
       <div className="card p-4 mb-6">
         <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
           <div className="flex items-center gap-2">
-            <CalendarRange size={16} className="text-brand" />
-            <h2 className="text-sm font-semibold text-text">Maintenance on shift</h2>
-            {rosterPeriod && (
+            <Users size={16} className="text-text-muted" />
+            <h2 className="text-sm font-semibold text-text">Team on shift</h2>
+            {rosterPeriod && !rosterLoading && (
               <span className="text-[11px] text-text-muted">
                 {new Date(rosterPeriod.start_date + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}
                 {' – '}
@@ -254,83 +178,77 @@ export default function PlannerPage() {
               </span>
             )}
           </div>
-          <Link href="/production/roster"
-            className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-brand hover:underline">
+          <Link href="/production/roster" className="text-[11px] font-semibold text-brand hover:underline">
             Edit in Shift Roster →
           </Link>
         </div>
 
         {rosterLoading ? (
-          <div className="text-sm text-text-muted">Loading roster…</div>
-        ) : !rosterPeriod ? (
-          <div className="rounded-lg border border-warn/20 bg-warn/5 p-3 text-[12px] text-text-muted">
-            No active roster period found for today. <Link href="/production/roster" className="text-brand font-semibold hover:underline">Open the shift roster</Link> to create one.
-          </div>
+          <div className="text-sm text-text-muted">Loading shift assignments…</div>
+        ) : allNames.length === 0 ? (
+          <div className="text-sm text-text-faint">No maintenance staff found. <Link href="/production/roster" className="text-brand font-semibold hover:underline">Open the shift roster</Link> to assign them.</div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Day shift */}
-            <div className={`rounded-xl border p-4 ${activeShift === 'day' ? 'border-brand/40 bg-brand/5 ring-1 ring-brand/20' : 'border-surface-rule bg-surface-card'}`}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`text-[11px] font-bold uppercase tracking-wide ${activeShift === 'day' ? 'text-brand' : 'text-text-muted'}`}>
-                  {dayLabel}
-                </span>
-                {activeShift === 'day' && (
-                  <span className="text-[9px] font-bold bg-brand text-white rounded px-1.5 py-0.5 uppercase tracking-wide">Active now</span>
-                )}
-                <span className="text-[10px] text-text-faint ml-auto">07:00 – 16:59</span>
-              </div>
-              {dayEntries.length === 0 ? (
-                <div className="text-[12px] text-text-faint">No maintenance staff on day shift.</div>
-              ) : (
-                <div className="space-y-2">
-                  {dayEntries.map(e => {
-                    const name = e.person_name ?? '—'
-                    const tc = colorFor(name)
-                    const onDuty = dutyNow.includes(name)
-                    return (
-                      <div key={e.id} className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: tc.dot }} />
-                        <span className="text-[13px] font-medium text-text flex-1">{name}</span>
-                        <span className="text-[10px] text-text-faint">{e.role_key === 'maintenance_tech' ? 'Technician' : 'Assistant'}</span>
-                        {onDuty && <span className="badge badge-ok text-[9px]">ON DUTY</span>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {allNames.map(name => {
+              const openJcs = jcs.filter(j => j.assigned_to === name && j.status !== 'complete' && j.status !== 'cancelled')
+              const active = openJcs.find(j => j.status === 'in_progress' && !j.paused)
+              const paused = openJcs.filter(j => j.status === 'in_progress' && j.paused)
+              const waitingAccept = openJcs.filter(j => j.status === 'assigned')
+              const onDuty = dutyNow.includes(name)
+              const tc = colorFor(name)
+              const shift = shiftOf.get(name) ?? null
+              const shiftLabel = shiftLabelOf(name)
+              const isActiveShift = shift === activeShift
 
-            {/* Night shift */}
-            <div className={`rounded-xl border p-4 ${activeShift === 'night' ? 'border-brand/40 bg-brand/5 ring-1 ring-brand/20' : 'border-surface-rule bg-surface-card'}`}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`text-[11px] font-bold uppercase tracking-wide ${activeShift === 'night' ? 'text-brand' : 'text-text-muted'}`}>
-                  {nightLabel}
-                </span>
-                {activeShift === 'night' && (
-                  <span className="text-[9px] font-bold bg-brand text-white rounded px-1.5 py-0.5 uppercase tracking-wide">Active now</span>
-                )}
-                <span className="text-[10px] text-text-faint ml-auto">17:00 – 06:59</span>
-              </div>
-              {nightEntries.length === 0 ? (
-                <div className="text-[12px] text-text-faint">No maintenance staff on night shift.</div>
-              ) : (
-                <div className="space-y-2">
-                  {nightEntries.map(e => {
-                    const name = e.person_name ?? '—'
-                    const tc = colorFor(name)
-                    const onDuty = dutyNow.includes(name)
-                    return (
-                      <div key={e.id} className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: tc.dot }} />
-                        <span className="text-[13px] font-medium text-text flex-1">{name}</span>
-                        <span className="text-[10px] text-text-faint">{e.role_key === 'maintenance_tech' ? 'Technician' : 'Assistant'}</span>
-                        {onDuty && <span className="badge badge-ok text-[9px]">ON DUTY</span>}
-                      </div>
-                    )
-                  })}
+              return (
+                <div key={name} className={`rounded-lg border p-3 ${isActiveShift && onDuty ? 'border-ok/30 bg-ok/5' : 'border-surface-rule bg-surface-raised'}`}>
+                  {/* Name + duty badge */}
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: tc.dot }} />
+                      <strong className="text-[13px] text-text truncate">{name}</strong>
+                    </div>
+                    <span className={`badge ${onDuty ? 'badge-ok' : 'badge-gray'}`}>{onDuty ? 'ON DUTY' : 'OFF'}</span>
+                  </div>
+
+                  {/* Shift label */}
+                  {shiftLabel && (
+                    <div className="mb-1.5">
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border ${isActiveShift ? 'border-brand/30 bg-brand/10 text-brand' : 'border-surface-rule text-text-muted'}`}>
+                        {shiftLabel}{isActiveShift && ' · active'}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Job status */}
+                  <div className="text-[12px] mb-1.5">
+                    {active
+                      ? <span className="text-warn font-medium">● Busy: <Link href={`/maintenance/job-cards/${active.id}`} className="text-accent">{active.card_no}</Link> — {active.area}</span>
+                      : paused.length
+                        ? <span className="text-text-muted">⏸ On hold ({paused.length}) — free to take work</span>
+                        : <span className="text-ok">○ Available</span>}
+                  </div>
+
+                  <div className="flex gap-3 text-[11px] text-text-muted mb-1.5">
+                    <span><strong className="text-text tabular-nums">{openJcs.length}</strong> outstanding</span>
+                    <span><strong className="text-text tabular-nums">{waitingAccept.length}</strong> to accept</span>
+                  </div>
+
+                  {openJcs.length > 0 && (
+                    <div className="space-y-0.5">
+                      {openJcs.slice(0, 4).map(j => (
+                        <div key={j.id} className="text-[11px] truncate">
+                          <Link href={`/maintenance/job-cards/${j.id}`} className="text-accent">{j.card_no}</Link>
+                          <span className="text-text-faint"> · {j.status.replace(/_/g, ' ')}</span>
+                          <span className="text-text-muted"> — {j.description}</span>
+                        </div>
+                      ))}
+                      {openJcs.length > 4 && <div className="text-[10px] text-text-faint">+{openJcs.length - 4} more</div>}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              )
+            })}
           </div>
         )}
       </div>
