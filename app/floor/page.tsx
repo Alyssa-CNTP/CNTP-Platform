@@ -9,9 +9,19 @@ import { deriveAuthPassword } from '@/lib/production/operator-auth'
 
 interface FloorOperator { id: string; display_name: string; email: string; section_ids: string[] }
 
+function currentShift(): 'day' | 'night' {
+  const h = new Date().getHours()
+  return h >= 7 && h < 16 ? 'day' : 'night'
+}
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
 export default function FloorLoginPage() {
   const router = useRouter()
   const [operators, setOperators] = useState<FloorOperator[]>([])
+  const [onShift,   setOnShift]   = useState<Set<string>>(new Set())
   const [loading, setLoading]     = useState(true)
   const [selected, setSelected]   = useState<FloorOperator | null>(null)
   const [pin, setPin]             = useState('')
@@ -27,12 +37,33 @@ export default function FloorLoginPage() {
   }, [router])
 
   useEffect(() => {
-    fetch('/api/floor/operators')
-      .then(r => r.json())
-      .then(d => setOperators(Array.isArray(d) ? d : []))
-      .catch(() => setOperators([]))
-      .finally(() => setLoading(false))
+    async function load() {
+      const [opsData, rosterData] = await Promise.all([
+        fetch('/api/floor/operators').then(r => r.json()).catch(() => []),
+        getSupabaseClient()
+          .schema('production' as any)
+          .from('roster_entries')
+          .select('operator_id, roster_periods!inner(start_date, end_date)')
+          .eq('shift', currentShift())
+          .not('operator_id', 'is', null)
+          .lte('roster_periods.start_date', todayISO())
+          .gte('roster_periods.end_date',   todayISO())
+          .then(r => r.data ?? [])
+          .catch(() => []),
+      ])
+      setOperators(Array.isArray(opsData) ? opsData : [])
+      setOnShift(new Set((rosterData as any[]).map((r: any) => r.operator_id).filter(Boolean)))
+      setLoading(false)
+    }
+    load()
   }, [])
+
+  // Sort: on-shift operators first, then alphabetical.
+  const sorted = [...operators].sort((a, b) => {
+    const aS = onShift.has(a.id) ? 0 : 1
+    const bS = onShift.has(b.id) ? 0 : 1
+    return aS - bS || a.display_name.localeCompare(b.display_name)
+  })
 
   async function signIn(p: string) {
     if (!selected || p.length !== 4) return
@@ -76,24 +107,41 @@ export default function FloorLoginPage() {
         ) : !selected ? (
           /* ── Operator picker ── */
           <div className="p-4">
-            {operators.length === 0 ? (
+            {sorted.length === 0 ? (
               <p className="text-center text-[13px] text-text-muted py-10">
                 No operators set up yet. Ask your supervisor to add you.
               </p>
             ) : (
+              <>
+                {onShift.size > 0 && (
+                  <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2">On shift now</p>
+                )}
               <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                {operators.map(op => (
+                {sorted.map((op, i) => {
+                  const isShift  = onShift.has(op.id)
+                  const prevShift = i > 0 && onShift.has(sorted[i - 1].id)
+                  return (
+                    <div key={op.id}>
+                      {!isShift && prevShift && onShift.size > 0 && (
+                        <p className="text-[11px] font-semibold text-text-faint uppercase tracking-wider px-1 mb-2 mt-3">Other operators</p>
+                      )}
                   <button
                     key={op.id} onClick={() => { setSelected(op); setPin(''); setError('') }}
-                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-stone-200 hover:border-brand hover:bg-brand/5 transition-colors text-left"
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${isShift ? 'border-brand/40 bg-brand/5 hover:border-brand hover:bg-brand/10' : 'border-stone-200 hover:border-brand hover:bg-brand/5'}`}
                   >
                     <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
                       <span className="font-mono font-bold text-[12px] text-stone-600">{op.display_name.slice(0, 2).toUpperCase()}</span>
                     </div>
-                    <span className="font-medium text-[15px] text-text">{op.display_name}</span>
+                    <span className="font-medium text-[15px] text-text flex-1">{op.display_name}</span>
+                    {isShift && (
+                      <span className="text-[10px] font-semibold text-brand bg-brand/10 rounded-full px-2 py-0.5 uppercase tracking-wide">On shift</span>
+                    )}
                   </button>
-                ))}
+                    </div>
+                  )
+                })}
               </div>
+              </>
             )}
           </div>
         ) : (
