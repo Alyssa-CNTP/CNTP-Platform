@@ -189,7 +189,7 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'maintenance_qc',         label: 'Maintenance QC',           desc: 'Performs post-maintenance QC checks' },
   ],
   Management: [
-    { role: 'management_default', label: 'Management (Default)', desc: 'All permissions off — toggle on what they need' },
+    { role: 'management_default', label: 'Management (Default)', desc: 'Read-only across all modules — view quality, production, maintenance, reports. Toggle write/delete on per person if needed.' },
   ],
   Sales: [
     { role: 'sales_default',    label: 'Sales (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -318,7 +318,23 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   },
 
   // ── Management — read-only across platform ─────────────────────────────────
+  // Directors and analysts get read/export access to every module by default.
+  // Write, delete, and admin actions remain off — toggle those on per person.
   management_default: {
+    // Quality (view + export, no write/delete)
+    can_view_history: true,
+    can_export_csv:   true,
+    // Production (view only)
+    can_view_ops_dashboard: true,
+    can_view_all_sections:  true,
+    can_view_live_history:  true,
+    // Maintenance (view module — no job-card actions)
+    can_access_maintenance: true,
+    // Management & Reporting
+    can_view_management: true,
+    can_view_reports:    true,
+    can_export_reports:  true,
+    // Staff directory (read-only)
     can_view_staff: true,
   },
 
