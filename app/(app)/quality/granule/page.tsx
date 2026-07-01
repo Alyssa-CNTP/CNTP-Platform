@@ -1318,6 +1318,7 @@ interface RunCardProps {
   onUpdateSpec: (id: number, spec: any) => void
   onRecheckSample: (id: number, f: any) => void
   onEditSample: (id: number, f: any) => void
+  onDeleteSample: (id: number) => void
   onCommentSample: (id: number, f: any) => void
   onEditTasting: (id: number, f: any) => void
   onUpdateBatch: (id: number, bn: string) => void
@@ -1326,7 +1327,7 @@ interface RunCardProps {
   canApprove: boolean
 }
 
-function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
+function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onDeleteSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
   const [expanded, setExpanded]         = useState(true)
   const [editingSpec, setEditingSpec]   = useState(false)
   const [editingSample, setEditingSample] = useState<any>(null)
@@ -1507,6 +1508,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                           </td>
                           <td className="px-2 py-2 text-center whitespace-nowrap">
                             <button onClick={() => setEditingSample(s)} className="text-[11px] px-1.5 py-0.5 rounded border border-surface-rule bg-surface-card cursor-pointer" title="Edit">✏️</button>
+                            <button onClick={() => onDeleteSample(s.id)} className="text-[11px] px-1.5 py-0.5 rounded border border-err/30 bg-err/8 text-err cursor-pointer ml-1" title="Delete sample">🗑</button>
                           </td>
                         </tr>
                         {moistVio && (
@@ -2159,6 +2161,17 @@ export default function GranulePage() {
     setRuns(prev => prev.map(r => ({ ...r, tastings: (r.tastings || []).map((t: any) => t.id === tastingId ? { ...t, ...data } : t) })))
   }
 
+  async function handleDeleteSample(sampleId: number) {
+    if (!confirm('Delete this sample?')) return
+    const run = runs.find(r => (r.samples || []).some((s: any) => s.id === sampleId))
+    const { error } = await db.schema('qms').from('granule_samples').delete().eq('id', sampleId)
+    if (error) { alert(error.message); return }
+    const remaining = (run?.samples || []).filter((s: any) => s.id !== sampleId)
+    const anyVio = remaining.some((s: any) => (s.violations || []).length > 0)
+    if (run) await db.schema('qms').from('granule_runs').update({ overall_status: anyVio ? 'Fail' : 'Pass' }).eq('id', run.id)
+    setRuns(prev => prev.map(r => r.id !== run?.id ? r : { ...r, samples: remaining, overall_status: anyVio ? 'Fail' : 'Pass' }))
+  }
+
   async function handleCommentSample(sampleId: number, data: any) {
     const { data: saved, error } = await db.schema('qms').from('granule_samples').update({ qc_comment: data.qc_comment }).eq('id', sampleId).select('qc_comment').single()
     if (error) { alert(error.message); return }
@@ -2280,6 +2293,7 @@ export default function GranulePage() {
                 onUpdateSpec={handleUpdateSpec}
                 onRecheckSample={handleRecheckSample}
                 onEditSample={handleEditSample}
+                onDeleteSample={handleDeleteSample}
                 onCommentSample={handleCommentSample}
                 onEditTasting={handleEditTasting}
                 onUpdateBatch={handleUpdateBatch}

@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Pasteuriser required fields + typo guard; granule sample delete; final-product upload routing fix)
+
+**Files changed:**
+- `app/(app)/quality/pasteuriser/page.tsx`
+- `app/(app)/quality/granule/page.tsx`
+- `app/(app)/quality/lab-results/page.tsx`
+
+**Changes:**
+- **Pasteuriser sample entry**: bin/bag number, and (when the Moisture/BD toggle is on) untapped BD and moisture are now required before a sample can be saved. When the Sieve toggle is on, all 7 sieve fractions are now required (was: no requirement at all).
+- **Pasteuriser typo guard**: added `PAST_SANITY_BOUNDS` — a hard, non-bypassable plausibility check (moisture 0–15%, bulk density 150–450cc/100g, hourly temp 60–150°C) that blocks saving outright. This is separate from the existing statistical outlier warning (which only required ticking a checkbox to override) — the reported bug was a moisture value of 25% saving silently because the statistical check needs ≥3 prior samples with real spread to trigger, so early-batch or tightly-clustered samples let extreme typos straight through. The new hard bounds catch those regardless of history.
+- **Granule**: added a delete button (🗑) for individual samples within a run — previously only the whole run could be deleted, not a single sample row.
+- **Lab Results (Final Product)**: fixed a one-line bug where every upload on the "Final Product Lab Results" page was hardcoded to `workcenter: 'rawMaterial'`, causing residue/pesticide/micro/etc. uploads dropped into the Final Product tabs to be parsed with the raw-material extraction prompt and tagged as raw material data. Now correctly sends `workcenter: 'pasteuriser'`, so Final Product uploads use the right extraction prompt and are tagged/saved as final product data.
+
+---
+
 ## 2026-07-02 — Alyssa (Maintenance tech PIN login + unified roster shift highlight)
 
 **Files changed:**
