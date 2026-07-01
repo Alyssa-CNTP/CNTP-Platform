@@ -164,6 +164,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-01 — Alyssa (full staff directory sync from employee spreadsheet)
+
+**Files changed:**
+- `supabase/migrations/20260623_001_staff_directory.sql` (data only — no schema change)
+
+**Changes:**
+- Synced all 125 employees from the canonical CNTP Employees spreadsheet into `production.employees` on both staging and production DBs.
+- 48 new employees inserted (staging) / 47 (production); remaining updated with correct name, department, job title, and skill certifications inferred from the roster.
+- Fixed 21 name spelling inconsistencies in `roster_entries.person_name` to match the canonical spreadsheet (e.g. "Grant Alexandra" → "Grant Alexander", "Shuaib Davids" → "Shuaib Sentso", "Ezetu Siminga" → "Amoretta Louw", and 18 others).
+- Employees not in the spreadsheet (test operators, "Alyssa", "Cyril", etc.) were left untouched.
+
+---
+
 ## 2026-07-01 — Alyssa (roster period selector date duplication fix)
 
 **Files changed:**
