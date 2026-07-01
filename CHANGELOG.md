@@ -5,28 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-07-02 — Gustav (Granule: hard moisture ceiling on samples)
+## 2026-07-02 — Alyssa (Capture overview — hierarchical tables, cross-shift totals, spillage rename)
 
 **Files changed:**
-- `app/(app)/quality/granule/page.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+- `components/production/capture/SievingCapture.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
 
 **Changes:**
-- Granule sample entry (add + edit, both dryers) now hard-blocks moisture readings above 10% — a value that high is implausible for granules and almost always a typo. Cannot be bypassed, same as the sanity-bound approach added for pasteuriser.
-
----
-
-## 2026-07-02 — Gustav (Pasteuriser required fields + typo guard; granule sample delete; final-product upload routing fix)
-
-**Files changed:**
-- `app/(app)/quality/pasteuriser/page.tsx`
-- `app/(app)/quality/granule/page.tsx`
-- `app/(app)/quality/lab-results/page.tsx`
-
-**Changes:**
-- **Pasteuriser sample entry**: bin/bag number, and (when the Moisture/BD toggle is on) untapped BD and moisture are now required before a sample can be saved. When the Sieve toggle is on, all 7 sieve fractions are now required (was: no requirement at all).
-- **Pasteuriser typo guard**: added `PAST_SANITY_BOUNDS` — a hard, non-bypassable plausibility check (moisture 0–15%, bulk density 150–450cc/100g, hourly temp 60–150°C) that blocks saving outright. This is separate from the existing statistical outlier warning (which only required ticking a checkbox to override) — the reported bug was a moisture value of 25% saving silently because the statistical check needs ≥3 prior samples with real spread to trigger, so early-batch or tightly-clustered samples let extreme typos straight through. The new hard bounds catch those regardless of history.
-- **Granule**: added a delete button (🗑) for individual samples within a run — previously only the whole run could be deleted, not a single sample row.
-- **Lab Results (Final Product)**: fixed a one-line bug where every upload on the "Final Product Lab Results" page was hardcoded to `workcenter: 'rawMaterial'`, causing residue/pesticide/micro/etc. uploads dropped into the Final Product tabs to be parsed with the raw-material extraction prompt and tagged as raw material data. Now correctly sends `workcenter: 'pasteuriser'`, so Final Product uploads use the right extraction prompt and are tagged/saved as final product data.
+- Debagging table restructured: rows grouped by lot/batch with expand/collapse, subtotal per lot, bucket elevator and machine spillage shown as separate named rows, total excl. spillage and total incl. spillage at bottom
+- Bagging table restructured: 3-level hierarchy (product → lot → individual bag) — tap product row to see lot breakdown with subtotals, tap lot row to see individual bags; product-level totals in each product row header
+- Spillage fields renamed: Spillage 1 → "Bucket elevator", Spillage 2 → "Machine spillage" in the capture debagging step
+- Production order (from Acumatica shift assignment) now shown at top of overview
+- Overview loads the other shift's session and combines it — same variant+grade+lot bags from morning and afternoon shift merge into shared totals
+- Mass balance now uses total incl. both spillage types as the "in" figure
 
 ---
 
