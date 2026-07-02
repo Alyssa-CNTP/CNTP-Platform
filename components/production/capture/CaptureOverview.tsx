@@ -116,7 +116,7 @@ export function CaptureOverview({
   const totalIncl     = debagOnlyKg + bucketKg + machineKg
   const totalOut      = productGroups.reduce((s, g) => s + g.totalKg, 0)
   const totalBags     = productGroups.reduce((s, g) => s + g.totalCount, 0)
-  const variance      = totalIncl - totalOut
+  const variance      = totalOut - totalIncl
   const withinTol     = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
@@ -156,7 +156,7 @@ export function CaptureOverview({
       if (g.lots.length > 1) lines.push(`Total ${g.product}\t\t\t\t${g.totalCount}\t${g.totalKg.toFixed(1)}`)
     })
     lines.push('', `Total out\t\t\t\t${totalBags}\t${totalOut.toFixed(1)}`)
-    lines.push(`Variance\t\t\t\t\t${variance > 0 ? '+' : ''}${variance.toFixed(1)}`)
+    lines.push(`Balance (out − in)\t\t\t\t\t${variance > 0 ? '+' : ''}${variance.toFixed(1)}`)
     navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   }
 
@@ -469,7 +469,7 @@ export function CaptureOverview({
 
             {/* Mass balance */}
             <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
-              <span className="text-stone-500">In {totalIncl.toFixed(1)} − Out {totalOut.toFixed(1)} =</span>
+              <span className="text-stone-500">Out {totalOut.toFixed(1)} − In {totalIncl.toFixed(1)} =</span>
               <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
                 <span className={withinTol ? 'text-ok' : 'text-warn'}>{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg</span>
                 {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
