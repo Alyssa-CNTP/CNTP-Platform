@@ -1,7 +1,7 @@
 'use client'
 
 // app/(app)/intelligence/global-wits/page.tsx
-// Drop a Global Wits trade .xlsx → parse buyers → save as leads, company profiles, trade signals
+// Parse Global Wits .xlsx in the browser → send JSON rows to API → leads + signals saved to DB
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import {
@@ -11,6 +11,18 @@ import {
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface NormalisedRow {
+  purchaser:  string
+  supplier:   string
+  country:    string
+  product:    string
+  value_usd:  number
+  weight_kg:  number
+  date:       string
+  datasource: string
+  hs_code:    string
+}
 
 interface ImportResult {
   ok:          boolean
@@ -31,6 +43,79 @@ interface PastImport {
   created_at:    string
 }
 
+// ─── xlsx parsing (browser-side) ─────────────────────────────────────────────
+
+function normHscode(rows: any[], datasource: string): NormalisedRow[] {
+  return rows
+    .filter(r => r['PURCHASER'] && String(r['PURCHASER']).trim())
+    .map(r => ({
+      purchaser:  String(r['PURCHASER']           ?? '').trim(),
+      supplier:   String(r['SUPPLIER']            ?? '').trim(),
+      country:    String(r['PURCHASING COUNTRY']  ?? r['COUNTRY OF ORIGIN'] ?? '').trim(),
+      product:    String(r['PRODUCT DESCRIPTION'] ?? '').trim().slice(0, 300),
+      value_usd:  Number(r['TOTAL VALUE($)']      ?? 0),
+      weight_kg:  Number(r['WEIGHT(KG)']          ?? 0),
+      date:       r['DATES'] ? String(r['DATES']).slice(0, 10) : '',
+      datasource: datasource || String(r['DATASOURCE'] ?? '').trim(),
+      hs_code:    String(r['HS CODE'] ?? '').trim(),
+    }))
+}
+
+function normUs(rows: any[]): NormalisedRow[] {
+  return rows
+    .filter(r => r['CONSIGNEE'] && String(r['CONSIGNEE']).trim().toUpperCase() !== 'NONE')
+    .map(r => ({
+      purchaser:  String(r['CONSIGNEE']            ?? '').trim(),
+      supplier:   String(r['SHIPPER']              ?? '').trim(),
+      country:    'UNITED STATES',
+      product:    String(r['PRODUCT DESCRIPTION']  ?? '').trim().slice(0, 300),
+      value_usd:  Number(r['KILO WEIGHT PER PRODUCT'] ?? 0),
+      weight_kg:  Number(r['KILO WEIGHT PER PRODUCT'] ?? 0),
+      date:       r['ACT ARRIVAL DATE '] ? String(r['ACT ARRIVAL DATE ']).slice(0, 10) : '',
+      datasource: 'US Customs',
+      hs_code:    '',
+    }))
+}
+
+function normGlobal(rows: any[]): NormalisedRow[] {
+  return rows
+    .filter(r => r['CONSIGNEE'] && String(r['CONSIGNEE']).trim())
+    .map(r => ({
+      purchaser:  String(r['CONSIGNEE']            ?? '').trim(),
+      supplier:   String(r['SHIPPER']              ?? '').trim(),
+      country:    String(r['DESTINATION COUNTRY']  ?? '').trim(),
+      product:    String(r['PRODUCT DESCRIPTION']  ?? '').trim().slice(0, 300),
+      value_usd:  Number(r['GROSS WEIGHT']         ?? 0),
+      weight_kg:  Number(r['GROSS WEIGHT']         ?? 0),
+      date:       r['MONTHS'] ? String(r['MONTHS']) : '',
+      datasource: 'Global Shipping',
+      hs_code:    '',
+    }))
+}
+
+async function parseXlsx(file: File): Promise<NormalisedRow[]> {
+  const XLSX = await import('xlsx')
+  const buffer = await file.arrayBuffer()
+  const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
+  const rows: NormalisedRow[] = []
+
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name]
+    const data  = XLSX.utils.sheet_to_json(sheet, { defval: '' })
+    const lower = name.toLowerCase()
+
+    if (lower.includes('hscode') || lower.includes('rooibos')) {
+      rows.push(...normHscode(data, lower.includes('rooibos') ? 'Rooibos' : ''))
+    } else if (lower === 'us') {
+      rows.push(...normUs(data))
+    } else if (lower.includes('global') || lower.includes('shipping')) {
+      rows.push(...normGlobal(data))
+    }
+  }
+
+  return rows
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function timeAgo(iso: string) {
@@ -46,7 +131,7 @@ function Spinner() {
 
 // ─── Drop zone ────────────────────────────────────────────────────────────────
 
-function DropZone({ onFile, loading }: { onFile: (f: File) => void; loading: boolean }) {
+function DropZone({ onFile, loading, status }: { onFile: (f: File) => void; loading: boolean; status: string }) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -63,9 +148,7 @@ function DropZone({ onFile, loading }: { onFile: (f: File) => void; loading: boo
       onDrop={handleDrop}
       onClick={() => !loading && inputRef.current?.click()}
       className={`relative rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-all select-none ${
-        dragging
-          ? 'border-accent bg-accent/5'
-          : 'border-surface-rule hover:border-accent/50 hover:bg-surface-card'
+        dragging ? 'border-accent bg-accent/5' : 'border-surface-rule hover:border-accent/50 hover:bg-surface-card'
       } ${loading ? 'pointer-events-none opacity-60' : ''}`}
     >
       <input
@@ -85,11 +168,11 @@ function DropZone({ onFile, loading }: { onFile: (f: File) => void; loading: boo
         )}
         <div>
           <p className="font-display font-semibold text-[15px] text-text">
-            {loading ? 'Importing…' : 'Drop a Global Wits .xlsx here'}
+            {loading ? status : 'Drop a Global Wits .xlsx here'}
           </p>
           <p className="text-[12px] text-text-muted mt-1">
             {loading
-              ? 'Parsing shipment rows, creating leads and trade signals…'
+              ? 'This may take a moment for large files…'
               : 'Or click to browse — supports hscode, US customs, global shipping, and rooibos sheets'}
           </p>
         </div>
@@ -132,7 +215,7 @@ function ResultBanner({ result }: { result: ImportResult }) {
       </div>
       <div className="px-5 pb-4">
         <p className="text-[12px] text-text-muted">
-          Each buyer now has a company profile, an account at <strong>Lead</strong> stage, and a trade signal in the signal feed.
+          Each buyer now has a company profile, an account at <strong>Lead</strong> stage, and a trade signal in the feed.
           {' '}<a href="/sales" className="text-accent hover:underline">View in Sales →</a>
         </p>
       </div>
@@ -151,7 +234,7 @@ function Stat({ label, value, accent }: { label: string; value: number; accent?:
   )
 }
 
-// ─── Past imports list ────────────────────────────────────────────────────────
+// ─── Past imports ─────────────────────────────────────────────────────────────
 
 function PastImports({ imports, loading, onRefresh }: { imports: PastImport[]; loading: boolean; onRefresh: () => void }) {
   if (loading) return <div className="text-[12px] text-text-faint flex items-center gap-2"><Spinner /> Loading import history…</div>
@@ -161,9 +244,7 @@ function PastImports({ imports, loading, onRefresh }: { imports: PastImport[]; l
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <h3 className="font-display font-semibold text-[13px] text-text">Previous imports</h3>
-        <button onClick={onRefresh} className="text-text-faint hover:text-text">
-          <RefreshCw size={12} />
-        </button>
+        <button onClick={onRefresh} className="text-text-faint hover:text-text"><RefreshCw size={12} /></button>
       </div>
       <div className="space-y-2">
         {imports.map(imp => (
@@ -188,14 +269,14 @@ function PastImports({ imports, loading, onRefresh }: { imports: PastImport[]; l
   )
 }
 
-// ─── What this does explainer ─────────────────────────────────────────────────
+// ─── Explainer ────────────────────────────────────────────────────────────────
 
 function Explainer() {
   const items = [
-    { icon: FileSpreadsheet, color: 'text-accent',   label: 'Parse all sheets',    desc: 'Reads hscode, US customs, global shipping, and rooibos sheets automatically' },
-    { icon: Building2,       color: 'text-info',     label: 'Company profiles',    desc: 'Each unique PURCHASER / CONSIGNEE becomes a company profile with shipment history (Panjiva layer)' },
-    { icon: TrendingUp,      color: 'text-ok',       label: 'Sales leads',         desc: 'Every buyer lands in your accounts pipeline at Lead stage with current supplier and a suggested pitch angle' },
-    { icon: Globe2,          color: 'text-warn',     label: 'Trade signals',       desc: 'A trade signal per company flows into the signal feed so they surface alongside news and social intel' },
+    { icon: FileSpreadsheet, color: 'text-accent', label: 'Parse all sheets',  desc: 'Reads hscode, US customs, global shipping, and rooibos sheets automatically' },
+    { icon: Building2,       color: 'text-info',   label: 'Company profiles', desc: 'Each unique PURCHASER / CONSIGNEE becomes a company profile with full shipment history' },
+    { icon: TrendingUp,      color: 'text-ok',     label: 'Sales leads',      desc: 'Every buyer lands in your accounts pipeline at Lead stage with a suggested pitch angle' },
+    { icon: Globe2,          color: 'text-warn',   label: 'Trade signals',    desc: 'A trade signal per company flows into the signal feed alongside news and social intel' },
   ]
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -216,6 +297,7 @@ function Explainer() {
 
 export default function GlobalWitsPage() {
   const [loading,  setLoading]  = useState(false)
+  const [status,   setStatus]   = useState('')
   const [result,   setResult]   = useState<ImportResult | null>(null)
   const [imports,  setImports]  = useState<PastImport[]>([])
   const [histLoad, setHistLoad] = useState(true)
@@ -235,11 +317,25 @@ export default function GlobalWitsPage() {
   const handleFile = useCallback(async (file: File) => {
     setLoading(true); setResult(null)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const r = await fetch('/api/global-wits', { method: 'POST', body: fd })
+      setStatus('Parsing spreadsheet…')
+      const rows = await parseXlsx(file)
+
+      if (rows.length === 0) {
+        setResult({ ok: false, error: 'No purchaser/consignee rows found in this file.', rows_parsed: 0, companies: 0, created: 0, updated: 0, filename: file.name })
+        setLoading(false); return
+      }
+
+      setStatus(`Saving ${rows.length} rows to database…`)
+      const r = await fetch('/api/global-wits', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ rows, filename: file.name }),
+      })
       const d = await r.json()
-      setResult(d.error ? { ok: false, error: d.error, rows_parsed: 0, companies: 0, created: 0, updated: 0, filename: file.name } : { ...d, ok: true })
+      setResult(d.error
+        ? { ok: false, error: d.error, rows_parsed: 0, companies: 0, created: 0, updated: 0, filename: file.name }
+        : { ...d, ok: true }
+      )
       if (!d.error) fetchHistory()
     } catch (e: any) {
       setResult({ ok: false, error: e.message ?? 'Upload failed', rows_parsed: 0, companies: 0, created: 0, updated: 0, filename: file.name })
@@ -249,8 +345,6 @@ export default function GlobalWitsPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-
-      {/* Header */}
       <div className="bg-surface-card border-b border-surface-rule px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
@@ -265,27 +359,18 @@ export default function GlobalWitsPage() {
               Drop a Global Wits trade file — buyers become leads, profiles, and trade signals automatically.
             </p>
           </div>
-          <a
-            href="/sales"
-            className="hidden sm:flex items-center gap-1.5 text-[12px] text-text-muted hover:text-accent transition-colors"
-          >
+          <a href="/sales" className="hidden sm:flex items-center gap-1.5 text-[12px] text-text-muted hover:text-accent transition-colors">
             View Sales pipeline <ArrowRight size={12} />
           </a>
         </div>
       </div>
 
-      {/* Body */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[860px] mx-auto p-6 space-y-6">
-
-          <DropZone onFile={handleFile} loading={loading} />
-
+          <DropZone onFile={handleFile} loading={loading} status={status} />
           {result && <ResultBanner result={result} />}
-
           <Explainer />
-
           <PastImports imports={imports} loading={histLoad} onRefresh={fetchHistory} />
-
         </div>
       </div>
     </div>
