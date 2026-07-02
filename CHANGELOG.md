@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara: full visual redesign — dark header, image cards, sidebar filters, routing)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **New dark forest green header**: sticky top bar with Leaf logo, "Engine active" dot, and an "ⓘ About" button; tab bar on same dark background with green active indicator — replaces the old light earthy header.
+- **Shopping-site layout for Signal Feed**: left sidebar (264px, sticky) contains all filter controls (search, classification, relevance, region, keyword group, sort); main area is a 2-column card grid — mirrors the reference design requested.
+- **Redesigned signal cards**: image area (148px, uses `media_url` or classification-coloured gradient with Leaf icon), platform + classification badge overlays, score bar, title (2-line clamp), summary (3-line clamp), source link, and a 4-button action row: **Save** (bookmarks via `/api/marketing`), **Lead** (promotes via `/api/accounts`), **Gap** (navigates + auto-runs Gap Finder), **Loophole** (navigates + auto-runs Loophole Scan).
+- **Hero card**: first item in the card grid, full-width dark green gradient with Leaf icon, Alara branding, live signal count and update time.
+- **Signal drawer**: removed auto-analysis on open; replaced with an explicit "Analyse with Alara" button so AI is not triggered unless requested.
+- **Cross-section routing**: Gap/Loophole buttons on cards lift `gapPreload`/`loopholePreload` state to the page root and switch section; GapSection and LoopholesSection auto-run analysis on preload change using a `prevPreload` ref to avoid duplicate runs.
+- **Map toggle**: world map is now collapsed by default; "Show map" button expands it above the card grid.
+- **New colour scheme**: dark header (`#0D1B09`), warm parchment background (`#F0EDE6`), forest green brand (`#2D6B1E`) replacing old earthy terracotta as the primary brand tone; terracotta (`#B84B25`) retained for threat/loophole contexts; amber retained for warnings.
+- **About section — signal schedule**: added a styled weekly schedule table (Mon–Sun) showing which regions/themes Alara scrapes on each day.
+- All section interiors (Gap, Loopholes, Intel, Vault, Compass) updated to use `C.brand` (forest green) for active states and primary buttons instead of old `C.red`.
+
+---
+
 ## 2026-07-02 — Alyssa (Production capture: auto-fill assignments, remove tablet setup, session delete)
 
 **Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/history/page.tsx`, `app/(app)/production/device/page.tsx` (deleted), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
