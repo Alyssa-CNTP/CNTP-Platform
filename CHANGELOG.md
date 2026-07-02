@@ -6,6 +6,15 @@ Format: date · developer · files changed · description of code changes.
 ---
 
 
+## 2026-07-02 — Alyssa (Production assign page: remove roster/staff links; fix filled-count bug)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`
+
+- **WorkforceTabs removed**: Shift Roster and Staff & Skills navigation links removed from the Assign Sections page — the page now shows assigned sections only.
+- **Filled-count bug fixed**: "Filled X people" message always showed 0 because the counter was incremented inside the `setDrafts` async callback. Calculation moved outside so the count is correct when `setFillNote` is called.
+
+---
+
 ## 2026-07-02 — Alyssa (Production capture: bucket elevator included in balance; balance sign fix)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
