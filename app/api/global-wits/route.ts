@@ -218,7 +218,7 @@ export async function GET(req: Request) {
       value_usd: (p.panjiva_data as any)?.total_value_usd ?? 0,
       shipments: (p.panjiva_data as any)?.shipment_count  ?? 0,
     }))
-    .sort((a, b) => b.value_usd - a.value_usd).slice(0, 10)
+    .sort((a, b) => b.value_usd - a.value_usd).slice(0, 60)
 
   return NextResponse.json({
     imports: docs ?? [],
