@@ -378,7 +378,7 @@ function CheckCard(props: any) {
       {/* Number (with photo-read) */}
       {d.kind === 'number' && (
         <ValueCapture label={d.label} unit={d.unit ?? spec?.unit ?? ''} value={numberValue} onChange={onNumber}
-          disabled={readOnly} spec={spec} />
+          disabled={readOnly} spec={spec} allowNegative={d.allowNegative} />
       )}
 
       {/* Text (+ optional QC hint) */}
@@ -451,8 +451,8 @@ function CheckCard(props: any) {
 }
 
 // ── Numeric input with camera photo-read ──────────────────────────────────────
-function ValueCapture({ label, unit, value, onChange, disabled, spec }: {
-  label: string; unit: string; value: string; onChange: (v: string) => void; disabled: boolean; spec?: CheckSpec
+function ValueCapture({ label, unit, value, onChange, disabled, spec, allowNegative }: {
+  label: string; unit: string; value: string; onChange: (v: string) => void; disabled: boolean; spec?: CheckSpec; allowNegative?: boolean
 }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -482,7 +482,7 @@ function ValueCapture({ label, unit, value, onChange, disabled, spec }: {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
-        <input type="number" inputMode="decimal" value={value} disabled={disabled} onChange={e => onChange(e.target.value)}
+        <input type="number" inputMode={allowNegative ? 'text' : 'decimal'} value={value} disabled={disabled} onChange={e => onChange(e.target.value)}
           placeholder={spec?.min != null || spec?.max != null ? `${spec?.min ?? ''}–${spec?.max ?? ''}` : ''}
           className={INP + (oor ? ' border-warn' : '')} />
         {unit && <span className="text-[12px] text-text-muted w-8 shrink-0">{unit}</span>}
