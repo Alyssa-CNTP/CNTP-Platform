@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Checks: indent screen angle allows negative values)
+
+**Files changed:**
+- `lib/production/checks-config.ts`
+- `components/production/capture/ChecksPanel.tsx`
+
+**Changes:**
+- Added `allowNegative?: boolean` field to `MachineCheckDef` interface
+- Set `allowNegative: true` on the `indent_screen_angle` check definition
+- Updated `ValueCapture` to use `inputMode="text"` when `allowNegative` is true — shows the minus key on mobile keyboards
+
+---
 
 ## 2026-07-02 — Alyssa (Production capture: operator must choose variant; mismatch warning + supervisor note)
 
