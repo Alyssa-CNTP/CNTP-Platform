@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Permissions: quality read toggles, staff/roster gate, delete error surfacing)
+
+**Files changed:**
+- `lib/auth/permission-registry.ts` — replaced `read: 'dept'` with `read: 'can_view_history'` on quality.lab_results, quality.specs, quality.runs, quality.sieving
+- `app/(app)/layout.tsx` — removed staff/roster from always-open list; added route guards for `/production/staff` and `/production/roster` behind `can_view_staff`
+- `app/api/admin/users/[id]/route.ts` — delete auth account before app_roles row; surface real Supabase error instead of generic "Failed to delete user"
+
+**Changes:**
+- Quality matrix no longer shows "by dept" for lab results, specs, runs, and sieving — now shows a real `can_view_history` toggle so cross-department users (e.g. Management) can be granted read access
+- Staff Directory, Skills Matrix, SOP Catalogue, and Shift Roster are now permission-gated behind `can_view_staff` — previously open to all logged-in users
+- User delete API fixed to show the actual Supabase error on failure (e.g. SSO identity conflict) and to delete auth account before app_roles to prevent orphaned records
+
+---
+
 ## 2026-07-02 — Alyssa (Alara: Signal Engine merged in, full UI update, sidebar cleanup)
 
 **Files changed:**
