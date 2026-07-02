@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara CRM: marketing loop wired — phase 2 step 2)
+
+**Files changed:**
+- `app/api/marketing/route.ts` — mirrored campaign saves + audience briefs to sales schema
+- `supabase/migrations/20260702_002_audiences_name_unique.sql` (new) — unique constraint on `sales.audiences.name`
+
+**Changes:**
+- `save_campaign` now writes to both `marketing.campaigns` (existing) and `sales.campaigns` (CRM). UI unchanged.
+- `audience_brief` generation now upserts to `sales.audiences` (tag, signal provenance, brief excerpt) after generating. Best-effort, never blocks the response.
+- Unique constraint on `sales.audiences.name` applied (migration run in Supabase staging).
+
+---
+
 ## 2026-07-02 — Alyssa (Alara CRM: lead pipeline — phase 2 step 1)
 
 **Files changed:**
