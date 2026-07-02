@@ -11,9 +11,10 @@ import React, { useState, useMemo } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
 import { sievingTotals, type SievingData } from '@/components/production/capture/SievingCapture'
+import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
@@ -38,45 +39,69 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
   let bucketKg = 0
   let machineKg = 0
   prods.forEach(p => {
-    // spillage[0] = bucket elevator, spillage[1] = machine spillage
-    ;(p.data.spillage ?? []).forEach((r, i) => {
-      if (num(r.kg) > 0) {
-        if (i === 0) bucketKg += num(r.kg)
-        else         machineKg += num(r.kg)
-      }
-    })
-    ;(p.data.debag ?? []).forEach((r, i) => {
-      if (num(r.nett) === 0) return
-      const lot = (r.lot || p.lot || '—').trim()
-      const row: DebagRow = { bagNo: r.bag_no || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
-      const g = map.get(lot)
-      if (g) { g.rows.push(row); g.totalKg += num(r.nett) }
-      else map.set(lot, { lot, rows: [row], totalKg: num(r.nett) })
-    })
+    const d = p.data as any
+    if ('inputs' in d) {
+      // RefiningData: inputs array, no spillage
+      ;(d.inputs ?? []).forEach((r: any, i: number) => {
+        if (num(r.weight) === 0) return
+        const lot = (r.lot || p.lot || '—').trim()
+        const row: DebagRow = { bagNo: r.serial || `Input bag ${i + 1}`, kg: num(r.weight), variant: p.variant, loggedAt: r.logged_at }
+        const g = map.get(lot)
+        if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
+        else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
+      })
+    } else {
+      // SievingData: debag + spillage
+      ;(d.spillage ?? []).forEach((r: any, i: number) => {
+        if (num(r.kg) > 0) {
+          if (i === 0) bucketKg += num(r.kg)
+          else         machineKg += num(r.kg)
+        }
+      })
+      ;(d.debag ?? []).forEach((r: any, i: number) => {
+        if (num(r.nett) === 0) return
+        const lot = (r.lot || p.lot || '—').trim()
+        const row: DebagRow = { bagNo: r.bag_no || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
+        const g = map.get(lot)
+        if (g) { g.rows.push(row); g.totalKg += num(r.nett) }
+        else map.set(lot, { lot, rows: [row], totalKg: num(r.nett) })
+      })
+    }
   })
   return { groups: Array.from(map.values()), bucketKg, machineKg }
 }
 
 function buildProductGroups(prods: Production[]): ProductGroup[] {
   const prodMap = new Map<string, ProductGroup>()
+
+  function addBag(p: Production, b: { productType: string; weight: string; batch?: string; destination?: string; serial: string; logged_at?: string; description?: string; code?: string | null }) {
+    if (num(b.weight) === 0) return
+    const lot   = (b.batch || p.lot || '—').trim()
+    const grade = (b.destination || p.grade || '—').trim()
+    const flat: FlatBag = { product: b.productType, lot, kg: num(b.weight), variant: p.variant, grade, serial: b.serial, loggedAt: b.logged_at, description: b.description }
+    let pg = prodMap.get(b.productType)
+    if (!pg) { pg = { product: b.productType, acumaticaCode: b.code ?? null, acumaticaDesc: b.description, lots: [], totalCount: 0, totalKg: 0 }; prodMap.set(b.productType, pg) }
+    if (!pg.acumaticaDesc && b.description) pg.acumaticaDesc = b.description
+    if (!pg.acumaticaCode && b.code)        pg.acumaticaCode = b.code ?? null
+    pg.totalCount++; pg.totalKg += num(b.weight)
+    const lotKey = `${lot}||${p.variant}||${grade}`
+    let lg = pg.lots.find(l => `${l.lot}||${l.variant}||${l.grade}` === lotKey)
+    if (!lg) { lg = { lot, variant: p.variant, grade, bags: [], count: 0, kg: 0 }; pg.lots.push(lg) }
+    lg.bags.push(flat); lg.count++; lg.kg += num(b.weight)
+  }
+
   prods.forEach((p) => {
-    ;(p.data.outputs ?? []).forEach((b) => {
-      if (num(b.weight) === 0) return
-      const lot   = (b.batch || p.lot || '—').trim()
-      const grade = (b.destination || p.grade || '—').trim()
-      const flat: FlatBag = { product: b.productType, lot, kg: num(b.weight), variant: p.variant, grade, serial: b.serial, loggedAt: b.logged_at, description: b.description }
-
-      let pg = prodMap.get(b.productType)
-      if (!pg) { pg = { product: b.productType, acumaticaCode: b.code, acumaticaDesc: b.description, lots: [], totalCount: 0, totalKg: 0 }; prodMap.set(b.productType, pg) }
-      if (!pg.acumaticaDesc && b.description) pg.acumaticaDesc = b.description
-      if (!pg.acumaticaCode && b.code)        pg.acumaticaCode = b.code
-      pg.totalCount++; pg.totalKg += num(b.weight)
-
-      const lotKey = `${lot}||${p.variant}||${grade}`
-      let lg = pg.lots.find(l => `${l.lot}||${l.variant}||${l.grade}` === lotKey)
-      if (!lg) { lg = { lot, variant: p.variant, grade, bags: [], count: 0, kg: 0 }; pg.lots.push(lg) }
-      lg.bags.push(flat); lg.count++; lg.kg += num(b.weight)
-    })
+    const d = p.data as any
+    if ('inputs' in d) {
+      // RefiningData: outputB/C/D groups each have a bags array
+      ;[d.outputB, d.outputC, d.outputD].forEach((grp: any) => {
+        if (!grp) return
+        ;(grp.bags ?? []).forEach((b: any) => addBag(p, { ...b, productType: grp.productType ?? grp.label, code: grp.code, description: grp.description }))
+      })
+    } else {
+      // SievingData: flat outputs array
+      ;(d.outputs ?? []).forEach((b: any) => addBag(p, b))
+    }
   })
   return Array.from(prodMap.values())
 }
