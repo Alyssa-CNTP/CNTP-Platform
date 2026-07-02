@@ -90,6 +90,17 @@ export async function POST(req: Request) {
       .select('id')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Mirror to sales.campaigns CRM (best-effort — never blocks the response)
+    void salesDb.from('campaigns').insert({
+      created_by: user.id,
+      title:      body.title,
+      channel:    body.channel ?? null,
+      status:     'draft',
+      body:       body.brief ?? null,
+      signal_ids: body.signal_ids ?? [],
+    })
+
     return NextResponse.json({ id: (data as any).id })
   }
 
@@ -167,6 +178,7 @@ A realistic 6-week campaign arc.`
   }
 
   let prompt: string
+  let audienceSignalIds: string[] = []
 
   switch (action) {
 
@@ -196,7 +208,8 @@ Make the angles specific, not generic. Reference real things: the Cederberg orig
     case 'audience_brief': {
       if (!body.audience_tag)
         return NextResponse.json({ error: 'audience_tag required' }, { status: 400 })
-      const { context: signalContext } = await recentSignalContext(body.audience_tag)
+      const { context: signalContext, ids: signalIds } = await recentSignalContext(body.audience_tag)
+      audienceSignalIds = signalIds
       prompt = `Generate a detailed audience intelligence brief for the segment: ${body.audience_tag}
 
 ${signalContext ? `RECENT SIGNALS FOR THIS AUDIENCE:\n${signalContext}\n` : ''}
@@ -231,5 +244,17 @@ One specific, actionable first step to reach this audience in the next 4 weeks.`
   const { response, ok } = await queryGeminiDetailed({ prompt, systemExtra: hsBlock, maxTokens: 900 })
 
   if (!ok) return NextResponse.json({ error: 'AI unavailable' }, { status: 503 })
+
+  // When an audience brief is generated, persist the segment to sales.audiences (best-effort)
+  if (action === 'audience_brief' && body.audience_tag) {
+    void salesDb.from('audiences').upsert({
+      name:        body.audience_tag,
+      description: response.slice(0, 300),
+      criteria:    { tag: body.audience_tag },
+      signal_ids:  audienceSignalIds,
+      created_by:  user.id,
+    }, { onConflict: 'name', ignoreDuplicates: false })
+  }
+
   return NextResponse.json({ response })
 }
