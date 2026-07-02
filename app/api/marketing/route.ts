@@ -104,6 +104,42 @@ export async function POST(req: Request) {
     return NextResponse.json({ id: (data as any).id })
   }
 
+  if (action === 'save_report') {
+    if (!body.title || !body.body)
+      return NextResponse.json({ error: 'title and body required' }, { status: 400 })
+    const { error } = await salesDb
+      .from('reports')
+      .insert({
+        created_by:  user.id,
+        title:       body.title,
+        report_type: body.report_type ?? 'briefing',
+        body:        body.body,
+      })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: true })
+  }
+
+  // Given a list of regions/keyword groups from audience signals, find matching company_profiles
+  if (action === 'audience_companies') {
+    const regions: string[] = body.regions ?? []
+    const limit = Math.min(parseInt(body.limit ?? '12', 10), 30)
+
+    let q = salesDb
+      .from('company_profiles')
+      .select('company_name, country, sector, pitch_angle, panjiva_data, account_id')
+      .not('panjiva_data', 'is', null)
+      .order('company_name')
+      .limit(limit)
+
+    if (regions.length > 0) {
+      q = q.in('country', regions)
+    }
+
+    const { data, error } = await q
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ companies: data ?? [] })
+  }
+
   if (action === 'bookmark_signal') {
     if (!body.signal_id) return NextResponse.json({ error: 'signal_id required' }, { status: 400 })
     const { error } = await marketingDb

@@ -2,15 +2,14 @@
 
 // app/(app)/marketing/page.tsx
 // Marketing Hub — Dashboard · Campaigns · Audiences · Content
-// Reads signals from sales.signals (shared pipeline).
-// Campaigns, briefs, and audience work stored in marketing schema.
+// Phase 3: full SignalCards, BriefingCards output, audience company matches.
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   TrendingUp, Swords, Users, Sparkles, Plus,
   BarChart2, Globe2, Loader2, RefreshCw,
-  ChevronDown, ChevronUp, FileText, Check,
-  Megaphone, Palette, ArrowRight,
+  ChevronDown, ChevronUp, Check,
+  Megaphone, Palette, ArrowRight, Building2,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -18,6 +17,7 @@ import {
 } from 'recharts'
 import SignalCard   from '@/components/intelligence/SignalCard'
 import SignalDrawer from '@/components/intelligence/SignalDrawer'
+import BriefingCards from '@/components/intelligence/BriefingCards'
 import type { Signal } from '@/components/intelligence/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -45,6 +45,15 @@ interface Audience {
   signal_count: number
 }
 
+interface CompanyProfile {
+  company_name: string
+  country:      string | null
+  sector:       string | null
+  pitch_angle:  string | null
+  panjiva_data: { total_value_usd?: number; shipment_count?: number; current_supplier?: string } | null
+  account_id:   string | null
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function Spinner() {
@@ -62,7 +71,7 @@ async function callMarketing(body: Record<string, unknown>): Promise<any> {
 
 function timeAgo(iso: string): string {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
-  if (m < 60)  return `${m}m ago`
+  if (m < 60)   return `${m}m ago`
   if (m < 1440) return `${Math.floor(m / 60)}h ago`
   return `${Math.floor(m / 1440)}d ago`
 }
@@ -70,20 +79,20 @@ function timeAgo(iso: string): string {
 const STATUS_COLORS: Record<string, string> = {
   draft:     'bg-surface border-surface-rule text-text-muted',
   active:    'bg-ok/10 border-ok/20 text-ok',
-  completed: 'bg-blue-50 border-blue-200 text-blue-700',
+  completed: 'bg-blue-500/10 border-blue-500/20 text-blue-500',
   paused:    'bg-warn/10 border-warn/20 text-warn',
 }
 
 // ─── Tab component ────────────────────────────────────────────────────────────
 
-function Tab({ label, active, onClick, icon: Icon }: { label: string; active: boolean; onClick: () => void; icon: React.ElementType }) {
+function Tab({ label, active, onClick, icon: Icon }: {
+  label: string; active: boolean; onClick: () => void; icon: React.ElementType
+}) {
   return (
     <button
       onClick={onClick}
       className={`flex items-center gap-2 px-4 py-3 text-[13px] font-medium border-b-2 transition-colors whitespace-nowrap ${
-        active
-          ? 'border-accent text-accent'
-          : 'border-transparent text-text-muted hover:text-text'
+        active ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text'
       }`}
     >
       <Icon size={13} />
@@ -92,41 +101,27 @@ function Tab({ label, active, onClick, icon: Icon }: { label: string; active: bo
   )
 }
 
-// ─── AI Result ────────────────────────────────────────────────────────────────
-
-function AiResult({ text, loading, label = 'Marketing Intelligence' }: { text: string; loading: boolean; label?: string }) {
-  if (loading) return (
-    <div className="flex items-center gap-3 p-4 bg-surface-card border border-surface-rule rounded-xl">
-      <Spinner />
-      <span className="font-mono text-[11px] text-text-faint tracking-wide">Generating…</span>
-    </div>
-  )
-  if (!text) return null
-  return (
-    <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-surface-rule flex items-center gap-2">
-        <Sparkles size={11} className="text-accent" />
-        <span className="font-mono text-[9px] font-bold text-accent tracking-widest uppercase">{label}</span>
-      </div>
-      <div className="p-4">
-        <p className="text-[13px] text-text leading-relaxed whitespace-pre-wrap">{text}</p>
-      </div>
-    </div>
-  )
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // DASHBOARD TAB
-// Market Pulse + 3-column signal view (Opportunities · Social Trends · Audience)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const AUDIENCE_KEYWORD_GROUPS = new Set(['wellness','k_beauty','halal','kosher','vegan','sustainability','organic','gen_z','consumer','lifestyle'])
+const AUDIENCE_KEYWORD_GROUPS = new Set([
+  'wellness','k_beauty','halal','kosher','vegan','sustainability',
+  'organic','gen_z','consumer','lifestyle',
+])
 
 function DashboardTab() {
   const [signals,    setSignals]    = useState<Signal[]>([])
   const [loading,    setLoading]    = useState(true)
   const [selected,   setSelected]   = useState<Signal | null>(null)
   const [gridOpen,   setGridOpen]   = useState(false)
+
+  // Audience companies (loaded lazily once audience signals are known)
+  const [companies,     setCompanies]     = useState<CompanyProfile[]>([])
+  const [companiesLoad, setCompaniesLoad] = useState(false)
+  const [companiesFetched, setCompaniesFetched] = useState(false)
+  const [savingAudience, setSavingAudience] = useState(false)
+  const [audienceSaved,  setAudienceSaved]  = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -137,12 +132,22 @@ function DashboardTab() {
       .finally(() => setLoading(false))
   }, [])
 
-  const opportunities  = useMemo(() => signals.filter(s => s.classification === 'opportunity').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
-  const socialTrends   = useMemo(() => signals.filter(s => ['youtube','tiktok','instagram','reddit'].includes(s.source_type)).sort((a, b) => b.relevance_score - a.relevance_score), [signals])
-  const audienceSignals= useMemo(() => signals.filter(s =>
-    s.classification === 'relationship' ||
-    (s.keyword_group && AUDIENCE_KEYWORD_GROUPS.has(s.keyword_group))
-  ).sort((a, b) => b.relevance_score - a.relevance_score), [signals])
+  const opportunities   = useMemo(() =>
+    signals.filter(s => s.classification === 'opportunity')
+           .sort((a, b) => b.relevance_score - a.relevance_score),
+    [signals])
+
+  const socialTrends    = useMemo(() =>
+    signals.filter(s => ['youtube','tiktok','instagram','reddit'].includes(s.source_type))
+           .sort((a, b) => b.relevance_score - a.relevance_score),
+    [signals])
+
+  const audienceSignals = useMemo(() =>
+    signals.filter(s =>
+      s.classification === 'relationship' ||
+      (s.keyword_group && AUDIENCE_KEYWORD_GROUPS.has(s.keyword_group))
+    ).sort((a, b) => b.relevance_score - a.relevance_score),
+    [signals])
 
   const regionData = useMemo(() => {
     const counts = new Map<string, number>()
@@ -152,6 +157,46 @@ function DashboardTab() {
       .sort((a, b) => b.count - a.count)
       .slice(0, 10)
   }, [signals])
+
+  // Audience signal regions → fetch matching company_profiles
+  const audienceRegions = useMemo(() =>
+    [...new Set(audienceSignals.map(s => s.region).filter(Boolean) as string[])],
+    [audienceSignals])
+
+  const loadCompanies = useCallback(async () => {
+    if (companiesFetched || companiesLoad || audienceRegions.length === 0) return
+    setCompaniesLoad(true)
+    setCompaniesFetched(true)
+    const d = await callMarketing({ action: 'audience_companies', regions: audienceRegions, limit: 12 })
+    setCompanies(d.companies ?? [])
+    setCompaniesLoad(false)
+  }, [audienceRegions, companiesFetched, companiesLoad])
+
+  async function saveAudience() {
+    if (savingAudience || audienceSaved) return
+    setSavingAudience(true)
+    await fetch('/api/accounts', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name:        `Audience — ${audienceRegions.slice(0, 3).join(', ') || 'global'}`,
+        account_type:'audience',
+        stage:       'lead',
+        tags:        ['audience-signals'],
+        signal_ids:  audienceSignals.slice(0, 20).map(s => s.id),
+        notes:       `Built from ${audienceSignals.length} audience signals`,
+      }),
+    })
+    // also save to sales.audiences via marketing API
+    await callMarketing({
+      action:      'save_report',
+      title:       `Audience Signals — ${audienceRegions.slice(0,3).join(', ') || 'global'}`,
+      report_type: 'audience',
+      body:        audienceSignals.map(s => `• ${s.title}${s.sales_angle ? ` → ${s.sales_angle}` : ''}`).join('\n'),
+    })
+    setAudienceSaved(true)
+    setSavingAudience(false)
+  }
 
   return (
     <div className="space-y-6">
@@ -193,10 +238,121 @@ function DashboardTab() {
 
       {/* 3-column signal view */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <SignalColumn icon={TrendingUp} title="Opportunities" accent="var(--color-ok)" signals={opportunities} loading={loading} onSelect={setSelected} />
-        <SignalColumn icon={Globe2}     title="Social Trends"  accent="var(--color-info)" signals={socialTrends}    loading={loading} onSelect={setSelected}
-          emptyNote="Social platforms (YouTube, Reddit, TikTok, Instagram) coming once n8n social pipeline is live." />
-        <SignalColumn icon={Users}      title="Audience Signals" accent="var(--color-accent)" signals={audienceSignals} loading={loading} onSelect={setSelected} />
+
+        {/* Opportunities — full SignalCard so recommended-action shows */}
+        <SignalColumn
+          icon={TrendingUp}
+          title="Opportunities"
+          accent="var(--color-ok)"
+          signals={opportunities}
+          loading={loading}
+          onSelect={setSelected}
+        />
+
+        {/* Social Trends — full SignalCard with platform badges */}
+        <SignalColumn
+          icon={Globe2}
+          title="Social Trends"
+          accent="var(--color-info)"
+          signals={socialTrends}
+          loading={loading}
+          onSelect={setSelected}
+          emptyNote="Social platforms (YouTube, TikTok, Instagram) — signals appear here once n8n pipeline runs."
+          showPlatform
+        />
+
+        {/* Audience Signals — with company matches + save-as-audience CTA */}
+        <section className="bg-surface-card rounded-xl border border-surface-rule flex flex-col max-h-[700px]">
+          <header className="flex items-center justify-between px-4 py-3 border-b border-surface-rule sticky top-0 bg-surface-card rounded-t-xl">
+            <div className="flex items-center gap-2">
+              <Users size={13} style={{ color: 'var(--color-accent)' }} />
+              <h3 className="font-display font-semibold text-[13px] text-text">Audience Signals</h3>
+            </div>
+            <span className="font-mono text-[10px] font-medium px-2 py-0.5 rounded border border-surface-rule bg-surface" style={{ color: 'var(--color-accent)' }}>
+              {audienceSignals.length}
+            </span>
+          </header>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {loading ? (
+              <div className="text-center text-text-faint text-[12px] py-6">Loading…</div>
+            ) : audienceSignals.length === 0 ? (
+              <div className="text-center text-text-faint text-[12px] py-6 px-3 leading-relaxed">
+                No audience signals yet.
+              </div>
+            ) : (
+              audienceSignals.slice(0, 12).map(s => (
+                <SignalCard key={s.id} signal={s} onClick={setSelected} />
+              ))
+            )}
+
+            {/* Company matches panel */}
+            {audienceSignals.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-surface-rule">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <Building2 size={11} className="text-text-muted" />
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
+                      Matching buyers
+                    </span>
+                  </div>
+                  {!companiesFetched && (
+                    <button
+                      onClick={loadCompanies}
+                      className="font-mono text-[10px] text-accent hover:text-accent/80 transition-colors"
+                    >
+                      Load
+                    </button>
+                  )}
+                </div>
+
+                {companiesLoad && (
+                  <div className="flex items-center gap-2 text-text-faint text-[11px] py-2">
+                    <Loader2 size={11} className="animate-spin" /> Loading…
+                  </div>
+                )}
+
+                {companies.length > 0 && (
+                  <div className="space-y-1.5">
+                    {companies.slice(0, 6).map(c => (
+                      <div key={c.company_name} className="rounded-lg border border-surface-rule bg-surface p-2.5 text-[11px]">
+                        <p className="font-medium text-text line-clamp-1">{c.company_name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5 text-text-faint font-mono text-[10px]">
+                          {c.country && <span>{c.country}</span>}
+                          {c.panjiva_data?.shipment_count != null && (
+                            <><span>·</span><span>{c.panjiva_data.shipment_count} shipments</span></>
+                          )}
+                        </div>
+                        {c.panjiva_data?.current_supplier && (
+                          <p className="text-text-muted mt-0.5 line-clamp-1">From: {c.panjiva_data.current_supplier}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Save as audience */}
+                {(companies.length > 0 || audienceSignals.length > 0) && (
+                  <button
+                    onClick={saveAudience}
+                    disabled={savingAudience || audienceSaved}
+                    className="mt-2 w-full flex items-center justify-center gap-1.5 font-mono text-[11px] py-1.5 rounded-lg border transition-colors disabled:opacity-60"
+                    style={audienceSaved
+                      ? { background: 'var(--color-ok-bg)', color: 'var(--color-ok)', borderColor: 'rgba(21,128,61,0.22)' }
+                      : { borderColor: 'var(--color-surface-rule)', color: 'var(--color-text-muted)' }}
+                  >
+                    {audienceSaved
+                      ? <><Check size={11} /> Saved to pipeline</>
+                      : savingAudience
+                        ? <><Loader2 size={11} className="animate-spin" /> Saving…</>
+                        : <>Save as audience</>
+                    }
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
 
       {/* Expand to full grid */}
@@ -224,9 +380,10 @@ function DashboardTab() {
   )
 }
 
-function SignalColumn({ icon: Icon, title, accent, signals, loading, onSelect, emptyNote }: {
+function SignalColumn({ icon: Icon, title, accent, signals, loading, onSelect, emptyNote, showPlatform }: {
   icon: React.ElementType; title: string; accent: string
-  signals: Signal[]; loading: boolean; onSelect: (s: Signal) => void; emptyNote?: string
+  signals: Signal[]; loading: boolean; onSelect: (s: Signal) => void
+  emptyNote?: string; showPlatform?: boolean
 }) {
   return (
     <section className="bg-surface-card rounded-xl border border-surface-rule flex flex-col max-h-[700px]">
@@ -239,7 +396,7 @@ function SignalColumn({ icon: Icon, title, accent, signals, loading, onSelect, e
           {signals.length}
         </span>
       </header>
-      <div className="flex-1 overflow-y-auto p-3 grid gap-2">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
         {loading ? (
           <div className="text-center text-text-faint text-[12px] py-6">Loading…</div>
         ) : signals.length === 0 ? (
@@ -247,8 +404,15 @@ function SignalColumn({ icon: Icon, title, accent, signals, loading, onSelect, e
             {emptyNote ?? 'No signals in this category yet.'}
           </div>
         ) : (
-          signals.slice(0, 20).map(s => (
-            <SignalCard key={s.id} signal={s} compact onClick={onSelect} />
+          signals.slice(0, 15).map(s => (
+            <div key={s.id}>
+              {showPlatform && (
+                <div className="mb-1 px-1">
+                  <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint">{s.source_type}</span>
+                </div>
+              )}
+              <SignalCard signal={s} onClick={onSelect} />
+            </div>
           ))
         )}
       </div>
@@ -260,7 +424,7 @@ function SignalColumn({ icon: Icon, title, accent, signals, loading, onSelect, e
 // CAMPAIGNS TAB
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MARKETS = ['South Korea','Germany','UAE','Japan','Netherlands','UK','Australia','Brazil','India','Poland']
+const MARKETS   = ['South Korea','Germany','UAE','Japan','Netherlands','UK','Australia','Brazil','India','Poland']
 const AUDIENCES = ['halal','kosher','vegan','gen_z','millennial','wellness','k_beauty','clinical','specialty_coffee']
 
 function CampaignsTab() {
@@ -270,12 +434,12 @@ function CampaignsTab() {
   const [aiLoading, setAiLoading] = useState(false)
   const [brief,     setBrief]     = useState('')
 
-  const [title,      setTitle]      = useState('')
-  const [market,     setMarket]     = useState('')
-  const [audience,   setAudience]   = useState('')
-  const [channel,    setChannel]    = useState('')
-  const [notes,      setNotes]      = useState('')
-  const [signalIds,  setSignalIds]  = useState<string[]>([])
+  const [title,     setTitle]     = useState('')
+  const [market,    setMarket]    = useState('')
+  const [audience,  setAudience]  = useState('')
+  const [channel,   setChannel]   = useState('')
+  const [notes,     setNotes]     = useState('')
+  const [signalIds, setSignalIds] = useState<string[]>([])
 
   useEffect(() => {
     callMarketing({ action: 'list_campaigns' })
@@ -299,14 +463,13 @@ function CampaignsTab() {
     await callMarketing({ action: 'save_campaign', title, market, audience_tag: audience, brief, notes, channel: channel || null, signal_ids: signalIds })
     const d = await callMarketing({ action: 'list_campaigns' })
     setCampaigns(d.campaigns ?? [])
-    setCreating(false); setTitle(''); setMarket(''); setAudience(''); setChannel(''); setBrief(''); setNotes(''); setSignalIds([])
+    setCreating(false)
+    setTitle(''); setMarket(''); setAudience(''); setChannel(''); setBrief(''); setNotes(''); setSignalIds([])
     setLoading(false)
   }
 
   return (
     <div className="space-y-5">
-
-      {/* Create button */}
       {!creating && (
         <button
           onClick={() => setCreating(true)}
@@ -316,7 +479,6 @@ function CampaignsTab() {
         </button>
       )}
 
-      {/* Create form */}
       {creating && (
         <div className="bg-surface-card border border-surface-rule rounded-xl p-5 space-y-4">
           <h3 className="font-display font-bold text-[15px] text-text">New campaign</h3>
@@ -390,12 +552,17 @@ function CampaignsTab() {
           </div>
 
           {(brief || aiLoading) && (
-            <AiResult text={brief} loading={aiLoading} label="Campaign Brief" />
+            <BriefingCards
+              text={brief}
+              loading={aiLoading}
+              label="Campaign Brief"
+              reportTitle={title || `${market} — ${audience} campaign brief`}
+              reportType="campaign_brief"
+            />
           )}
         </div>
       )}
 
-      {/* Campaign list */}
       {loading && !creating ? (
         <div className="flex items-center gap-2 text-text-faint text-[13px]"><Spinner /> Loading campaigns…</div>
       ) : campaigns.length === 0 && !creating ? (
@@ -458,16 +625,24 @@ function AudiencesTab() {
     setBriefLoad(false)
   }
 
-  const ACCENT_COLORS = ['bg-pink-50 border-pink-200', 'bg-purple-50 border-purple-200', 'bg-blue-50 border-blue-200',
-    'bg-ok/10 border-ok/20', 'bg-accent/10 border-accent/20', 'bg-warn/10 border-warn/20',
-    'bg-teal-50 border-teal-200', 'bg-orange-50 border-orange-200', 'bg-indigo-50 border-indigo-200']
+  const ACCENT_COLORS = [
+    'bg-pink-500/10 border-pink-500/20',
+    'bg-purple-500/10 border-purple-500/20',
+    'bg-blue-500/10 border-blue-500/20',
+    'bg-ok/10 border-ok/20',
+    'bg-accent/10 border-accent/20',
+    'bg-warn/10 border-warn/20',
+    'bg-teal-500/10 border-teal-500/20',
+    'bg-orange-500/10 border-orange-500/20',
+    'bg-indigo-500/10 border-indigo-500/20',
+  ]
 
   return (
     <div className="space-y-5">
       <div className="bg-surface-card border border-surface-rule rounded-xl p-4">
         <p className="text-[13px] text-text-muted leading-relaxed">
           Each segment represents a buyer or consumer profile. Click one to get a full intelligence brief — what they want, how to reach them, and what content works.
-          Signal counts update as n8n pulls tagged signals.
+          Signal counts update as n8n pulls tagged signals. Briefs are saved to reports automatically.
         </p>
       </div>
 
@@ -506,7 +681,13 @@ function AudiencesTab() {
             <ArrowRight size={12} className="text-text-faint" />
             <span className="text-[12px] text-text-muted">Intelligence brief</span>
           </div>
-          <AiResult text={brief} loading={briefLoad} label={`${selected.label} — Audience Brief`} />
+          <BriefingCards
+            text={brief}
+            loading={briefLoad}
+            label={`${selected.label} — Audience Brief`}
+            reportTitle={`${selected.label} audience brief`}
+            reportType="audience_brief"
+          />
         </div>
       )}
     </div>
@@ -518,11 +699,11 @@ function AudiencesTab() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PLATFORMS = [
-  { value: 'linkedin',       label: 'LinkedIn',       desc: 'B2B buyers, distributors, trade relationships' },
-  { value: 'instagram',      label: 'Instagram',      desc: 'Consumer brand, lifestyle, visual storytelling' },
-  { value: 'tiktok',         label: 'TikTok',         desc: 'Gen Z, short-form, trend-led content' },
-  { value: 'email',          label: 'Email',          desc: 'Direct to trade buyers — structured outreach' },
-  { value: 'press_release',  label: 'Press Release',  desc: 'Trade media, industry publications' },
+  { value: 'linkedin',      label: 'LinkedIn',      desc: 'B2B buyers, distributors, trade relationships' },
+  { value: 'instagram',     label: 'Instagram',     desc: 'Consumer brand, lifestyle, visual storytelling' },
+  { value: 'tiktok',        label: 'TikTok',        desc: 'Gen Z, short-form, trend-led content' },
+  { value: 'email',         label: 'Email',         desc: 'Direct to trade buyers — structured outreach' },
+  { value: 'press_release', label: 'Press Release', desc: 'Trade media, industry publications' },
 ]
 
 function ContentTab() {
@@ -596,7 +777,13 @@ function ContentTab() {
         </button>
       </div>
 
-      <AiResult text={result} loading={loading} label="Content Angles" />
+      <BriefingCards
+        text={result}
+        loading={loading}
+        label="Content Angles"
+        reportTitle={`${platform} content angles — ${market}`}
+        reportType="content_angles"
+      />
     </div>
   )
 }
@@ -605,11 +792,11 @@ function ContentTab() {
 // PAGE ROOT
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TABS: { key: TabKey; label: string; icon: React.ElementType; desc: string }[] = [
-  { key: 'dashboard',  label: 'Dashboard',  icon: BarChart2,  desc: 'Market pulse, signal overview'      },
-  { key: 'campaigns',  label: 'Campaigns',  icon: Megaphone,  desc: 'Campaign briefs and tracking'       },
-  { key: 'audiences',  label: 'Audiences',  icon: Users,      desc: 'Segment intelligence briefs'        },
-  { key: 'content',    label: 'Content',    icon: Palette,    desc: 'AI content angles by platform'      },
+const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
+  { key: 'dashboard', label: 'Dashboard',  icon: BarChart2 },
+  { key: 'campaigns', label: 'Campaigns',  icon: Megaphone },
+  { key: 'audiences', label: 'Audiences',  icon: Users     },
+  { key: 'content',   label: 'Content',    icon: Palette   },
 ]
 
 export default function MarketingPage() {
@@ -617,8 +804,6 @@ export default function MarketingPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-
-      {/* Header */}
       <div className="bg-surface-card border-b border-surface-rule px-6 py-4">
         <div className="flex items-center justify-between mb-1">
           <div>
@@ -634,12 +819,10 @@ export default function MarketingPage() {
         </div>
       </div>
 
-      {/* Tab bar */}
       <div className="bg-surface-card border-b border-surface-rule px-6 flex gap-0 overflow-x-auto">
         {TABS.map(t => <Tab key={t.key} label={t.label} active={tab === t.key} onClick={() => setTab(t.key)} icon={t.icon} />)}
       </div>
 
-      {/* Body */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[1280px] mx-auto p-6">
           {tab === 'dashboard' && <DashboardTab />}
