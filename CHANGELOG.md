@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Permissions: production orders added to matrix + orPermission sidebar gate)
+
+**Files changed:**
+- `lib/auth/permission-registry.ts` — added `production.orders` resource under Production module with `read: 'can_view_live_history'`
+- `components/layout/Sidebar.tsx` — Production Orders now uses `permission: 'can_view_live_history', orPermission: true` so any user with that toggle gets the sidebar link
+- `app/(app)/layout.tsx` — added explicit route guard for `/production/orders` with `can_view_live_history` orPermission
+
+**Changes:**
+- Production Orders now appears in the Users & Roles permission matrix so read access can be toggled per user
+- Any user outside Production/Management can be granted access to Production Orders by enabling `can_view_live_history`
+- **Standard going forward:** every page in the app must have a corresponding entry in `lib/auth/permission-registry.ts` with read/write/delete/manage mapped to the appropriate permission keys, so all access can be managed from Users & Roles without code changes
+
+---
+
 ## 2026-07-02 — Alyssa (Permissions: quality read toggles, staff/roster gate, delete error surfacing)
 
 **Files changed:**
