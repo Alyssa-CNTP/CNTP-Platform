@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Maintenance: remove Shuaib Sentso from PIN system)
+
+**Files changed:**
+- `supabase/migrations/20260702_002_remove_shuaib_tech_auth.sql`
+
+**Changes:**
+- Deactivated Shuaib Sentso in `maintenance.tech_auth` and `shared.app_roles` — he is the maintenance manager and logs in via Microsoft SSO, not PIN. He no longer appears on the Technician PINs page.
+
+---
+
 ## 2026-07-02 — Alyssa (Maintenance: breakdown auto-assignment fix + login clarification)
 
 **Files changed:**
