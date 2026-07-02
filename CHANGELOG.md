@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Production capture: Refining 1 & 2 screens)
+
+**Files changed:**
+- `components/production/capture/RefiningCapture.tsx` *(new)*
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+- `lib/production/capture-config.ts`
+- `lib/production/live-types.ts`
+
+**Changes:**
+- **New `RefiningCapture` component**: full production capture screen for Refining 1 and Refining 2. Debagging tab supports three input modes per bag — (1) serial scan/lookup (USB keyboard-wedge or typed serial; queries `bag_tags` directly to support both legacy `DD-MM-SEQ` and system `R1-DDMMYY-NNN` formats), (2) manual entry with all fields editable (registers the bag in `bag_tags` on lock), and (3) from-system picker (queries `bag_tags` for in-stock bags matching the section's input types and variant, with alias mapping so sieving's `'Rolsiev Sticks'` is found when Refining searches for `'Sticks'`). Bagging tab shows three output groups (B, C, D) upfront via `OutputPicker`; empty groups show "Not used this shift" and don't block submission. Mass balance `E = A − B − C − D` shown at bottom, flagged amber if `|E| > 15 kg`.
+- **`capture/[section]/page.tsx`**: made section-aware — `emptyProduction`, `prodTotals`, `buildDebag`, `buildBag`, and the render block all dispatch between `SievingCapture` and `RefiningCapture` based on `sectionId`. `Production.data` type widened to `SievingData | RefiningData`.
+- **`CaptureOverview.tsx`**: updated internal `Production.data` type to `SievingData | RefiningData`; `buildDebagLotGroups` and `buildProductGroups` now branch on data shape — RefiningData uses `inputs` array and `outputB/C/D` groups; SievingData uses the original `debag`/`spillage`/`outputs` arrays.
+- **`capture-config.ts`**: marked `refining1` and `refining2` as `built: true` so the "Coming soon" overlay is removed.
+- **`live-types.ts`**: corrected `SECTION_CONFIG` for `refining1` (inputTypes: `Indent Sticks, Sticks, Blocks: Clean, 1st Cut`; outputTypes: `Indent Dust, White Dust`) and confirmed `refining2` (inputTypes: `Sticks, Cut Heavy Stick Coarse`; outputTypes: `Cut Heavy Stick Fine, Cut Heavy Stick Coarse, White Dust, Powder Dust`).
+
+---
+
 ## 2026-07-02 — Alyssa (Checks: indent screen angle allows negative values)
 
 **Files changed:**
