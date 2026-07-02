@@ -9,7 +9,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  ChevronDown, ChevronRight, CalendarRange, Wrench, Users, KeyRound,
+  ChevronDown, ChevronRight, CalendarRange, Wrench, Users, KeyRound, Flame,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { useMaintenanceContext } from '../layout'
@@ -26,6 +26,19 @@ function todaySAST() {
 function currentShift(): 'day' | 'night' {
   const h = parseInt(new Date().toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', hour: 'numeric', hour12: false }), 10)
   return h >= 7 && h < 16 ? 'day' : 'night'
+}
+// Monday (ISO week start) for a YYYY-MM-DD date, as YYYY-MM-DD. Uses noon to stay
+// clear of any timezone/DST edge.
+function mondayOf(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  const day = d.getDay() || 7
+  d.setDate(d.getDate() - day + 1)
+  return d.toISOString().slice(0, 10)
+}
+function addWeeks(dateStr: string, n: number): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + n * 7)
+  return d.toISOString().slice(0, 10)
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -67,7 +80,7 @@ export default function PlannerPage() {
   const canManage = role.canManage
   const ctx = useMaintenanceContext()
   const { loading, data, derived, actions } = ctx
-  const { jcs, slots, staff } = data
+  const { jcs, slots, staff, boilerSchedule } = data
   const { dutyNow } = derived
 
   const techNames = staff.map(s => s.name)
@@ -75,6 +88,7 @@ export default function PlannerPage() {
   const colorFor = (name: string) => TECH_PALETTE[(techIndex.has(name) ? techIndex.get(name)! : hashName(name)) % TECH_PALETTE.length]
 
   const [openQc, setOpenQc] = useState(false)
+  const [openBoiler, setOpenBoiler] = useState(true)
   const [rosterPeriod, setRosterPeriod] = useState<RosterPeriod | null>(null)
   const [rosterEntries, setRosterEntries] = useState<RosterEntry[]>([])
   const [rosterLoading, setRosterLoading] = useState(true)
@@ -131,6 +145,11 @@ export default function PlannerPage() {
     .filter((n): n is string => !!n)
   const extraStaff = techNames.filter(n => !rosterNames.includes(n))
   const allNames = [...new Set([...rosterNames, ...extraStaff])]
+
+  // Boiler startup — this week + the next 5, editable per week (manager).
+  const boilerWeek0 = mondayOf(todaySAST())
+  const boilerWeeks = Array.from({ length: 6 }, (_, i) => addWeeks(boilerWeek0, i))
+  const boilerBy = new Map(boilerSchedule.map(b => [b.week_start, b]))
 
   if (loading) {
     return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading planner…</div></div>
@@ -260,6 +279,36 @@ export default function PlannerPage() {
           </div>
         )}
       </div>
+
+      {/* ── Boiler startup schedule (compact, editable for future weeks) ── */}
+      <Section title="Boiler startup" subtitle="Who switches on the boiler each week" open={openBoiler} onToggle={() => setOpenBoiler(o => !o)}>
+        <div className="flex items-center gap-2 mb-2 text-[12px] text-text-muted">
+          <Flame size={14} className="text-warn shrink-0" /> Technician on boiler startup per week — editable for the current and future weeks.
+        </div>
+        <div className="space-y-1">
+          {boilerWeeks.map((wk, i) => {
+            const b = boilerBy.get(wk)
+            const label = new Date(wk + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
+            const current = b?.technician || ''
+            const known = allNames.includes(current)
+            return (
+              <div key={wk} className={`flex gap-2 items-center rounded-md px-2.5 py-1.5 ${i === 0 ? 'bg-warn/5 border border-warn/20' : 'bg-surface-raised'}`}>
+                <span className="text-[11px] font-semibold w-32 shrink-0 text-text">Wk of {label}{i === 0 && <span className="text-warn"> · this week</span>}</span>
+                {canManage ? (
+                  <select className={`${INP} flex-1 text-[12px] py-1 min-h-0`} value={known ? current : (current ? '__free__' : '')}
+                    onChange={e => { const v = e.target.value; if (v === '__free__') return; const s = staff.find(x => x.name === v); actions.setBoilerStartup(wk, v, s?.id ?? null) }}>
+                    <option value="">— unassigned —</option>
+                    {!known && current && <option value="__free__">{current} (manual)</option>}
+                    {allNames.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                ) : (
+                  <span className="flex-1 text-[12px] text-text">{current || <span className="text-text-faint">— unassigned —</span>}</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </Section>
 
       {/* ── QC area map ── */}
       <Section title="QC area map" subtitle="Completed jobs route to the QC mapped to their area" open={openQc} onToggle={() => setOpenQc(o => !o)}>
