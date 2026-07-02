@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Maintenance: breakdown auto-assignment fix + login clarification)
+
+**Files changed:**
+- `lib/maintenance/roster.ts`
+- `app/maintenance-login/page.tsx`
+
+**Changes:**
+- Removed `maintenance_manager` from `MAINT_ROLE_KEYS` in roster.ts — the manager was being included as a candidate for breakdown auto-assignment when present on the Operations roster, causing breakdowns to route to the manager instead of the on-duty technician. Only `maintenance_tech` and `maintenance_asst` are now considered.
+- Removed "Maintenance manager? Sign in with Microsoft" link from the PIN login page — the manager uses the standard `/login` page like everyone else; no special section needed.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: bulk density/leaf shade only required on Final QC)
 
 **Files changed:**
