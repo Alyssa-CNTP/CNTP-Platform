@@ -227,7 +227,7 @@ export function SievingCapture({
               <Lock size={15} className="text-ok shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-medium text-text">Bucket elevator · {spillageKg.toFixed(1)} kg spillage</div>
-                <div className="font-mono text-[11px] text-text-muted">logged · excluded from balance</div>
+                <div className="font-mono text-[11px] text-text-muted">logged · included in balance</div>
               </div>
               {!locked && (
                 <button onClick={() => patch({ bucketSecured: false })}
@@ -241,7 +241,7 @@ export function SievingCapture({
               <div className="flex items-center gap-2">
                 <Scale size={14} className="text-amber-700" />
                 <span className="font-semibold text-[13px] text-amber-800">Bucket elevator</span>
-                <span className="text-[11px] text-amber-700/80">excluded from balance</span>
+                <span className="text-[11px] text-amber-700/80">included in balance</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {value.spillage.map((r, i) => (

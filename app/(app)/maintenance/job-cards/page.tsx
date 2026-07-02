@@ -81,7 +81,7 @@ export default function JobCardsPage() {
   const ctx = useMaintenanceContext()
   const { loading, data, derived, actions, ui, actor } = ctx
   const { jcs } = data
-  const { cnt, newCards, hist } = derived
+  const { cnt, newCards } = derived
 
   // IT / full admin get the full view of every profile via a "View as" switcher.
   const [viewAs, setViewAs] = useState<'manager' | 'tech' | 'qc' | 'raiser'>('manager')
@@ -221,31 +221,8 @@ export default function JobCardsPage() {
 
           <JobCardTable cards={activeCards} roles={cardRoles} empty="No active job cards match these filters." />
 
-          {/* Historical */}
-          <div className="card p-4 mt-6">
-            <div className="text-sm font-semibold text-text mb-3">Historical Job Cards (Last 20)</div>
-            <div className="overflow-x-auto">
-              <table className="data-table">
-                <thead><tr>{['#', 'Type', 'Area', 'Description', 'Tech', 'By', 'Raised', 'Closed', 'Days'].map(h => <th key={h}>{h}</th>)}</tr></thead>
-                <tbody>{hist.map(j => {
-                  const days = diffDays(j.raised_at, j.completed_at ?? j.verified_at)
-                  return (
-                    <tr key={j.id}>
-                      <td><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link></td>
-                      <td><span className={`badge ${j.workflow === 'breakdown' ? 'badge-err' : 'badge-info'}`}>{j.workflow === 'breakdown' ? 'BD' : 'PL'}</span></td>
-                      <td>{j.area}</td>
-                      <td className="max-w-[220px]">{j.description}</td>
-                      <td>{j.assigned_to ?? '—'}</td>
-                      <td>{j.raised_by}</td>
-                      <td>{fmtD(j.raised_at)}</td>
-                      <td>{fmtD(j.completed_at ?? j.verified_at)}</td>
-                      <td className={`font-semibold ${days > 7 ? 'text-warn' : 'text-ok'}`}>{days}</td>
-                    </tr>
-                  )
-                })}</tbody>
-              </table>
-            </div>
-          </div>
+          {/* Historical — searchable + per-column filters */}
+          <HistoryPanel jcs={jcs} cardHref={cardHref} />
         </div>
       )}
 
@@ -367,6 +344,95 @@ function Chip({ active, onClick, label, count }: { active: boolean; onClick: () 
       <span className="capitalize">{label}</span>
       <span className={`tabular-nums text-[11px] ${active ? 'text-white/80' : 'text-text-faint'}`}>{count}</span>
     </button>
+  )
+}
+
+// Searchable + per-column-filterable history of completed / cancelled job cards.
+function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard) => string }) {
+  const [q, setQ] = useState('')
+  const [statusF, setStatusF] = useState<'complete' | 'cancelled' | 'all'>('complete')
+  const [typeF, setTypeF] = useState('all')
+  const [areaF, setAreaF] = useState('all')
+  const [techF, setTechF] = useState('all')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+
+  const closedOf = (j: JobCard) => j.completed_at ?? j.verified_at
+  const base = useMemo(() => jcs.filter(j => j.status === 'complete' || j.status === 'cancelled'), [jcs])
+  const areas = useMemo(() => Array.from(new Set(base.map(j => j.area).filter(Boolean))).sort(), [base])
+  const techs = useMemo(() => Array.from(new Set(base.map(j => j.assigned_to).filter(Boolean) as string[])).sort(), [base])
+
+  const ql = q.trim().toLowerCase()
+  const rows = base.filter(j => {
+    if (statusF !== 'all' && j.status !== statusF) return false
+    if (typeF !== 'all' && j.workflow !== typeF) return false
+    if (areaF !== 'all' && j.area !== areaF) return false
+    if (techF !== 'all' && j.assigned_to !== techF) return false
+    const cd = (closedOf(j) ?? '').slice(0, 10)
+    if (from && cd && cd < from) return false
+    if (to && cd && cd > to) return false
+    if (ql && ![j.card_no, j.area, j.machine, j.description, j.long_desc, j.assigned_to, j.raised_by, j.root_cause, j.work_done]
+      .some(v => (v ?? '').toLowerCase().includes(ql))) return false
+    return true
+  }).sort((a, b) => (closedOf(b) ?? '').localeCompare(closedOf(a) ?? ''))
+
+  const active = q || from || to || typeF !== 'all' || areaF !== 'all' || techF !== 'all' || statusF !== 'complete'
+  const clear = () => { setQ(''); setFrom(''); setTo(''); setTypeF('all'); setAreaF('all'); setTechF('all'); setStatusF('complete') }
+  const colSel = `${INP} w-full text-[11px] py-1 min-h-0`
+
+  return (
+    <div className="card p-4 mt-6">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <div className="text-sm font-semibold text-text">Historical job cards <span className="text-[11px] text-text-muted tabular-nums">{rows.length}</span></div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
+            <input className={`${INP} pl-8 w-[240px]`} placeholder="Search history — card, machine, root cause…" value={q} onChange={e => setQ(e.target.value)} />
+          </div>
+          <select className={`${INP} w-auto`} value={statusF} onChange={e => setStatusF(e.target.value as any)}>
+            <option value="complete">Done</option><option value="cancelled">Cancelled</option><option value="all">Done + cancelled</option>
+          </select>
+          <label className="text-[11px] text-text-muted">Closed <input type="date" className={`${INP} w-auto ml-1`} value={from} onChange={e => setFrom(e.target.value)} /></label>
+          <span className="text-text-faint">–</span>
+          <input type="date" className={`${INP} w-auto`} value={to} onChange={e => setTo(e.target.value)} />
+          {active && <button className="text-[12px] underline text-text-muted hover:text-text" onClick={clear}>Clear</button>}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="data-table w-full">
+          <thead>
+            <tr>{['#', 'Type', 'Area', 'Machine', 'Description', 'Tech', 'By', 'Raised', 'Closed', 'Days'].map(h => <th key={h}>{h}</th>)}</tr>
+            <tr>
+              <th />
+              <th><select className={colSel} value={typeF} onChange={e => setTypeF(e.target.value)}><option value="all">All</option><option value="breakdown">BD</option><option value="planned">PL</option></select></th>
+              <th><select className={colSel} value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></th>
+              <th /><th />
+              <th><select className={colSel} value={techF} onChange={e => setTechF(e.target.value)}><option value="all">All techs</option>{techs.map(t => <option key={t} value={t}>{t}</option>)}</select></th>
+              <th /><th /><th /><th />
+            </tr>
+          </thead>
+          <tbody>{rows.slice(0, 200).map(j => {
+            const days = diffDays(j.raised_at, closedOf(j))
+            return (
+              <tr key={j.id}>
+                <td><Link href={cardHref(j)} className="text-accent font-semibold">{j.card_no}</Link></td>
+                <td><span className={`badge ${j.workflow === 'breakdown' ? 'badge-err' : 'badge-info'}`}>{j.workflow === 'breakdown' ? 'BD' : 'PL'}</span></td>
+                <td>{j.area}</td>
+                <td className="text-text-muted">{j.machine ?? '—'}</td>
+                <td className="max-w-[240px] truncate" title={j.description}>{j.description}</td>
+                <td>{j.assigned_to ?? '—'}</td>
+                <td>{j.raised_by}</td>
+                <td>{fmtD(j.raised_at)}</td>
+                <td>{j.status === 'cancelled' ? <span className="badge badge-gray">cancelled</span> : fmtD(closedOf(j))}</td>
+                <td className={`font-semibold ${days > 7 ? 'text-warn' : 'text-ok'}`}>{days}</td>
+              </tr>
+            )
+          })}</tbody>
+        </table>
+        {rows.length === 0 && <div className="p-3 text-[12px] text-text-faint text-center">No job cards match these filters.</div>}
+        {rows.length > 200 && <div className="p-2 text-[11px] text-text-faint text-center">Showing first 200 of {rows.length} — narrow with search / filters.</div>}
+      </div>
+    </div>
   )
 }
 

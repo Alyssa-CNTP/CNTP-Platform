@@ -5,6 +5,91 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+
+## 2026-07-02 — Alyssa (Production capture: bucket elevator included in balance; balance sign fix)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
+
+- **Bucket elevator label corrected**: UI previously showed "excluded from balance" on the bucket elevator spillage row, contradicting the actual calculation which already included it in `totalIn`. Label now reads "included in balance".
+- **Mass balance sign flipped**: variance was calculated as `totalIncl - totalOut` (positive when material is outstanding), changed to `totalOut - totalIncl` so the balance is **negative** when output is less than input — correctly expressing outstanding output as a deficit.
+- **Overview display updated**: mass balance row now reads `Out X − In Y =` to match the flipped formula; clipboard copy label updated from "Variance" to "Balance (out − in)".
+
+---
+
+## 2026-07-02 — Alyssa (Alara: second redesign — clean white/green design system; fix leads bug)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Design system overhaul**: replaced parchment background + dark forest green header with the app's actual design tokens — white `var(--color-surface-card)` cards, `var(--shadow-card)` shadows, transparent body (inherits the app's gradient from `globals.css`), and Inter font throughout. Header is now glass/white matching the rest of the platform.
+- **Single green accent**: removed the multi-colour scheme (parchment + terracotta + dark header). Only forest green (`#1A3A0E`) and sage green (`#5A8A2A`) are used as accent colours, consistent with the platform's brand tokens.
+- **Leads bug fix**: `SignalCard.promote()` and `SignalDrawer.promoteToLead()` were calling `setPromoted(true)` unconditionally after `await fetch(...)` — even on 401 or 500 responses, the button turned green while nothing was actually saved. Fixed to check `r.ok` before setting success state. Added `promoteErr` state to show red error feedback when the API returns a non-2xx response.
+- **Bookmark bug fix**: same pattern fixed in `SignalCard.bookmark()` — now checks `r.ok` before `setBookmarked(true)`.
+- Layout structure (left sidebar + 2-column card grid), hero card, signal drawer, Gap/Loophole routing, and all section logic retained.
+
+---
+
+
+## 2026-07-02 — Alyssa (Alara: full visual redesign — dark header, image cards, sidebar filters, routing)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **New dark forest green header**: sticky top bar with Leaf logo, "Engine active" dot, and an "ⓘ About" button; tab bar on same dark background with green active indicator — replaces the old light earthy header.
+- **Shopping-site layout for Signal Feed**: left sidebar (264px, sticky) contains all filter controls (search, classification, relevance, region, keyword group, sort); main area is a 2-column card grid — mirrors the reference design requested.
+- **Redesigned signal cards**: image area (148px, uses `media_url` or classification-coloured gradient with Leaf icon), platform + classification badge overlays, score bar, title (2-line clamp), summary (3-line clamp), source link, and a 4-button action row: **Save** (bookmarks via `/api/marketing`), **Lead** (promotes via `/api/accounts`), **Gap** (navigates + auto-runs Gap Finder), **Loophole** (navigates + auto-runs Loophole Scan).
+- **Hero card**: first item in the card grid, full-width dark green gradient with Leaf icon, Alara branding, live signal count and update time.
+- **Signal drawer**: removed auto-analysis on open; replaced with an explicit "Analyse with Alara" button so AI is not triggered unless requested.
+- **Cross-section routing**: Gap/Loophole buttons on cards lift `gapPreload`/`loopholePreload` state to the page root and switch section; GapSection and LoopholesSection auto-run analysis on preload change using a `prevPreload` ref to avoid duplicate runs.
+- **Map toggle**: world map is now collapsed by default; "Show map" button expands it above the card grid.
+- **New colour scheme**: dark header (`#0D1B09`), warm parchment background (`#F0EDE6`), forest green brand (`#2D6B1E`) replacing old earthy terracotta as the primary brand tone; terracotta (`#B84B25`) retained for threat/loophole contexts; amber retained for warnings.
+- **About section — signal schedule**: added a styled weekly schedule table (Mon–Sun) showing which regions/themes Alara scrapes on each day.
+- All section interiors (Gap, Loopholes, Intel, Vault, Compass) updated to use `C.brand` (forest green) for active states and primary buttons instead of old `C.red`.
+
+---
+
+## 2026-07-02 — Alyssa (Production capture: auto-fill assignments, remove tablet setup, session delete)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/history/page.tsx`, `app/(app)/production/device/page.tsx` (deleted), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+- **Shift assignment auto-fill**: assign page now auto-loads operators from the Shift Roster when no assignments exist for the selected date/shift — supervisor only needs to confirm variant, grade/lot, and production orders. Removed the manual "Fill from roster" button.
+- **Tablet setup removed**: deleted `/production/device` page and removed "Set up this tablet" button from the capture home. Existing device bindings in localStorage continue to route as before; new ones can no longer be set.
+- **Session delete**: added `can_delete_session` permission key; supervisors and IT get it by default. Delete button appears on session history cards — cascades through `session_signatures`, `scan_events`, `prod_mass_balance`, `prod_debagging`, `prod_bagging` before removing the session.
+- **New permission keys**: `can_edit_session`, `can_delete_session`, `can_edit_bag_tag`, `can_delete_bag_tag` — added to `permissions.ts`, `permission-registry.ts`, and the Production supervisor/legacy supervisor role defaults.
+
+---
+
+## 2026-07-02 — Gustav (Pop-up targeting, job-card history search/filters, boiler startup schedule)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/planner/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `supabase/migrations/20260702_010_maintenance_boiler_schedule.sql` (new)
+
+- **Pop-up targeting** now follows the notification: the technician modal fires for **any** card allocated to them (breakdown or planned, matched on `assigned_user_id`) — not just breakdowns — and never for the raiser; the allocate pop-up stays manager-only, and the acceptance toast still fires for the manager.
+- **Job-card history is searchable/filterable:** the "Last 20" table is replaced by a full history panel — free-text search (card, machine, root cause, work done…), per-column filters (Type / Area / Technician), a Done/Cancelled status filter and a closed-date range.
+- **Boiler startup schedule** restored in the Planner: a compact, editable weekly roster (this week + 5 ahead) of the technician on boiler startup — managers edit current/future weeks. New `maintenance.boiler_schedule` table (applied to staging).
+
+---
+
+## 2026-07-02 — Gustav (Live breakdown pop-ups: technician accept + manager allocate/accept alerts)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx` (new), `app/(app)/maintenance/layout.tsx`, `lib/maintenance/types.ts`
+
+- New `MaintenanceAlerts`, mounted once in the maintenance layout: polls `job_cards` every 10s while the app is open and raises on-screen pop-ups (no realtime/web-push infra exists yet, so closed-tab delivery still uses the existing email/WhatsApp path).
+- **Technician**: when a breakdown is auto-assigned to them (`assigned_user_id === userId`) and not yet accepted, a blocking modal appears — **Accept & attend**, or leave a **first comment** — even if they were idle on another maintenance page; it reloads the board on new events.
+- **Maintenance manager**: a corner pop-up lists **job cards awaiting allocation** with an "Allocate now →" link, and a **toast fires the moment a technician accepts** a breakdown, so the manager can track acceptance and manage urgent work.
+- Added `assigned_user_id` to the `JobCard` type (already on the table). QC-on-duty routing is intentionally out of scope for now (to follow).
+
+## 2026-07-02 — Alyssa (Permissions: production orders added to matrix + orPermission sidebar gate)
+
+**Files changed:**
+- `lib/auth/permission-registry.ts` — added `production.orders` resource under Production module with `read: 'can_view_live_history'`
+- `components/layout/Sidebar.tsx` — Production Orders now uses `permission: 'can_view_live_history', orPermission: true` so any user with that toggle gets the sidebar link
+- `app/(app)/layout.tsx` — added explicit route guard for `/production/orders` with `can_view_live_history` orPermission
+
+**Changes:**
+- Production Orders now appears in the Users & Roles permission matrix so read access can be toggled per user
+- Any user outside Production/Management can be granted access to Production Orders by enabling `can_view_live_history`
+- **Standard going forward:** every page in the app must have a corresponding entry in `lib/auth/permission-registry.ts` with read/write/delete/manage mapped to the appropriate permission keys, so all access can be managed from Users & Roles without code changes
+
+---
+
 ## 2026-07-02 — Alyssa (Permissions: quality read toggles, staff/roster gate, delete error surfacing)
 
 **Files changed:**

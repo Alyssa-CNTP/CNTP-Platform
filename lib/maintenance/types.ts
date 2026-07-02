@@ -18,7 +18,7 @@ export interface JobCard {
   maint_types: string[]; description: string; long_desc: string
   workflow: 'breakdown' | 'planned'
   raised_by: string; raised_at: string
-  status: Status; assigned_to: string | null; assigned_at: string | null
+  status: Status; assigned_to: string | null; assigned_user_id: string | null; assigned_at: string | null
   accepted_at: string | null; started_at: string | null; completed_at: string | null
   // Manager urgency label (null → derived priority); cancellation audit fields.
   urgency: Urgency | null; cancelled_at: string | null; cancelled_by: string | null
@@ -76,6 +76,8 @@ export interface EqConfig { id: number; equipment: string; service_interval_hour
 export interface EqHours { id: number; equipment: string; reading_date: string; total_hours: number | null; hours_since_service: number | null; serviced: boolean; notes: string; recorded_by: string }
 export interface CalAsset { id: number; serial_no: string; department: string; asset_name: string; last_done: string | null; interval_days: number; weekly_check: boolean; comment: string; active: boolean }
 export interface Machine { id: number; name: string; area: string; active: boolean; created_by: string }
+// Weekly boiler-startup roster — who is on boiler startup for a given week.
+export interface BoilerSchedule { id: number; week_start: string; technician: string; technician_user_id: string | null; updated_by: string | null; updated_at: string }
 
 // Chat (WhatsApp-style job-card thread). Backend is another workstream; this is
 // the shape the JobCardChat component consumes.

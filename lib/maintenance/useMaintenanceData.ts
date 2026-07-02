@@ -15,7 +15,7 @@ import type {
   JobCard, CardLog, SpareUsed, Roster, AreaQc, Slot,
   Template, Completion, AnnualItem, SparePart, Offsite, Status, QcAnswer, Staff,
   IpReading, DieselReading, LsLog, WaterReading, BoilerStart, EqConfig, EqHours, CalAsset, Machine,
-  SpareRequest,
+  SpareRequest, BoilerSchedule,
 } from './types'
 
 // Fallback staff directory built from the hardcoded TECHS (id: null) until the
@@ -64,6 +64,8 @@ export function useMaintenanceData() {
   // permission/schema hiccup falls back to the legacy maintenance duty_roster.
   const [opsPeriods, setOpsPeriods] = useState<{ id: string; start_date: string; end_date: string }[]>([])
   const [opsEntries, setOpsEntries] = useState<{ period_id: string; role_key: string; shift: string; person_name: string }[]>([])
+  // Boiler-startup weekly roster (loaded defensively — new table).
+  const [boilerSchedule, setBoilerSchedule] = useState<BoilerSchedule[]>([])
 
   // Acting-as name — defaults to the signed-in user; preserved from the original.
   const [actor, setActor] = useState('')
@@ -175,6 +177,32 @@ export function useMaintenanceData() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadOpsRoster() }, [loadOpsRoster])
+
+  // Boiler-startup schedule (own effect — new table, must not break the module).
+  const loadBoiler = useCallback(async () => {
+    try {
+      const { data, error: err } = await db.schema('maintenance').from('boiler_schedule')
+        .select('*').order('week_start', { ascending: true })
+      if (err) return
+      setBoilerSchedule((data ?? []) as BoilerSchedule[])
+    } catch { /* table not migrated yet — keep [] */ }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadBoiler() }, [loadBoiler])
+
+  // Assign / clear the boiler-startup technician for a week (upsert by week_start).
+  const setBoilerStartup = async (weekStart: string, technician: string, techId: string | null) => {
+    const row = { week_start: weekStart, technician, technician_user_id: techId, updated_by: actor || displayName || '', updated_at: new Date().toISOString() }
+    setBoilerSchedule(p => {
+      const i = p.findIndex(b => b.week_start === weekStart)
+      if (i >= 0) { const n = [...p]; n[i] = { ...n[i], ...row }; return n }
+      return [...p, { id: 0, created_at: new Date().toISOString(), ...row } as BoilerSchedule].sort((a, b) => a.week_start.localeCompare(b.week_start))
+    })
+    const { data, error: err } = await db.schema('maintenance').from('boiler_schedule')
+      .upsert(row, { onConflict: 'week_start' }).select().single()
+    if (err) { setPopup('Save failed: ' + err.message); loadBoiler(); return }
+    if (data) setBoilerSchedule(p => p.map(b => (b.week_start === weekStart ? data as BoilerSchedule : b)))
+  }
 
   // Raise a reorder / part request → server route (gating + manager notify).
   const createRequest = async (payload: { part_id?: number | null; part_no?: string | null; description: string; qty: number; reason: string; card_id?: number | null; note?: string }) => {
@@ -788,7 +816,7 @@ export function useMaintenanceData() {
     data: {
       jcs, logs, sparesUsed, roster, areaQc, slots, templates, completions, annual, stock, offsite, staff,
       ipReadings, dieselReadings, lsLogs, waterReadings, boilerStarts, eqConfig, eqHours, calAssets, machines,
-      requests,
+      requests, boilerSchedule,
     },
 
     // Shared form/UI state + setters that the route components drive.
@@ -806,7 +834,7 @@ export function useMaintenanceData() {
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,
-      createRequest, setRequestStatus, cancelRequest,
+      createRequest, setRequestStatus, cancelRequest, setBoilerStartup,
     },
 
     derived: {
