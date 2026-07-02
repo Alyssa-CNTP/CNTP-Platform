@@ -18,6 +18,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Timesheet: log shift start on page open; pre-populate standard breaks)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`
+
+- **Shift start logged at login**: a `capture_activity` stamp is written when the operator opens a section (only if no prior stamps exist), so shift start reflects actual login time rather than first data-entry time.
+- **Standard breaks pre-populated**: when no inactivity gaps are detected from activity, the standard factory schedule is pre-filled — morning shift gets tea at 10:00 (15 min) and lunch at 12:30 (60 min); night shift gets tea at 19:00 (15 min) and meal at 21:00 (60 min). All entries are editable at sign-off.
+
+---
+
 ## 2026-07-02 — Alyssa (Production capture: operator must choose variant; mismatch warning + supervisor note)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
