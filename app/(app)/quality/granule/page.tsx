@@ -1410,7 +1410,6 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
         </div>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
-          <button onClick={() => onAddTasting(run, null)} className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">🍵 Tasting</button>
           {run.lm_status === 'awaiting_approval' ? (
             <>
               <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold border-2 border-warn/40 bg-warn/10 text-warn">
