@@ -8,7 +8,6 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { WorkforceTabs } from '@/components/production/WorkforceTabs'
 import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
@@ -177,20 +176,23 @@ function AssignScreen() {
         (e.employee_id ? (empOp.get(e.employee_id) ?? null) : null) ??
         (e.person_name ? (nameOp.get(e.person_name.trim().toLowerCase()) ?? null) : null)
 
+      // Calculate fills synchronously before setDrafts so the count is accurate
+      // when setFillNote is called (setDrafts updater runs async on next render).
       let filled = 0
+      const sectionFills: Record<string, string[]> = {}
+      SECTION_ORDER.forEach(sectionId => {
+        const roleKeys = SECTION_ROLES[sectionId] ?? []
+        const ids: string[] = []
+        entries.filter(e => roleKeys.includes(e.role_key)).forEach(e => {
+          const opId = opFor(e)
+          if (opId && !ids.includes(opId)) ids.push(opId)
+        })
+        if (ids.length) { sectionFills[sectionId] = ids; filled += ids.length }
+      })
       setDrafts(prev => {
         const next = { ...prev }
-        SECTION_ORDER.forEach(sectionId => {
-          const roleKeys = SECTION_ROLES[sectionId] ?? []
-          const ids: string[] = []
-          entries.filter(e => roleKeys.includes(e.role_key)).forEach(e => {
-            const opId = opFor(e)
-            if (opId && !ids.includes(opId)) ids.push(opId)
-          })
-          if (ids.length) {
-            next[sectionId] = { ...(next[sectionId] ?? emptyDraft()), operatorIds: ids }
-            filled += ids.length
-          }
+        Object.entries(sectionFills).forEach(([sectionId, ids]) => {
+          next[sectionId] = { ...(next[sectionId] ?? emptyDraft()), operatorIds: ids }
         })
         return next
       })
@@ -243,8 +245,6 @@ function AssignScreen() {
           <p className="text-[12px] text-text-muted mt-0.5">Confirm variant, grade, and operators per section. Pre-filled from the Shift Roster automatically.</p>
         </div>
       </div>
-
-      <WorkforceTabs />
 
       {/* Date + shift */}
       <div className="flex flex-wrap items-center gap-3 bg-white border border-stone-200 rounded-2xl p-4">
