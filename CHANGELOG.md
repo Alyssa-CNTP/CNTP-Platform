@@ -5,6 +5,45 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara CRM: lead pipeline — phase 2 step 1)
+
+**Files changed:**
+- `app/(app)/intelligence/leads/page.tsx` (new) — kanban pipeline page grouped by stage
+- `components/leads/AccountDrawer.tsx` (new) — right-slide account detail drawer
+- `app/api/accounts/route.ts` (new) — GET list + POST create/promote
+- `app/api/accounts/[id]/route.ts` (new) — GET detail (account + profile + interactions + signals), PATCH
+- `app/api/accounts/[id]/interactions/route.ts` (new) — POST add timeline entry
+- `components/intelligence/SignalDrawer.tsx` — added "Promote to lead" button
+- `components/layout/Sidebar.tsx` — added "Lead Pipeline" nav entry (KanbanSquare icon)
+
+**Changes:**
+- Built the **lead pipeline view** at `/intelligence/leads`: kanban columns for all 6 stages (lead → qualified → proposal → negotiation → won → lost), stage tab filter, search, and 3-KPI row (total / active / won).
+- **AccountDrawer**: click any account card to open a detailed panel — stage picker (one-click advance), next-action block, company dossier (panjiva shipment data + current supplier), linked signals list, and an activity timeline with an add-note form (interaction type + next step).
+- **Three new API routes** wire the accounts/company_profiles/account_interactions/signals tables into the UI. Auth mirrors the signals route (Sales/Management/Marketing/IT or `can_access_intelligence`).
+- **Promote to lead**: "Promote to lead" button in the signal drawer creates an `accounts` row (stage='lead', signal_ids=[signal.id]) and logs a genesis `account_interactions` entry so every lead is traceable to its source signal.
+- The `docs/alara-crm-vision.md` spec and `supabase/migrations/20260702_001_crm_campaigns_audiences.sql` are now committed to the repo.
+
+---
+
+## 2026-07-02 — Alyssa (Alara: multi-source engine LIVE + CRM data-model foundation)
+
+**Files changed:**
+- `research-engine/n8n/cntp-signal-engine.json` — corrected/expanded workflow (reference export)
+- `supabase/migrations/20260702_001_crm_campaigns_audiences.sql` (new) — CRM `campaigns` + `audiences`
+- `docs/alara-crm-vision.md` — CRM closed-loop spec + schema introspection + phase-2 build order
+
+**Changes (n8n — done via the n8n public API over SSH; workflow lives in n8n, not the repo):**
+- Built the **multi-source** engine (`ud8p5FxBhqiDHH6X`): added TikTok + Instagram (Apify), X/web (Exa), YouTube alongside the 16 news feeds — each normalised to `{title,link,description,source}`, pooled via `Merge Sources` (social-first) → existing dedup→Gemini→Save pipeline.
+- **Models off the app's `2.5-flash-lite`** → dedicated: Tier 1 `gemini-3.1-flash-lite`, Tier 2 `gemini-2.5-flash`. Fixed ~16s/item slowness (old free-tier key → paid key in `CNTP Gemini` → 1.59s/item).
+- **Region-per-day rotation** (`Day Selector`) for Apify/Exa to cap credits + fit the 3am–5am window; news/YouTube global daily.
+- Fixes: dedup by URL **and** title; classification mapped to the `signals_classification_check` values (fine type kept in `intel`); `source_type` from the real platform (was hardcoded `news`); `region` = full country names; deep-scan JSON parsers both tiers.
+- **Went live:** activated multi-source (3am SAST, throttle 300), deactivated old news-only `kDhYBC0Q9IBM7CyS` (fallback), deleted 4 duplicate copies.
+
+**Changes (production `sales` schema):**
+- Introspected the live schema (20 tables): `accounts` already a full lead pipeline; only gap = `campaigns` + `audiences` (added by the migration above). Phase-2 app wiring not yet started.
+
+---
+
 ## 2026-07-02 — Alyssa (Global Wits trade intelligence + campaign close-loop)
 
 **Files changed:**
