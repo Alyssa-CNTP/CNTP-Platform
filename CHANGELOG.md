@@ -5,6 +5,30 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+
+## 2026-07-02 — Alyssa (Production capture: bucket elevator included in balance; balance sign fix)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
+
+- **Bucket elevator label corrected**: UI previously showed "excluded from balance" on the bucket elevator spillage row, contradicting the actual calculation which already included it in `totalIn`. Label now reads "included in balance".
+- **Mass balance sign flipped**: variance was calculated as `totalIncl - totalOut` (positive when material is outstanding), changed to `totalOut - totalIncl` so the balance is **negative** when output is less than input — correctly expressing outstanding output as a deficit.
+- **Overview display updated**: mass balance row now reads `Out X − In Y =` to match the flipped formula; clipboard copy label updated from "Variance" to "Balance (out − in)".
+
+---
+
+## 2026-07-02 — Alyssa (Alara: second redesign — clean white/green design system; fix leads bug)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Design system overhaul**: replaced parchment background + dark forest green header with the app's actual design tokens — white `var(--color-surface-card)` cards, `var(--shadow-card)` shadows, transparent body (inherits the app's gradient from `globals.css`), and Inter font throughout. Header is now glass/white matching the rest of the platform.
+- **Single green accent**: removed the multi-colour scheme (parchment + terracotta + dark header). Only forest green (`#1A3A0E`) and sage green (`#5A8A2A`) are used as accent colours, consistent with the platform's brand tokens.
+- **Leads bug fix**: `SignalCard.promote()` and `SignalDrawer.promoteToLead()` were calling `setPromoted(true)` unconditionally after `await fetch(...)` — even on 401 or 500 responses, the button turned green while nothing was actually saved. Fixed to check `r.ok` before setting success state. Added `promoteErr` state to show red error feedback when the API returns a non-2xx response.
+- **Bookmark bug fix**: same pattern fixed in `SignalCard.bookmark()` — now checks `r.ok` before `setBookmarked(true)`.
+- Layout structure (left sidebar + 2-column card grid), hero card, signal drawer, Gap/Loophole routing, and all section logic retained.
+
+---
+
+
 ## 2026-07-02 — Alyssa (Alara: full visual redesign — dark header, image cards, sidebar filters, routing)
 
 **Files changed:** `app/(app)/research/page.tsx`
