@@ -72,7 +72,6 @@ const NAV: NavItem[] = [
   { href: '/intelligence/global-wits',  label: 'Global Wits',                icon: FileSpreadsheet, group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/leads',        label: 'Lead Pipeline',              icon: KanbanSquare,    group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/research',                  label: 'Alara',                      icon: Leaf,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
-  { href: '/intelligence',              label: 'Signal Engine',              icon: Radio,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
 
   // ── Marketing ──
