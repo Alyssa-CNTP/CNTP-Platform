@@ -5,6 +5,27 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Global Wits trade intelligence + campaign close-loop)
+
+**Files changed:**
+- `app/(app)/intelligence/global-wits/page.tsx` (new)
+- `app/api/global-wits/route.ts` (new)
+- `app/(app)/marketing/page.tsx`
+- `app/api/marketing/route.ts`
+- `components/layout/Sidebar.tsx`
+- `app/(app)/quality/lab-manager/page.tsx`
+- `supabase/migrations/20260704_001_global_wits.sql`
+
+**Changes:**
+- **Global Wits**: replaced LinkedIn placeholder with a trade file import tool. Drop a Global Wits `.xlsx` — all sheets (hscode, US customs, global shipping, rooibos) are parsed client-side; each unique buyer becomes a `sales.company_profiles` record, a `sales.accounts` lead, and a `sales.signals` trade signal via 3 bulk upserts.
+- **Global Wits overview**: persistent trade dashboard loads from DB on every visit — stat cards (441 buyers, $23.4M, 1,860 shipments), SVG country bar chart, sortable/searchable buyers grid with expandable rows. Expanded row shows a dot-on-line shipment timeline (sized by $ value), monthly bar chart, pitch angle, and recent shipment detail.
+- **Import history**: collapsible accordion grid of past file imports.
+- **Campaign close-loop**: `campaign_brief` AI action now returns `signal_ids` (which signals inspired the brief); `save_campaign` persists `channel` and `signal_ids` to `marketing.campaigns`.
+- **Lab manager fix**: removed broken `import { computePastOosFlags } from '../pasteuriser/page'` — the export never existed, causing every production build to fail. Replaced with a local stub returning `[]`.
+- **Sidebar**: LinkedIn replaced with Global Wits under Sales group.
+
+---
+
 ## 2026-07-02 — Alyssa (Maintenance: remove Shuaib Sentso from PIN system)
 
 **Files changed:**
