@@ -40,7 +40,7 @@ const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
-  { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
   { href: '/production/floor-plan',     label: 'Floor Plan',                 icon: Map,             group: 'Production', departments: ['Production','Management'] },

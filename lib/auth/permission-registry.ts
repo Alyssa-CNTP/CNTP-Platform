@@ -82,6 +82,8 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_count', label: 'Edit a submitted count' },
           { key: 'can_view_all_sections', label: 'View all sections' },
         ] },
+      { key: 'production.orders', label: 'Production orders (session history)',
+        read: 'can_view_live_history' },
       { key: 'production.live', label: 'Live capture',
         read: 'can_view_live_history', write: 'can_start_live_session',
         manage: [
