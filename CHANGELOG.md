@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Breakdown routing: spread across on-duty crew from the shift roster)
+
+**Files changed:** `app/api/maintenance/job-cards/route.ts`
+
+- Breakdown auto-routing now distributes across the technicians on the **Operations shift roster**: the on-duty tech with the **fewest breakdowns in hand** gets the new one. A breakdown counts as "in hand" from the moment it is assigned (accepted or not) through in-progress, so once one on-duty tech is holding a breakdown, the next breakdown routes to the **other** technician on shift. Single-tech shifts still route to that tech; deterministic tie-break (fewest breakdowns → fewest open cards → name).
+
+## 2026-06-30 — Gustav (Maintenance overhaul round 4: table board, checklist allocation, unified roster, dashboard trends, energy)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`, `app/(app)/maintenance/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/energy/history/route.ts`, `lib/maintenance/roster.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/maintenance/JobCardTable.tsx` (new), `components/maintenance/Spark.tsx` (new), `components/maintenance/TrendsPanel.tsx` (new), `components/maintenance/EnergyHistory.tsx`, `components/maintenance/EnergyWidget.tsx`
+
+- **Job-card board → one-line table** (`JobCardTable`): rows expand to the full job card (allocate / log work / QC / verify) with a live in-row timer; **per-technician allocation tabs** replace the old "by raiser" panel; **urgency filter** added (search + date-range kept).
+- **New-job-card alert** on the maintenance dashboard for managers.
+- **Checklist allocation** to technicians (on-duty suggested first) with assignee highlight (+migration `20260629_002`).
+- **Roster unified:** on-duty technician sourced from the Operations shift roster (incl. breakdown routing); maintenance duty-roster editor retired.
+- **Trends moved to the dashboard** (`TrendsPanel`/`Spark`); Scheduled "Readings & Trends" tab is now capture-only.
+- **Energy:** solar charts shrunk; From/To date-range filter on energy history.
+
 ## 2026-07-02 — Alyssa (Alara: phase 3 — briefing cards, full signal cards, audience companies)
 
 **Files changed:**
