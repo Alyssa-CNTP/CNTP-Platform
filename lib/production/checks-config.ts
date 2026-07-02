@@ -23,6 +23,7 @@ export interface MachineCheckDef {
   hourly?:                boolean   // repeated reading; drives the hourly nudge
   equipment?:             string    // maintenance machine/asset name for a raise
   failRaisesMaintenance?: boolean
+  allowNegative?:         boolean
   help?:                  string
 }
 
@@ -30,7 +31,7 @@ export const MACHINE_CHECKS: Record<string, MachineCheckDef[]> = {
   sieving: [
     // ── Start-up ──
     { key: 'indent_screen_speed', phase: 'startup', label: 'Indent screen speed', kind: 'number', unit: 'rpm', equipment: 'Indent Screen' },
-    { key: 'indent_screen_angle', phase: 'startup', label: 'Indent screen angle', kind: 'number', unit: '°',  equipment: 'Indent Screen' },
+    { key: 'indent_screen_angle', phase: 'startup', label: 'Indent screen angle', kind: 'number', unit: '°',  equipment: 'Indent Screen', allowNegative: true },
     { key: 'rotex_clean_start',   phase: 'startup', label: 'Cleaning of Rotex',   kind: 'confirm', afternoonOnly: true, equipment: 'Rotex', help: 'Start of afternoon shift only' },
     { key: 'sieving_config',      phase: 'startup', label: 'Sieving configuration', kind: 'text', help: 'State the screen configuration in use' },
     { key: 'scale_verification',  phase: 'startup', label: 'Scale verification',  kind: 'scale', unit: 'kg', equipment: 'Scale — Sieving', failRaisesMaintenance: true },
