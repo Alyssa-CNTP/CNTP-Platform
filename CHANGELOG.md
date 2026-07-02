@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara: Master Engine restructure — About tab, save-to-reports, Promote to Lead, sidebar rebrand)
+
+**Files changed:**
+- `app/(app)/research/page.tsx` — major restructure
+- `components/layout/Sidebar.tsx` — sidebar rebrand
+
+**Changes:**
+- **About Alara tab**: new section with identity card (name etymology — "Ala" from Aspalathus linearis, "ra" from Rooibos · Intelligence · Alyssa), mission statement, creator attribution, and clickable capability cards that navigate to each engine section.
+- **Save to reports**: all AI outputs in the research page now have an inline "Save to reports" button — Gap Finder, Loopholes, all Intel tools (briefing/frontier/competitors/profiler/pitch/alerts), and Compass briefings. Uses the existing `/api/marketing` `save_report` action → `sales.reports`.
+- **Promote to Lead in signal drawer**: "Promote to Lead" button appears in the research page's signal drawer after the Alara auto-analysis. POSTs to `/api/accounts` with stage=lead and the signal ID, so Alara research signals flow directly into the CRM lead pipeline.
+- **Company profiler → accounts**: when the Intelligence > Company Profiler generates a dossier, the company name and first 500 chars of the profile are automatically saved to `sales.accounts` as a lead (best-effort, non-blocking).
+- **Intel result label**: IntelSection now tracks which tool generated the current result and passes the correct label (e.g. "Market Briefing", "Frontier Scout") to AiResult and to the saved report title.
+- **Sidebar**: "Research Engine" renamed to "Alara" with `Leaf` icon to match the engine's identity.
+- **`AiResult` component**: upgraded with optional `saveable` and `reportType` props; adds a save button to the header bar without changing the plain-text rendering used in the signal drawer.
+
+---
+
 ## 2026-07-02 — Alyssa (Alara: phase 3 — briefing cards, full signal cards, audience companies)
 
 **Files changed:**
