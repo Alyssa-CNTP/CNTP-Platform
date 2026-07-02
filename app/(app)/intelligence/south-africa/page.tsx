@@ -173,7 +173,7 @@ function SectionBlock({
           <div className="text-center text-text-faint text-[12px] py-6">{emptyLabel}</div>
         ) : (
           signals.slice(0, 25).map(s => (
-            <SignalCard key={s.id} signal={s} compact onClick={onSelect} />
+            <SignalCard key={s.id} signal={s} onClick={onSelect} />
           ))
         )}
       </div>

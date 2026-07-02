@@ -87,14 +87,16 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
       </div>
 
       {/* Title */}
-      <h3
-        className={clsx(
-          'font-display font-semibold text-text leading-snug',
-          compact ? 'text-[13px]' : 'text-[15px]'
-        )}
-      >
-        {signal.title}
-      </h3>
+      {(signal.title || signal.summary_en) && (
+        <h3
+          className={clsx(
+            'font-display font-semibold text-text leading-snug',
+            compact ? 'text-[13px]' : 'text-[15px]'
+          )}
+        >
+          {signal.title || signal.summary_en}
+        </h3>
+      )}
 
       {/* Summary */}
       {signal.summary_en && !compact && (
