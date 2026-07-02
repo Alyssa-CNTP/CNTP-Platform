@@ -1027,8 +1027,11 @@ export default function SievingPage() {
       const missing = activeMesh.filter(m=>f[m]===''||f[m]===undefined||f[m]===null)
       if (missing.length>0) errs._mesh=`All sieve mesh results are required for an In-Process run — missing: ${missing.map(m=>m.replace(' (%)','')).join(', ')}`
     }
-    if (!specDef.noBulkDensity&&(f.bulkDensity===''||f.bulkDensity==null)) errs.bulkDensity='Bulk density is required'
-    if (specDef.hasLeafShade&&!f.leafShade) errs.leafShade='Leaf shade is required (1–11)'
+    // Bulk density / leaf shade are only mandatory on Final QC — optional on In-Process.
+    if (f.runType==='final') {
+      if (!specDef.noBulkDensity&&(f.bulkDensity===''||f.bulkDensity==null)) errs.bulkDensity='Bulk density is required'
+      if (specDef.hasLeafShade&&!f.leafShade) errs.leafShade='Leaf shade is required (1–11)'
+    }
     if (f.leafShade) { const ls=parseInt(f.leafShade,10); if (isNaN(ls)||ls<1||ls>11) errs.leafShade='Leaf shade must be 1–11' }
     // No captured value may be negative.
     if (!errs._mesh && Object.keys(gramValues).some(k=>isNegative(gramValues[k]))) errs._mesh='Sieve grams cannot be negative'
@@ -1318,7 +1321,7 @@ export default function SievingPage() {
               <ErrMsg field="variant"/>
             </div>
             {!specDef.noBulkDensity&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.bulkDensity?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g) *</label>
+              <label style={{fontSize:10,fontWeight:700,color:errors.bulkDensity?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g){form.runType==='final'?' *':''}</label>
               <input type="number" min="0" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,borderColor:errors.bulkDensity?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="bulkDensity"/>
             </div>}

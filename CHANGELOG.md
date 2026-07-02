@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Sieving: bulk density/leaf shade only required on Final QC)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- Bulk density and leaf shade are no longer mandatory for In-Process runs — only Final QC still requires them. In-Process can now be saved without either field filled in; the range check (1–11) on leaf shade still applies if a value is entered.
+
+---
+
 ## 2026-07-04 — Gustav (Granule: remove redundant run-level Tasting button)
 
 **Files changed:**
