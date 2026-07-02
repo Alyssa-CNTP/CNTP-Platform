@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Granule: remove redundant run-level Tasting button)
+
+**Files changed:**
+- `app/(app)/quality/granule/page.tsx`
+
+**Changes:**
+- Removed the "🍵 Tasting" button in the run header — the per-sample "Add Tasting" button further down already covers this, so the top-level one was a duplicate entry point.
+
+---
+
 ## 2026-07-03 — Alyssa (Management role — read-only access to all modules by default)
 
 **Files changed:**
