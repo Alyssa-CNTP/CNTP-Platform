@@ -6,10 +6,9 @@ import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { markBagConsumed } from '@/lib/production/scan-utils'
-import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
-import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
+import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -35,14 +34,13 @@ export interface RefiningOutputBag {
   code: string | null
   description?: string
   weight: string
-  batch: string
   printed: boolean
   secured: boolean
   logged_at?: string
 }
 
 export interface RefiningOutputGroup {
-  label: string              // 'B' | 'C' | 'D'
+  label: string              // 'A' | 'B' | 'C' | 'D'
   productType: string
   code: string | null
   description?: string
@@ -51,13 +49,14 @@ export interface RefiningOutputGroup {
 
 export interface RefiningData {
   inputs: RefiningInputBag[]
+  outputA: RefiningOutputGroup | null
   outputB: RefiningOutputGroup | null
   outputC: RefiningOutputGroup | null
   outputD: RefiningOutputGroup | null
 }
 
 export function emptyRefiningData(): RefiningData {
-  return { inputs: [], outputB: null, outputC: null, outputD: null }
+  return { inputs: [], outputA: null, outputB: null, outputC: null, outputD: null }
 }
 
 // ── Totals ────────────────────────────────────────────────────────────────────
@@ -65,14 +64,31 @@ export function emptyRefiningData(): RefiningData {
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 export function refiningTotals(d: RefiningData) {
-  const totalA = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)
+  const totalIn = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)
   const groupKg = (g: RefiningOutputGroup | null) =>
     (g?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
+  const totalA = groupKg(d.outputA)
   const totalB = groupKg(d.outputB)
   const totalC = groupKg(d.outputC)
   const totalD = groupKg(d.outputD)
-  const balance = totalA - totalB - totalC - totalD
-  return { totalA, totalB, totalC, totalD, balance }
+  const balance = totalIn - totalA - totalB - totalC - totalD
+  return { totalIn, totalA, totalB, totalC, totalD, balance }
+}
+
+// ── Predefined outputs per section ───────────────────────────────────────────
+
+const SECTION_OUTPUTS: Record<string, { key: 'outputA' | 'outputB' | 'outputC' | 'outputD'; label: string; productType: string }[]> = {
+  refining1: [
+    { key: 'outputA', label: 'A', productType: 'Indent Dust' },
+    { key: 'outputB', label: 'B', productType: 'White Dust' },
+    { key: 'outputC', label: 'C', productType: 'Powder Dust' },
+  ],
+  refining2: [
+    { key: 'outputA', label: 'A', productType: 'Cut Heavy Stick Fine' },
+    { key: 'outputB', label: 'B', productType: 'Cut Heavy Stick Coarse' },
+    { key: 'outputC', label: 'C', productType: 'Powder Dust' },
+    { key: 'outputD', label: 'D', productType: 'White Dust' },
+  ],
 }
 
 // ── Shared style constants ────────────────────────────────────────────────────
@@ -102,6 +118,7 @@ interface SystemBag {
   variant: string | null
   weight_kg: number | null
   lot_number: string | null
+  created_at: string | null
 }
 
 function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
@@ -120,7 +137,7 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
     }
     const expanded = types.flatMap(t => aliases[t] ?? [t])
     getDb().schema('production').from('bag_tags')
-      .select('serial_number, product_type, variant, weight_kg, lot_number')
+      .select('serial_number, product_type, variant, weight_kg, lot_number, created_at')
       .in('product_type', expanded)
       .eq('status', 'in_stock')
       .order('created_at', { ascending: false })
@@ -338,60 +355,50 @@ function SystemPickList({
   )
 }
 
-// ── Output group ──────────────────────────────────────────────────────────────
+// ── Output weight group (predefined product type, weight-only entry) ───────────
 
-function OutputGroupSection({
-  groupLabel, group, sectionId, variantWord, gradeLetter, locked,
-  batchHints, onPickerAdd, onRemoveBag, onSetSecured, onClear, genSerial,
+function OutputWeightGroup({
+  groupLabel, productType, group, locked, variantWord, onAdd, onRemoveBag, onSetSecured,
 }: {
   groupLabel: string
+  productType: string
   group: RefiningOutputGroup | null
-  sectionId: string
-  variantWord: string
-  gradeLetter: string
   locked: boolean
-  batchHints: string[]
-  onPickerAdd: (p: PickedOutput) => void
+  variantWord: string
+  onAdd: (weight: string) => void
   onRemoveBag: (bagId: string) => void
   onSetSecured: (bagId: string, val: boolean) => void
-  onClear: () => void
-  genSerial: () => string
 }) {
-  const [picking, setPicking] = useState(false)
+  const [weight, setWeight] = useState('')
   const groupKg = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
-  const groupLetter = { B: 'Output 1', C: 'Output 2', D: 'Output 3' }[groupLabel] ?? groupLabel
 
-  function handleAdd(p: PickedOutput) {
-    onPickerAdd(p)
-    setPicking(false)
+  function handleAdd() {
+    if (n(weight) <= 0) return
+    onAdd(weight)
+    setWeight('')
   }
 
   return (
     <div className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: BAG_COLOR + '30' }}>
-      {/* Group header */}
+      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: BAG_COLOR + '20', background: BAG_COLOR + '08' }}>
         <div className="flex items-center gap-2">
           <span className="w-6 h-6 rounded-full text-white flex items-center justify-center text-[11px] font-bold shrink-0" style={{ background: BAG_COLOR }}>{groupLabel}</span>
-          <span className="font-semibold text-[14px] text-text">{groupLetter}</span>
-          {group && <span className="text-[12px] text-stone-500 truncate max-w-[120px]">{group.productType}</span>}
+          <span className="font-semibold text-[14px] text-text">{productType}</span>
+          {variantWord && <span className="text-[11px] text-stone-400">{variantWord}</span>}
         </div>
-        <div className="flex items-center gap-2">
-          {group && <span className="font-mono font-bold text-[14px] text-text">{groupKg.toFixed(1)} kg</span>}
-          {!locked && group && (
-            <button onClick={onClear} className="text-[11px] text-stone-400 hover:text-red-500 px-1.5 py-1 rounded-lg">Clear</button>
-          )}
-        </div>
+        {groupKg > 0 && <span className="font-mono font-bold text-[14px] text-text">{groupKg.toFixed(1)} kg</span>}
       </div>
 
       <div className="p-3 space-y-2">
-        {/* Existing bags */}
+        {/* Locked bags */}
         {group?.bags.map(b => (
           <div key={b.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
             style={b.secured ? { background: BAG_COLOR + '0d', border: `1px solid ${BAG_COLOR}30` } : { border: '1px solid #e5e7eb' }}>
             {b.secured && <Lock size={13} className="shrink-0" style={{ color: BAG_COLOR }} />}
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-medium text-text">
-                {b.productType} · {b.weight} kg
+                {b.weight} kg
                 {b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}
               </div>
               {LABEL_PRINTING_ENABLED
@@ -407,24 +414,26 @@ function OutputGroupSection({
           </div>
         ))}
 
-        {/* Picker or add button */}
-        {!locked && (picking
-          ? <OutputPicker
-              sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
-              defaultBatch={batchHints[0] ?? ''}
-              batchHints={batchHints}
-              onAdd={handleAdd} onClose={() => setPicking(false)}
+        {/* Inline weight entry */}
+        {!locked && (
+          <div className="flex gap-2 pt-1">
+            <input
+              type="text" inputMode="decimal" pattern="[0-9.,]*"
+              value={weight} onChange={e => setWeight(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd() } }}
+              placeholder="Weight (kg)"
+              className={INP + ' flex-1'}
             />
-          : <button onClick={() => setPicking(true)}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed text-[13px] font-medium transition-colors"
-              style={{ borderColor: BAG_COLOR + '50', color: BAG_COLOR }}>
-              <Plus size={15} /> Add bag to {groupLetter}
+            <button onClick={handleAdd} disabled={n(weight) <= 0}
+              className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0"
+              style={{ background: BAG_COLOR }}>
+              <Plus size={15} /> Add bag
             </button>
+          </div>
         )}
 
-        {/* Empty state */}
-        {!group && !picking && (
-          <p className="text-[11px] text-stone-400 text-center py-1">Not used this shift — add a bag above to record output.</p>
+        {!group && locked && (
+          <p className="text-[11px] text-stone-400 text-center py-1">No bags recorded for this output.</p>
         )}
       </div>
     </div>
@@ -434,12 +443,11 @@ function OutputGroupSection({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function RefiningCapture({
-  sectionId, assignment, variantWord, gradeLetter = 'A', locked, value, onChange, genSerial, operatorId,
+  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
   variantWord: string
-  gradeLetter?: string
   locked: boolean
   value: RefiningData
   onChange: (d: RefiningData) => void
@@ -509,11 +517,21 @@ export function RefiningCapture({
   function handleSystemPick(bag: SystemBag) {
     const t = nowISO()
     const locked_ = lockCompleted(value.inputs)
+    // Convert ISO created_at → DD-MM-YY for delivery date field
+    const bagDate = bag.created_at
+      ? (() => {
+          const d = new Date(bag.created_at)
+          const dd = String(d.getDate()).padStart(2, '0')
+          const mm = String(d.getMonth() + 1).padStart(2, '0')
+          const yy = String(d.getFullYear()).slice(-2)
+          return `${dd}-${mm}-${yy}`
+        })()
+      : ''
     const row: RefiningInputBag = {
       id: crypto.randomUUID(), serial: bag.serial_number,
       productType: bag.product_type, variant: bag.variant || variantWord || '',
       weight: bag.weight_kg ? String(bag.weight_kg) : '', lot: bag.lot_number || '',
-      deliveryDate: '', inputMode: 'system', secured: true, logged_at: t,
+      deliveryDate: bagDate, inputMode: 'system', secured: true, logged_at: t,
     }
     patch({ inputs: [...locked_, row] })
     markBagConsumed(bag.serial_number, sectionId, null, bag.weight_kg ?? undefined, operatorId ?? null)
@@ -522,54 +540,57 @@ export function RefiningCapture({
 
   // ── Output group helpers ───────────────────────────────────────────────────
 
-  async function addOutputBag(groupKey: 'outputB' | 'outputC' | 'outputD', p: PickedOutput) {
+  async function addOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', productType: string, weight: string) {
+    if (n(weight) <= 0) return
     const serial = genSerial()
     const now = nowISO()
+    const acCode = getAcumaticaCode(productType, variantShort, 'A')
     const bag: OutputBag = {
-      id: crypto.randomUUID(), serial_number: serial, product_type: p.productType,
-      variant: variantShort, grade: (gradeLetter || 'A') as any, weight_kg: n(p.weight),
-      lot_number: p.batch || '', section_id: sectionId,
+      id: crypto.randomUUID(), serial_number: serial, product_type: productType,
+      variant: variantShort, grade: 'A', weight_kg: n(weight),
+      lot_number: '', section_id: sectionId,
       section_name: SECTION_CONFIG[sectionId]?.name ?? sectionId,
       created_at: now, printed: false,
-      acumaticaId: p.code ?? undefined, acumaticaDesc: p.description,
+      acumaticaId: acCode?.inventoryId ?? undefined, acumaticaDesc: acCode?.description,
     }
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: sectionId, session_id: null,
-        product_type: p.productType, variant: variantWord || null,
-        weight_kg: n(p.weight), lot_number: p.batch || null,
-        acumatica_id: p.code || null, status: 'in_stock', consumed: false, printed_at: now,
+        product_type: productType, variant: variantWord || null,
+        weight_kg: n(weight), lot_number: null,
+        acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
         serial_number: serial, action: 'bagging_out', section_id: sectionId,
-        weight_kg: n(p.weight), operator_id: operatorId ?? null,
+        weight_kg: n(weight), operator_id: operatorId ?? null,
       } as any)
     } catch { /* session save retries */ }
 
     const newBag: RefiningOutputBag = {
-      id: bag.id, serial, productType: p.productType, code: p.code,
-      description: p.description, weight: p.weight, batch: bag.lot_number,
+      id: bag.id, serial, productType, code: acCode?.inventoryId ?? null,
+      description: acCode?.description, weight,
       printed: true, secured: true, logged_at: now,
     }
+    const labelMap: Record<string, string> = { outputA: 'A', outputB: 'B', outputC: 'C', outputD: 'D' }
     const existing = value[groupKey]
     patch({
       [groupKey]: {
-        label: { outputB: 'B', outputC: 'C', outputD: 'D' }[groupKey] ?? groupKey,
-        productType: p.productType, code: p.code, description: p.description,
+        label: labelMap[groupKey] ?? groupKey,
+        productType, code: acCode?.inventoryId ?? null, description: acCode?.description,
         bags: [...(existing?.bags ?? []), newBag],
       } as RefiningOutputGroup,
     })
     if (LABEL_PRINTING_ENABLED) printLabel(bag)
   }
 
-  function removeBagFromGroup(groupKey: 'outputB' | 'outputC' | 'outputD', bagId: string) {
+  function removeBagFromGroup(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string) {
     const g = value[groupKey]
     if (!g) return
     const remaining = g.bags.filter(b => b.id !== bagId)
     patch({ [groupKey]: remaining.length ? { ...g, bags: remaining } : null })
   }
 
-  function setGroupBagSecured(groupKey: 'outputB' | 'outputC' | 'outputD', bagId: string, val: boolean) {
+  function setGroupBagSecured(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string, val: boolean) {
     const g = value[groupKey]
     if (!g) return
     patch({ [groupKey]: { ...g, bags: g.bags.map(b => b.id === bagId ? { ...b, secured: val } : b) } })
@@ -577,24 +598,19 @@ export function RefiningCapture({
 
   // ── Derived totals ────────────────────────────────────────────────────────
 
-  const { totalA, totalB, totalC, totalD, balance } = refiningTotals(value)
-  const totalOut = totalB + totalC + totalD
+  const { totalIn, totalA, totalB, totalC, totalD, balance } = refiningTotals(value)
+  const totalOut = totalA + totalB + totalC + totalD
   const withinTol = Math.abs(balance) <= MASS_BALANCE_TOLERANCE_KG
   const inputCount = value.inputs.length
-  const outputCount = (value.outputB?.bags.length ?? 0) + (value.outputC?.bags.length ?? 0) + (value.outputD?.bags.length ?? 0)
-
-  const batchHints = [
-    assignment?.lot_number ?? '',
-    ...value.inputs.map(r => r.lot),
-    ...(value.outputB?.bags ?? []).map(b => b.batch),
-  ].filter(Boolean) as string[]
+  const outputCount = (value.outputA?.bags.length ?? 0) + (value.outputB?.bags.length ?? 0) + (value.outputC?.bags.length ?? 0) + (value.outputD?.bags.length ?? 0)
+  const sectionOutputs = SECTION_OUTPUTS[sectionId] ?? []
 
   return (
     <div className="space-y-4">
       {/* Tab selector */}
       <div className="grid grid-cols-2 gap-2.5">
         {([
-          { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: inputCount,  kg: totalA,   color: DEBAG_COLOR },
+          { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: inputCount,  kg: totalIn,  color: DEBAG_COLOR },
           { id: 'bag',   label: 'Bagging',   dir: 'out', Icon: PackageCheck, count: outputCount, kg: totalOut, color: BAG_COLOR   },
         ] as const).map(t => {
           const on = tab === t.id
@@ -688,8 +704,8 @@ export function RefiningCapture({
 
           {/* Total in */}
           <div className="flex items-center justify-between px-4 py-3 bg-stone-900 text-white rounded-2xl">
-            <span className="text-[12px] font-medium opacity-80">Total (A) — raw material in</span>
-            <span className="font-mono font-bold text-[16px]">{totalA.toFixed(1)} kg</span>
+            <span className="text-[12px] font-medium opacity-80">Total — raw material in</span>
+            <span className="font-mono font-bold text-[16px]">{totalIn.toFixed(1)} kg</span>
           </div>
         </>
       )}
@@ -698,30 +714,31 @@ export function RefiningCapture({
       {tab === 'bag' && (
         <>
           <p className="text-[12px] text-stone-500 px-1">
-            Record each output bag. Three independent output types — use only what applies.
+            Enter each output bag weight — the system generates the serial automatically.
           </p>
 
-          {(['outputB', 'outputC', 'outputD'] as const).map((key, i) => (
-            <OutputGroupSection key={key}
-              groupLabel={['B', 'C', 'D'][i]}
-              group={value[key]}
-              sectionId={sectionId}
-              variantWord={variantWord}
-              gradeLetter={gradeLetter}
-              locked={locked}
-              batchHints={batchHints}
-              genSerial={genSerial}
-              onPickerAdd={p => addOutputBag(key, p)}
-              onRemoveBag={bagId => removeBagFromGroup(key, bagId)}
-              onSetSecured={(bagId, v) => setGroupBagSecured(key, bagId, v)}
-              onClear={() => patch({ [key]: null })}
-            />
-          ))}
+          {sectionOutputs.map(({ key, label, productType }) => {
+            const group = value[key]
+            const groupKgVal = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
+            return (
+              <OutputWeightGroup
+                key={key}
+                groupLabel={label}
+                productType={productType}
+                group={group}
+                locked={locked}
+                variantWord={variantWord}
+                onAdd={weight => addOutputBag(key, productType, weight)}
+                onRemoveBag={bagId => removeBagFromGroup(key, bagId)}
+                onSetSecured={(bagId, v) => setGroupBagSecured(key, bagId, v)}
+              />
+            )
+          })}
 
           {/* Mass balance footer */}
           <div className={`px-4 py-3 rounded-2xl border ${withinTol ? 'bg-ok/5 border-ok/20' : 'bg-amber-50 border-amber-200'}`}>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance (E)</span>
+              <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance</span>
               {!withinTol && (
                 <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
                   <AlertTriangle size={12} /> Outside ±{MASS_BALANCE_TOLERANCE_KG} kg
@@ -729,12 +746,12 @@ export function RefiningCapture({
               )}
             </div>
             <div className="flex items-center gap-1.5 text-[12px] text-stone-500 flex-wrap">
-              <span className="font-mono font-bold text-text">{totalA.toFixed(1)}</span><span>A in</span>
-              {[['B', totalB], ['C', totalC], ['D', totalD]].map(([l, kg]) =>
-                Number(kg) > 0 ? (
-                  <span key={String(l)} className="flex items-center gap-1">
+              <span className="font-mono font-bold text-text">{totalIn.toFixed(1)}</span><span>in</span>
+              {([['A', totalA], ['B', totalB], ['C', totalC], ['D', totalD]] as [string, number][]).map(([l, kg]) =>
+                kg > 0 ? (
+                  <span key={l} className="flex items-center gap-1">
                     <span className="text-stone-400">−</span>
-                    <span className="font-mono font-bold text-text">{Number(kg).toFixed(1)}</span>
+                    <span className="font-mono font-bold text-text">{kg.toFixed(1)}</span>
                     <span>{l}</span>
                   </span>
                 ) : null
