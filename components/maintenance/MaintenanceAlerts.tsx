@@ -86,11 +86,13 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
     return () => { alive = false; clearInterval(id) }
   }, [userId, canManage]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A breakdown assigned to me that I have not yet accepted.
-  const myBreakdown = userId
-    ? cards.find(c => c.workflow === 'breakdown' && c.assigned_user_id === userId
+  // A job card allocated to me (breakdown or planned) that I have not yet
+  // accepted — the pop-up follows the allocation, never the raiser.
+  const myCard = userId
+    ? cards.find(c => c.assigned_user_id === userId
         && c.status === 'assigned' && !c.accepted_at && !techDismissed.includes(c.id)) ?? null
     : null
+  const myIsBd = myCard?.workflow === 'breakdown'
 
   // Manager: job cards awaiting allocation (freshly raised, undismissed).
   const pendingAlloc = canManage
@@ -121,36 +123,38 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
 
   return (
     <>
-      {/* ── Technician: breakdown assigned — accept or comment ── */}
-      {myBreakdown && (
+      {/* ── Technician: job card allocated to me — accept or comment ── */}
+      {myCard && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="card w-[460px] max-w-full overflow-hidden">
-            <div className="bg-err text-white px-5 py-3 flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 shrink-0 animate-pulse" />
-              <div className="font-semibold text-sm">Breakdown assigned to you — {myBreakdown.card_no}</div>
+            <div className={`${myIsBd ? 'bg-err' : 'bg-brand'} text-white px-5 py-3 flex items-center gap-2`}>
+              <AlertTriangle className={`w-5 h-5 shrink-0 ${myIsBd ? 'animate-pulse' : ''}`} />
+              <div className="font-semibold text-sm">{myIsBd ? 'Breakdown' : 'Job card'} assigned to you — {myCard.card_no}</div>
             </div>
             <div className="p-5 space-y-3">
               <div className="text-[13px] text-text">
-                <span className="font-semibold">{myBreakdown.area}</span>{myBreakdown.machine ? ' · ' + myBreakdown.machine : ''}
-                <span className="text-text-faint"> · raised {fmtDT(myBreakdown.raised_at)} by {myBreakdown.raised_by}</span>
+                <span className="font-semibold">{myCard.area}</span>{myCard.machine ? ' · ' + myCard.machine : ''}
+                <span className="text-text-faint"> · raised {fmtDT(myCard.raised_at)} by {myCard.raised_by}</span>
               </div>
-              <div className="text-[13px] text-text-muted whitespace-pre-wrap">{myBreakdown.description}</div>
-              <div className="rounded-lg bg-err/5 border border-err/20 px-3 py-2 text-[11px] text-err">
-                The timer is already running (breakdowns time from when they are raised). Attend on-site, then accept or reply here.
+              <div className="text-[13px] text-text-muted whitespace-pre-wrap">{myCard.description}</div>
+              <div className={`rounded-lg px-3 py-2 text-[11px] ${myIsBd ? 'bg-err/5 border border-err/20 text-err' : 'bg-brand/5 border border-brand/20 text-brand'}`}>
+                {myIsBd
+                  ? 'The timer is already running (breakdowns time from when they are raised). Attend on-site, then accept or reply here.'
+                  : 'You have been allocated this job card. Accept it here, or leave a first comment for the manager.'}
               </div>
               <textarea className="w-full rounded-lg border border-surface-rule bg-surface-card px-3 py-2 text-[13px] min-h-[60px]"
                 placeholder="First comment (optional) — e.g. on my way, or a question for the manager…"
                 value={comment} onChange={e => setComment(e.target.value)} />
               <div className="flex gap-2 flex-wrap">
-                <button disabled={busy} onClick={() => acceptFromModal(myBreakdown)}
+                <button disabled={busy} onClick={() => acceptFromModal(myCard)}
                   className="flex-1 bg-brand text-white rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:brightness-110 transition disabled:opacity-50">
-                  Accept &amp; attend
+                  {myIsBd ? 'Accept & attend' : 'Accept job card'}
                 </button>
-                <button disabled={busy || !comment.trim()} onClick={() => commentFromModal(myBreakdown)}
+                <button disabled={busy || !comment.trim()} onClick={() => commentFromModal(myCard)}
                   className="border border-surface-rule bg-surface-card text-text rounded-lg px-4 py-2.5 text-sm font-semibold min-h-[44px] hover:border-text/30 transition disabled:opacity-40">
                   Reply first
                 </button>
-                <Link href={`/maintenance/job-cards/${myBreakdown.id}`} onClick={() => setTechDismissed(d => [...d, myBreakdown.id])}
+                <Link href={`/maintenance/job-cards/${myCard.id}`} onClick={() => setTechDismissed(d => [...d, myCard.id])}
                   className="inline-flex items-center justify-center border border-surface-rule bg-surface-card text-text-muted rounded-lg px-3 py-2.5 text-[12px] font-semibold min-h-[44px] hover:border-text/30 transition">
                   Open card
                 </Link>
@@ -161,7 +165,7 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
       )}
 
       {/* ── Manager: job cards awaiting allocation ── */}
-      {!myBreakdown && pendingAlloc.length > 0 && (
+      {!myCard && pendingAlloc.length > 0 && (
         <div className="fixed bottom-5 right-5 z-[1000] w-[360px] max-w-[92vw]">
           <div className="card overflow-hidden shadow-menu border border-warn/30">
             <div className="bg-warn/10 text-text px-4 py-2.5 flex items-center gap-2">

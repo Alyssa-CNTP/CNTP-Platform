@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Pop-up targeting, job-card history search/filters, boiler startup schedule)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/planner/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `supabase/migrations/20260702_010_maintenance_boiler_schedule.sql` (new)
+
+- **Pop-up targeting** now follows the notification: the technician modal fires for **any** card allocated to them (breakdown or planned, matched on `assigned_user_id`) — not just breakdowns — and never for the raiser; the allocate pop-up stays manager-only, and the acceptance toast still fires for the manager.
+- **Job-card history is searchable/filterable:** the "Last 20" table is replaced by a full history panel — free-text search (card, machine, root cause, work done…), per-column filters (Type / Area / Technician), a Done/Cancelled status filter and a closed-date range.
+- **Boiler startup schedule** restored in the Planner: a compact, editable weekly roster (this week + 5 ahead) of the technician on boiler startup — managers edit current/future weeks. New `maintenance.boiler_schedule` table (applied to staging).
+
 ## 2026-07-02 — Gustav (Live breakdown pop-ups: technician accept + manager allocate/accept alerts)
 
 **Files changed:** `components/maintenance/MaintenanceAlerts.tsx` (new), `app/(app)/maintenance/layout.tsx`, `lib/maintenance/types.ts`
