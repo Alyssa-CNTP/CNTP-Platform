@@ -963,7 +963,7 @@ export default function UsersPage() {
   async function deleteUser(u: AppUser) {
     if (!confirm(`Delete "${u.display_name}" (${u.email})? This cannot be undone.`)) return
     const res = await fetch(`/api/admin/users/${u.id}`, { method: 'DELETE' })
-    if (!res.ok) { alert('Failed to delete user'); return }
+    if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed to delete user'); return }
     setUsers(p => p.filter(x => x.id !== u.id))
   }
 
