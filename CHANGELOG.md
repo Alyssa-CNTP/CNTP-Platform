@@ -6,6 +6,16 @@ Format: date · developer · files changed · description of code changes.
 ---
 
 
+## 2026-07-02 — Alyssa (Production capture: operator must choose variant; mismatch warning + supervisor note)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+- **Variant no longer pre-filled**: operator always starts with a blank variant and must actively choose it — applies to new captures, change-overs, and new batch records.
+- **Mismatch detection**: if the operator selects a different variant than the supervisor assigned, an amber warning banner appears immediately with the conflicting values.
+- **Auto supervisor note**: the mismatch is automatically appended to the handover comments so the supervisor sees it at sign-off. Deduplication prevents the note appearing twice if the operator changes selection.
+
+---
+
 ## 2026-07-02 — Alyssa (Production assign page: remove roster/staff links; fix filled-count bug)
 
 **Files changed:** `app/(app)/production/capture/assign/page.tsx`
