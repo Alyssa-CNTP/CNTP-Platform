@@ -16,6 +16,10 @@ import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData,
 } from '@/components/production/capture/SievingCapture'
+import {
+  RefiningCapture, emptyRefiningData, refiningTotals,
+  type RefiningData,
+} from '@/components/production/capture/RefiningCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -42,12 +46,13 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 ]
 
 // A shift can contain several productions, each its own variant/destination/lot.
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
-const emptyProduction = (variant?: string | null, lot?: string | null, grade: string = ''): Production =>
-  ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '', data: emptySievingData() })
+const emptyProduction = (sectionId: string, variant?: string | null, lot?: string | null, grade: string = ''): Production =>
+  ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
+     data: sectionId.startsWith('refining') ? emptyRefiningData() : emptySievingData() })
 
 function CaptureScreen() {
   const params = useParams()
@@ -94,7 +99,7 @@ function CaptureScreen() {
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
-  const updateActiveData = (d: SievingData) =>
+  const updateActiveData = (d: SievingData | RefiningData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
@@ -141,7 +146,10 @@ function CaptureScreen() {
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data
       const dbHasData = d?.productions?.length > 0 &&
-        (d.productions as any[]).some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0)
+        (d.productions as any[]).some((p: any) =>
+          p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0 ||
+          p?.data?.inputs?.length > 0 || p?.data?.outputB != null
+        )
       if (d?.productions?.length) {
         setProductions(d.productions as Production[])
       } else if (d?.outputs) {
@@ -157,7 +165,7 @@ function CaptureScreen() {
             if (ls?.productions?.length) { setProductions(ls.productions); recovered = true }
           }
         } catch {}
-        if (!recovered) setProductions([emptyProduction(null, aLot)])
+        if (!recovered) setProductions([emptyProduction(sectionId, null, aLot)])
       }
       // If DB has no capture data but localStorage does, prefer localStorage —
       // this covers the case where the tablet lost the async Supabase write.
@@ -166,7 +174,7 @@ function CaptureScreen() {
           const lsRaw = localStorage.getItem(`capture_draft_${sectionId}_${dateParam}_${shift}`)
           if (lsRaw) {
             const ls = JSON.parse(lsRaw)
-            if (ls?.productions?.length && ls.productions.some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0)) {
+            if (ls?.productions?.length && ls.productions.some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0 || p?.data?.inputs?.length > 0 || p?.data?.outputB != null)) {
               setProductions(ls.productions)
             }
           }
@@ -348,29 +356,44 @@ function CaptureScreen() {
   }
   ensureRef.current = ensureSession
 
-  // ── Build structured rows from SievingData ───────────────────────────────
+  // ── Build structured rows from SievingData or RefiningData ───────────────
   function buildDebag(prods: Production[], sid: string) {
     const rows: any[] = []
     let bagNo = 1
     prods.forEach(prod => {
-      prod.data.spillage.forEach(r => {
-        if (n(r.kg) === 0) return
-        rows.push({ session_id: sid, bag_no: bagNo++, product_type: 'Bucket Elevator', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
-      })
-      prod.data.debag.forEach(r => {
-        if (n(r.nett) === 0) return
-        rows.push({
-          session_id: sid, bag_no: bagNo++,
-          // bag_serial_no is a FK to bag_tags — farm bags aren't in bag_tags, so null it.
-          // Preserve the operator's physical bag number in notes for traceability.
-          bag_serial_no: null, notes: r.bag_no || null,
-          lot_number: r.lot || prod.lot || null,
-          product_type: '500kg Farm Bag', variant: prod.variant, grade: prod.grade || null,
-          kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-          delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
-          is_spillage: false, logged_at: r.logged_at || null,
+      if (sectionId.startsWith('refining')) {
+        const rd = prod.data as RefiningData
+        ;(rd.inputs ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++,
+            bag_serial_no: r.serial || null, lot_number: r.lot || prod.lot || null,
+            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            grade: prod.grade || null, kg_nett: n(r.weight),
+            delivery_date: r.deliveryDate || null, is_spillage: false, logged_at: r.logged_at || null,
+          })
         })
-      })
+      } else {
+        const sd = prod.data as SievingData
+        sd.spillage.forEach(r => {
+          if (n(r.kg) === 0) return
+          rows.push({ session_id: sid, bag_no: bagNo++, product_type: 'Bucket Elevator', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
+        })
+        sd.debag.forEach(r => {
+          if (n(r.nett) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++,
+            // bag_serial_no is a FK to bag_tags — farm bags aren't in bag_tags, so null it.
+            // Preserve the operator's physical bag number in notes for traceability.
+            bag_serial_no: null, notes: r.bag_no || null,
+            lot_number: r.lot || prod.lot || null,
+            product_type: '500kg Farm Bag', variant: prod.variant, grade: prod.grade || null,
+            kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
+            delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
+            is_spillage: false, logged_at: r.logged_at || null,
+          })
+        })
+      }
     })
     return rows
   }
@@ -378,22 +401,48 @@ function CaptureScreen() {
     const rows: any[] = []
     let bagNo = 1
     prods.forEach(prod => {
-      prod.data.outputs.forEach(b => {
-        if (n(b.weight) === 0) return
-        rows.push({
-          session_id: sid, bag_no: bagNo++, output_group: 'B',
-          bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
-          acumatica_id: b.code || null, variant: prod.variant, grade: prod.grade || null,
-          kg: n(b.weight), logged_at: b.logged_at || null,
+      if (sectionId.startsWith('refining')) {
+        const rd = prod.data as RefiningData
+        const groups: Array<[string, typeof rd.outputB]> = [['B', rd.outputB], ['C', rd.outputC], ['D', rd.outputD]]
+        groups.forEach(([grp, g]) => {
+          ;(g?.bags ?? []).forEach(b => {
+            if (n(b.weight) === 0) return
+            rows.push({
+              session_id: sid, bag_no: bagNo++, output_group: grp,
+              bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null,
+              product_type: b.productType, acumatica_id: b.code || null,
+              variant: prod.variant, grade: prod.grade || null,
+              kg: n(b.weight), logged_at: b.logged_at || null,
+            })
+          })
         })
-      })
+      } else {
+        const sd = prod.data as SievingData
+        sd.outputs.forEach(b => {
+          if (n(b.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: 'B',
+            bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
+            acumatica_id: b.code || null, variant: prod.variant, grade: prod.grade || null,
+            kg: n(b.weight), logged_at: b.logged_at || null,
+          })
+        })
+      }
     })
     return rows
+  }
+  // Per-production totals — dispatches by section type.
+  function prodTotals(p: Production): { totalIn: number; totalOut: number } {
+    if (sectionId.startsWith('refining')) {
+      const r = refiningTotals(p.data as RefiningData)
+      return { totalIn: r.totalA, totalOut: r.totalB + r.totalC + r.totalD }
+    }
+    return sievingTotals(p.data as SievingData)
   }
   // Session totals — summed across all productions.
   function sessionTotals(prods: Production[]) {
     return prods.reduce((acc, p) => {
-      const t = sievingTotals(p.data)
+      const t = prodTotals(p)
       return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut }
     }, { totalIn: 0, totalOut: 0 })
   }
@@ -506,7 +555,7 @@ function CaptureScreen() {
   }
 
   const locked = status === 'approved'
-  const at = active ? sievingTotals(active.data) : { totalIn: 0, totalOut: 0 }
+  const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0 }
   const totalIn = at.totalIn, totalOut = at.totalOut
   const variance  = totalIn - totalOut
   const withinTol = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
@@ -540,7 +589,7 @@ function CaptureScreen() {
     // Change-over: snapshot the closing mass balance of the production we're
     // leaving into the append-only checks trail (auto-derived, no typing).
     try {
-      const prev = sievingTotals(active!.data)
+      const prev = prodTotals(active!)
       const recId = await ensureCheckRecord(sectionId, dateParam, shift, sessionId)
       if (recId) await appendCheckEvent(recId, {
         phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance (change-over)', kind: 'massbalance',
@@ -549,7 +598,7 @@ function CaptureScreen() {
         production_idx: activeIdx, source: 'auto',
       })
     } catch { /* snapshot is best-effort */ }
-    setProductions(ps => [...ps, emptyProduction(null, assignment?.lot_number)])
+    setProductions(ps => [...ps, emptyProduction(sectionId, null, assignment?.lot_number)])
     setActiveIdx(productions.length)
     setTab('production')
   }
@@ -567,7 +616,7 @@ function CaptureScreen() {
     if (row) {
       setSessionId((row as any).id)
       setStatus('draft')
-      setProductions([emptyProduction(null, aL)])
+      setProductions([emptyProduction(sectionId, null, aL)])
       setActiveIdx(0)
       setTab('production')
     }
@@ -764,17 +813,31 @@ function CaptureScreen() {
               {/* Capture only opens once a variant and grade are chosen. */}
               {(active.variant && active.grade) || locked ? (
                 <>
-                  <SievingCapture
-                    key={active.id}
-                    assignment={assignment}
-                    variantWord={active.variant}
-                    gradeLetter={active.grade || 'A'}
-                    locked={locked}
-                    value={active.data}
-                    onChange={updateActiveData}
-                    genSerial={genSerial}
-                    operatorId={verifiedOp?.user_id ?? user?.id ?? null}
-                  />
+                  {sectionId.startsWith('refining')
+                    ? <RefiningCapture
+                        key={active.id}
+                        sectionId={sectionId}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        gradeLetter={active.grade || 'A'}
+                        locked={locked}
+                        value={active.data as RefiningData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
+                    : <SievingCapture
+                        key={active.id}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        gradeLetter={active.grade || 'A'}
+                        locked={locked}
+                        value={active.data as SievingData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
+                  }
                   {!locked && (
                     <button onClick={saveDraft} disabled={saving}
                       className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
