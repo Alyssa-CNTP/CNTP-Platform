@@ -161,7 +161,13 @@ export default function MaintenanceLoginPage() {
           </div>
         )}
       </div>
-      <p className="mt-5 text-[10px] uppercase tracking-[0.07em] text-stone-400">
+      <p className="mt-4 text-[12px] text-stone-500">
+        Maintenance manager?{' '}
+        <a href="/login" className="underline underline-offset-2 hover:text-stone-700 font-medium">
+          Sign in with Microsoft
+        </a>
+      </p>
+      <p className="mt-2 text-[10px] uppercase tracking-[0.07em] text-stone-400">
         Cape Natural Tea Products · Blackheath
       </p>
     </div>
