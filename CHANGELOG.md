@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Production capture: auto-fill assignments, remove tablet setup, session delete)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/history/page.tsx`, `app/(app)/production/device/page.tsx` (deleted), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+- **Shift assignment auto-fill**: assign page now auto-loads operators from the Shift Roster when no assignments exist for the selected date/shift — supervisor only needs to confirm variant, grade/lot, and production orders. Removed the manual "Fill from roster" button.
+- **Tablet setup removed**: deleted `/production/device` page and removed "Set up this tablet" button from the capture home. Existing device bindings in localStorage continue to route as before; new ones can no longer be set.
+- **Session delete**: added `can_delete_session` permission key; supervisors and IT get it by default. Delete button appears on session history cards — cascades through `session_signatures`, `scan_events`, `prod_mass_balance`, `prod_debagging`, `prod_bagging` before removing the session.
+- **New permission keys**: `can_edit_session`, `can_delete_session`, `can_edit_bag_tag`, `can_delete_bag_tag` — added to `permissions.ts`, `permission-registry.ts`, and the Production supervisor/legacy supervisor role defaults.
+
+---
+
 ## 2026-07-02 — Gustav (Live breakdown pop-ups: technician accept + manager allocate/accept alerts)
 
 **Files changed:** `components/maintenance/MaintenanceAlerts.tsx` (new), `app/(app)/maintenance/layout.tsx`, `lib/maintenance/types.ts`
