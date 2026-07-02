@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation'
 import { useAuth }     from '@/lib/auth/context'
 import {
   LayoutDashboard, ClipboardList, Factory, BarChart2, Home,
-  Users, Radio, Info, Tag, LogOut, Beaker,
+  Users, Radio, Info, Tag, LogOut, Beaker, Leaf,
   TrendingUp, Globe, FlaskConical,
   Microscope, FileText, BookOpen, Layers, Settings,
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare, KanbanSquare,
@@ -71,7 +71,7 @@ const NAV: NavItem[] = [
   { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/global-wits',  label: 'Global Wits',                icon: FileSpreadsheet, group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/leads',        label: 'Lead Pipeline',              icon: KanbanSquare,    group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/research',                  label: 'Research Engine',            icon: Beaker,          group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
+  { href: '/research',                  label: 'Alara',                      icon: Leaf,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
   { href: '/intelligence',              label: 'Signal Engine',              icon: Radio,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
 
