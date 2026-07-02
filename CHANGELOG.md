@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara: Signal Engine merged in, full UI update, sidebar cleanup)
+
+**Files changed:**
+- `app/(app)/research/page.tsx` — SignalsSection full rewrite
+- `app/(app)/intelligence/page.tsx` — replaced with redirect to `/research`
+- `components/layout/Sidebar.tsx` — removed Signal Engine nav entry
+
+**Changes:**
+- **Signal Engine merged into Alara**: `SignalsSection` now includes the world map (`SignalMap`), 4 stat cards (total, opportunities, threats, avg relevance), full filter bar (search, region, keyword group, sort), classification chip row, relevance bucket chips, load-more pagination, and a reset-filters empty state. All powered by the same `/api/signals?limit=300` endpoint.
+- **`/intelligence` redirect**: visiting the old Signal Engine URL now redirects to `/research` so no broken links.
+- **Sidebar**: Signal Engine entry removed. "Alara" is the single entry for both the research engine and signal feed.
+- **About Alara — etymology fix**: removed the Alyssa personal reference from the "ra" etymology card. Now reads: "Rooibos · Intelligence — the ability to range, detect, and act on what others miss."
+
+---
+
 ## 2026-07-02 — Gustav (Breakdown routing: spread across on-duty crew from the shift roster)
 
 **Files changed:** `app/api/maintenance/job-cards/route.ts`
