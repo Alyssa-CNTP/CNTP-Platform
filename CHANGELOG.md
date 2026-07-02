@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Refining capture: predefined outputs, no grade, system pick fixes, overview serials)
+
+**Files changed:**
+- `components/production/capture/RefiningCapture.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+
+**Changes:**
+- **Predefined output types**: bagging tab now shows fixed output slots per section rather than the generic OutputPicker. Refining 1 outputs: A = Indent Dust, B = White Dust, C = Powder Dust. Refining 2 outputs: A = Cut Heavy Stick Fine, B = Cut Heavy Stick Coarse, C = Powder Dust, D = White Dust. Operators enter weight only; the system generates the serial and looks up the Acumatica code automatically.
+- **No grade for refining**: grade removed from output bag creation. Refining records variant only. `gradeLetter` prop removed from `RefiningCapture`.
+- **System pick variant + bag date fix**: when picking from system, the variant stored in `bag_tags` is now carried into the input row, and `created_at` is converted to DD-MM-YY and used as the bag date.
+- **Overview serials**: debagging section now groups each input bag by its serial (one row per bag). Bagging output section shows the bag serial in the LOT/BATCH column.
+- **`outputA` slot added**: `RefiningData` now has `outputA | B | C | D` to support Refining 2's four output streams.
+
+---
+
 ## 2026-07-02 — Alyssa (Checks: indent screen angle allows negative values)
 
 **Files changed:**
