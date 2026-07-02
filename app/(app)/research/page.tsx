@@ -11,12 +11,12 @@ import {
   TrendingUp, Building2, Mail, Bell, Leaf, FlaskConical,
   Factory, Sun, Award, Flag, CheckCircle, Loader2,
   ArrowRight, Coffee, Wheat, AlertTriangle, Zap,
-  Link2, MessageSquare, ChevronRight,
+  Link2, MessageSquare, ChevronRight, Info, UserPlus, Save, BookOpen,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Section    = 'signals' | 'gap' | 'loopholes' | 'intel' | 'vault' | 'compass'
+type Section    = 'signals' | 'gap' | 'loopholes' | 'intel' | 'vault' | 'compass' | 'about'
 type IntelTool  = 'briefing' | 'frontier' | 'competitors' | 'profiler' | 'pitch' | 'alerts'
 type CompassVec = 'red_espresso' | 'k_beauty' | 'clinical' | 'functional_oem' | 'agriculture' | 'appellation' | 'japan'
 
@@ -160,7 +160,23 @@ function ClsTag({ cls }: { cls: string }) {
   )
 }
 
-function AiResult({ text, loading, label = 'Alara Analysis' }: { text: string; loading: boolean; label?: string }) {
+function AiResult({ text, loading, label = 'Alara Analysis', saveable = false, reportType = 'briefing' }: { text: string; loading: boolean; label?: string; saveable?: boolean; reportType?: string }) {
+  const [saving, setSaving] = useState(false)
+  const [saved,  setSaved]  = useState(false)
+
+  const saveReport = async () => {
+    if (saving || saved || !text) return
+    setSaving(true)
+    try {
+      await fetch('/api/marketing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_report', title: label, report_type: reportType, body: text }),
+      })
+      setSaved(true)
+    } finally { setSaving(false) }
+  }
+
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 20px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
       <Spinner />
@@ -170,11 +186,22 @@ function AiResult({ text, loading, label = 'Alara Analysis' }: { text: string; l
   if (!text) return null
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '10px 16px', borderBottom: `1px solid ${C.borderLight}`, display: 'flex', alignItems: 'center', gap: 7 }}>
-        <Leaf size={11} style={{ color: C.red, opacity: 0.8 }} />
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, color: C.red, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-          {label}
-        </span>
+      <div style={{ padding: '10px 16px', borderBottom: `1px solid ${C.borderLight}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <Leaf size={11} style={{ color: C.red, opacity: 0.8 }} />
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, color: C.red, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            {label}
+          </span>
+        </div>
+        {saveable && (
+          <button
+            onClick={saveReport}
+            disabled={saving || saved}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 5, border: `1px solid ${saved ? C.greenBorder : C.border}`, background: saved ? C.greenBg : 'transparent', fontFamily: 'var(--font-mono)', fontSize: 9, color: saved ? C.green : C.faint, cursor: saved || saving ? 'default' : 'pointer', letterSpacing: '0.06em', textTransform: 'uppercase' }}
+          >
+            {saved ? <><CheckCircle size={9} /> Saved</> : saving ? <><Spinner size={9} /> Saving…</> : <><Save size={9} /> Save to reports</>}
+          </button>
+        )}
       </div>
       <div style={{ padding: '16px 20px' }}>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: C.text, lineHeight: 1.8, whiteSpace: 'pre-wrap', margin: 0 }}>
@@ -291,17 +318,40 @@ function SignalDrawer({ signal, onClose }: { signal: Signal | null; onClose: () 
   const [question,      setQuestion]      = useState('')
   const [sourceAnswer,  setSourceAnswer]  = useState('')
   const [sourceAsking,  setSourceAsking]  = useState(false)
+  const [promoting,     setPromoting]     = useState(false)
+  const [promoted,      setPromoted]      = useState(false)
 
   useEffect(() => {
     if (!signal) return
     setAnalysis(''); setAnalysisLoad(true)
     setSourceText(''); setSourceTitle(''); setSourceError(''); setSourceFetched(false)
     setQuestion(''); setSourceAnswer('')
+    setPromoted(false)
     callSales({
       action: 'agent',
       query: `Analyse this market signal: "${signal.title}". ${signal.summary_en ?? ''} What is the specific commercial implication and the single best next action for a rooibos bulk exporter?`,
     }).then(r => { setAnalysis(r); setAnalysisLoad(false) })
   }, [signal?.id])
+
+  const promoteToLead = async () => {
+    if (!signal || promoting || promoted) return
+    setPromoting(true)
+    try {
+      await fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:             signal.title.slice(0, 120),
+          source_signal_id: signal.id,
+          signal_ids:       [signal.id],
+          signal_title:     signal.title,
+          stage:            'lead',
+          notes:            signal.summary_en ?? '',
+        }),
+      })
+      setPromoted(true)
+    } finally { setPromoting(false) }
+  }
 
   const fetchSource = async () => {
     if (!signal?.source_url) return
@@ -379,6 +429,22 @@ function SignalDrawer({ signal, onClose }: { signal: Signal | null; onClose: () 
 
           {/* Alara auto-analysis */}
           <AiResult text={analysis} loading={analysisLoad} label="Alara Analysis" />
+
+          {/* Promote to Lead */}
+          {!analysisLoad && (
+            <button
+              onClick={promoteToLead}
+              disabled={promoting || promoted}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 7, border: `1px solid ${promoted ? C.greenBorder : C.redBorder}`, background: promoted ? C.greenBg : C.redBg, fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: promoted ? C.green : C.red, cursor: promoting || promoted ? 'default' : 'pointer', opacity: promoting ? 0.6 : 1, alignSelf: 'flex-start' }}
+            >
+              {promoted
+                ? <><CheckCircle size={13} /> Added to Lead Pipeline</>
+                : promoting
+                  ? <><Spinner size={13} /> Promoting…</>
+                  : <><UserPlus size={13} /> Promote to Lead</>
+              }
+            </button>
+          )}
 
           {/* Source panel */}
           {signal.source_url && (
@@ -728,7 +794,7 @@ function GapSection() {
         </button>
       </div>
 
-      <AiResult text={result} loading={loading} label={mode === 'gap' ? 'Gap Analysis' : 'Variance Map'} />
+      <AiResult text={result} loading={loading} label={mode === 'gap' ? 'Gap Analysis' : 'Variance Map'} saveable reportType="gap_analysis" />
     </div>
   )
 }
@@ -809,7 +875,7 @@ function LoopholesSection() {
         </button>
       </div>
 
-      <AiResult text={result} loading={loading} label="Loophole Scan" />
+      <AiResult text={result} loading={loading} label="Loophole Scan" saveable reportType="loophole_scan" />
     </div>
   )
 }
@@ -828,16 +894,27 @@ const INTEL_TOOLS: { id: IntelTool; label: string; Icon: React.ElementType; desc
 ]
 
 function IntelSection() {
-  const [tool,    setTool]    = useState<IntelTool>('briefing')
-  const [loading, setLoading] = useState(false)
-  const [result,  setResult]  = useState('')
+  const [tool,       setTool]       = useState<IntelTool>('briefing')
+  const [loading,    setLoading]    = useState(false)
+  const [result,     setResult]     = useState('')
+  const [resultTool, setResultTool] = useState<IntelTool>('briefing')
   const [f1, setF1] = useState('')
   const [f2, setF2] = useState('')
   const [f3, setF3] = useState('')
 
   const call = async (body: Record<string, unknown>) => {
+    const activeTool = tool
     setLoading(true); setResult('')
-    callSales(body).then(r => { setResult(r); setLoading(false) })
+    const r = await callSales(body)
+    setResult(r); setResultTool(activeTool); setLoading(false)
+    // When a company profile is built, save the company as an account (best-effort)
+    if (activeTool === 'profiler' && f1) {
+      void fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: f1, stage: 'lead', notes: r.slice(0, 500), signal_title: f1 }),
+      })
+    }
   }
   const changeTool = (t: IntelTool) => { setTool(t); setResult(''); setF1(''); setF2(''); setF3('') }
 
@@ -975,7 +1052,11 @@ function IntelSection() {
         </div>
         {renderForm()}
       </div>
-      <AiResult text={result} loading={loading} />
+      <AiResult
+        text={result} loading={loading}
+        label={INTEL_TOOLS.find(t => t.id === resultTool)?.label ?? 'Intelligence'}
+        saveable reportType="intelligence"
+      />
     </div>
   )
 }
@@ -1151,13 +1232,105 @@ function CompassSection() {
           </button>
         </div>
       </div>
-      {result && <AiResult text={result} loading={false} label={`${selected.label} Briefing`} />}
+      {result && <AiResult text={result} loading={false} label={`${selected.label} Briefing`} saveable reportType="expansion_briefing" />}
       {!result && !loading && (
         <div style={{ padding: '32px 0', textAlign: 'center' }}>
           <Compass size={26} style={{ color: C.border, margin: '0 auto 10px', display: 'block' }} />
           <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: C.faint }}>Select an expansion vector and click "Get briefing".</p>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ABOUT SECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AboutSection({ onNavigate }: { onNavigate: (s: Section) => void }) {
+  const caps: { id: Section; label: string; Icon: React.ElementType; desc: string }[] = [
+    { id: 'signals',   label: 'Signal Feed',   Icon: Radio,         desc: 'Live intelligence from 15+ sources — social, news, trade. Ranked by relevance to rooibos export.' },
+    { id: 'gap',       label: 'Gap Finder',    Icon: Zap,           desc: 'Market gap and variance analysis. Where demand exists that isn\'t being met.' },
+    { id: 'loopholes', label: 'Loopholes',     Icon: AlertTriangle, desc: 'Competitor weaknesses, recalls, supply disruptions — someone else\'s problem is your window.' },
+    { id: 'intel',     label: 'Intelligence',  Icon: Sparkles,      desc: 'Market briefings, frontier scouting, competitor scans, company dossiers, pitch builder, and alerts.' },
+    { id: 'vault',     label: 'Vault',         Icon: Lock,          desc: 'Upload your own documents — contracts, trade reports, buyer specs — and ask Alara questions about them.' },
+    { id: 'compass',   label: 'Compass',       Icon: Compass,       desc: '7 strategic expansion vectors. Get a structured briefing on any growth direction.' },
+  ]
+
+  return (
+    <div style={{ padding: '32px 28px', maxWidth: 820 }}>
+
+      {/* Hero identity card */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 32, padding: '24px 28px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14 }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, background: `linear-gradient(135deg, ${C.red}, ${C.redLight})`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: `0 4px 16px ${C.redBg}` }}>
+          <Leaf size={22} style={{ color: '#fff' }} />
+        </div>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
+            <span style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: '-0.03em' }}>Alara</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: C.faint, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Rooibos Intelligence Engine</span>
+          </div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: C.muted, lineHeight: 1.7, margin: '0 0 14px', maxWidth: 560 }}>
+            A living market intelligence system built for CNTP — turning raw signals from global trade, social platforms, and news into ranked, actionable intelligence for the rooibos export team.
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6, background: C.redBg, border: `1px solid ${C.redBorder}`, fontFamily: 'var(--font-mono)', fontSize: 10, color: C.red, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              <div style={{ width: 5, height: 5, borderRadius: '50%', background: C.green, boxShadow: `0 0 5px ${C.green}` }} /> Engine active
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6, background: C.elevated, border: `1px solid ${C.border}`, fontFamily: 'var(--font-mono)', fontSize: 10, color: C.muted, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              15+ live sources
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 6, background: C.elevated, border: `1px solid ${C.border}`, fontFamily: 'var(--font-mono)', fontSize: 10, color: C.muted, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              Gemini-powered
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Etymology */}
+      <div style={{ marginBottom: 28 }}>
+        <p style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, color: C.faint, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>Name</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {[
+            { part: 'Ala', origin: 'Aspalathus linearis', desc: 'The botanical name of the rooibos plant. The first three letters anchor this engine to the source.' },
+            { part: 'ra',  origin: 'Rooibos • Intelligence • Alyssa', desc: 'Rooibos abbreviated, the intelligence mandate, and the creator — woven into one.' },
+          ].map(({ part, origin, desc }) => (
+            <div key={part} style={{ padding: '16px 18px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: C.red, letterSpacing: '-0.03em', display: 'block', marginBottom: 4 }}>{part}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, color: C.red, letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>{origin}</span>
+              <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: C.muted, lineHeight: 1.6, margin: 0 }}>{desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Capabilities */}
+      <div>
+        <p style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, color: C.faint, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>Capabilities</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 8 }}>
+          {caps.map(({ id, label, Icon, desc }) => (
+            <button
+              key={id}
+              onClick={() => onNavigate(id)}
+              style={{ padding: '14px 16px', borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.15s, box-shadow 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = C.redBorderMd; e.currentTarget.style.boxShadow = `0 2px 10px ${C.redBg}` }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.boxShadow = 'none' }}
+            >
+              <Icon size={13} style={{ color: C.red, marginBottom: 8 }} />
+              <p style={{ fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 700, color: C.text, margin: '0 0 5px' }}>{label}</p>
+              <p style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: C.muted, lineHeight: 1.5, margin: 0 }}>{desc}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Creator */}
+      <div style={{ marginTop: 28, padding: '14px 18px', background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Info size={13} style={{ color: C.faint, flexShrink: 0 }} />
+        <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.6 }}>
+          Built by <strong style={{ color: C.text }}>Alyssa Krishna</strong> for CNTP's export and sales intelligence operations. Alara is a living system — new sources, vectors, and tools are added as the business evolves.
+        </p>
+      </div>
     </div>
   )
 }
@@ -1173,6 +1346,7 @@ const SECTIONS: { id: Section; label: string; Icon: React.ElementType }[] = [
   { id: 'intel',     label: 'Intelligence',  Icon: Sparkles      },
   { id: 'vault',     label: 'Vault',         Icon: Lock          },
   { id: 'compass',   label: 'Compass',       Icon: Compass       },
+  { id: 'about',     label: 'About Alara',   Icon: Info          },
 ]
 
 export default function ResearchPage() {
@@ -1230,6 +1404,7 @@ export default function ResearchPage() {
       {section === 'intel'     && <IntelSection     />}
       {section === 'vault'     && <VaultSection     />}
       {section === 'compass'   && <CompassSection   />}
+      {section === 'about'     && <AboutSection onNavigate={setSection} />}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
