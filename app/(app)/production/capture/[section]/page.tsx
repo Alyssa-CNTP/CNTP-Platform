@@ -148,7 +148,7 @@ function CaptureScreen() {
       const dbHasData = d?.productions?.length > 0 &&
         (d.productions as any[]).some((p: any) =>
           p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0 ||
-          p?.data?.inputs?.length > 0 || p?.data?.outputB != null
+          p?.data?.inputs?.length > 0 || p?.data?.outputA != null || p?.data?.outputB != null
         )
       if (d?.productions?.length) {
         setProductions(d.productions as Production[])
@@ -174,7 +174,7 @@ function CaptureScreen() {
           const lsRaw = localStorage.getItem(`capture_draft_${sectionId}_${dateParam}_${shift}`)
           if (lsRaw) {
             const ls = JSON.parse(lsRaw)
-            if (ls?.productions?.length && ls.productions.some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0 || p?.data?.inputs?.length > 0 || p?.data?.outputB != null)) {
+            if (ls?.productions?.length && ls.productions.some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0 || p?.data?.inputs?.length > 0 || p?.data?.outputA != null || p?.data?.outputB != null)) {
               setProductions(ls.productions)
             }
           }
@@ -403,15 +403,15 @@ function CaptureScreen() {
     prods.forEach(prod => {
       if (sectionId.startsWith('refining')) {
         const rd = prod.data as RefiningData
-        const groups: Array<[string, typeof rd.outputB]> = [['B', rd.outputB], ['C', rd.outputC], ['D', rd.outputD]]
+        const groups: Array<[string, typeof rd.outputB]> = [['A', rd.outputA], ['B', rd.outputB], ['C', rd.outputC], ['D', rd.outputD]]
         groups.forEach(([grp, g]) => {
           ;(g?.bags ?? []).forEach(b => {
             if (n(b.weight) === 0) return
             rows.push({
               session_id: sid, bag_no: bagNo++, output_group: grp,
-              bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null,
+              bag_serial_no: b.serial, lot_number: prod.lot || null,
               product_type: b.productType, acumatica_id: b.code || null,
-              variant: prod.variant, grade: prod.grade || null,
+              variant: prod.variant, grade: null,
               kg: n(b.weight), logged_at: b.logged_at || null,
             })
           })
@@ -435,7 +435,7 @@ function CaptureScreen() {
   function prodTotals(p: Production): { totalIn: number; totalOut: number } {
     if (sectionId.startsWith('refining')) {
       const r = refiningTotals(p.data as RefiningData)
-      return { totalIn: r.totalA, totalOut: r.totalB + r.totalC + r.totalD }
+      return { totalIn: r.totalIn, totalOut: r.totalA + r.totalB + r.totalC + r.totalD }
     }
     return sievingTotals(p.data as SievingData)
   }
@@ -819,7 +819,6 @@ function CaptureScreen() {
                         sectionId={sectionId}
                         assignment={assignment}
                         variantWord={active.variant}
-                        gradeLetter={active.grade || 'A'}
                         locked={locked}
                         value={active.data as RefiningData}
                         onChange={updateActiveData}

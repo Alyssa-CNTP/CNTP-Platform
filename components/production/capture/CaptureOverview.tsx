@@ -41,14 +41,12 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
   prods.forEach(p => {
     const d = p.data as any
     if ('inputs' in d) {
-      // RefiningData: inputs array, no spillage
+      // RefiningData: group by serial (each bag = its own row)
       ;(d.inputs ?? []).forEach((r: any, i: number) => {
         if (num(r.weight) === 0) return
-        const lot = (r.lot || p.lot || '—').trim()
-        const row: DebagRow = { bagNo: r.serial || `Input bag ${i + 1}`, kg: num(r.weight), variant: p.variant, loggedAt: r.logged_at }
-        const g = map.get(lot)
-        if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
-        else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
+        const serial = r.serial || `Input bag ${i + 1}`
+        const row: DebagRow = { bagNo: serial, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
+        map.set(serial, { lot: serial, rows: [row], totalKg: num(r.weight) })
       })
     } else {
       // SievingData: debag + spillage
@@ -93,10 +91,17 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
   prods.forEach((p) => {
     const d = p.data as any
     if ('inputs' in d) {
-      // RefiningData: outputB/C/D groups each have a bags array
-      ;[d.outputB, d.outputC, d.outputD].forEach((grp: any) => {
+      // RefiningData: outputA/B/C/D groups each have a bags array
+      ;[d.outputA, d.outputB, d.outputC, d.outputD].forEach((grp: any) => {
         if (!grp) return
-        ;(grp.bags ?? []).forEach((b: any) => addBag(p, { ...b, productType: grp.productType ?? grp.label, code: grp.code, description: grp.description }))
+        ;(grp.bags ?? []).forEach((b: any) => addBag(p, {
+          ...b,
+          productType: grp.productType ?? grp.label,
+          code: grp.code,
+          description: grp.description,
+          batch: b.serial,        // show serial in the LOT/BATCH column
+          destination: p.variant, // no grade — show variant instead
+        }))
       })
     } else {
       // SievingData: flat outputs array
