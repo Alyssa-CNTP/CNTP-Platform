@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Live breakdown pop-ups: technician accept + manager allocate/accept alerts)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx` (new), `app/(app)/maintenance/layout.tsx`, `lib/maintenance/types.ts`
+
+- New `MaintenanceAlerts`, mounted once in the maintenance layout: polls `job_cards` every 10s while the app is open and raises on-screen pop-ups (no realtime/web-push infra exists yet, so closed-tab delivery still uses the existing email/WhatsApp path).
+- **Technician**: when a breakdown is auto-assigned to them (`assigned_user_id === userId`) and not yet accepted, a blocking modal appears — **Accept & attend**, or leave a **first comment** — even if they were idle on another maintenance page; it reloads the board on new events.
+- **Maintenance manager**: a corner pop-up lists **job cards awaiting allocation** with an "Allocate now →" link, and a **toast fires the moment a technician accepts** a breakdown, so the manager can track acceptance and manage urgent work.
+- Added `assigned_user_id` to the `JobCard` type (already on the table). QC-on-duty routing is intentionally out of scope for now (to follow).
+
 ## 2026-07-02 — Alyssa (Permissions: production orders added to matrix + orPermission sidebar gate)
 
 **Files changed:**
