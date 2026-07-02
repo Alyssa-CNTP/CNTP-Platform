@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import {
   FileSpreadsheet, Upload, CheckCircle2, AlertCircle,
   Loader2, ChevronDown, ChevronUp, Search,
-  RefreshCw, Truck, Package, Clock, Building2, DollarSign,
+  Truck, Package, Building2, DollarSign, Clock,
 } from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -39,8 +39,7 @@ interface CompanyProfile {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtDate(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+  return new Date(iso).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })
@@ -61,7 +60,7 @@ const DS_COLORS: Record<string, string> = {
 function dsChip(name: string) {
   const cls = DS_COLORS[name] ?? 'bg-surface-rule text-text-muted border-surface-rule'
   return (
-    <span key={name} className={`inline-flex items-center px-1.5 py-0.5 rounded border font-mono text-[9px] uppercase tracking-wide ${cls}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border font-mono text-[9px] uppercase tracking-wide ${cls}`}>
       {name}
     </span>
   )
@@ -143,27 +142,29 @@ function DropZone({ onFile, loading, status }: {
       onDragLeave={() => setDragging(false)}
       onDrop={onDrop}
       onClick={() => !loading && ref.current?.click()}
-      className={`rounded-xl border-2 border-dashed p-5 transition-all cursor-pointer select-none
+      className={`rounded-xl border-2 border-dashed p-10 text-center transition-all cursor-pointer select-none
         ${dragging ? 'border-accent bg-accent/5' : 'border-surface-rule hover:border-accent/40 hover:bg-surface-card'}
         ${loading ? 'pointer-events-none opacity-60' : ''}`}
     >
       <input ref={ref} type="file" accept=".xlsx,.xls" className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col items-center gap-4">
         {loading
-          ? <Loader2 size={18} className="animate-spin text-accent shrink-0" />
-          : <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
-              <FileSpreadsheet size={17} className="text-accent" />
+          ? <Loader2 size={32} className="animate-spin text-accent" />
+          : <div className="w-14 h-14 rounded-xl bg-accent/10 flex items-center justify-center">
+              <FileSpreadsheet size={26} className="text-accent" />
             </div>}
-        <div className="flex-1 min-w-0">
-          <p className="font-display font-semibold text-[13px] text-text">
-            {loading ? status : 'Drop a Global Wits .xlsx to import'}
+        <div>
+          <p className="font-display font-semibold text-[15px] text-text">
+            {loading ? status : 'Drop a Global Wits .xlsx here'}
           </p>
-          <p className="text-[11px] text-text-faint mt-0.5">hscode · US customs · global shipping · rooibos sheets</p>
+          <p className="text-[12px] text-text-muted mt-1">
+            {loading ? 'This may take a moment…' : 'hscode · US customs · global shipping · rooibos sheets'}
+          </p>
         </div>
         {!loading && (
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-semibold shrink-0">
-            <Upload size={11} /> Choose file
+          <div className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-accent text-white text-[12px] font-semibold">
+            <Upload size={13} /> Choose file
           </div>
         )}
       </div>
@@ -188,112 +189,12 @@ function ResultBanner({ result, onDismiss }: { result: ImportResult; onDismiss: 
     <div className="flex items-center gap-3 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl">
       <CheckCircle2 size={15} className="text-ok shrink-0" />
       <div className="flex-1 min-w-0">
-        <p className="font-semibold text-[13px] text-ok">Imported — {result.filename}</p>
+        <p className="font-semibold text-[13px] text-ok">Saved — {result.filename}</p>
         <p className="text-[11px] text-text-muted mt-0.5">
-          {result.rows_parsed.toLocaleString()} rows · {result.companies.toLocaleString()} buyers saved as leads, profiles &amp; signals
+          {result.rows_parsed.toLocaleString()} rows · {result.companies.toLocaleString()} buyers added to leads, profiles &amp; signals
         </p>
       </div>
       <button onClick={onDismiss} className="text-text-faint hover:text-text text-[18px] leading-none shrink-0">×</button>
-    </div>
-  )
-}
-
-// ── History Tab ───────────────────────────────────────────────────────────────
-
-function HistoryTab({ imports, loading, onRefresh }: {
-  imports: PastImport[]; loading: boolean; onRefresh: () => void
-}) {
-  if (loading) return (
-    <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-text-faint">
-      <Spinner size={16} /> Loading import history…
-    </div>
-  )
-  if (!imports.length) return (
-    <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
-      <Clock size={28} className="text-text-faint" />
-      <p className="text-[13px] text-text-muted">No imports yet</p>
-      <p className="text-[11px] text-text-faint">Drop a file above to get started</p>
-    </div>
-  )
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-[11px] text-text-faint">{imports.length} file{imports.length !== 1 ? 's' : ''} imported</p>
-        <button onClick={onRefresh} className="p-1.5 rounded hover:bg-surface-card text-text-faint hover:text-text transition-colors">
-          <RefreshCw size={12} />
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {imports.map(imp => (
-          <ImportCard key={imp.id} imp={imp} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function ImportCard({ imp }: { imp: PastImport }) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
-      {/* Card header */}
-      <div className="px-4 pt-4 pb-3">
-        <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
-            <FileSpreadsheet size={16} className="text-accent" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="font-mono text-[12px] font-semibold text-text truncate" title={imp.filename}>
-              {imp.filename}
-            </p>
-            <p className="text-[11px] text-text-faint mt-0.5 flex items-center gap-1">
-              <Clock size={9} />
-              {fmtDate(imp.created_at)} at {fmtTime(imp.created_at)}
-            </p>
-          </div>
-        </div>
-
-        {/* Stats row */}
-        <div className="grid grid-cols-2 gap-2 mt-3">
-          <div className="flex items-center gap-2 px-3 py-2 bg-background rounded-lg border border-surface-rule">
-            <Building2 size={12} className="text-accent shrink-0" />
-            <div>
-              <p className="font-display font-bold text-[18px] text-text leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {imp.company_count?.toLocaleString() ?? '—'}
-              </p>
-              <p className="font-mono text-[9px] uppercase tracking-wide text-text-faint mt-0.5">Companies</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 px-3 py-2 bg-background rounded-lg border border-surface-rule">
-            <Package size={12} className="text-text-muted shrink-0" />
-            <div>
-              <p className="font-display font-bold text-[18px] text-text leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {imp.row_count?.toLocaleString() ?? '—'}
-              </p>
-              <p className="font-mono text-[9px] uppercase tracking-wide text-text-faint mt-0.5">Shipment rows</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Expand toggle */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-4 py-2.5 border-t border-surface-rule hover:bg-background/60 transition-colors text-[11px] text-text-muted"
-      >
-        <span>{open ? 'Hide details' : 'Show details'}</span>
-        {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-      </button>
-
-      {/* Expanded notes */}
-      {open && imp.notes && (
-        <div className="px-4 py-3 border-t border-surface-rule bg-background">
-          <p className="text-[11px] text-text-muted leading-relaxed">{imp.notes}</p>
-        </div>
-      )}
     </div>
   )
 }
@@ -315,7 +216,7 @@ function ShipmentTimeline({ shipments }: { shipments: Shipment[] }) {
   const sources = [...new Set(sorted.map(s => s.datasource))]
 
   return (
-    <div className="mt-1">
+    <div>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {sources.map(s => <span key={s}>{dsChip(s)}</span>)}
         <span className="text-[10px] text-text-faint ml-auto">Dot size = shipment value</span>
@@ -334,9 +235,9 @@ function ShipmentTimeline({ shipments }: { shipments: Shipment[] }) {
           const pct  = range > 0 ? ((timestamps[i] - minT) / range) * 96 + 2 : 50
           const diam = 6 + Math.round((s.value_usd / maxVal) * 14)
           const dotCls =
-            s.datasource === 'US Customs'      ? 'bg-accent'    :
-            s.datasource === 'Global Shipping' ? 'bg-info'      :
-            s.datasource === 'Rooibos'         ? 'bg-ok'        : 'bg-text-muted'
+            s.datasource === 'US Customs'      ? 'bg-accent' :
+            s.datasource === 'Global Shipping' ? 'bg-info'   :
+            s.datasource === 'Rooibos'         ? 'bg-ok'     : 'bg-text-muted'
           return (
             <div key={i}
               title={`${s.date} — ${fmtUsd(s.value_usd)}\n${s.product || ''}\n${s.supplier || ''}`}
@@ -354,7 +255,7 @@ function ShipmentTimeline({ shipments }: { shipments: Shipment[] }) {
 function MonthlyBars({ shipments }: { shipments: Shipment[] }) {
   const months = useMemo(() => {
     const m: Record<string, number> = {}
-    for (const s of shipments) { const k = s.date?.slice(0, 7) ?? 'unknown'; m[k] = (m[k] ?? 0) + s.value_usd }
+    for (const s of shipments) { const k = s.date?.slice(0, 7) ?? 'x'; m[k] = (m[k] ?? 0) + s.value_usd }
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b))
   }, [shipments])
   if (months.length < 2) return null
@@ -388,21 +289,21 @@ function ExpandedBuyer({ name }: { name: string }) {
       .catch(() => setLoading(false))
   }, [name])
 
-  if (loading) return <div className="flex items-center gap-2 py-4 px-5 text-[12px] text-text-faint"><Spinner /> Loading…</div>
-  if (!profile) return <div className="py-3 px-5 text-[12px] text-text-muted">No profile found.</div>
+  if (loading) return <div className="flex items-center gap-2 py-4 px-6 text-[12px] text-text-faint"><Spinner /> Loading…</div>
+  if (!profile) return <div className="py-3 px-6 text-[12px] text-text-muted">No profile found.</div>
 
   const pd = profile.panjiva_data
   const sources = [...new Set((pd?.shipments ?? []).map(s => s.datasource))]
 
   return (
-    <div className="px-5 pb-5 pt-3 bg-background border-t border-surface-rule space-y-4">
-      <div className="flex items-center gap-6 flex-wrap">
+    <div className="px-6 pb-5 pt-4 bg-background border-t border-surface-rule space-y-4">
+      <div className="flex items-center gap-8 flex-wrap">
         <div>
-          <p className="font-display font-bold text-[20px] text-text" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(pd?.total_value_usd ?? 0)}</p>
+          <p className="font-display font-bold text-[22px] text-text" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(pd?.total_value_usd ?? 0)}</p>
           <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint">Total value</p>
         </div>
         <div>
-          <p className="font-display font-bold text-[20px] text-text">{pd?.shipment_count ?? 0}</p>
+          <p className="font-display font-bold text-[22px] text-text">{pd?.shipment_count ?? 0}</p>
           <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint">Shipments</p>
         </div>
         {pd?.current_supplier && (
@@ -415,10 +316,12 @@ function ExpandedBuyer({ name }: { name: string }) {
         )}
         <div className="flex items-center gap-1.5 flex-wrap">{sources.map(s => <span key={s}>{dsChip(s)}</span>)}</div>
       </div>
-      <div className="bg-surface-card rounded-lg border border-surface-rule p-3">
-        <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint mb-2">Shipment timeline</p>
+
+      <div className="bg-surface-card rounded-lg border border-surface-rule p-4">
+        <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint mb-3">Shipment timeline</p>
         <ShipmentTimeline shipments={pd?.shipments ?? []} />
       </div>
+
       {profile.pitch_angle && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-accent/5 border border-accent/15">
           <div className="w-1 self-stretch rounded-full bg-accent/40 shrink-0" />
@@ -428,24 +331,33 @@ function ExpandedBuyer({ name }: { name: string }) {
           </div>
         </div>
       )}
+
       {(pd?.shipments?.length ?? 0) > 0 && (
         <div>
           <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint mb-2">Recent shipments</p>
-          <div className="space-y-1.5">
-            {[...(pd?.shipments ?? [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map((s, i) => (
-              <div key={i} className="flex items-start justify-between gap-3 py-2 px-3 rounded-lg border border-surface-rule bg-surface-card/50 text-[11px]">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="font-mono text-[9px] text-text-faint">{s.date}</span>
-                    {dsChip(s.datasource)}
-                    {s.hs_code && <span className="font-mono text-[9px] text-text-faint flex items-center gap-0.5"><Package size={8} />HS {s.hs_code}</span>}
-                  </div>
-                  {s.product  && <p className="text-text-muted truncate">{s.product}</p>}
-                  {s.supplier && <p className="text-text-faint text-[10px] flex items-center gap-1 mt-0.5"><Truck size={8} />{s.supplier}</p>}
-                </div>
-                <span className="font-mono font-semibold text-accent shrink-0">{fmtUsd(s.value_usd)}</span>
-              </div>
-            ))}
+          <div className="overflow-x-auto rounded-lg border border-surface-rule">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-surface-rule bg-surface-card">
+                  <th className="text-left px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-text-faint">Date</th>
+                  <th className="text-left px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-text-faint">Source</th>
+                  <th className="text-left px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-text-faint">Product</th>
+                  <th className="text-left px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-text-faint">Supplier</th>
+                  <th className="text-right px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-text-faint">Value</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-rule">
+                {[...(pd?.shipments ?? [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8).map((s, i) => (
+                  <tr key={i} className="hover:bg-surface-card/40 transition-colors">
+                    <td className="px-3 py-2 font-mono text-text-faint whitespace-nowrap">{s.date}</td>
+                    <td className="px-3 py-2">{dsChip(s.datasource)}</td>
+                    <td className="px-3 py-2 text-text-muted max-w-[220px] truncate">{s.product || '—'}</td>
+                    <td className="px-3 py-2 text-text-faint max-w-[160px] truncate">{s.supplier || '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono font-semibold text-accent whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(s.value_usd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -453,7 +365,7 @@ function ExpandedBuyer({ name }: { name: string }) {
   )
 }
 
-// ── Buyers Grid ───────────────────────────────────────────────────────────────
+// ── Overview Tab — buyers grid + country chart ────────────────────────────────
 
 type SortKey = 'value' | 'name' | 'shipments'
 
@@ -488,6 +400,7 @@ function BuyersGrid({ buyers }: { buyers: TopBuyer[] }) {
 
   return (
     <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
+      {/* Toolbar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-surface-rule flex-wrap">
         <div className="flex items-center gap-2 flex-1 min-w-[160px] bg-background border border-surface-rule rounded-lg px-3 py-1.5">
           <Search size={12} className="text-text-faint shrink-0" />
@@ -501,31 +414,40 @@ function BuyersGrid({ buyers }: { buyers: TopBuyer[] }) {
         </div>
         <span className="font-mono text-[10px] text-text-faint">{filtered.length} buyers</span>
       </div>
+
+      {/* Table header */}
+      <div className="grid grid-cols-[1fr_120px_80px_80px_32px] gap-0 px-5 py-2 border-b border-surface-rule bg-background/50">
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint">Company</span>
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint hidden sm:block">Value</span>
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint text-right">Amount</span>
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint text-right">Ships</span>
+        <span />
+      </div>
+
+      {/* Rows */}
       <div className="divide-y divide-surface-rule">
         {filtered.map(b => {
           const open = expanded.has(b.name)
           return (
             <div key={b.name}>
               <button onClick={() => toggle(b.name)}
-                className="w-full flex items-center gap-4 px-5 py-3 hover:bg-background/60 transition-colors text-left group">
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-medium text-text truncate">{b.name}</p>
+                className="w-full grid grid-cols-[1fr_120px_80px_80px_32px] gap-0 items-center px-5 py-3 hover:bg-background/60 transition-colors group">
+                <div className="text-left min-w-0 pr-4">
+                  <p className="text-[12px] font-medium text-text truncate">{b.name}</p>
                   <p className="text-[10px] text-text-faint mt-0.5">{b.country}</p>
                 </div>
-                <div className="hidden sm:flex items-center gap-2 w-36">
+                <div className="hidden sm:flex items-center pr-3">
                   <div className="flex-1 h-1.5 bg-surface-rule rounded-full overflow-hidden">
                     <div className="h-full bg-accent/50 rounded-full group-hover:bg-accent/70 transition-colors"
                       style={{ width: `${(b.value_usd / maxVal) * 100}%` }} />
                   </div>
                 </div>
-                <span className="font-mono text-[13px] font-semibold text-accent w-14 text-right shrink-0" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                <span className="font-mono text-[12px] font-semibold text-accent text-right" style={{ fontVariantNumeric: 'tabular-nums' }}>
                   {fmtUsd(b.value_usd)}
                 </span>
-                <span className="font-mono text-[10px] text-text-muted w-16 text-right shrink-0">
-                  {b.shipments} ship{b.shipments !== 1 ? 's' : ''}
-                </span>
-                <div className="shrink-0 text-text-faint group-hover:text-text transition-colors">
-                  {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                <span className="font-mono text-[10px] text-text-muted text-right">{b.shipments}</span>
+                <div className="flex justify-end text-text-faint group-hover:text-text transition-colors">
+                  {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </div>
               </button>
               {open && <ExpandedBuyer name={b.name} />}
@@ -539,8 +461,6 @@ function BuyersGrid({ buyers }: { buyers: TopBuyer[] }) {
     </div>
   )
 }
-
-// ── Country Chart ─────────────────────────────────────────────────────────────
 
 function CountryChart({ countries }: { countries: CountryRow[] }) {
   const maxCount = Math.max(...countries.map(c => c.count), 1)
@@ -559,14 +479,10 @@ function CountryChart({ countries }: { countries: CountryRow[] }) {
             const opacity = 0.35 + 0.65 * (1 - i / countries.length)
             return (
               <g key={c.country}>
-                <text x={labelW - 8} y={y + 11} textAnchor="end" className="fill-current text-text" style={{ fontSize: 11, fontFamily: 'inherit' }}>
-                  {c.country || 'Unknown'}
-                </text>
+                <text x={labelW - 8} y={y + 11} textAnchor="end" className="fill-current text-text" style={{ fontSize: 11, fontFamily: 'inherit' }}>{c.country || 'Unknown'}</text>
                 <rect x={labelW} y={y} width={barAreaW} height={16} rx={3} className="fill-current text-surface-rule" />
-                <rect x={labelW} y={y} width={barW} height={16} rx={3} className="fill-current text-accent" style={{ opacity }} />
-                <text x={labelW + barW + 8} y={y + 11} className="fill-current text-text-muted" style={{ fontSize: 10, fontFamily: 'inherit', fontVariantNumeric: 'tabular-nums' }}>
-                  {c.count}
-                </text>
+                <rect x={labelW} y={y} width={barW}    height={16} rx={3} className="fill-current text-accent" style={{ opacity }} />
+                <text x={labelW + barW + 8} y={y + 11} className="fill-current text-text-muted" style={{ fontSize: 10, fontFamily: 'inherit', fontVariantNumeric: 'tabular-nums' }}>{c.count}</text>
                 <text x={labelW + barAreaW + 80} y={y + 11} textAnchor="end" className="fill-current text-accent"
                   style={{ fontSize: 10, fontFamily: 'var(--font-mono, monospace)', fontVariantNumeric: 'tabular-nums' }}>
                   {fmtUsd(c.value_usd)}
@@ -580,38 +496,30 @@ function CountryChart({ countries }: { countries: CountryRow[] }) {
   )
 }
 
-// ── Overview Tab ──────────────────────────────────────────────────────────────
-
 function OverviewTab({ stats, topCountries, topBuyers, loading }: {
   stats: OverviewStats | null; topCountries: CountryRow[]; topBuyers: TopBuyer[]; loading: boolean
 }) {
   if (loading) return (
     <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-text-faint">
-      <Spinner size={16} /> Loading trade data…
+      <Spinner size={16} /> Loading…
     </div>
   )
   if (!stats || stats.total_companies === 0) return (
-    <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
-      <DollarSign size={28} className="text-text-faint" />
-      <p className="text-[13px] text-text-muted">No trade data yet</p>
-      <p className="text-[11px] text-text-faint">Switch to History and import a file to get started</p>
+    <div className="flex flex-col items-center justify-center py-16 gap-2 text-center text-[13px] text-text-muted">
+      No trade data yet — import a file in the Overview tab.
     </div>
   )
-
   return (
     <div className="space-y-5">
-      {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {([
-          { label: 'Trade buyers',      value: stats.total_companies.toLocaleString(),  sub: 'unique companies'     },
-          { label: 'Total trade value', value: fmtUsd(stats.total_value_usd),           sub: 'across all shipments' },
-          { label: 'Shipment records',  value: stats.total_shipments.toLocaleString(),  sub: 'individual imports'   },
+          { icon: Building2,  label: 'Trade buyers',      value: stats.total_companies.toLocaleString(),  sub: 'unique companies'     },
+          { icon: DollarSign, label: 'Total trade value', value: fmtUsd(stats.total_value_usd),           sub: 'across all shipments' },
+          { icon: Package,    label: 'Shipment records',  value: stats.total_shipments.toLocaleString(),  sub: 'individual rows'      },
         ] as const).map(s => (
           <div key={s.label} className="bg-surface-card border border-surface-rule rounded-xl px-4 py-4">
             <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint mb-1">{s.label}</p>
-            <p className="font-display font-bold text-[26px] text-text leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>
-              {s.value}
-            </p>
+            <p className="font-display font-bold text-[26px] text-text leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>{s.value}</p>
             <p className="text-[10px] text-text-faint mt-1">{s.sub}</p>
           </div>
         ))}
@@ -622,12 +530,130 @@ function OverviewTab({ stats, topCountries, topBuyers, loading }: {
   )
 }
 
+// ── History Tab ───────────────────────────────────────────────────────────────
+
+function HistoryTab({ imports, loading }: { imports: PastImport[]; loading: boolean }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  function toggle(id: string) {
+    setExpanded(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  }
+
+  if (loading) return (
+    <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-text-faint">
+      <Spinner size={16} /> Loading history…
+    </div>
+  )
+  if (!imports.length) return (
+    <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
+      <Clock size={28} className="text-text-faint" />
+      <p className="text-[13px] text-text-muted">No files imported yet</p>
+      <p className="text-[11px] text-text-faint">Switch to Overview and drop a file to get started</p>
+    </div>
+  )
+
+  return (
+    <div className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
+      {/* Table header */}
+      <div className="grid grid-cols-[1fr_140px_100px_100px_32px] gap-0 px-5 py-2.5 border-b border-surface-rule bg-background/50">
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint">File name</span>
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint">Imported</span>
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint text-right">Companies</span>
+        <span className="font-mono text-[9px] uppercase tracking-wider text-text-faint text-right">Rows</span>
+        <span />
+      </div>
+
+      <div className="divide-y divide-surface-rule">
+        {imports.map(imp => {
+          const open = expanded.has(imp.id)
+          return (
+            <div key={imp.id}>
+              {/* Row */}
+              <button
+                onClick={() => toggle(imp.id)}
+                className="w-full grid grid-cols-[1fr_140px_100px_100px_32px] gap-0 items-center px-5 py-3.5 hover:bg-background/60 transition-colors group text-left"
+              >
+                {/* File name */}
+                <div className="flex items-center gap-2.5 min-w-0 pr-4">
+                  <div className="w-7 h-7 rounded-md bg-accent/10 flex items-center justify-center shrink-0">
+                    <FileSpreadsheet size={13} className="text-accent" />
+                  </div>
+                  <span className="font-mono text-[12px] font-medium text-text truncate">{imp.filename}</span>
+                </div>
+
+                {/* Date */}
+                <div>
+                  <p className="text-[11px] text-text">{fmtDate(imp.created_at)}</p>
+                  <p className="font-mono text-[10px] text-text-faint mt-0.5">{fmtTime(imp.created_at)}</p>
+                </div>
+
+                {/* Companies */}
+                <div className="text-right">
+                  <p className="font-mono text-[13px] font-semibold text-accent" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {imp.company_count?.toLocaleString() ?? '—'}
+                  </p>
+                  <p className="font-mono text-[9px] text-text-faint mt-0.5">buyers</p>
+                </div>
+
+                {/* Rows */}
+                <div className="text-right">
+                  <p className="font-mono text-[13px] font-semibold text-text" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {imp.row_count?.toLocaleString() ?? '—'}
+                  </p>
+                  <p className="font-mono text-[9px] text-text-faint mt-0.5">shipments</p>
+                </div>
+
+                {/* Chevron */}
+                <div className="flex justify-end text-text-faint group-hover:text-text transition-colors">
+                  {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </div>
+              </button>
+
+              {/* Expanded detail */}
+              {open && (
+                <div className="px-5 py-4 border-t border-surface-rule bg-background space-y-3">
+                  {/* Quick stats */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      { label: 'File',       value: imp.filename,                              mono: true  },
+                      { label: 'Imported',   value: `${fmtDate(imp.created_at)} ${fmtTime(imp.created_at)}`, mono: false },
+                      { label: 'Companies',  value: imp.company_count?.toLocaleString() ?? '—', mono: true  },
+                      { label: 'Rows',       value: imp.row_count?.toLocaleString() ?? '—',     mono: true  },
+                    ].map(s => (
+                      <div key={s.label} className="px-3 py-2.5 bg-surface-card border border-surface-rule rounded-lg">
+                        <p className="font-mono text-[9px] uppercase tracking-widest text-text-faint mb-1">{s.label}</p>
+                        <p className={`text-[12px] font-semibold text-text truncate ${s.mono ? 'font-mono' : ''}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {s.value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  {imp.notes && (
+                    <div className="flex items-start gap-2 p-3 rounded-lg bg-surface-card border border-surface-rule">
+                      <div className="w-1 self-stretch rounded-full bg-surface-rule shrink-0" />
+                      <p className="text-[11px] text-text-muted leading-relaxed">{imp.notes}</p>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-text-faint">
+                    All {imp.company_count?.toLocaleString()} buyers from this file are saved as leads and signals —
+                    <a href="/sales" className="text-accent hover:underline ml-1">view in Sales →</a>
+                  </p>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-type Tab = 'history' | 'overview'
+type Tab = 'overview' | 'history'
 
 export default function GlobalWitsPage() {
-  const [tab,          setTab]          = useState<Tab>('history')
+  const [tab,          setTab]          = useState<Tab>('overview')
   const [loading,      setLoading]      = useState(false)
   const [status,       setStatus]       = useState('')
   const [result,       setResult]       = useState<ImportResult | null>(null)
@@ -669,7 +695,7 @@ export default function GlobalWitsPage() {
       setResult(d.error
         ? { ok: false, error: d.error, rows_parsed: 0, companies: 0, created: 0, updated: 0, filename: file.name }
         : { ...d, ok: true })
-      if (!d.error) fetchOverview()
+      if (!d.error) { fetchOverview(); setTab('history') }
     } catch (e: any) {
       setResult({ ok: false, error: e.message ?? 'Upload failed', rows_parsed: 0, companies: 0, created: 0, updated: 0, filename: file.name })
     }
@@ -678,7 +704,7 @@ export default function GlobalWitsPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Header */}
+      {/* Header + tabs */}
       <div className="bg-surface-card border-b border-surface-rule px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <FileSpreadsheet size={17} className="text-accent" />
@@ -688,15 +714,13 @@ export default function GlobalWitsPage() {
           </span>
         </div>
         <p className="text-[11px] text-text-muted mt-1">
-          Trade file imports — each buyer becomes a lead, a company profile, and a market signal.
+          Import trade files — each buyer becomes a lead, a company profile, and a market signal.
         </p>
-
-        {/* Tab bar */}
         <div className="flex items-center gap-1 mt-4">
           {([
-            { key: 'history',  label: 'History',  count: imports.length || null },
-            { key: 'overview', label: 'Overview'  },
-          ] as { key: Tab; label: string; count?: number | null }[]).map(t => (
+            { key: 'overview' as Tab, label: 'Overview' },
+            { key: 'history'  as Tab, label: 'History', count: imports.length || null },
+          ]).map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors
                 ${tab === t.key ? 'bg-accent/10 text-accent' : 'text-text-muted hover:text-text hover:bg-surface-rule'}`}>
@@ -713,18 +737,16 @@ export default function GlobalWitsPage() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[920px] mx-auto p-6 space-y-5">
-
-          {/* Drop zone always visible at top */}
-          <DropZone onFile={handleFile} loading={loading} status={status} />
-          {result && <ResultBanner result={result} onDismiss={() => setResult(null)} />}
-
-          {/* Tab content */}
-          {tab === 'history' && (
-            <HistoryTab imports={imports} loading={overLoading} onRefresh={fetchOverview} />
-          )}
+        <div className="max-w-[960px] mx-auto p-6 space-y-5">
           {tab === 'overview' && (
-            <OverviewTab stats={stats} topCountries={topCountries} topBuyers={topBuyers} loading={overLoading} />
+            <>
+              <DropZone onFile={handleFile} loading={loading} status={status} />
+              {result && <ResultBanner result={result} onDismiss={() => setResult(null)} />}
+              <OverviewTab stats={stats} topCountries={topCountries} topBuyers={topBuyers} loading={overLoading} />
+            </>
+          )}
+          {tab === 'history' && (
+            <HistoryTab imports={imports} loading={overLoading} />
           )}
         </div>
       </div>
