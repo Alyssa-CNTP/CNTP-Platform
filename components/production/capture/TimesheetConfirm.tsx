@@ -88,7 +88,7 @@ export function TimesheetConfirm({
           return
         }
         const stamps = await loadActivity(sessionId)
-        const d = deriveTimesheet(stamps)
+        const d = deriveTimesheet(stamps, { shift, date })
         if (!alive) return
         setDerived(d)
         setHadActivity(stamps.length > 0)
