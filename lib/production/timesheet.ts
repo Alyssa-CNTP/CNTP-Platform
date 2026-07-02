@@ -30,11 +30,33 @@ export interface DerivedTimesheet {
 
 const MS_PER_MIN = 60_000
 
+// Standard break schedule per shift — pre-populated when no inactivity gaps are detected.
+// Times are local (SAST) on the session date; ISO conversion happens in the browser.
+const STANDARD_BREAKS: Record<string, { type: BreakType; localTime: string; durationMin: number }[]> = {
+  morning: [
+    { type: 'tea',   localTime: '10:00', durationMin: 15 },
+    { type: 'lunch', localTime: '12:30', durationMin: 60 },
+  ],
+  // Night shift 16:00–01:00: tea at 19:00, meal at 21:00
+  afternoon: [
+    { type: 'tea',   localTime: '19:00', durationMin: 15 },
+    { type: 'lunch', localTime: '21:00', durationMin: 60 },
+  ],
+  night: [
+    { type: 'tea',   localTime: '19:00', durationMin: 15 },
+    { type: 'lunch', localTime: '21:00', durationMin: 60 },
+  ],
+}
+
 /**
  * Derive a timesheet from a list of activity timestamps (ISO strings).
  * Pure — no I/O — so it's easy to unit-test against crafted inputs.
+ * When no inactivity gaps are found, pre-populate standard breaks for the shift.
  */
-export function deriveTimesheet(timestamps: string[]): DerivedTimesheet {
+export function deriveTimesheet(
+  timestamps: string[],
+  opts?: { shift?: string; date?: string },
+): DerivedTimesheet {
   const sorted = timestamps
     .map(t => new Date(t).getTime())
     .filter(t => !Number.isNaN(t))
@@ -57,6 +79,19 @@ export function deriveTimesheet(timestamps: string[]): DerivedTimesheet {
         end:   new Date(sorted[i]).toISOString(),
       })
     }
+  }
+
+  // No inactivity gaps detected — pre-populate the standard schedule for this shift.
+  if (breaks.length === 0 && opts?.shift && opts?.date) {
+    const schedule = STANDARD_BREAKS[opts.shift] ?? []
+    schedule.forEach(({ type, localTime, durationMin }) => {
+      const startMs = new Date(`${opts.date}T${localTime}:00`).getTime()
+      breaks.push({
+        type,
+        start: new Date(startMs).toISOString(),
+        end:   new Date(startMs + durationMin * MS_PER_MIN).toISOString(),
+      })
+    })
   }
 
   return {

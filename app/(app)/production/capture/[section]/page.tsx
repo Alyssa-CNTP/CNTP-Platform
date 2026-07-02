@@ -172,8 +172,10 @@ function CaptureScreen() {
           }
         } catch {}
       }
+      let resolvedSid: string | null = null
       if (sess) {
-        setSessionId((sess as any).id)
+        resolvedSid = (sess as any).id
+        setSessionId(resolvedSid)
         setStatus((sess as any).status)
       } else if (assign) {
         // Create the draft session immediately so autosave always has a target —
@@ -191,7 +193,22 @@ function CaptureScreen() {
           production_orders: (assign as any).production_orders ?? null,
           created_by: user?.id ?? null,
         } as any).select('id').maybeSingle()
-        if (row) { setSessionId((row as any).id); setStatus('draft') }
+        if (row) { resolvedSid = (row as any).id; setSessionId(resolvedSid); setStatus('draft') }
+      }
+
+      // Log page-open as shift start — written only if no prior stamps exist so
+      // the first timestamp always reflects actual login time, not data-entry time.
+      if (resolvedSid) {
+        try {
+          const { data: existingStamps } = await db.schema('production').from('capture_activity')
+            .select('id').eq('session_id', resolvedSid).limit(1)
+          if (!existingStamps?.length) {
+            await db.schema('production').from('capture_activity').insert({
+              session_id: resolvedSid, section_id: sectionId,
+              operator_id: user?.id ?? null,
+            } as any)
+          }
+        } catch { /* shift-start stamp is best-effort */ }
       }
 
       // Seed serial counter from today's bags only — each date restarts at 001.
