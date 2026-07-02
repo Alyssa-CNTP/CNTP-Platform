@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (fix: South Africa signal cards now show full content)
+
+**Files changed:**
+- `app/(app)/intelligence/south-africa/page.tsx` — removed `compact` prop from SignalCard calls so full cards render (title + summary + recommended action)
+- `components/intelligence/SignalCard.tsx` — added fallback: if `signal.title` is null, render `summary_en` instead so cards never appear as blank badge rows
+
+**Changes:**
+- Market opportunities (and other sections) on the South Africa page now show the full signal card with summary and recommended action, not just the badge row
+- SignalCard defensively handles null titles app-wide by falling back to the English summary
+
+---
+
 ## 2026-07-02 — Alyssa (Permissions: production orders added to matrix + orPermission sidebar gate)
 
 **Files changed:**
