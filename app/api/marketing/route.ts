@@ -90,7 +90,54 @@ export async function POST(req: Request) {
       .select('id')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Mirror to sales.campaigns CRM (best-effort — never blocks the response)
+    void salesDb.from('campaigns').insert({
+      created_by: user.id,
+      title:      body.title,
+      channel:    body.channel ?? null,
+      status:     'draft',
+      body:       body.brief ?? null,
+      signal_ids: body.signal_ids ?? [],
+    })
+
     return NextResponse.json({ id: (data as any).id })
+  }
+
+  if (action === 'save_report') {
+    if (!body.title || !body.body)
+      return NextResponse.json({ error: 'title and body required' }, { status: 400 })
+    const { error } = await salesDb
+      .from('reports')
+      .insert({
+        created_by:  user.id,
+        title:       body.title,
+        report_type: body.report_type ?? 'briefing',
+        body:        body.body,
+      })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: true })
+  }
+
+  // Given a list of regions/keyword groups from audience signals, find matching company_profiles
+  if (action === 'audience_companies') {
+    const regions: string[] = body.regions ?? []
+    const limit = Math.min(parseInt(body.limit ?? '12', 10), 30)
+
+    let q = salesDb
+      .from('company_profiles')
+      .select('company_name, country, sector, pitch_angle, panjiva_data, account_id')
+      .not('panjiva_data', 'is', null)
+      .order('company_name')
+      .limit(limit)
+
+    if (regions.length > 0) {
+      q = q.in('country', regions)
+    }
+
+    const { data, error } = await q
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ companies: data ?? [] })
   }
 
   if (action === 'bookmark_signal') {
@@ -167,6 +214,7 @@ A realistic 6-week campaign arc.`
   }
 
   let prompt: string
+  let audienceSignalIds: string[] = []
 
   switch (action) {
 
@@ -196,7 +244,8 @@ Make the angles specific, not generic. Reference real things: the Cederberg orig
     case 'audience_brief': {
       if (!body.audience_tag)
         return NextResponse.json({ error: 'audience_tag required' }, { status: 400 })
-      const { context: signalContext } = await recentSignalContext(body.audience_tag)
+      const { context: signalContext, ids: signalIds } = await recentSignalContext(body.audience_tag)
+      audienceSignalIds = signalIds
       prompt = `Generate a detailed audience intelligence brief for the segment: ${body.audience_tag}
 
 ${signalContext ? `RECENT SIGNALS FOR THIS AUDIENCE:\n${signalContext}\n` : ''}
@@ -231,5 +280,17 @@ One specific, actionable first step to reach this audience in the next 4 weeks.`
   const { response, ok } = await queryGeminiDetailed({ prompt, systemExtra: hsBlock, maxTokens: 900 })
 
   if (!ok) return NextResponse.json({ error: 'AI unavailable' }, { status: 503 })
+
+  // When an audience brief is generated, persist the segment to sales.audiences (best-effort)
+  if (action === 'audience_brief' && body.audience_tag) {
+    void salesDb.from('audiences').upsert({
+      name:        body.audience_tag,
+      description: response.slice(0, 300),
+      criteria:    { tag: body.audience_tag },
+      signal_ids:  audienceSignalIds,
+      created_by:  user.id,
+    }, { onConflict: 'name', ignoreDuplicates: false })
+  }
+
   return NextResponse.json({ response })
 }

@@ -5,6 +5,127 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara: Signal Engine merged in, full UI update, sidebar cleanup)
+
+**Files changed:**
+- `app/(app)/research/page.tsx` — SignalsSection full rewrite
+- `app/(app)/intelligence/page.tsx` — replaced with redirect to `/research`
+- `components/layout/Sidebar.tsx` — removed Signal Engine nav entry
+
+**Changes:**
+- **Signal Engine merged into Alara**: `SignalsSection` now includes the world map (`SignalMap`), 4 stat cards (total, opportunities, threats, avg relevance), full filter bar (search, region, keyword group, sort), classification chip row, relevance bucket chips, load-more pagination, and a reset-filters empty state. All powered by the same `/api/signals?limit=300` endpoint.
+- **`/intelligence` redirect**: visiting the old Signal Engine URL now redirects to `/research` so no broken links.
+- **Sidebar**: Signal Engine entry removed. "Alara" is the single entry for both the research engine and signal feed.
+- **About Alara — etymology fix**: removed the Alyssa personal reference from the "ra" etymology card. Now reads: "Rooibos · Intelligence — the ability to range, detect, and act on what others miss."
+
+---
+
+## 2026-07-02 — Gustav (Breakdown routing: spread across on-duty crew from the shift roster)
+
+**Files changed:** `app/api/maintenance/job-cards/route.ts`
+
+- Breakdown auto-routing now distributes across the technicians on the **Operations shift roster**: the on-duty tech with the **fewest breakdowns in hand** gets the new one. A breakdown counts as "in hand" from the moment it is assigned (accepted or not) through in-progress, so once one on-duty tech is holding a breakdown, the next breakdown routes to the **other** technician on shift. Single-tech shifts still route to that tech; deterministic tie-break (fewest breakdowns → fewest open cards → name).
+
+## 2026-06-30 — Gustav (Maintenance overhaul round 4: table board, checklist allocation, unified roster, dashboard trends, energy)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`, `app/(app)/maintenance/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/energy/history/route.ts`, `lib/maintenance/roster.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/maintenance/JobCardTable.tsx` (new), `components/maintenance/Spark.tsx` (new), `components/maintenance/TrendsPanel.tsx` (new), `components/maintenance/EnergyHistory.tsx`, `components/maintenance/EnergyWidget.tsx`
+
+- **Job-card board → one-line table** (`JobCardTable`): rows expand to the full job card (allocate / log work / QC / verify) with a live in-row timer; **per-technician allocation tabs** replace the old "by raiser" panel; **urgency filter** added (search + date-range kept).
+- **New-job-card alert** on the maintenance dashboard for managers.
+- **Checklist allocation** to technicians (on-duty suggested first) with assignee highlight (+migration `20260629_002`).
+- **Roster unified:** on-duty technician sourced from the Operations shift roster (incl. breakdown routing); maintenance duty-roster editor retired.
+- **Trends moved to the dashboard** (`TrendsPanel`/`Spark`); Scheduled "Readings & Trends" tab is now capture-only.
+- **Energy:** solar charts shrunk; From/To date-range filter on energy history.
+
+## 2026-07-02 — Alyssa (Alara: phase 3 — briefing cards, full signal cards, audience companies)
+
+**Files changed:**
+- `components/intelligence/BriefingCards.tsx` (new) — structured briefing output component
+- `app/(app)/marketing/page.tsx` — full rewrite of Dashboard, Campaigns, Audiences, Content tabs
+- `app/api/marketing/route.ts` — added `save_report` and `audience_companies` actions
+
+**Changes:**
+- **BriefingCards**: replaces the plain-text `AiResult` block across all three generation surfaces (campaign brief, audience brief, content angles). Parses `##` section headings into collapsible cards; renders bullet/numbered lists and inline bold. "Save to reports" button → `sales.reports` via new `save_report` action.
+- **Opportunities + Social Trends columns**: switched from compact to full `SignalCard` so the recommended-action block (sales_angle) is visible. Social Trends shows source platform label above each card.
+- **Audience Signals column**: added Matching Buyers panel — lazy-loads `company_profiles` filtered by the signal regions via new `audience_companies` action (shows company, country, shipment count, current supplier). "Save as audience" button writes to `sales.audiences` and logs a report.
+- **`save_report`**: inserts into `sales.reports` (title, body, report_type, created_by).
+- **`audience_companies`**: returns company_profiles filtered by country list with panjiva data.
+
+---
+
+## 2026-07-02 — Alyssa (Alara CRM: marketing loop wired — phase 2 step 2)
+
+**Files changed:**
+- `app/api/marketing/route.ts` — mirrored campaign saves + audience briefs to sales schema
+- `supabase/migrations/20260702_002_audiences_name_unique.sql` (new) — unique constraint on `sales.audiences.name`
+
+**Changes:**
+- `save_campaign` now writes to both `marketing.campaigns` (existing) and `sales.campaigns` (CRM). UI unchanged.
+- `audience_brief` generation now upserts to `sales.audiences` (tag, signal provenance, brief excerpt) after generating. Best-effort, never blocks the response.
+- Unique constraint on `sales.audiences.name` applied (migration run in Supabase staging).
+
+---
+
+## 2026-07-02 — Alyssa (Alara CRM: lead pipeline — phase 2 step 1)
+
+**Files changed:**
+- `app/(app)/intelligence/leads/page.tsx` (new) — kanban pipeline page grouped by stage
+- `components/leads/AccountDrawer.tsx` (new) — right-slide account detail drawer
+- `app/api/accounts/route.ts` (new) — GET list + POST create/promote
+- `app/api/accounts/[id]/route.ts` (new) — GET detail (account + profile + interactions + signals), PATCH
+- `app/api/accounts/[id]/interactions/route.ts` (new) — POST add timeline entry
+- `components/intelligence/SignalDrawer.tsx` — added "Promote to lead" button
+- `components/layout/Sidebar.tsx` — added "Lead Pipeline" nav entry (KanbanSquare icon)
+
+**Changes:**
+- Built the **lead pipeline view** at `/intelligence/leads`: kanban columns for all 6 stages (lead → qualified → proposal → negotiation → won → lost), stage tab filter, search, and 3-KPI row (total / active / won).
+- **AccountDrawer**: click any account card to open a detailed panel — stage picker (one-click advance), next-action block, company dossier (panjiva shipment data + current supplier), linked signals list, and an activity timeline with an add-note form (interaction type + next step).
+- **Three new API routes** wire the accounts/company_profiles/account_interactions/signals tables into the UI. Auth mirrors the signals route (Sales/Management/Marketing/IT or `can_access_intelligence`).
+- **Promote to lead**: "Promote to lead" button in the signal drawer creates an `accounts` row (stage='lead', signal_ids=[signal.id]) and logs a genesis `account_interactions` entry so every lead is traceable to its source signal.
+- The `docs/alara-crm-vision.md` spec and `supabase/migrations/20260702_001_crm_campaigns_audiences.sql` are now committed to the repo.
+
+---
+
+## 2026-07-02 — Alyssa (Alara: multi-source engine LIVE + CRM data-model foundation)
+
+**Files changed:**
+- `research-engine/n8n/cntp-signal-engine.json` — corrected/expanded workflow (reference export)
+- `supabase/migrations/20260702_001_crm_campaigns_audiences.sql` (new) — CRM `campaigns` + `audiences`
+- `docs/alara-crm-vision.md` — CRM closed-loop spec + schema introspection + phase-2 build order
+
+**Changes (n8n — done via the n8n public API over SSH; workflow lives in n8n, not the repo):**
+- Built the **multi-source** engine (`ud8p5FxBhqiDHH6X`): added TikTok + Instagram (Apify), X/web (Exa), YouTube alongside the 16 news feeds — each normalised to `{title,link,description,source}`, pooled via `Merge Sources` (social-first) → existing dedup→Gemini→Save pipeline.
+- **Models off the app's `2.5-flash-lite`** → dedicated: Tier 1 `gemini-3.1-flash-lite`, Tier 2 `gemini-2.5-flash`. Fixed ~16s/item slowness (old free-tier key → paid key in `CNTP Gemini` → 1.59s/item).
+- **Region-per-day rotation** (`Day Selector`) for Apify/Exa to cap credits + fit the 3am–5am window; news/YouTube global daily.
+- Fixes: dedup by URL **and** title; classification mapped to the `signals_classification_check` values (fine type kept in `intel`); `source_type` from the real platform (was hardcoded `news`); `region` = full country names; deep-scan JSON parsers both tiers.
+- **Went live:** activated multi-source (3am SAST, throttle 300), deactivated old news-only `kDhYBC0Q9IBM7CyS` (fallback), deleted 4 duplicate copies.
+
+**Changes (production `sales` schema):**
+- Introspected the live schema (20 tables): `accounts` already a full lead pipeline; only gap = `campaigns` + `audiences` (added by the migration above). Phase-2 app wiring not yet started.
+
+---
+
+## 2026-07-02 — Alyssa (Global Wits trade intelligence + campaign close-loop)
+
+**Files changed:**
+- `app/(app)/intelligence/global-wits/page.tsx` (new)
+- `app/api/global-wits/route.ts` (new)
+- `app/(app)/marketing/page.tsx`
+- `app/api/marketing/route.ts`
+- `components/layout/Sidebar.tsx`
+- `app/(app)/quality/lab-manager/page.tsx`
+- `supabase/migrations/20260704_001_global_wits.sql`
+
+**Changes:**
+- **Global Wits**: replaced LinkedIn placeholder with a trade file import tool. Drop a Global Wits `.xlsx` — all sheets (hscode, US customs, global shipping, rooibos) are parsed client-side; each unique buyer becomes a `sales.company_profiles` record, a `sales.accounts` lead, and a `sales.signals` trade signal via 3 bulk upserts.
+- **Global Wits overview**: persistent trade dashboard loads from DB on every visit — stat cards (441 buyers, $23.4M, 1,860 shipments), SVG country bar chart, sortable/searchable buyers grid with expandable rows. Expanded row shows a dot-on-line shipment timeline (sized by $ value), monthly bar chart, pitch angle, and recent shipment detail.
+- **Import history**: collapsible accordion grid of past file imports.
+- **Campaign close-loop**: `campaign_brief` AI action now returns `signal_ids` (which signals inspired the brief); `save_campaign` persists `channel` and `signal_ids` to `marketing.campaigns`.
+- **Lab manager fix**: removed broken `import { computePastOosFlags } from '../pasteuriser/page'` — the export never existed, causing every production build to fail. Replaced with a local stub returning `[]`.
+- **Sidebar**: LinkedIn replaced with Global Wits under Sales group.
+
+---
+
 ## 2026-07-02 — Alyssa (Maintenance: remove Shuaib Sentso from PIN system)
 
 **Files changed:**
