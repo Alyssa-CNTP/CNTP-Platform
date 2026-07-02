@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Alyssa (Alara: phase 3 — briefing cards, full signal cards, audience companies)
+
+**Files changed:**
+- `components/intelligence/BriefingCards.tsx` (new) — structured briefing output component
+- `app/(app)/marketing/page.tsx` — full rewrite of Dashboard, Campaigns, Audiences, Content tabs
+- `app/api/marketing/route.ts` — added `save_report` and `audience_companies` actions
+
+**Changes:**
+- **BriefingCards**: replaces the plain-text `AiResult` block across all three generation surfaces (campaign brief, audience brief, content angles). Parses `##` section headings into collapsible cards; renders bullet/numbered lists and inline bold. "Save to reports" button → `sales.reports` via new `save_report` action.
+- **Opportunities + Social Trends columns**: switched from compact to full `SignalCard` so the recommended-action block (sales_angle) is visible. Social Trends shows source platform label above each card.
+- **Audience Signals column**: added Matching Buyers panel — lazy-loads `company_profiles` filtered by the signal regions via new `audience_companies` action (shows company, country, shipment count, current supplier). "Save as audience" button writes to `sales.audiences` and logs a report.
+- **`save_report`**: inserts into `sales.reports` (title, body, report_type, created_by).
+- **`audience_companies`**: returns company_profiles filtered by country list with panjiva data.
+
+---
+
 ## 2026-07-02 — Alyssa (Alara CRM: marketing loop wired — phase 2 step 2)
 
 **Files changed:**
