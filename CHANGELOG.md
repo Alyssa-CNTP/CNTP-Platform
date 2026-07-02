@@ -5,16 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-07-02 — Alyssa (Checks: indent screen angle allows negative values)
+## 2026-07-04 — Gustav (Sieving: bulk density/leaf shade only required on Final QC)
 
 **Files changed:**
-- `lib/production/checks-config.ts`
-- `components/production/capture/ChecksPanel.tsx`
+- `app/(app)/quality/sieving/page.tsx`
 
 **Changes:**
-- Added `allowNegative?: boolean` field to `MachineCheckDef` interface
-- Set `allowNegative: true` on the `indent_screen_angle` check definition
-- Updated `ValueCapture` component to accept `allowNegative` prop and use `inputMode="text"` instead of `inputMode="decimal"` when set — this shows the minus key on mobile keyboards
+- Bulk density and leaf shade are no longer mandatory for In-Process runs — only Final QC still requires them. In-Process can now be saved without either field filled in; the range check (1–11) on leaf shade still applies if a value is entered.
 
 ---
 
