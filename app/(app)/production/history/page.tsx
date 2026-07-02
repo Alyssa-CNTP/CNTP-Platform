@@ -6,7 +6,7 @@ import { format, subDays, parseISO } from 'date-fns'
 import {
   Search, X, Scale, AlertTriangle, CheckCircle2,
   Users, Package, ExternalLink, ChevronDown, ChevronUp,
-  Calendar, Loader2,
+  Calendar, Loader2, Trash2,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
@@ -78,9 +78,28 @@ function operatorLabel(row: SessionRow): string {
 
 // ── Session card ──────────────────────────────────────────────────────────────
 
-function SessionCard({ session }: { session: SessionRow }) {
+function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; canDelete: boolean; onDelete: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const { label: statusLabel, cls: statusCls } = statusBadge(session.status)
+
+  async function handleDelete() {
+    if (!confirm(`Delete the ${session.section_name} session from ${session.date} (${session.shift} shift)? This cannot be undone.`)) return
+    setDeleting(true)
+    try {
+      const db = getDb().schema('production')
+      await db.from('session_signatures').delete().eq('session_id', session.id)
+      await db.from('scan_events').delete().eq('session_id', session.id)
+      await db.from('prod_mass_balance').delete().eq('session_id', session.id)
+      await db.from('prod_debagging').delete().eq('session_id', session.id)
+      await db.from('prod_bagging').delete().eq('session_id', session.id)
+      await db.from('prod_sessions').delete().eq('id', session.id)
+      onDelete(session.id)
+    } catch (e: any) {
+      alert('Delete failed: ' + e.message)
+      setDeleting(false)
+    }
+  }
   const href = `/production/section?id=${session.section_id}&shift=${session.shift}&date=${session.date}`
 
   const orders: string[] = session.production_orders ?? []
@@ -197,6 +216,15 @@ function SessionCard({ session }: { session: SessionRow }) {
           {expanded ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
           Acumatica summary
         </button>
+        {canDelete && (
+          <button
+            onClick={handleDelete} disabled={deleting}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 text-[12px] font-medium text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors"
+          >
+            {deleting ? <Loader2 size={12} className="animate-spin"/> : <Trash2 size={12}/>}
+            Delete
+          </button>
+        )}
       </div>
 
       {/* Expanded Acumatica summary */}
@@ -223,7 +251,8 @@ function SessionCard({ session }: { session: SessionRow }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProductionHistoryPage() {
-  const { role, sectionId: authSectionId } = useAuth()
+  const { role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
+  const canDelete = isSupervisor || isIT || role === 'admin'
 
   const today     = format(new Date(), 'yyyy-MM-dd')
   const thirtyAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
@@ -416,7 +445,12 @@ export default function ProductionHistoryPage() {
             </div>
           ) : (
             filtered.map(session => (
-              <SessionCard key={session.id} session={session}/>
+              <SessionCard
+                key={session.id}
+                session={session}
+                canDelete={canDelete}
+                onDelete={id => setSessions(prev => prev.filter(s => s.id !== id))}
+              />
             ))
           )}
         </div>

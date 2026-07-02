@@ -5,12 +5,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import {
-  Loader2, Users, ChevronRight, ClipboardList, CalendarPlus, Play, Pen, CheckCircle2, Clock, Lock, UserCog, Tablet,
+  Loader2, Users, ChevronRight, ClipboardList, CalendarPlus, Play, Pen, CheckCircle2, Clock, Lock, UserCog,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
-import { getDeviceBinding } from '@/lib/production/device'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
@@ -40,22 +39,6 @@ export default function CaptureLandingPage() {
   const [opMap, setOpMap] = useState<Record<string, string>>({})
   const [statusMap, setStatusMap] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [device, setDevice] = useState(() => getDeviceBinding())
-
-  // Tablet bound to a section opens straight to that section's capture — once per
-  // app launch (sessionStorage guard) so the back button still returns here.
-  useEffect(() => {
-    const b = getDeviceBinding()
-    setDevice(b)
-    if (b?.kind === 'section') {
-      try {
-        if (!sessionStorage.getItem('cntp_device_routed')) {
-          sessionStorage.setItem('cntp_device_routed', '1')
-          router.replace(`/production/capture/${b.sectionId}?date=${format(new Date(), 'yyyy-MM-dd')}&shift=${currentShift()}`)
-        }
-      } catch { /* ignore */ }
-    }
-  }, [router])
 
   useEffect(() => {
     async function load() {
@@ -93,13 +76,6 @@ export default function CaptureLandingPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Link
-            href="/production/device"
-            className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-white border border-stone-200 text-stone-600 font-medium text-[12px] hover:bg-stone-50 transition-colors"
-            title="Set which section/role this tablet is"
-          >
-            <Tablet size={14} /> {device ? `This tablet: ${device.kind === 'supervisor' ? 'Supervisor' : sectionMeta(device.sectionId).name}` : 'Set up this tablet'}
-          </Link>
           {canAssign && (
             <>
               <Link

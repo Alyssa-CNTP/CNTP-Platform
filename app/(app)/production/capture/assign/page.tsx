@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { format } from 'date-fns'
 import {
-  ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar, Sparkles,
+  ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -73,15 +73,17 @@ function AssignScreen() {
     loadAllInventory().then(setInventory)
   }, [])
 
-  // Load existing assignments whenever date/shift changes
+  // Load existing assignments whenever date/shift changes; auto-fill from roster if none exist yet
   useEffect(() => {
     setLoading(true)
+    setFillNote(null)
     getDb().schema('production').from('shift_assignments')
       .select('*').eq('date', date).eq('shift', shift)
-      .then(({ data }: any) => {
+      .then(async ({ data }: any) => {
+        const rows = (data ?? []) as any[]
         const next: Record<string, SectionDraft> = {}
         SECTION_ORDER.forEach(id => { next[id] = emptyDraft() })
-        ;(data ?? []).forEach((a: any) => {
+        rows.forEach((a: any) => {
           next[a.section_id] = {
             operatorIds: a.operator_ids ?? [],
             lotNumber:   a.lot_number ?? '',
@@ -91,7 +93,12 @@ function AssignScreen() {
         })
         setDrafts(next)
         setLoading(false)
+        // Auto-fill from roster when no assignments exist for this slot yet
+        if (rows.length === 0) {
+          await fillFromRoster()
+        }
       })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, shift])
 
   // Who's on leave for the selected date — flagged in the operator picker so a
@@ -233,7 +240,7 @@ function AssignScreen() {
         </button>
         <div className="flex-1">
           <h1 className="font-semibold text-[22px] text-text leading-tight">Assign sections</h1>
-          <p className="text-[12px] text-text-muted mt-0.5">Roster operators onto each section for the shift, or fill them straight from the Shift Roster.</p>
+          <p className="text-[12px] text-text-muted mt-0.5">Confirm variant, grade, and operators per section. Pre-filled from the Shift Roster automatically.</p>
         </div>
       </div>
 
@@ -258,20 +265,16 @@ function AssignScreen() {
             </button>
           ))}
         </div>
-        <button
-          onClick={fillFromRoster} disabled={filling}
-          title="Pre-fill every section with the people rostered for this date & shift"
-          className="ml-auto flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand/10 text-brand border border-brand/20 text-[13px] font-medium hover:bg-brand/15 disabled:opacity-50 transition-colors"
-        >
-          {filling ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-          Fill from roster
-        </button>
+        {filling && (
+          <div className="ml-auto flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand/10 text-brand border border-brand/20 text-[13px]">
+            <Loader2 size={14} className="animate-spin" /> Filling from roster…
+          </div>
+        )}
       </div>
 
       {fillNote && (
-        <div className="flex items-start gap-2.5 px-4 py-3 bg-brand/5 border border-brand/20 rounded-xl text-[12px] text-brand-mid">
-          <Sparkles size={14} className="shrink-0 mt-0.5" />
-          <span>{fillNote}</span>
+        <div className="px-4 py-3 bg-brand/5 border border-brand/20 rounded-xl text-[12px] text-brand-mid">
+          {fillNote}
         </div>
       )}
 
