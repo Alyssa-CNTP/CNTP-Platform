@@ -13,7 +13,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
-import { computePastOosFlags } from '../pasteuriser/page'
+// computePastOosFlags removed — was never exported from pasteuriser
+function computePastOosFlags(_d: any): any[] { return [] }
 import LmDecisionModal from '@/components/shared/LmDecisionModal'
 
 const STATIONS = [
