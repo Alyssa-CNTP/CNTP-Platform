@@ -78,6 +78,7 @@ function CaptureScreen() {
     const t = sp.get('tab')
     return (['production', 'checks', 'cleaning', 'overview', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
   })
+  const [variantMismatch, setVariantMismatch] = useState<string | null>(null)
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -156,7 +157,7 @@ function CaptureScreen() {
             if (ls?.productions?.length) { setProductions(ls.productions); recovered = true }
           }
         } catch {}
-        if (!recovered) setProductions([emptyProduction(aVariant, aLot)])
+        if (!recovered) setProductions([emptyProduction(null, aLot)])
       }
       // If DB has no capture data but localStorage does, prefer localStorage —
       // this covers the case where the tablet lost the async Supabase write.
@@ -505,6 +506,18 @@ function CaptureScreen() {
 
   function updateActiveMeta(key: 'variant' | 'lot' | 'grade', val: string) {
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
+    if (key === 'variant') {
+      const assigned = assignment?.variant ?? ''
+      if (assigned && val && val !== assigned) {
+        const assignedLabel = VARIANT_OPTIONS.find(v => v.value === assigned)?.label ?? assigned
+        const chosenLabel   = VARIANT_OPTIONS.find(v => v.value === val)?.label ?? val
+        setVariantMismatch(`Supervisor assigned ${assignedLabel} — you selected ${chosenLabel}.`)
+        const noteText = `⚠ Variant mismatch: supervisor assigned "${assignedLabel}", operator captured "${chosenLabel}".`
+        setComments(prev => prev.includes('Variant mismatch') ? prev : prev.trim() ? `${prev}\n${noteText}` : noteText)
+      } else {
+        setVariantMismatch(null)
+      }
+    }
   }
   async function addProduction() {
     // Change-over: snapshot the closing mass balance of the production we're
@@ -519,7 +532,7 @@ function CaptureScreen() {
         production_idx: activeIdx, source: 'auto',
       })
     } catch { /* snapshot is best-effort */ }
-    setProductions(ps => [...ps, emptyProduction(assignment?.variant, assignment?.lot_number)])
+    setProductions(ps => [...ps, emptyProduction(null, assignment?.lot_number)])
     setActiveIdx(productions.length)
     setTab('production')
   }
@@ -537,7 +550,7 @@ function CaptureScreen() {
     if (row) {
       setSessionId((row as any).id)
       setStatus('draft')
-      setProductions([emptyProduction(aV, aL)])
+      setProductions([emptyProduction(null, aL)])
       setActiveIdx(0)
       setTab('production')
     }
@@ -720,6 +733,16 @@ function CaptureScreen() {
                   </div>
                 )}
               </div>
+
+              {variantMismatch && (
+                <div className="flex items-start gap-2.5 px-4 py-3 bg-warn/8 border border-warn/30 rounded-2xl text-[13px] text-amber-800">
+                  <AlertTriangle size={15} className="shrink-0 mt-0.5 text-warn" />
+                  <div>
+                    <span className="font-semibold">Variant mismatch — </span>
+                    {variantMismatch} Your selection will be used. A note has been added to the supervisor sign-off.
+                  </div>
+                </div>
+              )}
 
               {/* Capture only opens once a variant and grade are chosen. */}
               {(active.variant && active.grade) || locked ? (
