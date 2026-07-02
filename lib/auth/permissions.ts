@@ -61,6 +61,10 @@ export type PermissionKey =
   | 'can_reset_operator_pin'
   | 'can_view_live_history'
   | 'can_approve_session'
+  | 'can_edit_session'
+  | 'can_delete_session'
+  | 'can_edit_bag_tag'
+  | 'can_delete_bag_tag'
   // Sales & Marketing
   | 'can_access_sales'
   | 'can_access_marketing'
@@ -114,6 +118,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_ops_dashboard',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
+  'can_edit_session','can_delete_session','can_edit_bag_tag','can_delete_bag_tag',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
@@ -222,6 +227,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
     can_approve_session: true, can_export_csv: true,
+    can_edit_session: true, can_delete_session: true,
+    can_edit_bag_tag: true, can_delete_bag_tag: true,
   },
   operator:         {                        // maps to warehouse_supervisor
     can_submit_count: true, can_view_ops_dashboard: true,
@@ -238,6 +245,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
     can_approve_session: true, can_export_csv: true,
+    can_edit_session: true, can_delete_session: true,
+    can_edit_bag_tag: true, can_delete_bag_tag: true,
     // Staff & Competency
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
@@ -451,6 +460,10 @@ export const PERMISSION_GROUPS: {
       { key: 'can_reset_operator_pin',  label: 'Reset operator PIN (notifies Management)' },
       { key: 'can_view_live_history',   label: 'View live capture session history' },
       { key: 'can_approve_session',     label: 'Approve and lock a session' },
+      { key: 'can_edit_session',        label: 'Edit production session records' },
+      { key: 'can_delete_session',      label: 'Delete production session records' },
+      { key: 'can_edit_bag_tag',        label: 'Edit bag tag records' },
+      { key: 'can_delete_bag_tag',      label: 'Delete bag tag records' },
     ],
   },
   {
