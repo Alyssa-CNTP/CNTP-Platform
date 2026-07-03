@@ -5,6 +5,34 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Explicit confirm checks + QC serial bag tag lookup)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- **Explicit confirm checks**: confirm-type checks (machine startup/shutdown inspections) are no longer assumed OK by default. Operator must explicitly tap **OK** or **Flag** for each one. Sign-off is blocked until all checks have been acted on. Description text updated to reflect this requirement.
+- **QC serial bag tag lookup**: serial number field in the sieving QC "New Run" modal now triggers a `production.bag_tags` lookup on blur or Enter (barcode scanner compatible). Pre-fills date (from `created_at`), lot number, variant, and grade (destination A→Export, B→Export Blend, C→Domestic). Green/red status indicator shown under the field.
+
+---
+
+## 2026-07-02 — Alyssa (Refining capture: predefined outputs, no grade, system pick fixes, overview serials)
+
+**Files changed:**
+- `components/production/capture/RefiningCapture.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+
+**Changes:**
+- **Predefined output types**: bagging tab now shows fixed output slots per section rather than the generic OutputPicker. Refining 1 outputs: A = Indent Dust, B = White Dust, C = Powder Dust. Refining 2 outputs: A = Cut Heavy Stick Fine, B = Cut Heavy Stick Coarse, C = Powder Dust, D = White Dust. Operators enter weight only; the system generates the serial and looks up the Acumatica code automatically.
+- **No grade for refining**: grade removed from output bag creation. Refining records variant only. `gradeLetter` prop removed from `RefiningCapture`.
+- **System pick variant + bag date fix**: when picking from system, the variant stored in `bag_tags` is now carried into the input row, and `created_at` is converted to DD-MM-YY and used as the bag date.
+- **Overview serials**: debagging section now groups each input bag by its serial (one row per bag). Bagging output section shows the bag serial in the LOT/BATCH column.
+- **`outputA` slot added**: `RefiningData` now has `outputA | B | C | D` to support Refining 2's four output streams.
+
+---
+
 ## 2026-07-02 — Alyssa (Checks: indent screen angle allows negative values)
 
 **Files changed:**
