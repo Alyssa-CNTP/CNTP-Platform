@@ -51,7 +51,6 @@ const NAV: NavItem[] = [
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
 
   // ── Quality ──
-  { href: '/quality/lab-assistants',    label: 'Lab Assistant PINs',         icon: KeyRound,        group: 'Quality', departments: ['Quality'], permission: 'can_signoff_day' },
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
   { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
   { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
