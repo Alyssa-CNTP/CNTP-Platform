@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Refining capture: DB save correctness — column fixes, mass balance, Coarse Leaf batch, auto date)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/RefiningCapture.tsx`, `lib/production/live-types.ts`, `supabase/migrations/20260704_005_prod_sessions_section_direct.sql`
+
+**Changes:**
+- Removed non-existent `grade` column from refining `prod_debagging` inserts (schema has no grade on debag rows) — was causing every input-bag save to fail silently.
+- Removed non-existent `logged_at` column from both `prod_debagging` and `prod_bagging` inserts — same issue.
+- Fixed `prod_mass_balance` for refining: was writing all output to `total_output_b_kg` with C and D hardcoded to 0. Now correctly splits refining totals across B (first output stream), C (second), D (third).
+- `ensureSession()` now does a SELECT before INSERT — recovers an existing session if a prior page-load insert failed silently, instead of repeatedly failing with 400.
+- Bag date field in refining input rows now auto-fills with today's date (DD-MM-YY).
+- Added 'Coarse Leaf' to refining 2 input types. When selected, a batch number field appears and is required before the row can be locked.
+- New migration `20260704_005` directly widens `prod_sessions.section_id` CHECK (adds refining1/refining2) and `prod_bagging.output_group` CHECK (adds 'A') using `NOT VALID`.
+
+---
+
 ## 2026-07-04 — Alyssa (Refining capture: fix "Not found in system" false-positive + 400 on session create)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`, `supabase/migrations/20260704_004_refining_section_constraints.sql`
