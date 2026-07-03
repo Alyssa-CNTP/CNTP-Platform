@@ -256,6 +256,42 @@ const outlineBtn: React.CSSProperties = {
   border: `1px solid ${C.brandBorder}`,
 }
 
+// ─── Alara logo mark (user's botanical SVG logo) ─────────────────────────────
+
+function AlaraLogoMark({ size = 30, stemColor = '#8B3020', ringColor = '#C9A840' }: {
+  size?: number; stemColor?: string; ringColor?: string
+}) {
+  const c = stemColor
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="Alara">
+      <circle cx="50" cy="46" r="38" stroke={ringColor} strokeWidth="1.4"/>
+      {/* Main stems */}
+      <path d="M50 80C48 70 43 58 37 46C33 38 30 30 28 20" stroke={c} strokeWidth="1.7" strokeLinecap="round"/>
+      <path d="M50 78C54 70 59 60 65 50C69 42 71 34 72 24" stroke={c} strokeWidth="1.7" strokeLinecap="round"/>
+      <path d="M51 80C57 74 63 66 68 58C70 54 72 50 72 46" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+      <path d="M47 76C42 74 37 70 32 64C29 60 27 56 26 52" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+      {/* Sub-branches left stem */}
+      <path d="M43 58C40 54 37 50 35 44" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+      <path d="M40 50C37 46 35 42 33 36" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+      <path d="M36 42C33 38 31 34 30 28" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+      {/* Sub-branches right stem */}
+      <path d="M57 62C60 58 63 54 64 50" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+      <path d="M62 54C65 50 67 46 68 42" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+      <path d="M66 46C68 42 70 38 71 34" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+      {/* Needle clusters — left stem */}
+      <path d="M46 67L42 65 M46 67L48 63 M43 60L39 58 M43 60L45 56 M40 53L36 51 M40 53L42 49 M37 46L33 44 M37 46L39 42 M34 39L30 37 M34 39L36 35 M31 32L27 30 M31 32L33 28 M29 25L25 23 M29 25L31 21" stroke={c} strokeWidth="0.9" strokeLinecap="round"/>
+      {/* Needle clusters — right stem */}
+      <path d="M54 70L56 66 M54 70L51 67 M58 62L60 58 M58 62L55 59 M63 54L65 50 M63 54L60 51 M66 47L68 43 M66 47L63 44 M69 40L71 36 M69 40L66 37 M70 34L72 30 M70 34L67 31 M71 28L73 24 M71 28L68 25" stroke={c} strokeWidth="0.9" strokeLinecap="round"/>
+      {/* Needle clusters — far-right sub-branch */}
+      <path d="M55 76L57 72 M55 76L52 73 M60 68L62 64 M60 68L57 65 M65 60L67 56 M65 60L62 57 M69 53L71 49 M69 53L66 50" stroke={c} strokeWidth="0.9" strokeLinecap="round"/>
+      {/* Needle clusters — lower-left branch */}
+      <path d="M43 73L40 70 M43 73L44 69 M38 69L35 66 M38 69L39 65 M33 65L30 62 M33 65L34 61 M28 60L25 57 M28 60L29 56" stroke={c} strokeWidth="0.9" strokeLinecap="round"/>
+      {/* Base convergence */}
+      <path d="M50 80L47 77 M50 80L53 77 M50 80L45 79 M50 80L55 79" stroke={c} strokeWidth="1" strokeLinecap="round"/>
+    </svg>
+  )
+}
+
 // ─── Hero card ────────────────────────────────────────────────────────────────
 
 function HeroCard({ signalCount, lastUpdated }: { signalCount: number; lastUpdated: Date | null }) {
@@ -302,8 +338,8 @@ function HeroCard({ signalCount, lastUpdated }: { signalCount: number; lastUpdat
           )}
         </div>
       </div>
-      <div style={{ width: 110, height: 110, borderRadius: '50%', background: 'radial-gradient(circle, rgba(139,196,122,0.20) 0%, rgba(45,107,30,0.35) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <Leaf size={44} style={{ color: 'rgba(139,196,122,0.5)' }} />
+      <div style={{ flexShrink: 0, opacity: 0.55 }}>
+        <AlaraLogoMark size={100} stemColor="rgba(255,240,220,0.9)" ringColor="rgba(201,168,64,0.7)" />
       </div>
     </div>
   )
@@ -1421,13 +1457,13 @@ function AboutSection({ onNavigate }: { onNavigate: (s: Section) => void }) {
     <div style={{ padding: '32px 32px', maxWidth: 860 }}>
       {/* Identity */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 32, padding: '24px 28px', background: C.surface, borderRadius: 16, boxShadow: C.shadowMenu }}>
-        <div style={{ width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, #1A3A0E, #3D7A20)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Leaf size={26} style={{ color: '#8BC47A' }} />
+        <div style={{ flexShrink: 0 }}>
+          <AlaraLogoMark size={72} />
         </div>
         <div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
-            <span style={{ fontSize: 28, fontWeight: 800, color: C.text, letterSpacing: '-0.03em' }}>Alara</span>
-            <span style={{ fontSize: 12, color: C.faint, letterSpacing: '0.04em' }}>Rooibos Intelligence Engine</span>
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ fontSize: 26, fontWeight: 700, fontFamily: 'Georgia,"Times New Roman",serif', color: '#3D1A14', letterSpacing: '0.12em', textTransform: 'uppercase' as const, display: 'block', lineHeight: 1.2 }}>Alara</span>
+            <span style={{ fontSize: 11, color: '#8B6055', letterSpacing: '0.12em', textTransform: 'uppercase' as const }}>Sales Intelligence Engine</span>
           </div>
           <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.7, margin: '0 0 16px', maxWidth: 540 }}>
             A living market intelligence system built for CNTP — turning raw signals from global trade, social platforms, and news into ranked, actionable intelligence for the rooibos export team.
@@ -1529,12 +1565,9 @@ export default function ResearchPage() {
 
         {/* Top bar */}
         <div style={{ padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg, #1A3A0E, #3D7A20)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Leaf size={15} style={{ color: '#8BC47A' }} />
-            </div>
-            <span style={{ fontSize: 16, fontWeight: 800, color: C.brand, letterSpacing: '-0.02em' }}>Alara</span>
-            <span style={{ fontSize: 12, color: C.faint }}>Rooibos Intelligence Engine</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <AlaraLogoMark size={32} />
+            <span style={{ fontSize: 15, fontWeight: 700, fontFamily: 'Georgia,"Times New Roman",serif', color: '#3D1A14', letterSpacing: '0.14em', textTransform: 'uppercase' as const }}>Alara</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
