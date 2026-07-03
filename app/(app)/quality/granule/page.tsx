@@ -419,7 +419,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
     sample_date:  now.toISOString().split('T')[0],
     qc_name:      now.getHours() >= 16 ? '' : (run.qc_name || ''),
     dryer_number: lastSample?.dryer_number || '',
-    bulk_bag_serial: '', bag_number: '',
+    bulk_bag_serial: '',
     sieving_done: true, moisture: '', bulk_density: '', dryer_temp: '',
     compares_to_ref: true, final_weight_ok: true,
     sieve_g: null as any, sieve_pct: null as any,
@@ -433,7 +433,6 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
   const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   const isAfterShift = (() => { const [hh] = (form.sample_time || '').split(':').map(Number); return !isNaN(hh) && hh >= 16 })()
-  const serialPrefix = buildSerialPrefix(form.sample_date)
 
   // ── Variation / outlier detection vs the other samples in this run ──
   // Flags moisture/BD/temp only when this run already has real spread AND
@@ -455,11 +454,6 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
   const set = (k: string, v: any) => {
     setForm(f => {
       const next: any = { ...f, [k]: v }
-      if (k === 'bag_number' || k === 'sample_date') {
-        const prefix = buildSerialPrefix(k === 'sample_date' ? v : f.sample_date)
-        const bag    = k === 'bag_number' ? v : f.bag_number
-        next.bulk_bag_serial = bag !== '' ? `${prefix}${bag}` : ''
-      }
       if (k === 'sieving_done' && !v) { next.sieve_g = null; next.sieve_pct = null }
       return next
     })
@@ -509,7 +503,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
     if (!form.sample_time.trim()) errs.push('Time')
     if (isAfterShift && !form.qc_name.trim()) errs.push('QC Name (required after 16:00 shift change)')
     if (!form.dryer_number.trim()) errs.push('Dryer Number')
-    if (!form.bag_number.trim()) errs.push('Bag Number')
+    if (!form.bulk_bag_serial.trim()) errs.push('Bulk Bag Serial')
     if (form.moisture === '' || form.moisture == null) errs.push('Moisture')
     if (form.bulk_density === '' || form.bulk_density == null) errs.push('Bulk Density')
     if (form.dryer_temp === '' || form.dryer_temp == null) errs.push('Dryer Temperature')
@@ -524,9 +518,9 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
       if (toMins(form.sample_time) <= toMins(lastSample.sample_time))
         warns.push(`Time ${form.sample_time} is not after previous sample time ${lastSample.sample_time}`)
     }
-    if (lastSample && form.bag_number !== '') {
+    if (lastSample && form.bulk_bag_serial !== '') {
       const prevBag = parseInt(extractBagNum(lastSample.bulk_bag_serial), 10)
-      const thisBag = parseInt(form.bag_number, 10)
+      const thisBag = parseInt(extractBagNum(form.bulk_bag_serial), 10)
       if (!isNaN(prevBag) && !isNaN(thisBag) && thisBag < prevBag)
         warns.push(`Bag number ${thisBag} is lower than previous bag ${prevBag}`)
     }
@@ -629,21 +623,13 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
             ))}
           </div>
 
-          {/* Bag serial */}
-          <div className="grid grid-cols-2 gap-3 items-end">
-            <div>
-              <label className={`${lbl} ${errors.some(e => e.startsWith('Bag Number')) ? 'text-err' : ''}`}>Bag Number *</label>
-              <input type="number" min="1" step="1" value={form.bag_number}
-                placeholder={lastSample ? `prev: ${extractBagNum(lastSample.bulk_bag_serial) || '—'}` : 'e.g. 7'}
-                onChange={e => set('bag_number', e.target.value)}
-                className={`${inp} w-full ${errors.some(e => e.startsWith('Bag Number')) ? 'border-err/40' : ''}`} />
-            </div>
-            <div>
-              <label className={`${lbl} text-text-faint`}>Bulk Bag Serial (auto-filled)</label>
-              <div className="px-3 py-1.5 bg-surface border border-surface-rule rounded-lg font-mono text-[12px]" style={{ color: form.bulk_bag_serial ? '#111827' : '#9ca3af' }}>
-                {form.bulk_bag_serial || `${serialPrefix || 'DD.MM.'}…`}
-              </div>
-            </div>
+          {/* Bag serial — typed directly, not auto-generated */}
+          <div>
+            <label className={`${lbl} ${errors.some(e => e.startsWith('Bulk Bag Serial')) ? 'text-err' : ''}`}>Bulk Bag Serial *</label>
+            <input type="text" value={form.bulk_bag_serial}
+              placeholder={lastSample ? `prev: ${lastSample.bulk_bag_serial || '—'}` : 'e.g. 17.07.7'}
+              onChange={e => set('bulk_bag_serial', e.target.value)}
+              className={`${inp} w-full ${errors.some(e => e.startsWith('Bulk Bag Serial')) ? 'border-err/40' : ''}`} />
           </div>
 
           {/* Bag Type & Weight */}
@@ -1405,6 +1391,11 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
           {run.final_reason && (
             <div className="text-[10px] text-warn bg-warn/8 border border-warn/20 rounded-lg px-2 py-1 mt-1 inline-block">
               💬 <span className="font-semibold">Lab Manager comment:</span> {run.final_reason}
+            </div>
+          )}
+          {run.lm_notes && (
+            <div className="text-[10px] text-info bg-info/8 border border-info/20 rounded-lg px-2 py-1 mt-1 inline-block">
+              📝 <span className="font-semibold">Lab Manager notes:</span> {run.lm_notes}
             </div>
           )}
         </div>

@@ -1390,6 +1390,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             💬 <span className="font-semibold">Lab Manager comment:</span> {activeBatch.final_reason}
                           </div>
                         )}
+                        {activeBatch.lm_notes && (
+                          <div className="w-full text-[11px] text-info bg-info/8 border border-info/20 rounded-lg px-3 py-1.5 mt-1">
+                            📝 <span className="font-semibold">Lab Manager notes:</span> {activeBatch.lm_notes}
+                          </div>
+                        )}
                       </div>
                     ) : activeBatch.batch_status === 'awaiting_approval' ? (
                       /* ── Allocated to Lab Manager, awaiting pass/fail ── */
@@ -1410,6 +1415,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                           </>
                         ) : (
                           <button onClick={recallFromLabManager} className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">↩ Recall to QC</button>
+                        )}
+                        {activeBatch.lm_notes && (
+                          <div className="w-full text-[11px] text-info bg-info/8 border border-info/20 rounded-lg px-3 py-1.5 mt-1">
+                            📝 <span className="font-semibold">Lab Manager notes:</span> {activeBatch.lm_notes}
+                          </div>
                         )}
                       </div>
                     ) : (

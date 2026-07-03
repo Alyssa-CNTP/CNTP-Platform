@@ -5,6 +5,67 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Granule: typed bag serial + Lab Manager per-bag OOS listing)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/lab-manager/page.tsx`
+
+- **Granule Add Sample — Bulk Bag Serial is now typed directly**, replacing the old "Bag Number" input that auto-generated the serial as `DD.MM.<bagnumber>`. The Edit Sample modal already took a typed serial; Add Sample now matches it.
+- **Lab Manager Daily Overview — out-of-spec listing restructured per bag/serial.** Previously all OOS entries for a batch were concatenated into one run-on line (unreadable once a run had many samples, e.g. Granule Line with 37 runs). Now each out-of-spec bag/serial gets its own line with the serial clearly tagged (🏷), for both Pasteuriser and Granule Line sections.
+
+---
+
+## 2026-07-04 — Gustav (Lab Manager: station-grouped Pending Approvals + date-range Daily Overview)
+
+**Files changed:** `app/(app)/quality/lab-manager/page.tsx`
+
+- **Pending Approvals grouped by station:** now shows Pasteuriser / Granule Line / Sieving as separate sections (matching the Daily Overview layout), so nothing is missed regardless of which station or production date a run belongs to. Pending Approvals already had no date filter — this makes that explicit and visible. Sieving shows an informational note since it self-grades Pass/Fail at capture and doesn't route through Lab Manager approval.
+- **Daily Overview & Sign-off is now a date range:** replaced the single "Production day" picker with From/To date inputs (plus Today / This week shortcuts). Each station's batches now show their production date, and sign-off tracks per-date within the range — the sign-off button signs off every unsigned day in range in one action, and the header shows "X/Y days signed off" until complete.
+
+---
+
+## 2026-07-04 — Gustav (Lab Manager: standing per-batch notes + weekly Approvals History tab)
+
+**Files changed:** `app/(app)/quality/lab-manager/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260704_002_granule_runs_lm_notes.sql`
+
+- **Standing Lab Manager notes:** Added an always-visible comment box (`LmNotesBox`) on every Pending Approvals card, saved on blur independently of the Pass/Fail/Concession decision — no click-to-open modal. Notes persist to `qms.quality_records.data_json.lm_notes` (pasteuriser) or the new `qms.granule_runs.lm_notes` column (granule), and remain visible after the batch is closed.
+- **New `lm_notes` column:** Added to `qms.granule_runs` via migration (additive, nullable).
+- **New "🗓 Approvals History" tab:** Monday-based weekly navigator (◀ / ▶ / "This week"), full-text search across all history regardless of week, and status filter chips (Outstanding / Approved / Concession / Fail) with live counts. Each card shows the decision comment and LM notes.
+- **Surfaced `lm_notes` for QC:** Pasteuriser and granule pages now show the Lab Manager's standing note (when present) both while a batch is still pending and after it's finalized.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: Lead fix, South Africa tab, SignalCard title fallback, prod deploy)
+
+**Files changed:** `app/(app)/research/page.tsx`, `components/intelligence/SignalCard.tsx`
+
+- **Lead button fix:** `promote()` and `promoteToLead()` now build the account name using a fallback chain (`title → summary_en → keyword_group → source_domain → "Signal"`) instead of calling `signal.title.slice(0, 120)` directly. Signals with empty title fields were sending `name: ""` to `/api/accounts`, which returned 400, causing the "Failed" state.
+- **South Africa tab added to Alara:** New "South Africa" section in the Alara tab bar. Filters signals to `region = 'ZA'`, with a classification sidebar (Opportunity / Threat / Competitor / Regulation / Neutral), stat chips, and the same card + drawer UX as the Signal Feed. The separate `/intelligence/south-africa` page remains but is now superseded.
+- **SignalCard title fallback:** Shared `SignalCard` component now falls back through `intel.title → keyword_group · classification → source_domain` when both `title` and `summary_en` are empty — fixes blank cards in the South Africa section.
+- **Promoted to production:** All Alara changes (redesign, botanical logo, header cleanup) plus this fix were promoted to `main` via PR #301.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: custom botanical logo across header, hero, About)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Custom SVG logo mark:** Replaced Lucide Leaf icon with a hand-traced rooibos botanical SVG (circle ring + Aspalathus linearis stems and needle clusters) matching Alyssa's reference design.
+- **Header:** Logo mark (32px) + "ALARA" in Georgia serif, spaced caps, deep burgundy `#3D1A14` — matches the logo's typographic treatment.
+- **Hero card:** Botanical mark rendered at 100px in translucent cream/gold so it reads on the dark green hero background.
+- **About section:** 72px logo mark alongside "ALARA" in large spaced serif caps + "Sales Intelligence Engine" subtitle.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: clean white/green design system; fix leads bug)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Design system overhaul:** Replaced parchment background + dark forest green header with app design tokens — white `var(--color-surface-card)` cards, `var(--shadow-card)`, transparent body, Inter font. Header is now glass/white matching the rest of the platform.
+- **Single green accent:** Removed parchment + terracotta + dark header multi-colour scheme. Only forest green (`#1A3A0E`) and sage (`#5A8A2A`) used throughout.
+- **Leads bug fix:** `promote()` and `promoteToLead()` now check `r.ok` before setting success state. Also removed pipeline status bar ("n8n · News pipeline…") and trimmed header to logo + name only (no repeated subtitle).
+
+---
+
 ## 2026-07-04 — Alyssa (Quality lab assistant PIN login + manager PIN management)
 
 **Files changed:**
@@ -37,6 +98,20 @@ Format: date · developer · files changed · description of code changes.
 **Changes:**
 - **Explicit confirm checks**: confirm-type checks (machine startup/shutdown inspections) are no longer assumed OK by default. Operator must explicitly tap **OK** or **Flag** for each one. Sign-off is blocked until all checks have been acted on. Description text updated to reflect this requirement.
 - **QC serial bag tag lookup**: serial number field in the sieving QC "New Run" modal now triggers a `production.bag_tags` lookup on blur or Enter (barcode scanner compatible). Pre-fills date (from `created_at`), lot number, variant, and grade (destination A→Export, B→Export Blend, C→Domestic). Green/red status indicator shown under the field.
+
+---
+
+## 2026-07-03 — Alyssa (QC sieving: link result to bag audit trail)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/tags/page.tsx`
+- `lib/supabase/database.types.ts`
+
+**Changes:**
+- **QC result write-back**: after saving a sieving QC run with a serial number, two best-effort writes happen: (1) `production.bag_tags` is updated with `qc_initials` and `qc_signed_at`; (2) a `qc_check` scan event is inserted with pass/fail, QC controller name, product/grade/variant, and any spec violations in the notes field.
+- **Bag tracking timeline**: scan event `notes` field now rendered in the event timeline on `/tags` so the QC result is visible when tracing a bag's history.
+- **`ScanAction` type**: added `qc_check` to the TypeScript union type.
 
 ---
 
