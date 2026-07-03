@@ -379,8 +379,8 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.serial || null, lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
-            grade: prod.grade || null, kg_nett: n(r.weight),
-            delivery_date: r.deliveryDate || null, is_spillage: false, logged_at: r.logged_at || null,
+            kg_nett: n(r.weight),
+            delivery_date: r.deliveryDate || null, is_spillage: false,
           })
         })
       } else {
@@ -400,7 +400,7 @@ function CaptureScreen() {
             product_type: '500kg Farm Bag', variant: prod.variant, grade: prod.grade || null,
             kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
             delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
-            is_spillage: false, logged_at: r.logged_at || null,
+            is_spillage: false,
           })
         })
       }
@@ -421,8 +421,8 @@ function CaptureScreen() {
               session_id: sid, bag_no: bagNo++, output_group: grp,
               bag_serial_no: b.serial, lot_number: prod.lot || null,
               product_type: b.productType, acumatica_id: b.code || null,
-              variant: prod.variant, grade: null,
-              kg: n(b.weight), logged_at: b.logged_at || null,
+              variant: prod.variant,
+              kg: n(b.weight),
             })
           })
         })
@@ -434,7 +434,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: 'B',
             bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
             acumatica_id: b.code || null, variant: prod.variant, grade: prod.grade || null,
-            kg: n(b.weight), logged_at: b.logged_at || null,
+            kg: n(b.weight),
           })
         })
       }
@@ -461,7 +461,7 @@ function CaptureScreen() {
   // Used by the explicit Save, the 30s autosave, and submit, so prod_debagging /
   // prod_bagging are always current and nothing is lost on the inactivity sign-out.
   async function persist(prods: Production[], sid: string) {
-    const { totalIn, totalOut } = sessionTotals(prods)
+    const { totalIn } = sessionTotals(prods)
     const db = getDb()
 
     await db.schema('production').from('prod_sessions').update({
@@ -476,9 +476,19 @@ function CaptureScreen() {
     await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
     if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
 
+    let mbB = 0, mbC = 0, mbD = 0
+    if (sectionId.startsWith('refining')) {
+      prods.forEach(p => {
+        const t = refiningTotals(p.data as RefiningData)
+        mbB += t.totalB; mbC += t.totalC; mbD += t.totalD
+      })
+    } else {
+      prods.forEach(p => { mbB += sievingTotals(p.data as SievingData).totalOut })
+    }
     await db.schema('production').from('prod_mass_balance').upsert({
-      session_id: sid, total_input_kg: totalIn, total_output_b_kg: totalOut,
-      total_output_c_kg: 0, total_output_d_kg: 0, calculated_at: new Date().toISOString(),
+      session_id: sid, total_input_kg: totalIn,
+      total_output_b_kg: mbB, total_output_c_kg: mbC, total_output_d_kg: mbD,
+      calculated_at: new Date().toISOString(),
     } as any, { onConflict: 'session_id' })
 
     const serials = bag.map(b => b.bag_serial_no).filter(Boolean)
