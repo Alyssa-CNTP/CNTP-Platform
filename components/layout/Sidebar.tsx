@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
-  FileSpreadsheet, KeyRound,
+  FileSpreadsheet,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
