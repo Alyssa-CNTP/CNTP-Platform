@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Production capture: floor operators only see their own rostered sections)
+
+**Files changed:** `app/(app)/production/capture/page.tsx`
+
+**Changes:**
+- Floor operators now only see sections where their operator ID is listed in `shift_assignment.operator_ids` for the current shift. Previously all rostered sections were shown to every logged-in user regardless of who they were assigned to.
+- Supervisors and admins still see all rostered sections (for overview and sign-off).
+- If a logged-in user has no matching operator record (e.g. a supervisor account with no operator row), falls back to showing all sections so access is never blocked unexpectedly.
+- Added `user_id` to the operators query so the logged-in auth user can be matched to their operator record.
+
+---
+
 ## 2026-07-04 — Gustav (Granule: typed bag serial + Lab Manager per-bag OOS listing)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/lab-manager/page.tsx`
