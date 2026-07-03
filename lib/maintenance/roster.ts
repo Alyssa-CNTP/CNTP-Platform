@@ -16,7 +16,8 @@ export interface OnDutyTech {
 }
 
 // Maintenance-category role keys in the Operations roster (see roster-config.ts).
-const MAINT_ROLE_KEYS = ['maintenance_tech', 'maintenance_asst', 'maintenance_manager']
+// Only technician/assistant roles — manager is never auto-assigned a breakdown.
+const MAINT_ROLE_KEYS = ['maintenance_tech', 'maintenance_asst']
 
 // Current shift + SAST calendar date for `at`. SAST is UTC+2 (no DST).
 function shiftAndDate(at: Date): { shift: 'day' | 'night'; today: string } {

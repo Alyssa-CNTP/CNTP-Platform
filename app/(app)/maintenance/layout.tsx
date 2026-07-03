@@ -7,6 +7,7 @@
 
 import { createContext, useContext } from 'react'
 import { useMaintenanceData, type MaintenanceData } from '@/lib/maintenance/useMaintenanceData'
+import { MaintenanceAlerts } from '@/components/maintenance/MaintenanceAlerts'
 
 const MaintenanceDataContext = createContext<MaintenanceData | null>(null)
 
@@ -22,6 +23,9 @@ export default function MaintenanceLayout({ children }: { children: React.ReactN
   return (
     <MaintenanceDataContext.Provider value={value}>
       {children}
+
+      {/* Live breakdown / allocation / acceptance pop-ups (polls while app is open) */}
+      <MaintenanceAlerts actions={value.actions} actor={value.actor} reload={value.reload} />
 
       {/* Shared popup modal — token-styled */}
       {popup && (

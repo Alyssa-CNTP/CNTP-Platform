@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect } from 'react'
-import { X, ExternalLink, Calendar, Globe, Tag, Languages, Target } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { X, ExternalLink, Calendar, Globe, Tag, Languages, Target, UserPlus, CheckCircle } from 'lucide-react'
 import type { Signal } from './types'
 import {
   classificationStyle,
@@ -17,6 +17,40 @@ interface SignalDrawerProps {
 }
 
 export default function SignalDrawer({ signal, onClose }: SignalDrawerProps) {
+  const [promoting, setPromoting] = useState(false)
+  const [promoted,  setPromoted]  = useState(false)
+
+  async function promoteToLead() {
+    if (!signal || promoting || promoted) return
+    setPromoting(true)
+    try {
+      const name = signal.source_domain
+        ?? signal.title.split(' ').slice(0, 4).join(' ')
+      const res = await fetch('/api/accounts', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          country:          signal.region ?? undefined,
+          region:           signal.region ?? undefined,
+          account_type:     'prospect',
+          stage:            'lead',
+          sales_angle:      signal.sales_angle ?? undefined,
+          signal_ids:       [signal.id],
+          source_signal_id: signal.id,
+          signal_title:     signal.title,
+          tags:             ['signal-promoted'],
+        }),
+      })
+      if (res.ok) setPromoted(true)
+    } finally {
+      setPromoting(false)
+    }
+  }
+
+  // reset promoted state when a different signal opens
+  useEffect(() => { setPromoted(false) }, [signal?.id])
+
   // Lock body scroll while open
   useEffect(() => {
     if (signal) document.body.style.overflow = 'hidden'
@@ -194,18 +228,32 @@ export default function SignalDrawer({ signal, onClose }: SignalDrawerProps) {
             </section>
           )}
 
-          {/* External link button */}
-          {signal.source_url && (
-            <a
-              href={signal.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors"
+          {/* Actions */}
+          <div className="mt-6 flex flex-wrap gap-2">
+            {signal.source_url && (
+              <a
+                href={signal.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand-hover transition-colors"
+              >
+                <ExternalLink size={14} />
+                Open source
+              </a>
+            )}
+            <button
+              onClick={promoteToLead}
+              disabled={promoting || promoted}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-surface-rule text-[13px] font-medium transition-colors disabled:opacity-60"
+              style={promoted
+                ? { background: 'var(--color-ok-bg)', color: 'var(--color-ok)', borderColor: 'rgba(21,128,61,0.22)' }
+                : { background: 'var(--color-surface)', color: 'var(--color-text-muted)' }}
             >
-              <ExternalLink size={14} />
-              Open source
-            </a>
-          )}
+              {promoted
+                ? <><CheckCircle size={14} /> Added to pipeline</>
+                : <><UserPlus size={14} /> {promoting ? 'Adding…' : 'Promote to lead'}</>}
+            </button>
+          </div>
         </div>
       </aside>
     </div>

@@ -27,22 +27,32 @@ export async function POST(req: NextRequest) {
 
     const db = await getSessionClient()
     const isBd = workflow === 'breakdown'
-    // Route a breakdown to the on-duty technician who is NOT already busy. Falls
-    // back to the most-recent shift (resolveOnDutyTechnician) when no one is free
-    // or only one tech is on duty.
+    // Route a breakdown to whichever on-duty technician has the fewest breakdowns
+    // in hand, so a second breakdown goes to the OTHER technician on shift once the
+    // first is holding one. resolveOnDutyTechnician is the single-tech fallback.
     let duty = isBd ? await resolveOnDutyTechnician(db) : null
     if (isBd) {
-      // On-duty techs come from the Operations roster (single source); pick the
-      // one carrying the least active load.
+      // On-duty crew comes from the Operations shift roster (single source of truth).
       const onDuty = await listOnDutyTechnicians(db)
-      if (onDuty.length) {
+      if (onDuty.length === 1) {
+        duty = onDuty[0]
+      } else if (onDuty.length > 1) {
+        // Count each on-duty tech's breakdowns in hand. A breakdown is "in hand"
+        // from the moment it is assigned (whether or not accepted yet) through
+        // in-progress — so once tech A holds one, tech B (zero in hand) wins the
+        // next. A paused in-progress job doesn't count (they were pulled off it).
+        // Tie-break: fewest total open cards, then name, for deterministic routing.
         const { data: openCards } = await db.schema('maintenance' as any).from('job_cards')
-          .select('assigned_to, status, paused').in('status', ['assigned', 'in_progress'])
-        const load = (name: string) => (openCards ?? []).filter((c: any) => c.assigned_to === name && !(c.status === 'in_progress' && c.paused)).length
+          .select('assigned_to, workflow, status, paused')
+          .in('status', ['assigned', 'in_progress'])
+        const held = (name: string, bdOnly: boolean) => (openCards ?? []).filter((c: any) =>
+          c.assigned_to === name &&
+          !(c.status === 'in_progress' && c.paused) &&
+          (!bdOnly || c.workflow === 'breakdown')).length
         const ranked = onDuty
-          .map(r => ({ userId: r.userId, name: r.name, load: load(r.name) }))
-          .sort((a, b) => a.load - b.load)
-        if (ranked[0]) duty = { userId: ranked[0].userId, name: ranked[0].name }
+          .map(r => ({ userId: r.userId, name: r.name, bd: held(r.name, true), all: held(r.name, false) }))
+          .sort((a, b) => a.bd - b.bd || a.all - b.all || a.name.localeCompare(b.name))
+        duty = { userId: ranked[0].userId, name: ranked[0].name }
       }
     }
 

@@ -53,6 +53,7 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/operations',departments: ['Management'] },
   { prefix: '/production/dashboard', departments: ['Production','Management'] },
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
+  { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 

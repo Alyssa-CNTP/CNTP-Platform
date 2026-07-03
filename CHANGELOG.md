@@ -5,6 +5,385 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Alara: Lead fix, South Africa tab, SignalCard title fallback, prod deploy)
+
+**Files changed:** `app/(app)/research/page.tsx`, `components/intelligence/SignalCard.tsx`
+
+- **Lead button fix:** `promote()` and `promoteToLead()` now build the account name using a fallback chain (`title → summary_en → keyword_group → source_domain → "Signal"`) instead of calling `signal.title.slice(0, 120)` directly. Signals with empty title fields were sending `name: ""` to `/api/accounts`, which returned 400, causing the "Failed" state.
+- **South Africa tab added to Alara:** New "South Africa" section in the Alara tab bar. Filters signals to `region = 'ZA'`, with a classification sidebar (Opportunity / Threat / Competitor / Regulation / Neutral), stat chips, and the same card + drawer UX as the Signal Feed. The separate `/intelligence/south-africa` page remains but is now superseded.
+- **SignalCard title fallback:** Shared `SignalCard` component now falls back through `intel.title → keyword_group · classification → source_domain` when both `title` and `summary_en` are empty — fixes blank cards in the South Africa section.
+- **Promoted to production:** All Alara changes (redesign, botanical logo, header cleanup) plus this fix were promoted to `main` via PR #301.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: custom botanical logo across header, hero, About)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Custom SVG logo mark:** Replaced Lucide Leaf icon with a hand-traced rooibos botanical SVG (circle ring + Aspalathus linearis stems and needle clusters) matching Alyssa's reference design.
+- **Header:** Logo mark (32px) + "ALARA" in Georgia serif, spaced caps, deep burgundy `#3D1A14` — matches the logo's typographic treatment.
+- **Hero card:** Botanical mark rendered at 100px in translucent cream/gold so it reads on the dark green hero background.
+- **About section:** 72px logo mark alongside "ALARA" in large spaced serif caps + "Sales Intelligence Engine" subtitle.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: clean white/green design system; fix leads bug)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Design system overhaul:** Replaced parchment background + dark forest green header with app design tokens — white `var(--color-surface-card)` cards, `var(--shadow-card)`, transparent body, Inter font. Header is now glass/white matching the rest of the platform.
+- **Single green accent:** Removed parchment + terracotta + dark header multi-colour scheme. Only forest green (`#1A3A0E`) and sage (`#5A8A2A`) used throughout.
+- **Leads bug fix:** `promote()` and `promoteToLead()` now check `r.ok` before setting success state. Also removed pipeline status bar ("n8n · News pipeline…") and trimmed header to logo + name only (no repeated subtitle).
+
+---
+
+## 2026-07-04 — Alyssa (Quality lab assistant PIN login + manager PIN management)
+
+**Files changed:**
+- `supabase/migrations/20260704_002_quality_lab_auth.sql` *(new)*
+- `lib/quality/lab-auth.ts` *(new)*
+- `app/quality-login/page.tsx` *(new)*
+- `app/api/quality/lab-assistants/route.ts` *(new)*
+- `app/api/quality/lab-assistants/manage/route.ts` *(new)*
+- `app/(app)/quality/lab-assistants/page.tsx` *(new)*
+- `app/login/page.tsx`
+- `components/layout/Sidebar.tsx`
+- `lib/auth/permissions.ts`
+
+**Changes:**
+- **Quality lab assistant PIN login**: lab assistants now sign in at the tablet via `/quality-login` — select name from list, enter 4-digit PIN, redirects to `/quality/lab-results`. Mirrors the maintenance technician and floor operator pattern.
+- **DB table `qms.lab_auth`**: stores `user_id`, `auth_email`, `full_name`, `pin` (plaintext for manager visibility), `active`. RLS restricts access to quality managers, lab managers, and IT.
+- **Auth helpers** (`lib/quality/lab-auth.ts`): `deriveLabPassword` (`lab_{pin}_{email}` max 64 chars), `newLabEmail` (`lab-{rand}@lab.rooibostea.co.za`), `LAB_ASSISTANT_PERMISSIONS` (save records, create/add runs/samples/tastings/sieving).
+- **Admin PIN management page** (`/quality/lab-assistants`): quality managers and lab managers can add new assistants, see their PIN (eye reveal/hide toggle), change PIN, and toggle active status. Accessible from the Quality sidebar group.
+- **Login page** (`/login`): added Quality Lab card alongside Maintenance Tech and Floor Operator.
+- **Permissions registry**: added `quality_lab_assistant` role to `DEPARTMENT_ROLES` (Quality group) and `ROLE_PERMISSION_DEFAULTS` with capture-only permissions.
+
+---
+
+## 2026-07-03 — Alyssa (Explicit confirm checks + QC serial bag tag lookup)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- **Explicit confirm checks**: confirm-type checks (machine startup/shutdown inspections) are no longer assumed OK by default. Operator must explicitly tap **OK** or **Flag** for each one. Sign-off is blocked until all checks have been acted on. Description text updated to reflect this requirement.
+- **QC serial bag tag lookup**: serial number field in the sieving QC "New Run" modal now triggers a `production.bag_tags` lookup on blur or Enter (barcode scanner compatible). Pre-fills date (from `created_at`), lot number, variant, and grade (destination A→Export, B→Export Blend, C→Domestic). Green/red status indicator shown under the field.
+
+---
+
+## 2026-07-03 — Alyssa (QC sieving: link result to bag audit trail)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/tags/page.tsx`
+- `lib/supabase/database.types.ts`
+
+**Changes:**
+- **QC result write-back**: after saving a sieving QC run with a serial number, two best-effort writes happen: (1) `production.bag_tags` is updated with `qc_initials` and `qc_signed_at`; (2) a `qc_check` scan event is inserted with pass/fail, QC controller name, product/grade/variant, and any spec violations in the notes field.
+- **Bag tracking timeline**: scan event `notes` field now rendered in the event timeline on `/tags` so the QC result is visible when tracing a bag's history.
+- **`ScanAction` type**: added `qc_check` to the TypeScript union type.
+
+---
+
+## 2026-07-02 — Alyssa (Refining capture: predefined outputs, no grade, system pick fixes, overview serials)
+
+**Files changed:**
+- `components/production/capture/RefiningCapture.tsx`
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/CaptureOverview.tsx`
+
+**Changes:**
+- **Predefined output types**: bagging tab now shows fixed output slots per section rather than the generic OutputPicker. Refining 1 outputs: A = Indent Dust, B = White Dust, C = Powder Dust. Refining 2 outputs: A = Cut Heavy Stick Fine, B = Cut Heavy Stick Coarse, C = Powder Dust, D = White Dust. Operators enter weight only; the system generates the serial and looks up the Acumatica code automatically.
+- **No grade for refining**: grade removed from output bag creation. Refining records variant only. `gradeLetter` prop removed from `RefiningCapture`.
+- **System pick variant + bag date fix**: when picking from system, the variant stored in `bag_tags` is now carried into the input row, and `created_at` is converted to DD-MM-YY and used as the bag date.
+- **Overview serials**: debagging section now groups each input bag by its serial (one row per bag). Bagging output section shows the bag serial in the LOT/BATCH column.
+- **`outputA` slot added**: `RefiningData` now has `outputA | B | C | D` to support Refining 2's four output streams.
+
+---
+
+## 2026-07-02 — Alyssa (Checks: indent screen angle allows negative values)
+
+**Files changed:**
+- `lib/production/checks-config.ts`
+- `components/production/capture/ChecksPanel.tsx`
+
+**Changes:**
+- Added `allowNegative?: boolean` field to `MachineCheckDef` interface
+- Set `allowNegative: true` on the `indent_screen_angle` check definition
+- Updated `ValueCapture` to use `inputMode="text"` when `allowNegative` is true — shows the minus key on mobile keyboards
+
+---
+
+## 2026-07-02 — Alyssa (Timesheet: log shift start on page open; pre-populate standard breaks)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`
+
+- **Shift start logged at login**: a `capture_activity` stamp is written when the operator opens a section (only if no prior stamps exist), so shift start reflects actual login time rather than first data-entry time.
+- **Standard breaks pre-populated**: when no inactivity gaps are detected from activity, the standard factory schedule is pre-filled — morning shift gets tea at 10:00 (15 min) and lunch at 12:30 (60 min); night shift gets tea at 19:00 (15 min) and meal at 21:00 (60 min). All entries are editable at sign-off.
+
+---
+
+## 2026-07-02 — Alyssa (Production capture: operator must choose variant; mismatch warning + supervisor note)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+- **Variant no longer pre-filled**: operator always starts with a blank variant and must actively choose it — applies to new captures, change-overs, and new batch records.
+- **Mismatch detection**: if the operator selects a different variant than the supervisor assigned, an amber warning banner appears immediately with the conflicting values.
+- **Auto supervisor note**: the mismatch is automatically appended to the handover comments so the supervisor sees it at sign-off. Deduplication prevents the note appearing twice if the operator changes selection.
+
+---
+
+## 2026-07-02 — Alyssa (Production assign page: remove roster/staff links; fix filled-count bug)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`
+
+- **WorkforceTabs removed**: Shift Roster and Staff & Skills navigation links removed from the Assign Sections page — the page now shows assigned sections only.
+- **Filled-count bug fixed**: "Filled X people" message always showed 0 because the counter was incremented inside the `setDrafts` async callback. Calculation moved outside so the count is correct when `setFillNote` is called.
+
+---
+
+## 2026-07-02 — Alyssa (Production capture: bucket elevator included in balance; balance sign fix)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
+
+- **Bucket elevator label corrected**: UI previously showed "excluded from balance" on the bucket elevator spillage row, contradicting the actual calculation which already included it in `totalIn`. Label now reads "included in balance".
+- **Mass balance sign flipped**: variance was calculated as `totalIncl - totalOut` (positive when material is outstanding), changed to `totalOut - totalIncl` so the balance is **negative** when output is less than input — correctly expressing outstanding output as a deficit.
+- **Overview display updated**: mass balance row now reads `Out X − In Y =` to match the flipped formula; clipboard copy label updated from "Variance" to "Balance (out − in)".
+
+---
+
+## 2026-07-02 — Alyssa (Alara: second redesign — clean white/green design system; fix leads bug)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Design system overhaul**: replaced parchment background + dark forest green header with the app's actual design tokens — white `var(--color-surface-card)` cards, `var(--shadow-card)` shadows, transparent body (inherits the app's gradient from `globals.css`), and Inter font throughout. Header is now glass/white matching the rest of the platform.
+- **Single green accent**: removed the multi-colour scheme (parchment + terracotta + dark header). Only forest green (`#1A3A0E`) and sage green (`#5A8A2A`) are used as accent colours, consistent with the platform's brand tokens.
+- **Leads bug fix**: `SignalCard.promote()` and `SignalDrawer.promoteToLead()` were calling `setPromoted(true)` unconditionally after `await fetch(...)` — even on 401 or 500 responses, the button turned green while nothing was actually saved. Fixed to check `r.ok` before setting success state. Added `promoteErr` state to show red error feedback when the API returns a non-2xx response.
+- **Bookmark bug fix**: same pattern fixed in `SignalCard.bookmark()` — now checks `r.ok` before `setBookmarked(true)`.
+- Layout structure (left sidebar + 2-column card grid), hero card, signal drawer, Gap/Loophole routing, and all section logic retained.
+
+---
+
+
+## 2026-07-02 — Alyssa (Alara: full visual redesign — dark header, image cards, sidebar filters, routing)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **New dark forest green header**: sticky top bar with Leaf logo, "Engine active" dot, and an "ⓘ About" button; tab bar on same dark background with green active indicator — replaces the old light earthy header.
+- **Shopping-site layout for Signal Feed**: left sidebar (264px, sticky) contains all filter controls (search, classification, relevance, region, keyword group, sort); main area is a 2-column card grid — mirrors the reference design requested.
+- **Redesigned signal cards**: image area (148px, uses `media_url` or classification-coloured gradient with Leaf icon), platform + classification badge overlays, score bar, title (2-line clamp), summary (3-line clamp), source link, and a 4-button action row: **Save** (bookmarks via `/api/marketing`), **Lead** (promotes via `/api/accounts`), **Gap** (navigates + auto-runs Gap Finder), **Loophole** (navigates + auto-runs Loophole Scan).
+- **Hero card**: first item in the card grid, full-width dark green gradient with Leaf icon, Alara branding, live signal count and update time.
+- **Signal drawer**: removed auto-analysis on open; replaced with an explicit "Analyse with Alara" button so AI is not triggered unless requested.
+- **Cross-section routing**: Gap/Loophole buttons on cards lift `gapPreload`/`loopholePreload` state to the page root and switch section; GapSection and LoopholesSection auto-run analysis on preload change using a `prevPreload` ref to avoid duplicate runs.
+- **Map toggle**: world map is now collapsed by default; "Show map" button expands it above the card grid.
+- **New colour scheme**: dark header (`#0D1B09`), warm parchment background (`#F0EDE6`), forest green brand (`#2D6B1E`) replacing old earthy terracotta as the primary brand tone; terracotta (`#B84B25`) retained for threat/loophole contexts; amber retained for warnings.
+- **About section — signal schedule**: added a styled weekly schedule table (Mon–Sun) showing which regions/themes Alara scrapes on each day.
+- All section interiors (Gap, Loopholes, Intel, Vault, Compass) updated to use `C.brand` (forest green) for active states and primary buttons instead of old `C.red`.
+
+---
+
+## 2026-07-02 — Alyssa (Production capture: auto-fill assignments, remove tablet setup, session delete)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/history/page.tsx`, `app/(app)/production/device/page.tsx` (deleted), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+- **Shift assignment auto-fill**: assign page now auto-loads operators from the Shift Roster when no assignments exist for the selected date/shift — supervisor only needs to confirm variant, grade/lot, and production orders. Removed the manual "Fill from roster" button.
+- **Tablet setup removed**: deleted `/production/device` page and removed "Set up this tablet" button from the capture home. Existing device bindings in localStorage continue to route as before; new ones can no longer be set.
+- **Session delete**: added `can_delete_session` permission key; supervisors and IT get it by default. Delete button appears on session history cards — cascades through `session_signatures`, `scan_events`, `prod_mass_balance`, `prod_debagging`, `prod_bagging` before removing the session.
+- **New permission keys**: `can_edit_session`, `can_delete_session`, `can_edit_bag_tag`, `can_delete_bag_tag` — added to `permissions.ts`, `permission-registry.ts`, and the Production supervisor/legacy supervisor role defaults.
+
+---
+
+## 2026-07-02 — Gustav (Pop-up targeting, job-card history search/filters, boiler startup schedule)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/planner/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `supabase/migrations/20260702_010_maintenance_boiler_schedule.sql` (new)
+
+- **Pop-up targeting** now follows the notification: the technician modal fires for **any** card allocated to them (breakdown or planned, matched on `assigned_user_id`) — not just breakdowns — and never for the raiser; the allocate pop-up stays manager-only, and the acceptance toast still fires for the manager.
+- **Job-card history is searchable/filterable:** the "Last 20" table is replaced by a full history panel — free-text search (card, machine, root cause, work done…), per-column filters (Type / Area / Technician), a Done/Cancelled status filter and a closed-date range.
+- **Boiler startup schedule** restored in the Planner: a compact, editable weekly roster (this week + 5 ahead) of the technician on boiler startup — managers edit current/future weeks. New `maintenance.boiler_schedule` table (applied to staging).
+
+---
+
+## 2026-07-02 — Gustav (Live breakdown pop-ups: technician accept + manager allocate/accept alerts)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx` (new), `app/(app)/maintenance/layout.tsx`, `lib/maintenance/types.ts`
+
+- New `MaintenanceAlerts`, mounted once in the maintenance layout: polls `job_cards` every 10s while the app is open and raises on-screen pop-ups (no realtime/web-push infra exists yet, so closed-tab delivery still uses the existing email/WhatsApp path).
+- **Technician**: when a breakdown is auto-assigned to them (`assigned_user_id === userId`) and not yet accepted, a blocking modal appears — **Accept & attend**, or leave a **first comment** — even if they were idle on another maintenance page; it reloads the board on new events.
+- **Maintenance manager**: a corner pop-up lists **job cards awaiting allocation** with an "Allocate now →" link, and a **toast fires the moment a technician accepts** a breakdown, so the manager can track acceptance and manage urgent work.
+- Added `assigned_user_id` to the `JobCard` type (already on the table). QC-on-duty routing is intentionally out of scope for now (to follow).
+
+## 2026-07-02 — Alyssa (Permissions: production orders added to matrix + orPermission sidebar gate)
+
+**Files changed:**
+- `lib/auth/permission-registry.ts` — added `production.orders` resource under Production module with `read: 'can_view_live_history'`
+- `components/layout/Sidebar.tsx` — Production Orders now uses `permission: 'can_view_live_history', orPermission: true` so any user with that toggle gets the sidebar link
+- `app/(app)/layout.tsx` — added explicit route guard for `/production/orders` with `can_view_live_history` orPermission
+
+**Changes:**
+- Production Orders now appears in the Users & Roles permission matrix so read access can be toggled per user
+- Any user outside Production/Management can be granted access to Production Orders by enabling `can_view_live_history`
+- **Standard going forward:** every page in the app must have a corresponding entry in `lib/auth/permission-registry.ts` with read/write/delete/manage mapped to the appropriate permission keys, so all access can be managed from Users & Roles without code changes
+
+---
+
+## 2026-07-02 — Alyssa (Permissions: quality read toggles, staff/roster gate, delete error surfacing)
+
+**Files changed:**
+- `lib/auth/permission-registry.ts` — replaced `read: 'dept'` with `read: 'can_view_history'` on quality.lab_results, quality.specs, quality.runs, quality.sieving
+- `app/(app)/layout.tsx` — removed staff/roster from always-open list; added route guards for `/production/staff` and `/production/roster` behind `can_view_staff`
+- `app/api/admin/users/[id]/route.ts` — delete auth account before app_roles row; surface real Supabase error instead of generic "Failed to delete user"
+
+**Changes:**
+- Quality matrix no longer shows "by dept" for lab results, specs, runs, and sieving — now shows a real `can_view_history` toggle so cross-department users (e.g. Management) can be granted read access
+- Staff Directory, Skills Matrix, SOP Catalogue, and Shift Roster are now permission-gated behind `can_view_staff` — previously open to all logged-in users
+- User delete API fixed to show the actual Supabase error on failure (e.g. SSO identity conflict) and to delete auth account before app_roles to prevent orphaned records
+
+---
+
+## 2026-07-02 — Alyssa (Alara: Signal Engine merged in, full UI update, sidebar cleanup)
+
+**Files changed:**
+- `app/(app)/research/page.tsx` — SignalsSection full rewrite
+- `app/(app)/intelligence/page.tsx` — replaced with redirect to `/research`
+- `components/layout/Sidebar.tsx` — removed Signal Engine nav entry
+
+**Changes:**
+- **Signal Engine merged into Alara**: `SignalsSection` now includes the world map (`SignalMap`), 4 stat cards (total, opportunities, threats, avg relevance), full filter bar (search, region, keyword group, sort), classification chip row, relevance bucket chips, load-more pagination, and a reset-filters empty state. All powered by the same `/api/signals?limit=300` endpoint.
+- **`/intelligence` redirect**: visiting the old Signal Engine URL now redirects to `/research` so no broken links.
+- **Sidebar**: Signal Engine entry removed. "Alara" is the single entry for both the research engine and signal feed.
+- **About Alara — etymology fix**: removed the Alyssa personal reference from the "ra" etymology card. Now reads: "Rooibos · Intelligence — the ability to range, detect, and act on what others miss."
+
+---
+
+## 2026-07-02 — Gustav (Breakdown routing: spread across on-duty crew from the shift roster)
+
+**Files changed:** `app/api/maintenance/job-cards/route.ts`
+
+- Breakdown auto-routing now distributes across the technicians on the **Operations shift roster**: the on-duty tech with the **fewest breakdowns in hand** gets the new one. A breakdown counts as "in hand" from the moment it is assigned (accepted or not) through in-progress, so once one on-duty tech is holding a breakdown, the next breakdown routes to the **other** technician on shift. Single-tech shifts still route to that tech; deterministic tie-break (fewest breakdowns → fewest open cards → name).
+
+## 2026-06-30 — Gustav (Maintenance overhaul round 4: table board, checklist allocation, unified roster, dashboard trends, energy)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/job-cards/[cardId]/page.tsx`, `app/(app)/maintenance/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/api/maintenance/job-cards/route.ts`, `app/api/maintenance/energy/history/route.ts`, `lib/maintenance/roster.ts`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/maintenance/JobCardTable.tsx` (new), `components/maintenance/Spark.tsx` (new), `components/maintenance/TrendsPanel.tsx` (new), `components/maintenance/EnergyHistory.tsx`, `components/maintenance/EnergyWidget.tsx`
+
+- **Job-card board → one-line table** (`JobCardTable`): rows expand to the full job card (allocate / log work / QC / verify) with a live in-row timer; **per-technician allocation tabs** replace the old "by raiser" panel; **urgency filter** added (search + date-range kept).
+- **New-job-card alert** on the maintenance dashboard for managers.
+- **Checklist allocation** to technicians (on-duty suggested first) with assignee highlight (+migration `20260629_002`).
+- **Roster unified:** on-duty technician sourced from the Operations shift roster (incl. breakdown routing); maintenance duty-roster editor retired.
+- **Trends moved to the dashboard** (`TrendsPanel`/`Spark`); Scheduled "Readings & Trends" tab is now capture-only.
+- **Energy:** solar charts shrunk; From/To date-range filter on energy history.
+
+## 2026-07-02 — Alyssa (Alara: phase 3 — briefing cards, full signal cards, audience companies)
+
+**Files changed:**
+- `components/intelligence/BriefingCards.tsx` (new) — structured briefing output component
+- `app/(app)/marketing/page.tsx` — full rewrite of Dashboard, Campaigns, Audiences, Content tabs
+- `app/api/marketing/route.ts` — added `save_report` and `audience_companies` actions
+
+**Changes:**
+- **BriefingCards**: replaces the plain-text `AiResult` block across all three generation surfaces (campaign brief, audience brief, content angles). Parses `##` section headings into collapsible cards; renders bullet/numbered lists and inline bold. "Save to reports" button → `sales.reports` via new `save_report` action.
+- **Opportunities + Social Trends columns**: switched from compact to full `SignalCard` so the recommended-action block (sales_angle) is visible. Social Trends shows source platform label above each card.
+- **Audience Signals column**: added Matching Buyers panel — lazy-loads `company_profiles` filtered by the signal regions via new `audience_companies` action (shows company, country, shipment count, current supplier). "Save as audience" button writes to `sales.audiences` and logs a report.
+- **`save_report`**: inserts into `sales.reports` (title, body, report_type, created_by).
+- **`audience_companies`**: returns company_profiles filtered by country list with panjiva data.
+
+---
+
+## 2026-07-02 — Alyssa (Alara CRM: marketing loop wired — phase 2 step 2)
+
+**Files changed:**
+- `app/api/marketing/route.ts` — mirrored campaign saves + audience briefs to sales schema
+- `supabase/migrations/20260702_002_audiences_name_unique.sql` (new) — unique constraint on `sales.audiences.name`
+
+**Changes:**
+- `save_campaign` now writes to both `marketing.campaigns` (existing) and `sales.campaigns` (CRM). UI unchanged.
+- `audience_brief` generation now upserts to `sales.audiences` (tag, signal provenance, brief excerpt) after generating. Best-effort, never blocks the response.
+- Unique constraint on `sales.audiences.name` applied (migration run in Supabase staging).
+
+---
+
+## 2026-07-02 — Alyssa (Alara CRM: lead pipeline — phase 2 step 1)
+
+**Files changed:**
+- `app/(app)/intelligence/leads/page.tsx` (new) — kanban pipeline page grouped by stage
+- `components/leads/AccountDrawer.tsx` (new) — right-slide account detail drawer
+- `app/api/accounts/route.ts` (new) — GET list + POST create/promote
+- `app/api/accounts/[id]/route.ts` (new) — GET detail (account + profile + interactions + signals), PATCH
+- `app/api/accounts/[id]/interactions/route.ts` (new) — POST add timeline entry
+- `components/intelligence/SignalDrawer.tsx` — added "Promote to lead" button
+- `components/layout/Sidebar.tsx` — added "Lead Pipeline" nav entry (KanbanSquare icon)
+
+**Changes:**
+- Built the **lead pipeline view** at `/intelligence/leads`: kanban columns for all 6 stages (lead → qualified → proposal → negotiation → won → lost), stage tab filter, search, and 3-KPI row (total / active / won).
+- **AccountDrawer**: click any account card to open a detailed panel — stage picker (one-click advance), next-action block, company dossier (panjiva shipment data + current supplier), linked signals list, and an activity timeline with an add-note form (interaction type + next step).
+- **Three new API routes** wire the accounts/company_profiles/account_interactions/signals tables into the UI. Auth mirrors the signals route (Sales/Management/Marketing/IT or `can_access_intelligence`).
+- **Promote to lead**: "Promote to lead" button in the signal drawer creates an `accounts` row (stage='lead', signal_ids=[signal.id]) and logs a genesis `account_interactions` entry so every lead is traceable to its source signal.
+- The `docs/alara-crm-vision.md` spec and `supabase/migrations/20260702_001_crm_campaigns_audiences.sql` are now committed to the repo.
+
+---
+
+## 2026-07-02 — Alyssa (Alara: multi-source engine LIVE + CRM data-model foundation)
+
+**Files changed:**
+- `research-engine/n8n/cntp-signal-engine.json` — corrected/expanded workflow (reference export)
+- `supabase/migrations/20260702_001_crm_campaigns_audiences.sql` (new) — CRM `campaigns` + `audiences`
+- `docs/alara-crm-vision.md` — CRM closed-loop spec + schema introspection + phase-2 build order
+
+**Changes (n8n — done via the n8n public API over SSH; workflow lives in n8n, not the repo):**
+- Built the **multi-source** engine (`ud8p5FxBhqiDHH6X`): added TikTok + Instagram (Apify), X/web (Exa), YouTube alongside the 16 news feeds — each normalised to `{title,link,description,source}`, pooled via `Merge Sources` (social-first) → existing dedup→Gemini→Save pipeline.
+- **Models off the app's `2.5-flash-lite`** → dedicated: Tier 1 `gemini-3.1-flash-lite`, Tier 2 `gemini-2.5-flash`. Fixed ~16s/item slowness (old free-tier key → paid key in `CNTP Gemini` → 1.59s/item).
+- **Region-per-day rotation** (`Day Selector`) for Apify/Exa to cap credits + fit the 3am–5am window; news/YouTube global daily.
+- Fixes: dedup by URL **and** title; classification mapped to the `signals_classification_check` values (fine type kept in `intel`); `source_type` from the real platform (was hardcoded `news`); `region` = full country names; deep-scan JSON parsers both tiers.
+- **Went live:** activated multi-source (3am SAST, throttle 300), deactivated old news-only `kDhYBC0Q9IBM7CyS` (fallback), deleted 4 duplicate copies.
+
+**Changes (production `sales` schema):**
+- Introspected the live schema (20 tables): `accounts` already a full lead pipeline; only gap = `campaigns` + `audiences` (added by the migration above). Phase-2 app wiring not yet started.
+
+---
+
+## 2026-07-02 — Alyssa (Global Wits trade intelligence + campaign close-loop)
+
+**Files changed:**
+- `app/(app)/intelligence/global-wits/page.tsx` (new)
+- `app/api/global-wits/route.ts` (new)
+- `app/(app)/marketing/page.tsx`
+- `app/api/marketing/route.ts`
+- `components/layout/Sidebar.tsx`
+- `app/(app)/quality/lab-manager/page.tsx`
+- `supabase/migrations/20260704_001_global_wits.sql`
+
+**Changes:**
+- **Global Wits**: replaced LinkedIn placeholder with a trade file import tool. Drop a Global Wits `.xlsx` — all sheets (hscode, US customs, global shipping, rooibos) are parsed client-side; each unique buyer becomes a `sales.company_profiles` record, a `sales.accounts` lead, and a `sales.signals` trade signal via 3 bulk upserts.
+- **Global Wits overview**: persistent trade dashboard loads from DB on every visit — stat cards (441 buyers, $23.4M, 1,860 shipments), SVG country bar chart, sortable/searchable buyers grid with expandable rows. Expanded row shows a dot-on-line shipment timeline (sized by $ value), monthly bar chart, pitch angle, and recent shipment detail.
+- **Import history**: collapsible accordion grid of past file imports.
+- **Campaign close-loop**: `campaign_brief` AI action now returns `signal_ids` (which signals inspired the brief); `save_campaign` persists `channel` and `signal_ids` to `marketing.campaigns`.
+- **Lab manager fix**: removed broken `import { computePastOosFlags } from '../pasteuriser/page'` — the export never existed, causing every production build to fail. Replaced with a local stub returning `[]`.
+- **Sidebar**: LinkedIn replaced with Global Wits under Sales group.
+
+---
+
+## 2026-07-02 — Alyssa (Maintenance: remove Shuaib Sentso from PIN system)
+
+**Files changed:**
+- `supabase/migrations/20260702_002_remove_shuaib_tech_auth.sql`
+
+**Changes:**
+- Deactivated Shuaib Sentso in `maintenance.tech_auth` and `shared.app_roles` — he is the maintenance manager and logs in via Microsoft SSO, not PIN. He no longer appears on the Technician PINs page.
+
+---
+
+## 2026-07-02 — Alyssa (Maintenance: breakdown auto-assignment fix + login clarification)
+
+**Files changed:**
+- `lib/maintenance/roster.ts`
+- `app/maintenance-login/page.tsx`
+
+**Changes:**
+- Removed `maintenance_manager` from `MAINT_ROLE_KEYS` in roster.ts — the manager was being included as a candidate for breakdown auto-assignment when present on the Operations roster, causing breakdowns to route to the manager instead of the on-duty technician. Only `maintenance_tech` and `maintenance_asst` are now considered.
+- Removed "Maintenance manager? Sign in with Microsoft" link from the PIN login page — the manager uses the standard `/login` page like everyone else; no special section needed.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: bulk density/leaf shade only required on Final QC)
 
 **Files changed:**

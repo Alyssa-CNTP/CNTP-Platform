@@ -1,11 +1,10 @@
 // app/api/global-wits/route.ts
-// Parse Global Wits trade .xlsx files → company_profiles + accounts + trade signals
+// Receives pre-parsed trade rows from the client → bulk upserts in 3 DB calls
 
 import { NextResponse }      from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { createClient }       from '@supabase/supabase-js'
 import { cookies }            from 'next/headers'
-import * as XLSX              from 'xlsx'
 
 export const maxDuration = 60
 
@@ -17,117 +16,27 @@ const salesDb = createClient(
   { db: { schema: 'sales' } }
 )
 
-// ─── Sheet normalisers ─────────────────────────────────────────────────────────
-
 interface NormalisedRow {
-  purchaser:    string
-  supplier:     string
-  country:      string
-  product:      string
-  value_usd:    number
-  weight_kg:    number
-  date:         string
-  datasource:   string
-  hs_code:      string
+  purchaser: string; supplier: string; country: string; product: string
+  value_usd: number; weight_kg: number; date: string; datasource: string; hs_code: string
 }
-
-function normHscode(rows: any[]): NormalisedRow[] {
-  return rows
-    .filter(r => r['PURCHASER'] && String(r['PURCHASER']).trim())
-    .map(r => ({
-      purchaser:  String(r['PURCHASER'] ?? '').trim(),
-      supplier:   String(r['SUPPLIER']  ?? '').trim(),
-      country:    String(r['PURCHASING COUNTRY'] ?? r['COUNTRY OF ORIGIN'] ?? '').trim(),
-      product:    String(r['PRODUCT DESCRIPTION'] ?? '').trim().slice(0, 300),
-      value_usd:  Number(r['TOTAL VALUE($)']  ?? 0),
-      weight_kg:  Number(r['WEIGHT(KG)']       ?? 0),
-      date:       r['DATES'] ? String(r['DATES']).slice(0, 10) : '',
-      datasource: String(r['DATASOURCE'] ?? '').trim(),
-      hs_code:    String(r['HS CODE']    ?? '').trim(),
-    }))
-}
-
-function normUs(rows: any[]): NormalisedRow[] {
-  return rows
-    .filter(r => r['CONSIGNEE'] && String(r['CONSIGNEE']).trim() && String(r['CONSIGNEE']).trim().toUpperCase() !== 'NONE')
-    .map(r => ({
-      purchaser:  String(r['CONSIGNEE'] ?? '').trim(),
-      supplier:   String(r['SHIPPER']   ?? '').trim(),
-      country:    'UNITED STATES',
-      product:    String(r['PRODUCT DESCRIPTION'] ?? '').trim().slice(0, 300),
-      value_usd:  Number(r['KILO WEIGHT PER PRODUCT'] ?? 0),
-      weight_kg:  Number(r['KILO WEIGHT PER PRODUCT'] ?? 0),
-      date:       r['ACT ARRIVAL DATE '] ? String(r['ACT ARRIVAL DATE ']).slice(0, 10) : '',
-      datasource: 'US Customs',
-      hs_code:    '',
-    }))
-}
-
-function normGlobal(rows: any[]): NormalisedRow[] {
-  return rows
-    .filter(r => r['CONSIGNEE'] && String(r['CONSIGNEE']).trim())
-    .map(r => ({
-      purchaser:  String(r['CONSIGNEE'] ?? '').trim(),
-      supplier:   String(r['SHIPPER']   ?? '').trim(),
-      country:    String(r['DESTINATION COUNTRY'] ?? '').trim(),
-      product:    String(r['PRODUCT DESCRIPTION'] ?? '').trim().slice(0, 300),
-      value_usd:  Number(r['GROSS WEIGHT'] ?? 0),
-      weight_kg:  Number(r['GROSS WEIGHT'] ?? 0),
-      date:       r['MONTHS'] ? String(r['MONTHS']) : '',
-      datasource: 'Global Shipping',
-      hs_code:    '',
-    }))
-}
-
-function parseWorkbook(buffer: Buffer): NormalisedRow[] {
-  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true })
-  const rows: NormalisedRow[] = []
-
-  for (const name of wb.SheetNames) {
-    const sheet = wb.Sheets[name]
-    const data  = XLSX.utils.sheet_to_json(sheet, { defval: '' })
-    const lower = name.toLowerCase()
-
-    if (lower.includes('hscode') || lower.includes('rooibos')) {
-      rows.push(...normHscode(data))
-    } else if (lower.includes('us')) {
-      rows.push(...normUs(data))
-    } else if (lower.includes('global') || lower.includes('shipping')) {
-      rows.push(...normGlobal(data))
-    }
-  }
-
-  return rows
-}
-
-// ─── Group rows by purchaser ───────────────────────────────────────────────────
 
 interface CompanyData {
-  name:      string
-  country:   string
-  supplier:  string
-  total_usd: number
-  shipments: NormalisedRow[]
+  name: string; country: string; supplier: string; total_usd: number; shipments: NormalisedRow[]
 }
 
 function groupByCompany(rows: NormalisedRow[]): CompanyData[] {
   const map = new Map<string, CompanyData>()
-
   for (const r of rows) {
     const key = r.purchaser.toLowerCase()
-    if (!map.has(key)) {
-      map.set(key, { name: r.purchaser, country: r.country, supplier: r.supplier, total_usd: 0, shipments: [] })
-    }
+    if (!map.has(key)) map.set(key, { name: r.purchaser, country: r.country, supplier: r.supplier, total_usd: 0, shipments: [] })
     const c = map.get(key)!
     c.total_usd += r.value_usd
     c.shipments.push(r)
     if (!c.country && r.country) c.country = r.country
   }
-
   return Array.from(map.values())
 }
-
-// ─── Handler ───────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()
@@ -141,132 +50,118 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { data: appRole } = await supabase
-    .schema('shared' as any)
-    .from('app_roles')
-    .select('department, permissions')
-    .eq('user_id', user.id)
-    .single()
+    .schema('shared' as any).from('app_roles')
+    .select('department, permissions').eq('user_id', user.id).single()
 
   const dept      = (appRole as any)?.department as string | null
   const overrides = ((appRole as any)?.permissions ?? {}) as Record<string, boolean>
-  const canAccess = ALLOWED.includes(dept ?? '') || overrides['can_access_sales'] === true
-  if (!canAccess) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-
-  const formData = await req.formData().catch(() => null)
-  if (!formData) return NextResponse.json({ error: 'No form data' }, { status: 400 })
-
-  const file = formData.get('file') as File | null
-  if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 })
-
-  const ext = file.name.split('.').pop()?.toLowerCase()
-  if (ext !== 'xlsx' && ext !== 'xls') {
-    return NextResponse.json({ error: 'Only .xlsx files are supported' }, { status: 400 })
+  if (!ALLOWED.includes(dept ?? '') && !overrides['can_access_sales']) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const buffer  = Buffer.from(await file.arrayBuffer())
-  const rows    = parseWorkbook(buffer)
-  const companies = groupByCompany(rows)
-
-  if (companies.length === 0) {
-    return NextResponse.json({ error: 'No purchaser/consignee data found in file' }, { status: 400 })
+  const body = await req.json().catch(() => null)
+  if (!body?.rows || !Array.isArray(body.rows)) {
+    return NextResponse.json({ error: 'rows array required' }, { status: 400 })
   }
 
-  // ── Store vault document ───────────────────────────────────────────────────
-  await salesDb.from('vault_documents').insert({
-    uploaded_by:  user.id,
-    filename:     file.name,
-    source:       'global_wits',
-    row_count:    rows.length,
-    company_count: companies.length,
-    notes:        `Trade file — ${companies.length} companies, ${rows.length} shipment rows`,
-  }).select('id').single()
+  const rows: NormalisedRow[]  = body.rows
+  const filename: string       = body.filename ?? 'unknown.xlsx'
+  const companies              = groupByCompany(rows)
 
-  // ── Upsert company_profiles + accounts + signals ───────────────────────────
-  let created = 0, updated = 0
-  const signalInserts: any[] = []
+  if (!companies.length) {
+    return NextResponse.json({ error: 'No purchaser/consignee data found' }, { status: 400 })
+  }
 
-  for (const co of companies) {
-    const panjiva = {
-      shipments:    co.shipments.map(s => ({
-        date:        s.date,
-        datasource:  s.datasource,
-        supplier:    s.supplier,
-        hs_code:     s.hs_code,
-        product:     s.product,
-        value_usd:   s.value_usd,
-        weight_kg:   s.weight_kg,
-      })),
+  // ── 1. Bulk upsert company_profiles (1 call) ─────────────────────────────
+  const profileRows = companies.map(co => ({
+    company_name:  co.name,
+    country:       co.country,
+    sector:        'tea/beverage',
+    pitch_angle:   co.supplier
+      ? `Currently buying from ${co.supplier} — pitch CNTP rooibos as a premium alternative.`
+      : `Active buyer in ${co.country || 'this market'} — introduce CNTP rooibos range.`,
+    panjiva_data:  {
+      shipments:        co.shipments.map(s => ({ date: s.date, datasource: s.datasource, supplier: s.supplier, hs_code: s.hs_code, product: s.product, value_usd: s.value_usd, weight_kg: s.weight_kg })),
       total_value_usd:  co.total_usd,
       shipment_count:   co.shipments.length,
       current_supplier: co.supplier,
-    }
+    },
+    last_enriched: new Date().toISOString(),
+  }))
 
-    const salesAngle = co.supplier
-      ? `Currently buying from ${co.supplier} — pitch CNTP rooibos as a premium, appellation-protected alternative.`
-      : `Active buyer in ${co.country || 'this market'} — qualify product fit and introduce CNTP rooibos range.`
+  await salesDb.from('company_profiles')
+    .upsert(profileRows, { onConflict: 'company_name', ignoreDuplicates: false })
 
-    // Upsert company_profile
-    const { data: profile, error: profileErr } = await salesDb
-      .from('company_profiles')
-      .upsert(
-        { company_name: co.name, country: co.country, sector: 'tea/beverage', panjiva_data: panjiva, pitch_angle: salesAngle, last_enriched: new Date().toISOString() },
-        { onConflict: 'company_name', ignoreDuplicates: false }
-      )
-      .select('id')
-      .single()
+  // ── 2. Bulk upsert accounts (1 call) ─────────────────────────────────────
+  const accountRows = companies.map(co => ({
+    name:         co.name,
+    country:      co.country,
+    account_type: 'prospect',
+    stage:        'lead',
+    tags:         ['trade-data'],
+    sales_angle:  co.supplier
+      ? `Currently buying from ${co.supplier} — pitch CNTP rooibos as a premium alternative.`
+      : `Active buyer in ${co.country || 'this market'} — introduce CNTP rooibos range.`,
+    notes:        `Imported from Global Wits: ${filename}`,
+  }))
 
-    if (profileErr) continue
+  await salesDb.from('accounts')
+    .upsert(accountRows, { onConflict: 'name', ignoreDuplicates: false })
 
-    // Upsert account
-    const { data: account, error: accountErr } = await salesDb
-      .from('accounts')
-      .upsert(
-        { name: co.name, country: co.country, account_type: 'prospect', stage: 'lead', tags: ['trade-data'], sales_angle: salesAngle, notes: `Imported from Global Wits trade file: ${file.name}` },
-        { onConflict: 'name', ignoreDuplicates: false }
-      )
-      .select('id')
-      .single()
+  // ── 3. Bulk upsert signals (1 call) ──────────────────────────────────────
+  const signalRows = companies.map(co => ({
+    source_type:     'trade',
+    source_url:      `gwits://${co.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    title:           `Trade buyer: ${co.name} (${co.country})`,
+    summary_en:      `${co.name} in ${co.country} has ${co.shipments.length} recorded shipment(s)${co.supplier ? ` from ${co.supplier}` : ''}. Total value: $${co.total_usd.toLocaleString()}.`,
+    classification:  'opportunity',
+    relevance_score: co.total_usd > 10000 ? 8 : co.total_usd > 1000 ? 6 : 5,
+    region:          co.country,
+    keyword_group:   'trade',
+    sales_angle:     co.supplier
+      ? `Currently buying from ${co.supplier} — pitch CNTP rooibos as a premium alternative.`
+      : `Active buyer in ${co.country || 'this market'} — introduce CNTP rooibos range.`,
+    urgency:         'medium',
+    intel:           {},
+  }))
 
-    if (!accountErr && account) {
-      // Link profile → account
-      await salesDb.from('company_profiles').update({ account_id: (profile as any).id }).eq('id', (profile as any).id)
-      created++
+  await salesDb.from('signals')
+    .upsert(signalRows, { onConflict: 'source_url', ignoreDuplicates: true })
 
-      // Queue trade signal
-      signalInserts.push({
-        source_type:     'trade',
-        source_url:      `gwits://${co.name.toLowerCase().replace(/\s+/g, '-')}`,
-        title:           `Trade buyer: ${co.name} (${co.country})`,
-        summary_en:      `${co.name} in ${co.country} has imported ${co.shipments.length} shipment(s) of tea/bubble tea products${co.supplier ? ` from ${co.supplier}` : ''}. Total recorded value: $${co.total_usd.toLocaleString()}.`,
-        classification:  'opportunity',
-        relevance_score: co.total_usd > 10000 ? 8 : co.total_usd > 1000 ? 6 : 5,
-        region:          co.country,
-        keyword_group:   'trade',
-        sales_angle:     salesAngle,
-        urgency:         'medium',
-        intel:           { account_id: (account as any).id, company_profile_id: (profile as any).id },
-      })
-    } else {
-      updated++
-    }
+  // ── 4. Log vault document ────────────────────────────────────────────────
+  await salesDb.from('vault_documents').insert({
+    uploaded_by: user.id, filename, source: 'global_wits',
+    row_count: rows.length, company_count: companies.length,
+    notes: `Trade file — ${companies.length} companies, ${rows.length} shipment rows`,
+  })
+
+  // ── 5. Build overview analytics ─────────────────────────────────────────
+  const countryMap = new Map<string, { count: number; value_usd: number }>()
+  for (const co of companies) {
+    const c = co.country || 'Unknown'
+    const e = countryMap.get(c) ?? { count: 0, value_usd: 0 }
+    e.count++; e.value_usd += co.total_usd
+    countryMap.set(c, e)
   }
+  const top_countries = Array.from(countryMap.entries())
+    .map(([country, v]) => ({ country, ...v }))
+    .sort((a, b) => b.count - a.count).slice(0, 8)
 
-  // Bulk insert signals (ignore duplicate source_url)
-  if (signalInserts.length > 0) {
-    await salesDb.from('signals').upsert(signalInserts, { onConflict: 'source_url', ignoreDuplicates: true })
-  }
+  const top_buyers = companies
+    .sort((a, b) => b.total_usd - a.total_usd)
+    .slice(0, 8)
+    .map(co => ({ name: co.name, country: co.country, value_usd: co.total_usd, shipments: co.shipments.length }))
+
+  const dsMap = new Map<string, number>()
+  for (const r of rows) { dsMap.set(r.datasource || 'Unknown', (dsMap.get(r.datasource || 'Unknown') ?? 0) + 1) }
+  const datasources = Array.from(dsMap.entries()).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
 
   return NextResponse.json({
-    ok:           true,
-    rows_parsed:  rows.length,
-    companies:    companies.length,
-    created,
-    updated,
-    filename:     file.name,
+    ok: true, rows_parsed: rows.length, companies: companies.length,
+    created: companies.length, updated: 0, filename,
+    top_countries, top_buyers, datasources,
   })
 }
-
-// ── List previous imports ──────────────────────────────────────────────────────
 
 export async function GET(req: Request) {
   const cookieStore = await cookies()
@@ -275,16 +170,64 @@ export async function GET(req: Request) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     { cookies: { getAll: () => cookieStore.getAll() } }
   )
-
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data } = await salesDb
-    .from('vault_documents')
-    .select('id, filename, row_count, company_count, notes, created_at')
-    .eq('source', 'global_wits')
-    .order('created_at', { ascending: false })
-    .limit(20)
+  const url = new URL(req.url)
+  const companyName = url.searchParams.get('company')
 
-  return NextResponse.json({ imports: data ?? [] })
+  // ── Company drill-down ────────────────────────────────────────────────────
+  if (companyName) {
+    const { data } = await salesDb
+      .from('company_profiles')
+      .select('company_name, country, panjiva_data, pitch_angle, last_enriched')
+      .eq('company_name', companyName)
+      .single()
+    return NextResponse.json({ profile: data ?? null })
+  }
+
+  // ── Overview: import history + live DB aggregates ─────────────────────────
+  const [{ data: docs }, { data: profiles }] = await Promise.all([
+    salesDb.from('vault_documents')
+      .select('id, filename, row_count, company_count, notes, created_at')
+      .eq('source', 'global_wits').order('created_at', { ascending: false }).limit(20),
+    salesDb.from('company_profiles')
+      .select('company_name, country, panjiva_data')
+      .not('panjiva_data', 'is', null)
+      .limit(2000),
+  ])
+
+  const countryMap = new Map<string, { count: number; value_usd: number }>()
+  let totalValue = 0; let totalShipments = 0
+  for (const p of profiles ?? []) {
+    const pd = (p.panjiva_data ?? {}) as any
+    const v = pd.total_value_usd ?? 0; const s = pd.shipment_count ?? 0
+    totalValue += v; totalShipments += s
+    const c = p.country || 'Unknown'
+    const e = countryMap.get(c) ?? { count: 0, value_usd: 0 }
+    e.count++; e.value_usd += v; countryMap.set(c, e)
+  }
+  const top_countries = Array.from(countryMap.entries())
+    .map(([country, v]) => ({ country, ...v }))
+    .sort((a, b) => b.count - a.count).slice(0, 10)
+
+  const top_buyers = (profiles ?? [])
+    .map(p => ({
+      name:      p.company_name,
+      country:   p.country,
+      value_usd: (p.panjiva_data as any)?.total_value_usd ?? 0,
+      shipments: (p.panjiva_data as any)?.shipment_count  ?? 0,
+    }))
+    .sort((a, b) => b.value_usd - a.value_usd).slice(0, 60)
+
+  return NextResponse.json({
+    imports: docs ?? [],
+    stats: {
+      total_companies: profiles?.length ?? 0,
+      total_value_usd: totalValue,
+      total_shipments: totalShipments,
+    },
+    top_countries,
+    top_buyers,
+  })
 }

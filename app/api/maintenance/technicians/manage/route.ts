@@ -52,7 +52,7 @@ export async function GET() {
     const { data: authRows } = await admin
       .schema('maintenance' as any)
       .from('tech_auth')
-      .select('user_id, person_name, active')
+      .select('user_id, person_name, pin, active')
     const authByName = new Map<string, any>()
     for (const r of authRows ?? []) {
       if (r.person_name) authByName.set(normName(r.person_name), r)
@@ -78,6 +78,7 @@ export async function GET() {
         full_name: display,
         role,
         has_pin:   !!authRow,
+        pin:       authRow?.pin ?? null,
         is_active: authRow?.active ?? true,
         on_shift:  onShiftNames.has(norm),
         user_id:   authRow?.user_id ?? null,

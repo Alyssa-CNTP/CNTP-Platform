@@ -82,6 +82,8 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_count', label: 'Edit a submitted count' },
           { key: 'can_view_all_sections', label: 'View all sections' },
         ] },
+      { key: 'production.orders', label: 'Production orders (session history)',
+        read: 'can_view_live_history', write: 'can_edit_session', delete: 'can_delete_session' },
       { key: 'production.live', label: 'Live capture',
         read: 'can_view_live_history', write: 'can_start_live_session',
         manage: [
@@ -89,6 +91,8 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_add_outputs', label: 'Add output bags & labels' },
           { key: 'can_approve_session', label: 'Approve & lock session' },
           { key: 'can_reset_operator_pin', label: 'Reset operator PIN' },
+          { key: 'can_edit_bag_tag', label: 'Edit bag tag records' },
+          { key: 'can_delete_bag_tag', label: 'Delete bag tag records' },
         ] },
     ],
   },

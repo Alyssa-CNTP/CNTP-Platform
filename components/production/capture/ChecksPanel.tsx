@@ -130,13 +130,12 @@ export function ChecksPanel({
   }
 
   // ── Per-check status, so the operator can SEE what's still outstanding ──────
-  // 'pending' = a reading/value still needs entering; 'logged' = value captured;
-  // 'ok' = a confirm check (assumed OK until flagged); 'flagged' = needs a note.
+  // 'pending' = not yet acted on; 'logged' = value captured; 'ok' = explicitly confirmed; 'flagged' = needs a note.
   type CheckStatus = 'pending' | 'logged' | 'ok' | 'flagged'
   function checkStatus(def: MachineCheckDef): CheckStatus {
     if (raised[def.key]) return 'flagged'
     switch (def.kind) {
-      case 'confirm':     return confirms[def.key]?.flagged ? 'flagged' : 'ok'
+      case 'confirm':     return def.key in confirms ? (confirms[def.key]?.flagged ? 'flagged' : 'ok') : 'pending'
       case 'number':      return def.hourly ? (vsd.length > 0 ? 'logged' : 'pending')
                                             : ((numbers[def.key] ?? '').trim() ? 'logged' : 'pending')
       case 'scale':       return (scaleStd.trim() && scaleAct.trim()) ? 'logged' : 'pending'
@@ -180,6 +179,8 @@ export function ChecksPanel({
     if (!operators.length)    { setError('No operators rostered for this section'); return }
     const op = operators.find(o => o.pin && o.pin === pin)
     if (!op)                  { setError('PIN not recognised — check the roster'); return }
+    const pendingChecks = checks.filter(c => checkStatus(c) === 'pending')
+    if (pendingChecks.length) { setError(`Complete all checks before signing (${pendingChecks.length} outstanding)`); return }
     const missingReason = checks.some(c => c.kind === 'confirm' && confirms[c.key]?.flagged && !confirms[c.key].reason.trim())
     if (missingReason)        { setError('Add a reason for each flagged check'); return }
     setSigning(true)
@@ -259,7 +260,7 @@ export function ChecksPanel({
   return (
     <div className="space-y-5">
       <div className="px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-[12px] text-stone-500 leading-relaxed">
-        Machine checks for this shift. Confirm-style checks are <strong>assumed OK</strong> — only flag what isn't.
+        Machine checks for this shift. <strong>Each check must be confirmed or flagged</strong> — sign-off is blocked until all are done.
         Readings can be typed or <strong>scanned from the display</strong>. Your name and the time are recorded automatically.
       </div>
 
@@ -289,9 +290,11 @@ export function ChecksPanel({
             {phaseChecks.map(def => (
               <CheckCard
                 key={def.key} def={def} spec={specs[def.key]} readOnly={readOnly} status={checkStatus(def)}
-                confirm={confirms[def.key]} onToggleConfirm={() => setConfirms(c => {
+                confirm={confirms[def.key]}
+                onConfirmOk={() => setConfirms(c => ({ ...c, [def.key]: { flagged: false, reason: '' } }))}
+                onToggleConfirm={() => setConfirms(c => {
                   const cur = c[def.key]
-                  if (cur?.flagged) { const { [def.key]: _, ...rest } = c; return rest }
+                  if (cur?.flagged) return { ...c, [def.key]: { flagged: false, reason: '' } }
                   return { ...c, [def.key]: { flagged: true, reason: '' } }
                 })}
                 onReason={(r: string) => setConfirms(c => ({ ...c, [def.key]: { flagged: true, reason: r } }))}
@@ -341,7 +344,7 @@ export function ChecksPanel({
 // ── One check card ───────────────────────────────────────────────────────────
 function CheckCard(props: any) {
   const {
-    def, spec, readOnly, status, confirm, onToggleConfirm, onReason, numberValue, onNumber, textValue, onText,
+    def, spec, readOnly, status, confirm, onConfirmOk, onToggleConfirm, onReason, numberValue, onNumber, textValue, onText,
     qmsHint, scaleStd, scaleAct, onScaleStd, onScaleAct, vsd, lastVsd, onLogVsd,
     massBalance, mbConfirmed, onConfirmMb, failing, raisedCard, onRaise,
   } = props
@@ -361,16 +364,34 @@ function CheckCard(props: any) {
         </div>
       </div>
 
-      {/* Confirm (exception-based) */}
+      {/* Confirm — operator must explicitly tap OK or Flag (not assumed) */}
       {d.kind === 'confirm' && (
         <>
-          <button onClick={() => !readOnly && onToggleConfirm()} disabled={readOnly} className="flex items-center gap-2.5 text-left">
-            {confirm?.flagged ? <AlertTriangle size={18} className="text-err" /> : <CheckCircle2 size={18} className="text-ok" />}
-            <span className={`text-[13px] ${confirm?.flagged ? 'text-err' : 'text-text'}`}>{confirm?.flagged ? 'Flagged — not OK' : 'OK'}</span>
-          </button>
+          {!confirm && !readOnly && (
+            <div className="flex gap-2">
+              <button onClick={onConfirmOk} className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-ok/10 text-ok text-[13px] font-medium">
+                <CheckCircle2 size={15} /> OK
+              </button>
+              <button onClick={onToggleConfirm} className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-err/10 text-err text-[13px] font-medium">
+                <AlertTriangle size={15} /> Flag
+              </button>
+            </div>
+          )}
+          {confirm && !confirm.flagged && (
+            <button onClick={() => !readOnly && onToggleConfirm()} disabled={readOnly} className="flex items-center gap-2.5 text-left">
+              <CheckCircle2 size={18} className="text-ok" />
+              <span className="text-[13px] text-ok">Confirmed OK</span>
+            </button>
+          )}
           {confirm?.flagged && (
-            <input autoFocus value={confirm.reason} disabled={readOnly} onChange={e => onReason(e.target.value)}
-              placeholder="What's wrong?" className="w-full px-3 py-2 rounded-lg border border-err/30 bg-err/5 text-[12px] outline-none focus:border-err" />
+            <>
+              <button onClick={() => !readOnly && onConfirmOk()} disabled={readOnly} className="flex items-center gap-2.5 text-left">
+                <AlertTriangle size={18} className="text-err" />
+                <span className="text-[13px] text-err">Flagged — not OK</span>
+              </button>
+              <input autoFocus value={confirm.reason} disabled={readOnly} onChange={e => onReason(e.target.value)}
+                placeholder="What's wrong?" className="w-full px-3 py-2 rounded-lg border border-err/30 bg-err/5 text-[12px] outline-none focus:border-err" />
+            </>
           )}
         </>
       )}
