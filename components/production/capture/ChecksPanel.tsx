@@ -503,9 +503,15 @@ function ValueCapture({ label, unit, value, onChange, disabled, spec, allowNegat
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
-        <input type="number" inputMode={allowNegative ? 'text' : 'decimal'} value={value} disabled={disabled} onChange={e => onChange(e.target.value)}
+        {allowNegative && !disabled && (
+          <button type="button" onClick={() => onChange(value.startsWith('-') ? value.slice(1) : value ? `-${value}` : '-')}
+            className="shrink-0 w-10 h-[42px] rounded-xl border border-stone-200 bg-white text-[18px] font-bold text-stone-500 hover:border-brand hover:text-brand flex items-center justify-center transition-colors">
+            −
+          </button>
+        )}
+        <input type="number" inputMode="decimal" value={value} disabled={disabled} onChange={e => onChange(e.target.value)}
           placeholder={spec?.min != null || spec?.max != null ? `${spec?.min ?? ''}–${spec?.max ?? ''}` : ''}
-          className={INP + (oor ? ' border-warn' : '')} />
+          className={INP + (oor ? ' border-warn' : '') + ' flex-1'} />
         {unit && <span className="text-[12px] text-text-muted w-8 shrink-0">{unit}</span>}
         {!disabled && (
           <button onClick={() => fileRef.current?.click()} disabled={busy}
