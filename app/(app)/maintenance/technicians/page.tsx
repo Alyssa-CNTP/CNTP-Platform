@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  Loader2, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Search, KeyRound,
+  Loader2, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Search, KeyRound, Eye, EyeOff,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 
@@ -11,6 +11,7 @@ interface Tech {
   full_name: string
   role:      string
   has_pin:   boolean
+  pin:       string | null
   is_active: boolean
   on_shift:  boolean
   user_id:   string | null
@@ -48,8 +49,9 @@ export default function TechnicianPinsPage() {
   const [editing,    setEditing]    = useState<FormState | null>(null)
   const [saving,     setSaving]     = useState(false)
   const [error,      setError]      = useState<string | null>(null)
-  const [query,      setQuery]      = useState('')
-  const [activeOnly, setActiveOnly] = useState(true)
+  const [query,       setQuery]      = useState('')
+  const [activeOnly,  setActiveOnly] = useState(true)
+  const [revealedPin, setRevealedPin] = useState<string | null>(null)
 
   async function load() {
     const res  = await fetch('/api/maintenance/technicians/manage')
@@ -164,9 +166,22 @@ export default function TechnicianPinsPage() {
                   {tech.on_shift && (
                     <span className="text-[10px] font-semibold text-brand bg-brand/10 px-1.5 py-0.5 rounded">On shift</span>
                   )}
-                  {!tech.has_pin && (
+                  {tech.has_pin && tech.pin ? (
+                    <span className="flex items-center gap-1">
+                      <span className="font-mono text-[11px] text-stone-500 tracking-widest">
+                        {revealedPin === tech.full_name ? tech.pin : '••••'}
+                      </span>
+                      <button
+                        onClick={() => setRevealedPin(revealedPin === tech.full_name ? null : tech.full_name)}
+                        className="text-stone-400 hover:text-text p-0.5"
+                        title={revealedPin === tech.full_name ? 'Hide PIN' : 'Reveal PIN'}
+                      >
+                        {revealedPin === tech.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
+                      </button>
+                    </span>
+                  ) : !tech.has_pin ? (
                     <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>
-                  )}
+                  ) : null}
                 </div>
               </div>
               {tech.user_id && (

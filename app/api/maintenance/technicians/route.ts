@@ -92,11 +92,16 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
 
     if (existing) {
-      // Already has an account — just update the password (re-set PIN).
+      // Already has an account — update password and stored PIN.
       const { error: pwErr } = await admin.auth.admin.updateUserById((existing as any).user_id, {
         password: deriveMaintPassword(body.pin, (existing as any).auth_email),
       })
       if (pwErr) return NextResponse.json({ error: pwErr.message }, { status: 500 })
+      await admin
+        .schema('maintenance' as any)
+        .from('tech_auth')
+        .update({ pin: body.pin, updated_at: new Date().toISOString() })
+        .eq('person_name', name)
       return NextResponse.json({ success: true, updated: true })
     }
 
@@ -115,7 +120,7 @@ export async function POST(req: NextRequest) {
     const { error: insertErr } = await admin
       .schema('maintenance' as any)
       .from('tech_auth')
-      .insert({ user_id: userId, auth_email: email, person_name: name, active: true })
+      .insert({ user_id: userId, auth_email: email, person_name: name, pin: body.pin, active: true })
     if (insertErr) {
       await admin.auth.admin.deleteUser(userId).catch(() => {})
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
@@ -170,6 +175,11 @@ export async function PATCH(req: NextRequest) {
         password: deriveMaintPassword(body.pin, authEmail),
       })
       if (pwErr) return NextResponse.json({ error: pwErr.message }, { status: 500 })
+      await admin
+        .schema('maintenance' as any)
+        .from('tech_auth')
+        .update({ pin: body.pin, updated_at: new Date().toISOString() })
+        .eq('person_name', body.person_name.trim())
     }
 
     if (body.active !== undefined) {

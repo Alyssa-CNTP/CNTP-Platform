@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  ChevronLeft, Loader2, Plus, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Trash2, Search,
+  ChevronLeft, Loader2, Plus, Pencil, UserCheck, UserX, X, Save, ShieldCheck, Trash2, Search, Eye, EyeOff,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -30,8 +30,9 @@ export default function OperatorsPage() {
   const [editing, setEditing]     = useState<FormState | null>(null)
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState<string | null>(null)
-  const [query, setQuery]         = useState('')
-  const [activeOnly, setActiveOnly] = useState(true)
+  const [query,       setQuery]      = useState('')
+  const [activeOnly,  setActiveOnly] = useState(true)
+  const [revealedPin, setRevealedPin] = useState<string | null>(null)
 
   async function load() {
     const { data } = await getDb().schema('production').from('operators')
@@ -172,8 +173,25 @@ export default function OperatorsPage() {
                   {op.operator_code && <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{op.operator_code}</span>}
                   {!op.pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
                 </div>
-                <div className="text-[11px] text-text-muted font-mono truncate">
-                  {sectionSummary(op.section_ids ?? [])}
+                <div className="flex items-center gap-2 mt-0.5">
+                  {op.pin ? (
+                    <>
+                      <span className="font-mono text-[12px] text-text-muted tracking-widest">
+                        {revealedPin === op.id ? op.pin : '••••'}
+                      </span>
+                      <button
+                        onClick={() => setRevealedPin(revealedPin === op.id ? null : op.id ?? null)}
+                        className="text-stone-400 hover:text-text p-0.5"
+                        title={revealedPin === op.id ? 'Hide PIN' : 'Reveal PIN'}
+                      >
+                        {revealedPin === op.id ? <EyeOff size={12} /> : <Eye size={12} />}
+                      </button>
+                      <span className="text-[11px] text-text-faint">·</span>
+                    </>
+                  ) : null}
+                  <span className="text-[11px] text-text-muted font-mono truncate">
+                    {sectionSummary(op.section_ids ?? [])}
+                  </span>
                 </div>
               </div>
               <button onClick={() => toggleActive(op)} title={op.active ? 'Deactivate' : 'Activate'} className="p-2 text-stone-400 hover:text-text">
