@@ -340,6 +340,16 @@ function CaptureScreen() {
 
   async function ensureSession(): Promise<string> {
     if (sessionId) return sessionId
+    // Recover an existing session first — handles case where page-load insert
+    // failed silently (constraint violation) but a session exists from a prior attempt.
+    const { data: existing } = await getDb().schema('production').from('prod_sessions')
+      .select('id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (existing) {
+      const id = (existing as any).id
+      setSessionId(id)
+      return id
+    }
     const { data: row, error: e } = await getDb().schema('production').from('prod_sessions').insert({
       section_id: sectionId, date: dateParam, shift, status: 'draft',
       operator_names:    opNames.length ? opNames : null,

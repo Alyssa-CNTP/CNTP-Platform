@@ -63,6 +63,14 @@ export function emptyRefiningData(): RefiningData {
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
+function todayDelivery(): string {
+  const d = new Date()
+  const dd = String(d.getDate()).padStart(2, '0')
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const yy = String(d.getFullYear()).slice(2)
+  return `${dd}-${mm}-${yy}`
+}
+
 export function refiningTotals(d: RefiningData) {
   const totalIn = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)
   const groupKg = (g: RefiningOutputGroup | null) =>
@@ -209,7 +217,8 @@ function ScanRow({
     if (e.key === 'Enter') { e.preventDefault(); triggerLookup() }
   }
 
-  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0
+  const needsLot = row.productType === 'Coarse Leaf'
+  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!needsLot || !!row.lot.trim())
 
   return (
     <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: DEBAG_COLOR + '40' }}>
@@ -281,6 +290,14 @@ function ScanRow({
           <input type="text" value={row.deliveryDate} disabled={locked} placeholder="e.g. 29-06-26"
             onChange={e => onUpdate('deliveryDate', e.target.value)} className={INP} />
         </div>
+        {needsLot && (
+          <div className="space-y-1 col-span-2">
+            <label className={LBL + ' text-amber-600'}>Batch number <span className="text-red-500">*</span></label>
+            <input type="text" value={row.lot} disabled={locked} placeholder="Required for Coarse Leaf"
+              onChange={e => onUpdate('lot', e.target.value)}
+              className={INP + (!row.lot.trim() ? ' border-amber-400 focus:ring-amber-300' : '')} />
+          </div>
+        )}
       </div>
 
       {!locked && (
@@ -291,7 +308,7 @@ function ScanRow({
           </button>
           {!complete && (
             <p className="text-[11px] text-stone-400 text-center">
-              {[!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight'].filter(Boolean).join(', ')} still needed.
+              {[!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight', needsLot && !row.lot.trim() && 'batch number'].filter(Boolean).join(', ')} still needed.
             </p>
           )}
         </>
@@ -476,7 +493,7 @@ export function RefiningCapture({
     const locked_ = lockCompleted(value.inputs)
     patch({ inputs: [...locked_, {
       id: crypto.randomUUID(), serial: '', productType: '', variant: variantWord || '',
-      weight: '', lot: assignment?.lot_number ?? '', deliveryDate: '',
+      weight: '', lot: assignment?.lot_number ?? '', deliveryDate: todayDelivery(),
       inputMode: mode, secured: false, ...prefill,
     }] })
   }

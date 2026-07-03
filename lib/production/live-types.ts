@@ -87,7 +87,7 @@ export const SECTION_CONFIG: Record<string, {
     name: 'Refining 2', code: 'R2',
     colorHex: '#3b82f6', colorClass: 'bg-blue-500',
     inputMode: 'scan',
-    inputTypes: ['Sticks', 'Cut Heavy Stick Coarse'],
+    inputTypes: ['Sticks', 'Cut Heavy Stick Coarse', 'Coarse Leaf'],
     outputTypes: ['Cut Heavy Stick Fine', 'Cut Heavy Stick Coarse', 'White Dust', 'Powder Dust'],
   },
   granule: {
