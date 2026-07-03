@@ -419,6 +419,9 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
                             <span className="font-mono text-[10px] text-stone-500">{ev.weight_kg} kg</span>
                           )}
                         </div>
+                        {ev.notes && (
+                          <div className="font-mono text-[10px] text-stone-500 mt-0.5 truncate">{ev.notes}</div>
+                        )}
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="font-mono text-[10px] text-stone-400">
                             {format(parseISO(ev.scanned_at), 'dd MMM yyyy HH:mm:ss')}

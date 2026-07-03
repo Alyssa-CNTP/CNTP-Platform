@@ -1082,6 +1082,30 @@ export default function SievingPage() {
     if (error) { setSdError('Could not save run: '+error.message); setSaving(false); return }
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
+
+    // Link QC result back to the bag for audit trail (best-effort — don't block save).
+    if (form.serialNumber?.trim()) {
+      const serial = form.serialNumber.trim().toUpperCase()
+      const now = new Date().toISOString()
+      const passLabel = newRun.pass_status === 'Pass' ? 'Pass' : 'Fail'
+      try {
+        await getDb().schema('production').from('bag_tags')
+          .update({ qc_initials: form.qcName || null, qc_signed_at: now } as any)
+          .eq('serial_number', serial)
+      } catch { /* non-fatal */ }
+      try {
+        await getDb().schema('production').from('scan_events').insert({
+          serial_number: serial,
+          action: 'qc_check',
+          section_id: 'sieving',
+          session_id: null,
+          operator_id: null,
+          weight_kg: null,
+          notes: `${passLabel} · QC: ${form.qcName || '—'} · ${activeProduct} ${form.grade} ${form.variant}${newRun.violations?.length ? ' · ' + newRun.violations.join('; ') : ''}`,
+        } as any)
+      } catch { /* non-fatal */ }
+    }
+
     setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle')
     setLastSaved(new Date()); setSaving(false)
   }
