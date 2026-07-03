@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Explicit confirm checks + QC serial bag tag lookup)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- **Explicit confirm checks**: confirm-type checks (machine startup/shutdown inspections) are no longer assumed OK by default. Operator must explicitly tap **OK** or **Flag** for each one. Sign-off is blocked until all checks have been acted on. Description text updated to reflect this requirement.
+- **QC serial bag tag lookup**: serial number field in the sieving QC "New Run" modal now triggers a `production.bag_tags` lookup on blur or Enter (barcode scanner compatible). Pre-fills date (from `created_at`), lot number, variant, and grade (destination A→Export, B→Export Blend, C→Domestic). Green/red status indicator shown under the field.
+
+---
+
 ## 2026-07-02 — Alyssa (Refining capture: predefined outputs, no grade, system pick fixes, overview serials)
 
 **Files changed:**
