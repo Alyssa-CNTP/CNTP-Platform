@@ -5,6 +5,38 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Alara: Lead fix, South Africa tab, SignalCard title fallback, prod deploy)
+
+**Files changed:** `app/(app)/research/page.tsx`, `components/intelligence/SignalCard.tsx`
+
+- **Lead button fix:** `promote()` and `promoteToLead()` now build the account name using a fallback chain (`title → summary_en → keyword_group → source_domain → "Signal"`) instead of calling `signal.title.slice(0, 120)` directly. Signals with empty title fields were sending `name: ""` to `/api/accounts`, which returned 400, causing the "Failed" state.
+- **South Africa tab added to Alara:** New "South Africa" section in the Alara tab bar. Filters signals to `region = 'ZA'`, with a classification sidebar (Opportunity / Threat / Competitor / Regulation / Neutral), stat chips, and the same card + drawer UX as the Signal Feed. The separate `/intelligence/south-africa` page remains but is now superseded.
+- **SignalCard title fallback:** Shared `SignalCard` component now falls back through `intel.title → keyword_group · classification → source_domain` when both `title` and `summary_en` are empty — fixes blank cards in the South Africa section.
+- **Promoted to production:** All Alara changes (redesign, botanical logo, header cleanup) plus this fix were promoted to `main` via PR #301.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: custom botanical logo across header, hero, About)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Custom SVG logo mark:** Replaced Lucide Leaf icon with a hand-traced rooibos botanical SVG (circle ring + Aspalathus linearis stems and needle clusters) matching Alyssa's reference design.
+- **Header:** Logo mark (32px) + "ALARA" in Georgia serif, spaced caps, deep burgundy `#3D1A14` — matches the logo's typographic treatment.
+- **Hero card:** Botanical mark rendered at 100px in translucent cream/gold so it reads on the dark green hero background.
+- **About section:** 72px logo mark alongside "ALARA" in large spaced serif caps + "Sales Intelligence Engine" subtitle.
+
+---
+
+## 2026-07-03 — Alyssa (Alara: clean white/green design system; fix leads bug)
+
+**Files changed:** `app/(app)/research/page.tsx`
+
+- **Design system overhaul:** Replaced parchment background + dark forest green header with app design tokens — white `var(--color-surface-card)` cards, `var(--shadow-card)`, transparent body, Inter font. Header is now glass/white matching the rest of the platform.
+- **Single green accent:** Removed parchment + terracotta + dark header multi-colour scheme. Only forest green (`#1A3A0E`) and sage (`#5A8A2A`) used throughout.
+- **Leads bug fix:** `promote()` and `promoteToLead()` now check `r.ok` before setting success state. Also removed pipeline status bar ("n8n · News pipeline…") and trimmed header to logo + name only (no repeated subtitle).
+
+---
+
 ## 2026-07-04 — Alyssa (Quality lab assistant PIN login + manager PIN management)
 
 **Files changed:**
