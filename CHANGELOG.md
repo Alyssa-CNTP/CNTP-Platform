@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Refining capture: fix "Not found in system" false-positive + 400 on session create)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `supabase/migrations/20260704_004_refining_section_constraints.sql`
+
+**Changes:**
+- Fixed "Not found in system" warning showing on fresh manual-entry rows and persisting after typing. Root cause: `onUpdate('notInSystem', 'false')` was setting the field to the string `'false'` which is truthy in JS, so the warning always displayed after the first keystroke. Fixed by using `''` to clear the flag and tightening the display condition to check for `=== 'true'` explicitly, and only in non-manual input mode.
+- Added DB migration to widen two CHECK constraints in production: `prod_sessions.section_id` now explicitly includes `'refining1'` and `'refining2'` (the original CHECK may have been missing these in production, causing 400 on session creation); `prod_bagging.output_group` now includes `'A'` alongside `B/C/D` (refining's first output stream uses group A). Both constraints use `NOT VALID` so existing rows are unaffected.
+
+---
+
 ## 2026-07-04 — Alyssa (Production capture: floor operators only see their own rostered sections)
 
 **Files changed:** `app/(app)/production/capture/page.tsx`
