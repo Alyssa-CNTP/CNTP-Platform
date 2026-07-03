@@ -1082,7 +1082,7 @@ export default function SievingPage() {
     if (error) { setSdError('Could not save run: '+error.message); setSaving(false); return }
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
-    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg('')
+    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle')
     setLastSaved(new Date()); setSaving(false)
   }
 
@@ -1112,6 +1112,31 @@ export default function SievingPage() {
   }
 
   const setF = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
+
+  const [tagLookupState, setTagLookupState] = React.useState<'idle'|'loading'|'found'|'notfound'>('idle')
+  const DEST_TO_GRADE: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic' }
+
+  async function lookupBagTag(serial: string) {
+    const s = serial.trim().toUpperCase()
+    if (!s) { setTagLookupState('idle'); return }
+    setTagLookupState('loading')
+    try {
+      const { data } = await getDb().schema('production').from('bag_tags')
+        .select('lot_number,variant,destination,created_at').eq('serial_number', s).maybeSingle()
+      if (!data) { setTagLookupState('notfound'); return }
+      const grade = DEST_TO_GRADE[data.destination ?? ''] ?? 'Export'
+      const date  = data.created_at ? data.created_at.slice(0, 10) : ''
+      setForm((f: any) => ({
+        ...f,
+        ...(data.lot_number ? { lotNumber: data.lot_number } : {}),
+        ...(data.variant    ? { variant: data.variant }       : {}),
+        grade,
+        ...(date            ? { date }                        : {}),
+      }))
+      setTagLookupState('found')
+    } catch { setTagLookupState('idle') }
+  }
+
   const inputSt: React.CSSProperties = { padding:'5px 8px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, width:'100%', boxSizing:'border-box' }
   const errSt: React.CSSProperties   = { fontSize:10, color:'#dc2626', marginTop:2 }
   const ErrMsg = ({ field }: { field:string }) => errors[field] ? <div style={errSt}>⚠ {errors[field]}</div> : null
@@ -1227,7 +1252,7 @@ export default function SievingPage() {
         <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
-            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('')}}
+            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
 
@@ -1280,7 +1305,15 @@ export default function SievingPage() {
             </div>}
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. {form.runType==='in-process'?'*':''}</label>
-              <input value={form.serialNumber} onChange={e=>setF('serialNumber',e.target.value)} style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <input value={form.serialNumber}
+                onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
+                onBlur={e=>lookupBagTag(e.target.value)}
+                onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
+                placeholder="Type or scan barcode"
+                style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
+              {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
+              {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
             </div>
             <div>
@@ -1406,7 +1439,7 @@ export default function SievingPage() {
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('')}}
+              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
                 style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
               <button onClick={addRun} disabled={saving || (outlierWarnings.length>0 && !confirmAnomaly)}
                 style={{padding:'10px 26px',borderRadius:7,border:'none',background:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'default':'pointer'}}>
