@@ -5,6 +5,30 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (QC sieving: link result to bag audit trail)
+
+**Files changed:**
+- `app/(app)/quality/sieving/page.tsx`
+- `app/(app)/tags/page.tsx`
+- `lib/supabase/database.types.ts`
+
+**Changes:**
+- **QC result write-back**: after saving a sieving QC run with a serial number, two best-effort writes happen: (1) `production.bag_tags` is updated with `qc_initials` and `qc_signed_at`; (2) a `qc_check` scan event is inserted with pass/fail, QC controller name, product/grade/variant, and any spec violations in the notes field.
+- **Bag tracking timeline**: scan event `notes` field now rendered in the event timeline on `/tags` so the QC result is visible when tracing a bag's history.
+- **`ScanAction` type**: added `qc_check` to the TypeScript union type.
+
+## 2026-07-03 — Alyssa (Explicit confirm checks + QC serial bag tag lookup)
+
+**Files changed:**
+- `components/production/capture/ChecksPanel.tsx`
+- `app/(app)/quality/sieving/page.tsx`
+
+**Changes:**
+- **Explicit confirm checks**: confirm-type checks are no longer assumed OK by default. Operator must explicitly tap OK or Flag for each one. Sign-off is blocked until all checks have been acted on.
+- **QC serial bag tag lookup**: serial number field in the sieving QC "New Run" modal now triggers a `production.bag_tags` lookup on blur or Enter (barcode scanner compatible). Pre-fills date, lot, variant, and grade. Green/red status indicator shown.
+
+---
+
 ## 2026-07-02 — Alyssa (Refining capture: predefined outputs, no grade, system pick fixes, overview serials)
 
 **Files changed:**
