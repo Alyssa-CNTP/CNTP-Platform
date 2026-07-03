@@ -6,7 +6,7 @@ import {
   TrendingUp, Clock, DollarSign, Users, Activity,
   Database, Shield, Zap, BarChart3, CheckCircle2,
   AlertCircle, Info, Package, FlaskConical, Layers,
-  ClipboardList, Tag, ChevronDown, ChevronRight,
+  ClipboardList, Tag, ChevronDown, ChevronRight, RefreshCw,
 } from 'lucide-react'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -210,12 +210,27 @@ function UptimeDot({ status }: { status: 'up' | 'degraded' | 'down' }) {
 }
 
 // ─── Page ────────────────────────────────────────────────────────────────────
+const REFRESH_INTERVAL_MS = 60_000 // 1 minute
+
 export default function PlatformHealthPage() {
-  const [metrics, setMetrics] = useState<PlatformMetrics | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [metrics,     setMetrics]     = useState<PlatformMetrics | null>(null)
+  const [loading,     setLoading]     = useState(true)
+  const [refreshing,  setRefreshing]  = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+
+  async function refresh(isManual = false) {
+    if (isManual) setRefreshing(true)
+    const m = await load()
+    setMetrics(m)
+    setLastUpdated(new Date())
+    setLoading(false)
+    setRefreshing(false)
+  }
 
   useEffect(() => {
-    load().then(m => { setMetrics(m); setLoading(false) })
+    refresh()
+    const interval = setInterval(() => refresh(), REFRESH_INTERVAL_MS)
+    return () => clearInterval(interval)
   }, [])
 
   async function load(): Promise<PlatformMetrics> {
@@ -386,9 +401,24 @@ export default function PlatformHealthPage() {
           <h2 className="font-display font-extrabold text-3xl text-text mb-1">Platform Health</h2>
           <p className="text-sm text-text-muted">
             ROI analytics, usage, and operational value of the CNTP Ops platform.
+            {lastUpdated && (
+              <span className="ml-2 text-text-faint">
+                Updated {lastUpdated.toLocaleTimeString('en-ZA', { timeStyle: 'short' })}
+              </span>
+            )}
           </p>
         </div>
-        <UptimeDot status="up" />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => refresh(true)}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-surface-rule text-text-muted text-[12px] hover:text-text hover:border-brand/30 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+          <UptimeDot status="up" />
+        </div>
       </div>
 
       {/* ── ROI hero strip ────────────────────────────────────────────────── */}
@@ -714,7 +744,7 @@ export default function PlatformHealthPage() {
         <p className="text-[11px] text-text-faint leading-relaxed">
           ROI figures are estimates based on documented time-saving benchmarks for digital vs. manual processes.
           Actual savings may be higher. Projections assume current usage patterns continue linearly.
-          Labour rate is configurable in platform settings.
+          Data auto-refreshes every 60 seconds.
         </p>
       </div>
 

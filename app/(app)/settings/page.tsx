@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth/context'
 import { DEPARTMENT_META, PERMISSION_GROUPS } from '@/lib/auth/permissions'
 import {
   Sun, Moon, Monitor, User, Palette, Globe, Bell, ShieldCheck,
-  Activity, KeyRound, Info, Check, ChevronRight, Mail, MessageSquareWarning,
+  Activity, Check, ChevronRight, Mail, MessageSquareWarning,
 } from 'lucide-react'
 import { useLanguage } from '@/lib/i18n/context'
 import { LANGUAGES, LANGUAGE_META } from '@/lib/i18n/translations'
@@ -42,7 +42,7 @@ const SECTION_HEADER = 'font-mono text-[10px] uppercase tracking-widest text-tex
 
 type SectionId =
   | 'profile' | 'appearance' | 'language' | 'notifications'
-  | 'access' | 'activity' | 'security' | 'about'
+  | 'access' | 'activity'
 
 const SECTIONS: { id: SectionId; label: string; Icon: typeof User }[] = [
   { id: 'profile',       label: 'Profile',       Icon: User },
@@ -51,8 +51,6 @@ const SECTIONS: { id: SectionId; label: string; Icon: typeof User }[] = [
   { id: 'notifications', label: 'Notifications', Icon: Bell },
   { id: 'access',        label: 'My Access',     Icon: ShieldCheck },
   { id: 'activity',      label: 'Activity',      Icon: Activity },
-  { id: 'security',      label: 'Security',      Icon: KeyRound },
-  { id: 'about',         label: 'About',         Icon: Info },
 ]
 
 // ─── Toggle switch ─────────────────────────────────────────────────────────────
@@ -82,7 +80,7 @@ function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (v: boolean
 
 export default function SettingsPage() {
   const auth = useAuth()
-  const { displayName, role, department, sectionId, user, changePassword, initials, p } = auth
+  const { displayName, role, department, sectionId, user, initials, p } = auth
   const { lang, setLang } = useLanguage()
 
   const [active, setActive] = useState<SectionId>('profile')
@@ -147,27 +145,6 @@ export default function SettingsPage() {
         .from('user_preferences')
         .upsert({ user_id: user.id, notifications: next, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
     } catch {}
-  }
-
-  // ── Password ──
-  const [current, setCurrent] = useState('')
-  const [next, setNext] = useState('')
-  const [confirm, setConfirm] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [pwError, setPwError] = useState('')
-  const [pwOk, setPwOk] = useState(false)
-
-  async function handlePasswordChange(e: React.FormEvent) {
-    e.preventDefault()
-    setPwError(''); setPwOk(false)
-    if (!current || !next || !confirm) { setPwError('All fields are required'); return }
-    if (next !== confirm)              { setPwError('New passwords do not match'); return }
-    if (next.length < 8)              { setPwError('Password must be at least 8 characters'); return }
-    setSaving(true)
-    const { error } = await changePassword(current, next)
-    if (error) { setPwError(error); setSaving(false); return }
-    setPwOk(true); setSaving(false)
-    setCurrent(''); setNext(''); setConfirm('')
   }
 
   const deptMeta = department ? DEPARTMENT_META[department] : null
@@ -375,63 +352,6 @@ export default function SettingsPage() {
           {/* ── Activity ── */}
           {active === 'activity' && <ActivitySection />}
 
-          {/* ── Security ── */}
-          {active === 'security' && (
-            <div className={CARD}>
-              <p className={SECTION_HEADER}>Security</p>
-              <form onSubmit={handlePasswordChange} className="space-y-4">
-                {pwError && (
-                  <div className="px-4 py-2.5 bg-err/8 border border-err/20 rounded-xl text-[12px] text-err">⚠ {pwError}</div>
-                )}
-                {pwOk && (
-                  <div className="px-4 py-2.5 bg-ok/8 border border-ok/20 rounded-xl text-[12px] text-ok">✓ Password changed successfully</div>
-                )}
-                {([
-                  ['Current password',     current, setCurrent, 'current-password'] as const,
-                  ['New password',         next,    setNext,    'new-password'] as const,
-                  ['Confirm new password', confirm, setConfirm, 'new-password'] as const,
-                ]).map(([label, value, setter, ac]) => (
-                  <div key={label}>
-                    <label className="block font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">{label}</label>
-                    <input
-                      type="password"
-                      value={value}
-                      onChange={e => setter(e.target.value)}
-                      autoComplete={ac}
-                      placeholder="••••••••"
-                      className="w-full px-3 py-2.5 border border-surface-rule rounded-xl font-mono text-[12px] text-text bg-surface-card outline-none focus:border-brand"
-                    />
-                  </div>
-                ))}
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="w-full py-2.5 rounded-xl bg-brand text-white text-[12px] font-semibold disabled:opacity-50"
-                >
-                  {saving ? 'Changing password…' : 'Change Password'}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* ── About ── */}
-          {active === 'about' && (
-            <div className={CARD}>
-              <p className={SECTION_HEADER}>About</p>
-              <dl className="space-y-2">
-                {[
-                  ['App',         'CNTP · Ops'],
-                  ['Environment', process.env.NODE_ENV],
-                  ['Build',       process.env.NEXT_PUBLIC_APP_VERSION || '—'],
-                ].map(([k, v]) => (
-                  <div key={k} className="flex items-center justify-between">
-                    <dt className="font-mono text-[11px] text-text-muted">{k}</dt>
-                    <dd className="font-mono text-[11px] text-text">{v}</dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          )}
         </div>
       </div>
     </div>

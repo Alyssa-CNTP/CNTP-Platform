@@ -34,18 +34,20 @@ interface AppUser {
 }
 
 interface AuditEntry {
-  id:           number
-  actor_id:     string | null
-  actor_name:   string
-  action:       string
-  schema_name:  string | null
-  table_name:   string | null
-  record_id:    string | null
-  before_state: any
-  after_state:  any
-  ip_address:   string | null
-  user_agent:   string | null
-  created_at:   string
+  id:               number
+  actor_id:         string | null
+  actor_name:       string
+  actor_department: string | null
+  actor_role:       string | null
+  action:           string
+  schema_name:      string | null
+  table_name:       string | null
+  record_id:        string | null
+  before_state:     any
+  after_state:      any
+  ip_address:       string | null
+  user_agent:       string | null
+  created_at:       string
 }
 
 function fmt(s: string | null) {
@@ -68,14 +70,16 @@ function DeptBadge({ dept }: { dept: Department | null }) {
 
 // ─── Audit Log Tab ────────────────────────────────────────────────────────────
 
-function AuditLogTab({ myId }: { myId: string | null }) {
-  const [entries,   setEntries]   = useState<AuditEntry[]>([])
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState('')
-  const [filterActor, setFilterActor] = useState('')
+function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
+  const [entries,      setEntries]      = useState<AuditEntry[]>([])
+  const [loading,      setLoading]      = useState(false)
+  const [error,        setError]        = useState('')
+  const [filterActor,  setFilterActor]  = useState('')
+  const [filterDept,   setFilterDept]   = useState('')
   const [filterAction, setFilterAction] = useState('')
+  const [sortAlpha,    setSortAlpha]    = useState(false)
 
-  const isAllowed = myId === ALYSSA_UUID || myId === JAN_UUID
+  const isAllowed = isIT || myId === ALYSSA_UUID || myId === JAN_UUID
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -83,7 +87,7 @@ function AuditLogTab({ myId }: { myId: string | null }) {
       const params = new URLSearchParams()
       if (filterActor)  params.set('actor_id', filterActor)
       if (filterAction) params.set('action', filterAction)
-      params.set('limit', '200')
+      params.set('limit', '500')
       const res = await fetch('/api/admin/audit?' + params.toString())
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -106,10 +110,12 @@ function AuditLogTab({ myId }: { myId: string | null }) {
       <div className="text-center">
         <Shield size={36} className="text-text-faint mx-auto mb-3" />
         <div className="font-semibold text-text mb-1">Restricted access</div>
-        <div className="text-[12px] text-text-muted">Audit history is only visible to Alyssa and Jan.</div>
+        <div className="text-[12px] text-text-muted">Audit history is only visible to IT and authorised administrators.</div>
       </div>
     </div>
   )
+
+  const FONT = { fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, sans-serif' }
 
   function actionColor(action: string) {
     if (action === 'sign_in')  return { bg: '#F0FDF4', border: '#86EFAC', text: '#166534', dot: '#16A34A' }
@@ -120,37 +126,93 @@ function AuditLogTab({ myId }: { myId: string | null }) {
     return { bg: '#FAFAFA', border: '#E5E7EB', text: '#374151', dot: '#9CA3AF' }
   }
 
-  const uniqueActors = [...new Map(entries.filter(e => e.actor_id).map(e => [e.actor_id, e.actor_name])).entries()]
-  const uniqueActions = [...new Set(entries.map(e => e.action))]
+  // Unique actors sorted alphabetically for the filter dropdown
+  const uniqueActors = [...new Map(
+    entries.filter(e => e.actor_id).map(e => [e.actor_id, e.actor_name])
+  ).entries()].sort((a, b) => (a[1] as string).localeCompare(b[1] as string))
+
+  // Unique departments from enriched data
+  const uniqueDepts = [...new Set(
+    entries.map(e => e.actor_department).filter(Boolean)
+  )].sort() as string[]
+
+  const uniqueActions = [...new Set(entries.map(e => e.action))].sort()
+
+  // Apply department filter client-side (dept not queryable server-side directly)
+  let filtered = filterDept
+    ? entries.filter(e => e.actor_department === filterDept)
+    : entries
+
+  // Apply alphabetical sort by actor name (default is chronological)
+  if (sortAlpha) {
+    filtered = [...filtered].sort((a, b) => a.actor_name.localeCompare(b.actor_name))
+  }
+
+  // Summary stats
+  const signIns  = entries.filter(e => e.action === 'sign_in').length
+  const signOuts = entries.filter(e => e.action === 'sign_out').length
+  const uniquePeople = new Set(entries.filter(e => e.actor_id).map(e => e.actor_id)).size
 
   return (
     <div>
+      {/* Summary strip */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[
+          { label: 'Total events', value: entries.length },
+          { label: 'Sign-ins',     value: signIns,  color: '#16A34A' },
+          { label: 'Sign-outs',    value: signOuts, color: '#EA580C' },
+          { label: 'Users active', value: uniquePeople },
+        ].map(s => (
+          <div key={s.label} style={{ ...FONT, padding: '8px 14px', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8, minWidth: 100 }}>
+            <div style={{ fontSize: 10, color: '#9CA3AF', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{s.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: (s as any).color ?? '#111827' }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
       {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <select
           value={filterActor}
           onChange={e => setFilterActor(e.target.value)}
-          style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, padding: '7px 10px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', color: '#111827', outline: 'none' }}
+          style={{ ...FONT, fontSize: 12, padding: '7px 10px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', color: '#111827', outline: 'none' }}
         >
-          <option value="">All users</option>
+          <option value="">All people (A–Z)</option>
           {uniqueActors.map(([id, name]) => (
             <option key={id as string} value={id as string}>{name as string}</option>
           ))}
         </select>
         <select
+          value={filterDept}
+          onChange={e => setFilterDept(e.target.value)}
+          style={{ ...FONT, fontSize: 12, padding: '7px 10px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', color: '#111827', outline: 'none' }}
+        >
+          <option value="">All departments</option>
+          {uniqueDepts.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select
           value={filterAction}
           onChange={e => setFilterAction(e.target.value)}
-          style={{ fontFamily: 'Arial, sans-serif', fontSize: 12, padding: '7px 10px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', color: '#111827', outline: 'none' }}
+          style={{ ...FONT, fontSize: 12, padding: '7px 10px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', color: '#111827', outline: 'none' }}
         >
           <option value="">All events</option>
-          {uniqueActions.map(a => <option key={a} value={a}>{a}</option>)}
+          {uniqueActions.map(a => <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>)}
         </select>
-        <button onClick={load} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', cursor: 'pointer', fontSize: 12, color: '#6B7280' }}>
+        <button
+          onClick={() => setSortAlpha(s => !s)}
+          style={{ ...FONT, display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', border: `1px solid ${sortAlpha ? '#1A3A0E' : '#E0E0E0'}`, borderRadius: 6, background: sortAlpha ? '#1A3A0E' : 'white', cursor: 'pointer', fontSize: 12, color: sortAlpha ? 'white' : '#6B7280', fontWeight: sortAlpha ? 600 : 400 }}
+        >
+          A→Z
+        </button>
+        <button
+          onClick={load}
+          style={{ ...FONT, display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', border: '1px solid #E0E0E0', borderRadius: 6, background: 'white', cursor: 'pointer', fontSize: 12, color: '#6B7280' }}
+        >
           <RefreshCw size={13} style={loading ? { animation: 'spin 1s linear infinite' } : {}} />
           Refresh
         </button>
-        <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
-          {entries.length} event{entries.length !== 1 ? 's' : ''}
+        <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
+          {filtered.length}{filtered.length !== entries.length ? ` of ${entries.length}` : ''} event{entries.length !== 1 ? 's' : ''}
         </span>
       </div>
 
@@ -161,81 +223,58 @@ function AuditLogTab({ myId }: { myId: string | null }) {
       )}
 
       {loading && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF', fontSize: 12, fontFamily: 'Arial, sans-serif' }}>
+        <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF', fontSize: 12, ...FONT }}>
           Loading audit log…
         </div>
       )}
 
-      {!loading && entries.length === 0 && !error && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF', fontSize: 12, fontFamily: 'Arial, sans-serif' }}>
+      {!loading && filtered.length === 0 && !error && (
+        <div style={{ textAlign: 'center', padding: 40, color: '#9CA3AF', fontSize: 12, ...FONT }}>
           <Clock size={28} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
           No events recorded yet. Sign-in and sign-out events will appear here automatically.
         </div>
       )}
 
-      {!loading && entries.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 0, border: '1px solid #E5E7EB', borderRadius: 10, overflow: 'hidden' }}>
-          {entries.map((e, i) => {
+      {!loading && filtered.length > 0 && (
+        <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, overflow: 'hidden' }}>
+          {/* Table header */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 120px 140px 160px', background: '#F9FAFB', borderBottom: '1.5px solid #E5E7EB', padding: '8px 14px' }}>
+            {['Person', 'Department', 'Event', 'Role', 'Time (SAST)'].map(h => (
+              <span key={h} style={{ ...FONT, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6B7280' }}>{h}</span>
+            ))}
+          </div>
+          {filtered.map((e, i) => {
             const c = actionColor(e.action)
-            const isAuthEvent = e.schema_name === 'auth'
+            const dept = e.actor_department ?? e.after_state?.department ?? '—'
+            const role = e.actor_role ?? e.after_state?.role ?? null
             return (
               <div key={e.id} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 12,
-                padding: '12px 16px',
-                borderBottom: i < entries.length - 1 ? '1px solid #F3F4F6' : 'none',
+                display: 'grid', gridTemplateColumns: '1fr 110px 120px 140px 160px',
+                padding: '11px 14px',
+                borderBottom: i < filtered.length - 1 ? '1px solid #F3F4F6' : 'none',
                 background: 'white',
+                alignItems: 'center',
               }}>
-                {/* Dot */}
-                <div style={{ width: 10, height: 10, borderRadius: '50%', background: c.dot, flexShrink: 0, marginTop: 5 }} />
-
-                {/* Content */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    {/* Actor */}
-                    <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, fontWeight: 600, color: '#111827' }}>
-                      {e.actor_name}
-                    </span>
-                    {/* Action badge */}
-                    <span style={{
-                      fontFamily: 'Arial, sans-serif', fontSize: 10, fontWeight: 700,
-                      padding: '2px 8px', borderRadius: 20,
-                      background: c.bg, border: `1px solid ${c.border}`, color: c.text,
-                      textTransform: 'uppercase', letterSpacing: '0.05em',
-                    }}>
-                      {e.action.replace(/_/g, ' ')}
-                    </span>
-                    {/* Context */}
-                    {!isAuthEvent && e.table_name && (
-                      <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#6B7280' }}>
-                        {e.schema_name}.{e.table_name}
-                        {e.record_id && <span style={{ color: '#9CA3AF' }}> #{e.record_id.slice(0, 8)}</span>}
-                      </span>
-                    )}
-                    {isAuthEvent && e.after_state?.email && (
-                      <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#6B7280' }}>
-                        {e.after_state.email}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Details row */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 3, flexWrap: 'wrap' }}>
-                    <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#9CA3AF' }}>
-                      {fmtTs(e.created_at)}
-                    </span>
-                    {e.after_state?.department && (
-                      <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#9CA3AF' }}>
-                        {e.after_state.department} · {e.after_state.role?.replace(/_/g, ' ')}
-                      </span>
-                    )}
-                    {!isAuthEvent && e.before_state && e.after_state && (
-                      <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#9CA3AF', cursor: 'pointer' }}
-                        title={JSON.stringify({ before: e.before_state, after: e.after_state }, null, 2)}>
-                        hover for diff
-                      </span>
-                    )}
-                  </div>
+                {/* Person */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+                  <span style={{ ...FONT, fontSize: 13, fontWeight: 600, color: '#111827', truncate: true }}>{e.actor_name}</span>
                 </div>
+                {/* Department */}
+                <span style={{ ...FONT, fontSize: 11, color: '#6B7280' }}>{dept}</span>
+                {/* Event badge */}
+                <span style={{
+                  ...FONT, fontSize: 10, fontWeight: 700, width: 'fit-content',
+                  padding: '2px 8px', borderRadius: 20,
+                  background: c.bg, border: `1px solid ${c.border}`, color: c.text,
+                  textTransform: 'uppercase', letterSpacing: '0.05em',
+                }}>
+                  {e.action.replace(/_/g, ' ')}
+                </span>
+                {/* Role */}
+                <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF' }}>{role?.replace(/_/g, ' ') ?? '—'}</span>
+                {/* Time */}
+                <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF' }}>{fmtTs(e.created_at)}</span>
               </div>
             )
           })}
@@ -918,7 +957,7 @@ export default function UsersPage() {
   const canDelete  = p('can_manage_users')
   const canResetPw = p('can_reset_passwords')
   const canConfirm = p('can_confirm_emails')
-  const canAudit   = myId === ALYSSA_UUID || myId === JAN_UUID
+  const canAudit   = isIT || myId === ALYSSA_UUID || myId === JAN_UUID
 
   const [pageTab,   setPageTab]   = useState<'users' | 'audit'>('users')
   const [users,     setUsers]     = useState<AppUser[]>([])
@@ -1041,7 +1080,7 @@ export default function UsersPage() {
       </div>
 
       {/* Audit tab */}
-      {pageTab === 'audit' && <AuditLogTab myId={myId} />}
+      {pageTab === 'audit' && <AuditLogTab myId={myId} isIT={isIT} />}
 
       {/* Users tab */}
       {pageTab === 'users' && (
