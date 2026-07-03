@@ -16,7 +16,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Section    = 'signals' | 'gap' | 'loopholes' | 'intel' | 'vault' | 'compass' | 'south-africa' | 'about'
+type Section    = 'signals' | 'gap' | 'loopholes' | 'intel' | 'vault' | 'compass' | 'south-africa' | 'leads' | 'about'
 type IntelTool  = 'briefing' | 'frontier' | 'competitors' | 'profiler' | 'pitch' | 'alerts'
 type CompassVec = 'red_espresso' | 'k_beauty' | 'clinical' | 'functional_oem' | 'agriculture' | 'appellation' | 'japan'
 
@@ -356,10 +356,12 @@ const CLS_GRADIENT: Record<string, string> = {
   neutral:     'linear-gradient(150deg, #1A1A1A 0%, #363636 100%)',
 }
 
-function SignalCard({ signal, onClick, onSendTo }: {
+function SignalCard({ signal, onClick, onSendTo, onPromoted, onNavigate }: {
   signal: Signal
   onClick: () => void
   onSendTo: (s: 'gap' | 'loopholes', term: string) => void
+  onPromoted?: (id: string) => void
+  onNavigate?: (s: Section) => void
 }) {
   const [bookmarked,  setBookmarked]  = useState(false)
   const [promoted,    setPromoted]    = useState(false)
@@ -377,7 +379,10 @@ function SignalCard({ signal, onClick, onSendTo }: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'bookmark_signal', signal_id: signal.id, title: signal.title }),
       })
-      if (r.ok) setBookmarked(true)
+      if (r.ok) {
+        setBookmarked(true)
+        setTimeout(() => onNavigate?.('vault'), 600)
+      }
     } finally { setBookmarking(false) }
   }
 
@@ -399,9 +404,19 @@ function SignalCard({ signal, onClick, onSendTo }: {
           notes:            signal.summary_en ?? '',
         }),
       })
-      if (r.ok) setPromoted(true)
-      else setPromoteErr(true)
-    } catch { setPromoteErr(true) }
+      if (r.ok) {
+        setPromoted(true)
+        // Remove from feed + navigate to leads after short delay
+        setTimeout(() => {
+          onPromoted?.(signal.id)
+          onNavigate?.('leads')
+        }, 800)
+      } else {
+        const body = await r.json().catch(() => ({}))
+        console.error('[Lead] API error:', r.status, body)
+        setPromoteErr(true)
+      }
+    } catch (err) { console.error('[Lead] fetch error:', err); setPromoteErr(true) }
     finally { setPromoting(false) }
   }
 
@@ -738,13 +753,18 @@ function SignalDrawer({ signal, onClose }: { signal: Signal | null; onClose: () 
 
 // ─── Signals section ──────────────────────────────────────────────────────────
 
-function SignalsSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', term: string) => void }) {
+function SignalsSection({ onSendTo, onNavigate }: { onSendTo: (s: 'gap' | 'loopholes', term: string) => void; onNavigate: (s: Section) => void }) {
   const [signals,     setSignals]     = useState<Signal[]>([])
+  const [promoted,    setPromoted]    = useState<Set<string>>(new Set())
   const [totalCount,  setTotalCount]  = useState<number | null>(null)
   const [loading,     setLoading]     = useState(true)
   const [selected,    setSelected]    = useState<Signal | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [showMap,     setShowMap]     = useState(false)
+
+  const handlePromoted = useCallback((id: string) => {
+    setPromoted(prev => new Set([...prev, id]))
+  }, [])
 
   const [search,       setSearch]       = useState('')
   const [clsFilter,    setClsFilter]    = useState<ClsFilter>('all')
@@ -806,7 +826,7 @@ function SignalsSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', term:
 
   useEffect(() => { setVisible(SIG_PAGE) }, [search, clsFilter, regionFilter, groupFilter, relevance, sort])
 
-  const visibleSignals = filtered.slice(0, visible)
+  const visibleSignals = filtered.filter(s => !promoted.has(s.id)).slice(0, visible)
 
   const selCss: React.CSSProperties = { width: '100%', padding: '7px 10px', borderRadius: 7, border: `1px solid ${C.border}`, fontSize: 13, background: C.surface, color: C.text, outline: 'none' }
 
@@ -956,7 +976,7 @@ function SignalsSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', term:
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
               <HeroCard signalCount={signals.length} lastUpdated={lastUpdated} />
               {visibleSignals.map(s => (
-                <SignalCard key={s.id} signal={s} onClick={() => setSelected(s)} onSendTo={onSendTo} />
+                <SignalCard key={s.id} signal={s} onClick={() => setSelected(s)} onSendTo={onSendTo} onPromoted={handlePromoted} onNavigate={onNavigate} />
               ))}
             </div>
             {filtered.length > visible && (
@@ -1551,11 +1571,16 @@ const ZA_CLS: { id: ClsFilter; label: string; color: string; bg: string }[] = [
   { id: 'neutral',      label: 'Neutral',     color: C.muted,   bg: C.surfaceDim },
 ]
 
-function SouthAfricaSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', term: string) => void }) {
+function SouthAfricaSection({ onSendTo, onNavigate }: { onSendTo: (s: 'gap' | 'loopholes', term: string) => void; onNavigate: (s: Section) => void }) {
   const [signals,  setSignals]  = useState<Signal[]>([])
+  const [promoted, setPromoted] = useState<Set<string>>(new Set())
   const [loading,  setLoading]  = useState(true)
   const [selected, setSelected] = useState<Signal | null>(null)
   const [filter,   setFilter]   = useState<ClsFilter>('all')
+
+  const handlePromoted = useCallback((id: string) => {
+    setPromoted(prev => new Set([...prev, id]))
+  }, [])
 
   useEffect(() => {
     fetch('/api/signals?limit=300')
@@ -1573,8 +1598,9 @@ function SouthAfricaSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', t
 
   const filtered = useMemo(() =>
     (filter === 'all' ? signals : signals.filter(s => s.classification === filter))
+      .filter(s => !promoted.has(s.id))
       .sort((a, b) => b.relevance_score - a.relevance_score),
-    [signals, filter]
+    [signals, filter, promoted]
   )
 
   return (
@@ -1641,7 +1667,7 @@ function SouthAfricaSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', t
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
             {filtered.map(s => (
-              <SignalCard key={s.id} signal={s} onClick={() => setSelected(s)} onSendTo={onSendTo} />
+              <SignalCard key={s.id} signal={s} onClick={() => setSelected(s)} onSendTo={onSendTo} onPromoted={handlePromoted} onNavigate={onNavigate} />
             ))}
           </div>
         )}
@@ -1652,8 +1678,109 @@ function SouthAfricaSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', t
   )
 }
 
+// ─── Leads section ───────────────────────────────────────────────────────────
+
+interface Account {
+  id: string
+  name: string
+  country: string | null
+  stage: string
+  account_type: string
+  notes: string | null
+  sales_angle: string | null
+  created_at: string
+  updated_at: string
+}
+
+function LeadsSection() {
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('')
+    try {
+      const r = await fetch('/api/accounts?stage=lead&limit=200')
+      if (!r.ok) { setError('Could not load leads.'); return }
+      const { accounts: data } = await r.json()
+      setAccounts(data ?? [])
+    } catch { setError('Could not load leads.') }
+    finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const STAGE_COLOR: Record<string, { color: string; bg: string; border: string }> = {
+    lead:       { color: C.brandMid,  bg: C.brandBg,  border: C.brandBorder  },
+    prospect:   { color: C.amber,     bg: C.amberBg,  border: C.amberBorder  },
+    qualified:  { color: C.green,     bg: C.greenBg,  border: C.greenBorder  },
+    closed_won: { color: C.green,     bg: C.greenBg,  border: C.greenBorder  },
+  }
+
+  return (
+    <div style={{ padding: '28px 32px', maxWidth: 900 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: '0 0 4px' }}>Lead Pipeline</h2>
+          <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>Signals promoted to leads — ready for follow-up in the Sales CRM.</p>
+        </div>
+        <button onClick={load} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: `1px solid ${C.border}`, background: 'transparent', fontSize: 13, color: C.muted, cursor: 'pointer' }}>
+          <RefreshCw size={12} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} /> Refresh
+        </button>
+      </div>
+
+      {loading && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 60, justifyContent: 'center' }}>
+          <Spinner /><span style={{ fontSize: 14, color: C.faint }}>Loading leads…</span>
+        </div>
+      )}
+      {error && <p style={{ color: C.red, fontSize: 14 }}>{error}</p>}
+      {!loading && !error && accounts.length === 0 && (
+        <div style={{ textAlign: 'center', paddingTop: 80 }}>
+          <UserPlus size={28} style={{ color: C.border, margin: '0 auto 12px', display: 'block' }} />
+          <p style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>No leads yet</p>
+          <p style={{ fontSize: 13, color: C.faint }}>Use the Lead button on any signal card to promote it here.</p>
+        </div>
+      )}
+      {!loading && accounts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {accounts.map(a => {
+            const stl = STAGE_COLOR[a.stage] ?? STAGE_COLOR.lead
+            return (
+              <div key={a.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 20px', boxShadow: C.shadow, display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{a.name}</span>
+                    <span style={{ padding: '2px 8px', borderRadius: 6, border: `1px solid ${stl.border}`, background: stl.bg, color: stl.color, fontSize: 11, fontWeight: 600 }}>
+                      {a.stage}
+                    </span>
+                    {a.account_type && a.account_type !== 'prospect' && (
+                      <span style={{ padding: '2px 8px', borderRadius: 6, background: C.surfaceDim, color: C.muted, fontSize: 11 }}>
+                        {a.account_type}
+                      </span>
+                    )}
+                  </div>
+                  {a.notes && (
+                    <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, margin: '0 0 6px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {a.notes}
+                    </p>
+                  )}
+                  <span style={{ fontSize: 12, color: C.faint, fontFamily: 'var(--font-mono)' }}>
+                    {[a.country, timeAgo(a.created_at)].filter(Boolean).join(' · ')}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const SECTIONS: { id: Section; label: string; Icon: React.ElementType }[] = [
   { id: 'signals',      label: 'Signal Feed',   Icon: Radio         },
+  { id: 'leads',        label: 'Leads',         Icon: UserPlus      },
   { id: 'gap',          label: 'Gap Finder',    Icon: Zap           },
   { id: 'loopholes',    label: 'Loopholes',     Icon: AlertTriangle },
   { id: 'intel',        label: 'Intelligence',  Icon: Sparkles      },
@@ -1718,13 +1845,14 @@ export default function ResearchPage() {
       </div>
 
       {/* Content */}
-      {section === 'signals'   && <SignalsSection   onSendTo={handleSendTo} />}
-      {section === 'gap'       && <GapSection       preload={gapPreload} />}
-      {section === 'loopholes' && <LoopholesSection preload={loopholePreload} />}
+      {section === 'signals'      && <SignalsSection      onSendTo={handleSendTo} onNavigate={setSection} />}
+      {section === 'leads'        && <LeadsSection        />}
+      {section === 'gap'          && <GapSection          preload={gapPreload} />}
+      {section === 'loopholes'    && <LoopholesSection    preload={loopholePreload} />}
       {section === 'intel'        && <IntelSection        />}
       {section === 'vault'        && <VaultSection        />}
       {section === 'compass'      && <CompassSection      />}
-      {section === 'south-africa' && <SouthAfricaSection  onSendTo={handleSendTo} />}
+      {section === 'south-africa' && <SouthAfricaSection  onSendTo={handleSendTo} onNavigate={setSection} />}
       {section === 'about'        && <AboutSection        onNavigate={setSection} />}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
