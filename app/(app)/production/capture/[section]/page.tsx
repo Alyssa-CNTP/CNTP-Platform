@@ -748,9 +748,9 @@ function CaptureScreen() {
                   <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">
                     Batch{multi ? ` · P${activeIdx + 1}` : ''}
                   </span>
-                  <GradeHelp />
+                  {!sectionId.startsWith('refining') && <GradeHelp />}
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className={`grid gap-2.5 ${sectionId.startsWith('refining') ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</label>
                     <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
@@ -759,14 +759,16 @@ function CaptureScreen() {
                       {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                     </select>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
-                    <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
-                      <option value="" disabled>Select grade…</option>
-                      {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                    </select>
-                  </div>
+                  {!sectionId.startsWith('refining') && (
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
+                      <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                        <option value="" disabled>Select grade…</option>
+                        {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 {totalIn > 0 && (
@@ -810,8 +812,8 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {/* Capture only opens once a variant and grade are chosen. */}
-              {(active.variant && active.grade) || locked ? (
+              {/* Capture only opens once variant (and grade for non-refining) are chosen. */}
+              {(sectionId.startsWith('refining') ? !!active.variant : !!(active.variant && active.grade)) || locked ? (
                 <>
                   {sectionId.startsWith('refining')
                     ? <RefiningCapture
@@ -848,7 +850,7 @@ function CaptureScreen() {
               ) : (
                 <div className="flex items-start gap-2.5 px-4 py-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-[13px] text-amber-800">
                   <Info size={16} className="shrink-0 mt-0.5" />
-                  <span>Choose a <strong>variant</strong> and <strong>grade</strong> above to start capturing this batch.</span>
+                  <span>Choose a <strong>variant</strong>{sectionId.startsWith('refining') ? '' : ' and grade'} above to start capturing this batch.</span>
                 </div>
               )}
             </>
