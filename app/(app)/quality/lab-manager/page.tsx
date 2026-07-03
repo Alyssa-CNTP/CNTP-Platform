@@ -28,6 +28,42 @@ function parseData(r: any) {
 const fmtDateTime = isoDateTime
 const todayISO = () => isoDate(new Date())
 
+function mondayOf(dateStr: string) {
+  const d = new Date(dateStr + 'T12:00:00')
+  const day = d.getDay()
+  d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day))
+  return isoDate(d)
+}
+function addDays(dateStr: string, n: number) {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + n)
+  return isoDate(d)
+}
+function fmtDay(dateStr: string) {
+  return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// Standing Lab Manager note — always editable, saves on blur. Separate from
+// the decision comment (final_reason) tied to a Fail/Concession verdict.
+function LmNotesBox({ initialValue, onSave, disabled }: { initialValue: string; onSave: (v: string) => void; disabled?: boolean }) {
+  const [value, setValue] = useState(initialValue || '')
+  const [dirty, setDirty] = useState(false)
+  return (
+    <div>
+      <textarea
+        value={value}
+        onChange={e => { setValue(e.target.value); setDirty(true) }}
+        onBlur={() => { if (dirty) { onSave(value); setDirty(false) } }}
+        disabled={disabled}
+        placeholder="Add any comments on this batch before deciding…"
+        rows={2}
+        className="w-full text-[12px] px-3 py-2 border border-surface-rule rounded-lg bg-surface resize-y disabled:opacity-60 outline-none focus:border-brand/50"
+      />
+      {dirty && <span className="text-[10px] text-warn">Unsaved — click outside the box to save</span>}
+    </div>
+  )
+}
+
 export default function LabManagerPage() {
   const { p, session } = useAuth()
   const db = getDb()
@@ -35,7 +71,7 @@ export default function LabManagerPage() {
   const canSignoff = p('can_signoff_day')
   const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
 
-  const [tab, setTab] = useState<'approvals' | 'daily'>('approvals')
+  const [tab, setTab] = useState<'approvals' | 'daily' | 'history'>('approvals')
 
   // ── Pending approvals ──────────────────────────────────────────────────────
   const [pending, setPending] = useState<any[]>([])
@@ -54,7 +90,7 @@ export default function LabManagerPage() {
         kind: 'pasteuriser', id: r.id, batch: r.batch_number || r.d.batch_number || '—',
         meta: `${r.d.production_date || '—'} · ${r.d.customer || '—'} · ${r.d.type_grade || [r.d.product_family, r.d.grade, r.d.variant].filter(Boolean).join(' ')}`,
         samples: (r.d.samples ?? []).length, allocated_by: r.d.allocated_by, allocated_at: r.d.allocated_at,
-        oos: r.d.oos_flags ?? computePastOosFlags(r.d), raw: r,
+        oos: r.d.oos_flags ?? computePastOosFlags(r.d), lm_notes: r.d.lm_notes || '', raw: r,
       }))
     const gsByRun: Record<number, any[]> = {}
     for (const s of (gsRes.data ?? [])) (gsByRun[s.run_id] = gsByRun[s.run_id] || []).push(s)
@@ -66,7 +102,7 @@ export default function LabManagerPage() {
         return {
           kind: 'granule', id: r.id, batch: r.batch_number || '—',
           meta: `${r.production_date || '—'} · ${r.type_grade || r.grade || '—'} · QC ${r.qc_name || '—'}`,
-          samples: samples.length, allocated_by: r.allocated_by, allocated_at: r.allocated_at, oos, raw: r,
+          samples: samples.length, allocated_by: r.allocated_by, allocated_at: r.allocated_at, oos, lm_notes: r.lm_notes || '', raw: r,
         }
       })
     setPending([...past, ...gran])
@@ -89,6 +125,20 @@ export default function LabManagerPage() {
     }
     setPending(prev => prev.filter(x => !(x.kind === item.kind && x.id === item.id)))
     setDecisionModal(null)
+  }
+
+  // Standing Lab Manager note — savable any time, independent of the pass/fail/concession decision.
+  async function saveLmNotes(item: any, text: string) {
+    if (item.kind === 'pasteuriser') {
+      const d = { ...item.raw.d, lm_notes: text }
+      const { error } = await db.schema('qms').from('quality_records').update({ data_json: d }).eq('id', item.id)
+      if (error) { alert('Failed to save note: ' + error.message); return }
+      setPending(prev => prev.map(x => (x.kind === item.kind && x.id === item.id) ? { ...x, lm_notes: text, raw: { ...x.raw, d } } : x))
+    } else {
+      const { error } = await db.schema('qms').from('granule_runs').update({ lm_notes: text }).eq('id', item.id)
+      if (error) { alert('Failed to save note: ' + error.message); return }
+      setPending(prev => prev.map(x => (x.kind === item.kind && x.id === item.id) ? { ...x, lm_notes: text, raw: { ...x.raw, lm_notes: text } } : x))
+    }
   }
 
   // ── Daily overview ─────────────────────────────────────────────────────────
@@ -122,6 +172,62 @@ export default function LabManagerPage() {
   }, [db, day])
 
   useEffect(() => { if (tab === 'daily') loadDaily() }, [tab, loadDaily])
+
+  // ── Approvals history (weekly, searchable) ──────────────────────────────────
+  const [weekStart, setWeekStart] = useState(mondayOf(todayISO()))
+  const [historyItems, setHistoryItems] = useState<any[]>([])
+  const [loadingH, setLoadingH] = useState(true)
+  const [historySearch, setHistorySearch] = useState('')
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'outstanding' | 'approved' | 'concession' | 'fail'>('all')
+
+  const loadHistory = useCallback(async () => {
+    setLoadingH(true)
+    const [pRes, gRes] = await Promise.all([
+      db.schema('qms').from('quality_records').select('*').eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run').order('created_at', { ascending: false }).limit(1000),
+      db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }).limit(1000),
+    ])
+    const pRows = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
+      .filter((r: any) => r.d.batch_status === 'awaiting_approval' || !!r.d.final_result)
+      .map((r: any) => ({
+        kind: 'pasteuriser', id: r.id, batch: r.batch_number || r.d.batch_number || '—',
+        date: (r.d.production_date || '').slice(0, 10),
+        status: r.d.final_result || 'Outstanding',
+        meta: `${r.d.customer || '—'} · ${r.d.type_grade || [r.d.product_family, r.d.grade, r.d.variant].filter(Boolean).join(' ')}`,
+        qc: r.d.allocated_by || '—', approved_by: r.d.approved_by || '', final_reason: r.d.final_reason || '', lm_notes: r.d.lm_notes || '',
+      }))
+    const gRows = (gRes.data ?? []).filter((r: any) => r.lm_status === 'awaiting_approval' || !!r.final_status)
+      .map((r: any) => ({
+        kind: 'granule', id: r.id, batch: r.batch_number || '—',
+        date: String(r.production_date || '').slice(0, 10),
+        status: r.final_status || 'Outstanding',
+        meta: `${r.type_grade || r.grade || '—'}`,
+        qc: r.qc_name || '—', approved_by: r.approved_by || '', final_reason: r.final_reason || '', lm_notes: r.lm_notes || '',
+      }))
+    setHistoryItems([...pRows, ...gRows])
+    setLoadingH(false)
+  }, [db])
+
+  useEffect(() => { if (tab === 'history') loadHistory() }, [tab, loadHistory])
+
+  const historySearchLower = historySearch.trim().toLowerCase()
+  const historyDateFiltered = historyItems.filter((item: any) => historySearchLower
+    ? [item.batch, item.qc, item.meta, item.approved_by, item.final_reason, item.lm_notes].some((v: string) => (v || '').toLowerCase().includes(historySearchLower))
+    : (item.date >= weekStart && item.date <= addDays(weekStart, 6)))
+  const historyCounts = {
+    all: historyDateFiltered.length,
+    outstanding: historyDateFiltered.filter((i: any) => i.status === 'Outstanding').length,
+    approved: historyDateFiltered.filter((i: any) => i.status === 'Pass').length,
+    concession: historyDateFiltered.filter((i: any) => i.status === 'Concession').length,
+    fail: historyDateFiltered.filter((i: any) => i.status === 'Fail').length,
+  }
+  const historyFiltered = historyDateFiltered.filter((item: any) => {
+    if (historyFilter === 'all') return true
+    if (historyFilter === 'outstanding') return item.status === 'Outstanding'
+    if (historyFilter === 'approved') return item.status === 'Pass'
+    if (historyFilter === 'concession') return item.status === 'Concession'
+    if (historyFilter === 'fail') return item.status === 'Fail'
+    return true
+  }).sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''))
 
   // Build a per-station summary of batches + OOS highlights for the selected day
   function pastSummary() {
@@ -187,7 +293,7 @@ export default function LabManagerPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-4">
-        {([['approvals', `✅ Pending Approvals${pending.length ? ` (${pending.length})` : ''}`], ['daily', '📅 Daily Overview & Sign-off']] as const).map(([k, l]) => (
+        {([['approvals', `✅ Pending Approvals${pending.length ? ` (${pending.length})` : ''}`], ['daily', '📅 Daily Overview & Sign-off'], ['history', '🗓 Approvals History']] as const).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k as any)}
             className={`px-4 py-2 rounded-xl text-[12px] font-semibold border transition-colors ${tab === k ? 'bg-brand text-white border-brand' : 'bg-surface-card text-text-muted border-surface-rule hover:text-text'}`}>
             {l}
@@ -225,6 +331,11 @@ export default function LabManagerPage() {
                       <button onClick={() => setDecisionModal({ item, result: 'Fail' })} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
                     </div>
                   )}
+                </div>
+                {/* Standing Lab Manager note — always available, independent of the decision */}
+                <div className="mt-3 pt-3 border-t border-surface-rule">
+                  <label className="block text-[10px] font-mono uppercase tracking-wide text-text-muted mb-1">📝 Lab Manager Notes</label>
+                  <LmNotesBox key={`${item.kind}-${item.id}`} initialValue={item.lm_notes} onSave={text => saveLmNotes(item, text)} disabled={!canApprove} />
                 </div>
                 {/* Out-of-spec highlights */}
                 <div className="mt-3 pt-3 border-t border-surface-rule">
@@ -337,6 +448,60 @@ export default function LabManagerPage() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* ── Approvals history: weekly, searchable across pasteuriser + granule ── */}
+      {tab === 'history' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setWeekStart(w => addDays(w, -7))} className="px-2 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[12px] font-semibold">◀</button>
+              <span className="text-[12px] font-semibold text-text whitespace-nowrap">Week of {fmtDay(weekStart)} – {fmtDay(addDays(weekStart, 6))}</span>
+              <button onClick={() => setWeekStart(w => addDays(w, 7))} className="px-2 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[12px] font-semibold">▶</button>
+              <button onClick={() => setWeekStart(mondayOf(todayISO()))} className="px-3 py-1.5 rounded-lg border border-brand/30 bg-brand/10 text-brand text-[11px] font-semibold">This week</button>
+            </div>
+            <input value={historySearch} onChange={e => setHistorySearch(e.target.value)} placeholder="🔍 Search batch, QC, customer, notes…"
+              className="flex-1 min-w-[220px] px-3 py-1.5 border border-surface-rule rounded-lg text-[12px] bg-surface-card" />
+          </div>
+          {historySearchLower && <div className="text-[11px] text-text-muted">Searching all history — not limited to the selected week.</div>}
+
+          <div className="flex gap-2 flex-wrap">
+            {([['all', 'All'], ['outstanding', '⏳ Outstanding'], ['approved', '✓ Approved'], ['concession', '⚠ Concession'], ['fail', '✗ Fail']] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setHistoryFilter(k)}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors ${historyFilter === k ? 'bg-brand text-white border-brand' : 'bg-surface-card text-text-muted border-surface-rule hover:text-text'}`}>
+                {l} ({(historyCounts as any)[k]})
+              </button>
+            ))}
+          </div>
+
+          {loadingH && <div className="text-center py-10 text-text-muted text-[12px] animate-pulse">Loading…</div>}
+          {!loadingH && historyFiltered.length === 0 && (
+            <div className="bg-surface-card border border-surface-rule rounded-xl p-10 text-center text-text-muted text-[13px]">No matching records.</div>
+          )}
+          <div className="space-y-2">
+            {historyFiltered.map((item: any) => (
+              <div key={`${item.kind}-${item.id}`} className="bg-surface-card border border-surface-rule rounded-xl p-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-[13px] text-text">{item.batch}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${item.kind === 'pasteuriser' ? 'bg-info/10 text-info' : 'bg-brand/10 text-brand'}`}>{item.kind === 'pasteuriser' ? '🫗 Pasteuriser' : '🔬 Granule'}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${item.status === 'Pass' ? 'bg-ok/15 text-ok' : item.status === 'Fail' ? 'bg-err/15 text-err' : item.status === 'Concession' ? 'bg-warn/15 text-warn' : 'bg-text-faint/15 text-text-muted'}`}>{item.status}</span>
+                    </div>
+                    <div className="text-[11px] text-text-muted">{item.date || '—'} · {item.meta} · QC {item.qc}</div>
+                    {item.approved_by && <div className="text-[10px] text-text-muted">approved by {item.approved_by}</div>}
+                  </div>
+                </div>
+                {item.final_reason && (
+                  <div className="mt-2 text-[11px] text-warn bg-warn/8 border border-warn/20 rounded-lg px-2 py-1">💬 Decision comment: {item.final_reason}</div>
+                )}
+                {item.lm_notes && (
+                  <div className="mt-2 text-[11px] text-info bg-info/8 border border-info/20 rounded-lg px-2 py-1">📝 LM notes: {item.lm_notes}</div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

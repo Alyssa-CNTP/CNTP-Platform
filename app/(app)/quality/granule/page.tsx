@@ -1407,6 +1407,11 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
               💬 <span className="font-semibold">Lab Manager comment:</span> {run.final_reason}
             </div>
           )}
+          {run.lm_notes && (
+            <div className="text-[10px] text-info bg-info/8 border border-info/20 rounded-lg px-2 py-1 mt-1 inline-block">
+              📝 <span className="font-semibold">Lab Manager notes:</span> {run.lm_notes}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <button onClick={() => onAddSample(run)} title="Add when a new sample is taken during the current run" className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface-card text-[11px] font-semibold cursor-pointer">+ Sample</button>
