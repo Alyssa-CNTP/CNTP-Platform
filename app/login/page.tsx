@@ -89,6 +89,19 @@ export default function LoginPage() {
 
             {/* Role cards */}
             <div className="login-role-cards">
+              <a href="/quality-login" className="login-role-card">
+                <div className="login-role-icon login-role-icon--quality">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4m0 0h18"/>
+                  </svg>
+                </div>
+                <div className="login-role-text">
+                  <span className="login-role-name">Quality Lab</span>
+                  <span className="login-role-desc">Sign in with your PIN</span>
+                </div>
+                <svg className="login-role-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+              </a>
+
               <a href="/maintenance-login" className="login-role-card">
                 <div className="login-role-icon login-role-icon--maint">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -317,6 +330,7 @@ export default function LoginPage() {
           shrink: 0;
           flex-shrink: 0;
         }
+        .login-role-icon--quality { background: #EEF2FF; color: #4338CA; }
         .login-role-icon--maint { background: #FFF7ED; color: #C2410C; }
         .login-role-icon--floor { background: #F0FDF4; color: #15803D; }
         .login-role-text {
