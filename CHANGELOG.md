@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Lab Manager: standing per-batch notes + weekly Approvals History tab)
+
+**Files changed:** `app/(app)/quality/lab-manager/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260704_002_granule_runs_lm_notes.sql`
+
+- **Standing Lab Manager notes:** Added an always-visible comment box (`LmNotesBox`) on every Pending Approvals card, saved on blur independently of the Pass/Fail/Concession decision — no click-to-open modal. Notes persist to `qms.quality_records.data_json.lm_notes` (pasteuriser) or the new `qms.granule_runs.lm_notes` column (granule), and remain visible after the batch is closed.
+- **New `lm_notes` column:** Added to `qms.granule_runs` via migration (additive, nullable).
+- **New "🗓 Approvals History" tab:** Monday-based weekly navigator (◀ / ▶ / "This week"), full-text search across all history regardless of week, and status filter chips (Outstanding / Approved / Concession / Fail) with live counts. Each card shows the decision comment and LM notes.
+- **Surfaced `lm_notes` for QC:** Pasteuriser and granule pages now show the Lab Manager's standing note (when present) both while a batch is still pending and after it's finalized.
+
+---
+
 ## 2026-07-03 — Alyssa (Alara: Lead fix, South Africa tab, SignalCard title fallback, prod deploy)
 
 **Files changed:** `app/(app)/research/page.tsx`, `components/intelligence/SignalCard.tsx`
