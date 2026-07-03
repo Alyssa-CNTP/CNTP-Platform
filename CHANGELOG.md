@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Lab Manager: station-grouped Pending Approvals + date-range Daily Overview)
+
+**Files changed:** `app/(app)/quality/lab-manager/page.tsx`
+
+- **Pending Approvals grouped by station:** now shows Pasteuriser / Granule Line / Sieving as separate sections (matching the Daily Overview layout), so nothing is missed regardless of which station or production date a run belongs to. Pending Approvals already had no date filter — this makes that explicit and visible. Sieving shows an informational note since it self-grades Pass/Fail at capture and doesn't route through Lab Manager approval.
+- **Daily Overview & Sign-off is now a date range:** replaced the single "Production day" picker with From/To date inputs (plus Today / This week shortcuts). Each station's batches now show their production date, and sign-off tracks per-date within the range — the sign-off button signs off every unsigned day in range in one action, and the header shows "X/Y days signed off" until complete.
+
+---
+
 ## 2026-07-04 — Gustav (Lab Manager: standing per-batch notes + weekly Approvals History tab)
 
 **Files changed:** `app/(app)/quality/lab-manager/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260704_002_granule_runs_lm_notes.sql`

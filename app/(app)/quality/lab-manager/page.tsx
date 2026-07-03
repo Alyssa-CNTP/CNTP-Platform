@@ -142,13 +142,17 @@ export default function LabManagerPage() {
     }
   }
 
-  // ── Daily overview ─────────────────────────────────────────────────────────
-  const [day, setDay] = useState(todayISO())
+  // ── Daily overview (date range) ──────────────────────────────────────────────
+  const [dayFrom, setDayFrom] = useState(todayISO())
+  const [dayTo, setDayTo] = useState(todayISO())
   const [past, setPast] = useState<any[]>([])
   const [gran, setGran] = useState<any[]>([])
   const [siev, setSiev] = useState<any[]>([])
-  const [signoffs, setSignoffs] = useState<Record<string, any>>({})
+  // signoffs[workcenter][production_date] = signoff row
+  const [signoffs, setSignoffs] = useState<Record<string, Record<string, any>>>({})
   const [loadingD, setLoadingD] = useState(true)
+
+  const inRange = (d: string) => !!d && d >= dayFrom && d <= dayTo
 
   const loadDaily = useCallback(async () => {
     setLoadingD(true)
@@ -157,20 +161,23 @@ export default function LabManagerPage() {
       db.schema('qms').from('granule_runs').select('*').order('created_at', { ascending: false }).limit(500),
       db.schema('qms').from('granule_samples').select('*').limit(3000),
       db.schema('qms').from('sd_runs').select('*').order('created_at', { ascending: false }).limit(1000),
-      db.schema('qms').from('daily_signoffs').select('*').eq('production_date', day),
+      db.schema('qms').from('daily_signoffs').select('*').gte('production_date', dayFrom).lte('production_date', dayTo),
     ])
     const pRows = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
-      .filter((r: any) => (r.d.production_date || '').slice(0, 10) === day)
+      .filter((r: any) => inRange((r.d.production_date || '').slice(0, 10)))
     const gsByRun: Record<number, any[]> = {}
     for (const s of (gsRes.data ?? [])) (gsByRun[s.run_id] = gsByRun[s.run_id] || []).push(s)
-    const gRows = (gRes.data ?? []).filter((r: any) => String(r.production_date || r.date || '').slice(0, 10) === day)
+    const gRows = (gRes.data ?? []).filter((r: any) => inRange(String(r.production_date || r.date || '').slice(0, 10)))
       .map((r: any) => ({ ...r, _samples: gsByRun[r.id] || [] }))
-    const sRows = (sRes.data ?? []).filter((r: any) => String(r.date || '').slice(0, 10) === day)
-    const so: Record<string, any> = {}
-    for (const row of (soRes.data ?? [])) so[row.workcenter] = row
+    const sRows = (sRes.data ?? []).filter((r: any) => inRange(String(r.date || '').slice(0, 10)))
+    const so: Record<string, Record<string, any>> = {}
+    for (const row of (soRes.data ?? [])) {
+      so[row.workcenter] = so[row.workcenter] || {}
+      so[row.workcenter][row.production_date] = row
+    }
     setPast(pRows); setGran(gRows); setSiev(sRows); setSignoffs(so)
     setLoadingD(false)
-  }, [db, day])
+  }, [db, dayFrom, dayTo])
 
   useEffect(() => { if (tab === 'daily') loadDaily() }, [tab, loadDaily])
 
@@ -230,12 +237,13 @@ export default function LabManagerPage() {
     return true
   }).sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''))
 
-  // Build a per-station summary of batches + OOS highlights for the selected day
+  // Build a per-station summary of batches + OOS highlights for the selected date range
   function pastSummary() {
     return past.map((r: any) => {
       const flags = r.d.oos_flags ?? computePastOosFlags(r.d)
       return {
         batch: r.batch_number || r.d.batch_number || '—',
+        date: (r.d.production_date || '').slice(0, 10),
         status: r.d.final_result || (r.d.batch_status === 'awaiting_approval' ? 'Awaiting LM' : 'In progress'),
         samples: (r.d.samples ?? []).length,
         oos: flags,
@@ -248,6 +256,7 @@ export default function LabManagerPage() {
         .map((s: any) => ({ bag: s.bulk_bag_serial || `Sample ${s.id}`, time: s.sample_time, fails: (s.violations || []).map((v: string) => ({ field: v })) }))
       return {
         batch: r.batch_number || '—',
+        date: String(r.production_date || r.date || '').slice(0, 10),
         status: r.final_status || (r.lm_status === 'awaiting_approval' ? 'Awaiting LM' : 'In progress'),
         grade: r.type_grade || r.grade || '—',
         qc: r.qc_name || '—',
@@ -258,6 +267,7 @@ export default function LabManagerPage() {
   function sievSummary() {
     return siev.map((r: any) => ({
       batch: r.serial_number || r.lot_number || '—',
+      date: String(r.date || '').slice(0, 10),
       product: r.product || '—',
       grade: [r.grade, r.variant].filter(Boolean).join(' / '),
       fail: String(r.pass_status || '').toLowerCase() === 'fail',
@@ -265,13 +275,25 @@ export default function LabManagerPage() {
     }))
   }
 
-  async function signOff(station: string, summary: any) {
+  // Distinct production dates present in a station's rows within the selected range
+  function datesFor(rows: any[]) {
+    return Array.from(new Set(rows.map(r => r.date).filter(Boolean))).sort()
+  }
+
+  async function signOff(station: string, rows: any[]) {
     if (!canSignoff) return
-    const notes = prompt(`Sign-off note for ${station} on ${day} (optional):`, '') ?? ''
-    const { error } = await db.schema('qms').from('daily_signoffs').upsert(
-      { workcenter: station, production_date: day, signed_by: whoAmI, signed_at: new Date().toISOString(), notes: notes || null, summary },
-      { onConflict: 'workcenter,production_date' },
-    )
+    const dates = datesFor(rows)
+    const already = signoffs[station] || {}
+    const unsigned = dates.filter(d => !already[d])
+    if (unsigned.length === 0) return
+    const notes = prompt(`Sign-off note for ${station} — ${unsigned.length} day${unsigned.length > 1 ? 's' : ''} (${unsigned.join(', ')}), optional:`, '') ?? ''
+    const rowsByDate: Record<string, any[]> = {}
+    for (const r of rows) (rowsByDate[r.date] = rowsByDate[r.date] || []).push(r)
+    const payload = unsigned.map(d => ({
+      workcenter: station, production_date: d, signed_by: whoAmI, signed_at: new Date().toISOString(),
+      notes: notes || null, summary: rowsByDate[d] || [],
+    }))
+    const { error } = await db.schema('qms').from('daily_signoffs').upsert(payload, { onConflict: 'workcenter,production_date' })
     if (error) { alert('Sign-off failed: ' + error.message); return }
     loadDaily()
   }
@@ -302,57 +324,74 @@ export default function LabManagerPage() {
         ))}
       </div>
 
-      {/* ── Pending approvals ── */}
+      {/* ── Pending approvals — grouped by station, spans every production day (no date filter) ── */}
       {tab === 'approvals' && (
-        <div className="space-y-3">
+        <div className="space-y-6">
           {!canApprove && <div className="text-[12px] text-warn bg-warn/8 rounded-lg px-3 py-2">You don't have approval rights — view only.</div>}
           {loadingP && <div className="text-center py-10 text-text-muted text-[12px] animate-pulse">Loading…</div>}
-          {!loadingP && pending.length === 0 && (
-            <div className="bg-surface-card border border-surface-rule rounded-xl p-10 text-center text-text-muted text-[13px]">No runs awaiting approval. 🎉</div>
-          )}
-          {pending.map((item: any) => {
-            const flags = item.oos || []
+          {!loadingP && STATIONS.map(st => {
+            const items = st.key === 'sieving' ? [] : pending.filter((p: any) => p.kind === st.key)
             return (
-              <div key={`${item.kind}-${item.id}`} className="bg-surface-card border border-surface-rule rounded-xl p-4">
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-[14px] text-text">{item.batch}</span>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${item.kind === 'pasteuriser' ? 'bg-info/10 text-info' : 'bg-brand/10 text-brand'}`}>{item.kind === 'pasteuriser' ? '🫗 Pasteuriser' : '🔬 Granule'}</span>
-                    </div>
-                    <div className="text-[11px] text-text-muted">{item.meta}</div>
-                    <div className="text-[11px] text-text-muted mt-0.5">
-                      {item.samples} samples · allocated by {item.allocated_by || '—'} {item.allocated_at ? `· ${fmtDateTime(item.allocated_at)}` : ''}
-                    </div>
+              <div key={st.key}>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="font-semibold text-[13px] text-text">{st.label}</span>
+                  <span className="text-[11px] text-text-muted">{items.length} awaiting approval — all production days</span>
+                </div>
+                {st.key === 'sieving' ? (
+                  <div className="bg-surface-card border border-surface-rule rounded-xl p-4 text-[12px] text-text-muted">
+                    Sieving runs are graded Pass/Fail automatically at capture and don't route through Lab Manager approval.
                   </div>
-                  {canApprove && (
-                    <div className="flex gap-2">
-                      <button onClick={() => decide(item, 'Pass', '')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
-                      <button onClick={() => setDecisionModal({ item, result: 'Concession' })} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
-                      <button onClick={() => setDecisionModal({ item, result: 'Fail' })} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
-                    </div>
-                  )}
-                </div>
-                {/* Standing Lab Manager note — always available, independent of the decision */}
-                <div className="mt-3 pt-3 border-t border-surface-rule">
-                  <label className="block text-[10px] font-mono uppercase tracking-wide text-text-muted mb-1">📝 Lab Manager Notes</label>
-                  <LmNotesBox key={`${item.kind}-${item.id}`} initialValue={item.lm_notes} onSave={text => saveLmNotes(item, text)} disabled={!canApprove} />
-                </div>
-                {/* Out-of-spec highlights */}
-                <div className="mt-3 pt-3 border-t border-surface-rule">
-                  {flags.length === 0 ? (
-                    <div className="text-[11px] text-ok">✓ No out-of-spec bags/boxes detected.</div>
-                  ) : (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-semibold text-err">⚠ {flags.length} out-of-spec bag/box{flags.length > 1 ? 'es' : ''}:</div>
-                      {flags.map((f: any, i: number) => (
-                        <div key={i} className="text-[11px] text-text-muted">
-                          <span className="font-mono font-semibold text-text">{f.bag}</span>{f.time ? ` (${f.time})` : ''} — {f.fails.map((x: any) => `${x.field}${x.value !== '' && x.value != null ? `: ${x.value}` : ''}${x.spec ? ` [${x.spec.min ?? ''}–${x.spec.max ?? ''}]` : ''}`).join(', ')}
+                ) : items.length === 0 ? (
+                  <div className="bg-surface-card border border-surface-rule rounded-xl p-6 text-center text-text-muted text-[12px]">No {st.key} runs awaiting approval. 🎉</div>
+                ) : (
+                  <div className="space-y-3">
+                    {items.map((item: any) => {
+                      const flags = item.oos || []
+                      return (
+                        <div key={`${item.kind}-${item.id}`} className="bg-surface-card border border-surface-rule rounded-xl p-4">
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-[14px] text-text">{item.batch}</span>
+                              </div>
+                              <div className="text-[11px] text-text-muted">{item.meta}</div>
+                              <div className="text-[11px] text-text-muted mt-0.5">
+                                {item.samples} samples · allocated by {item.allocated_by || '—'} {item.allocated_at ? `· ${fmtDateTime(item.allocated_at)}` : ''}
+                              </div>
+                            </div>
+                            {canApprove && (
+                              <div className="flex gap-2">
+                                <button onClick={() => decide(item, 'Pass', '')} className="px-3 py-1.5 rounded-lg border-2 border-ok/40 bg-ok/10 text-ok text-[11px] font-bold">Pass</button>
+                                <button onClick={() => setDecisionModal({ item, result: 'Concession' })} className="px-3 py-1.5 rounded-lg border-2 border-warn/40 bg-warn/10 text-warn text-[11px] font-bold">Concession</button>
+                                <button onClick={() => setDecisionModal({ item, result: 'Fail' })} className="px-3 py-1.5 rounded-lg border-2 border-err/40 bg-err/10 text-err text-[11px] font-bold">Fail</button>
+                              </div>
+                            )}
+                          </div>
+                          {/* Standing Lab Manager note — always available, independent of the decision */}
+                          <div className="mt-3 pt-3 border-t border-surface-rule">
+                            <label className="block text-[10px] font-mono uppercase tracking-wide text-text-muted mb-1">📝 Lab Manager Notes</label>
+                            <LmNotesBox key={`${item.kind}-${item.id}`} initialValue={item.lm_notes} onSave={text => saveLmNotes(item, text)} disabled={!canApprove} />
+                          </div>
+                          {/* Out-of-spec highlights */}
+                          <div className="mt-3 pt-3 border-t border-surface-rule">
+                            {flags.length === 0 ? (
+                              <div className="text-[11px] text-ok">✓ No out-of-spec bags/boxes detected.</div>
+                            ) : (
+                              <div className="space-y-1">
+                                <div className="text-[11px] font-semibold text-err">⚠ {flags.length} out-of-spec bag/box{flags.length > 1 ? 'es' : ''}:</div>
+                                {flags.map((f: any, i: number) => (
+                                  <div key={i} className="text-[11px] text-text-muted">
+                                    <span className="font-mono font-semibold text-text">{f.bag}</span>{f.time ? ` (${f.time})` : ''} — {f.fails.map((x: any) => `${x.field}${x.value !== '' && x.value != null ? `: ${x.value}` : ''}${x.spec ? ` [${x.spec.min ?? ''}–${x.spec.max ?? ''}]` : ''}`).join(', ')}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -362,21 +401,33 @@ export default function LabManagerPage() {
       {/* ── Daily overview & sign-off ── */}
       {tab === 'daily' && (
         <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <label className="text-[11px] font-mono uppercase tracking-wide text-text-muted">Production day</label>
-            <input type="date" value={day} onChange={e => setDay(e.target.value)}
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-[11px] font-mono uppercase tracking-wide text-text-muted">From</label>
+            <input type="date" value={dayFrom} onChange={e => setDayFrom(e.target.value)}
               className="px-3 py-1.5 border border-surface-rule rounded-lg font-mono text-[12px] bg-surface-card" />
+            <label className="text-[11px] font-mono uppercase tracking-wide text-text-muted">To</label>
+            <input type="date" value={dayTo} onChange={e => setDayTo(e.target.value)}
+              className="px-3 py-1.5 border border-surface-rule rounded-lg font-mono text-[12px] bg-surface-card" />
+            <button onClick={() => { const t = todayISO(); setDayFrom(t); setDayTo(t) }}
+              className="px-3 py-1.5 rounded-lg border border-brand/30 bg-brand/10 text-brand text-[11px] font-semibold">Today</button>
+            <button onClick={() => { setDayFrom(mondayOf(todayISO())); setDayTo(addDays(mondayOf(todayISO()), 6)) }}
+              className="px-3 py-1.5 rounded-lg border border-brand/30 bg-brand/10 text-brand text-[11px] font-semibold">This week</button>
           </div>
 
           {loadingD && <div className="text-center py-10 text-text-muted text-[12px] animate-pulse">Loading…</div>}
 
           {!loadingD && STATIONS.map(st => {
-            const so = signoffs[st.key]
             let rows: any[] = []
             let oosCount = 0
             if (st.key === 'pasteuriser') { const s = pastSummary(); rows = s; oosCount = s.reduce((a, b) => a + (b.oos?.length || 0), 0) }
             else if (st.key === 'granule') { const s = granSummary(); rows = s; oosCount = s.reduce((a, b) => a + (b.oos?.length || 0), 0) }
             else { const s = sievSummary(); rows = s; oosCount = s.filter(x => x.fail).length }
+
+            const dates = datesFor(rows)
+            const soForStation = signoffs[st.key] || {}
+            const signedDates = dates.filter(d => soForStation[d])
+            const allSigned = dates.length > 0 && signedDates.length === dates.length
+            const lastSigned = signedDates.length ? soForStation[signedDates[signedDates.length - 1]] : null
 
             return (
               <div key={st.key} className="bg-surface-card border border-surface-rule rounded-xl overflow-hidden">
@@ -384,28 +435,33 @@ export default function LabManagerPage() {
                   <span className="font-semibold text-[14px] text-text">{st.label}</span>
                   <div className="flex items-center gap-3">
                     {oosCount > 0 && <span className="text-[11px] font-bold text-err">⚠ {oosCount} OOS</span>}
-                    <span className="text-[11px] text-text-muted">{rows.length} {st.key === 'sieving' ? 'runs' : 'batches'}</span>
-                    {so ? (
-                      <span className="text-[11px] text-ok font-semibold">✓ Signed off by {so.signed_by} · {fmtDateTime(so.signed_at)}</span>
+                    <span className="text-[11px] text-text-muted">{rows.length} {st.key === 'sieving' ? 'runs' : 'batches'} · {dates.length} day{dates.length === 1 ? '' : 's'}</span>
+                    {allSigned ? (
+                      <span className="text-[11px] text-ok font-semibold">✓ All signed off{lastSigned ? ` · last by ${lastSigned.signed_by} ${fmtDateTime(lastSigned.signed_at)}` : ''}</span>
                     ) : canSignoff ? (
                       <button
-                        onClick={() => signOff(st.key, st.key === 'pasteuriser' ? pastSummary() : st.key === 'granule' ? granSummary() : sievSummary())}
-                        disabled={rows.length === 0}
-                        className="px-3 py-1 rounded-lg border border-brand/40 bg-brand/10 text-brand text-[11px] font-semibold disabled:opacity-40">✍ Sign off</button>
+                        onClick={() => signOff(st.key, rows)}
+                        disabled={dates.length === 0}
+                        className="px-3 py-1 rounded-lg border border-brand/40 bg-brand/10 text-brand text-[11px] font-semibold disabled:opacity-40">
+                        ✍ Sign off {dates.length - signedDates.length} day{dates.length - signedDates.length === 1 ? '' : 's'}
+                      </button>
+                    ) : dates.length > 0 ? (
+                      <span className="text-[11px] text-warn font-semibold">{signedDates.length}/{dates.length} days signed off</span>
                     ) : null}
                   </div>
                 </div>
                 <div className="p-4">
                   {rows.length === 0 ? (
-                    <div className="text-[12px] text-text-muted text-center py-3">No {st.key} activity on {day}.</div>
+                    <div className="text-[12px] text-text-muted text-center py-3">No {st.key} activity between {fmtDay(dayFrom)} and {fmtDay(dayTo)}.</div>
                   ) : st.key === 'pasteuriser' ? (
                     <div className="space-y-2">
                       {rows.map((b: any, i: number) => (
                         <div key={i} className="flex flex-col gap-1 border-b border-surface-rule/60 pb-2 last:border-0">
                           <div className="flex items-center gap-2 text-[12px]">
                             <span className="font-mono font-semibold text-text">{b.batch}</span>
-                            <span className="text-text-muted">· {b.samples} samples ·</span>
+                            <span className="text-text-muted">· {b.date || '—'} · {b.samples} samples ·</span>
                             <span className={`font-semibold ${b.status === 'Pass' ? 'text-ok' : b.status === 'Fail' ? 'text-err' : b.status === 'Concession' ? 'text-warn' : 'text-text-muted'}`}>{b.status}</span>
+                            {soForStation[b.date] && <span className="text-[10px] text-ok">✓ signed</span>}
                           </div>
                           {b.oos.length > 0 && (
                             <div className="text-[11px] text-err pl-2">
@@ -421,8 +477,9 @@ export default function LabManagerPage() {
                         <div key={i} className="flex flex-col gap-1 border-b border-surface-rule/60 pb-2 last:border-0">
                           <div className="flex items-center gap-2 text-[12px]">
                             <span className="font-mono font-semibold text-text">{b.batch}</span>
-                            <span className="text-text-muted">· {b.grade} · QC {b.qc} ·</span>
+                            <span className="text-text-muted">· {b.date || '—'} · {b.grade} · QC {b.qc} ·</span>
                             <span className={`font-semibold ${b.status === 'Pass' ? 'text-ok' : b.status === 'Fail' ? 'text-err' : b.status === 'Concession' ? 'text-warn' : 'text-text-muted'}`}>{b.status}</span>
+                            {soForStation[b.date] && <span className="text-[10px] text-ok">✓ signed</span>}
                           </div>
                           {b.oos.length > 0 && (
                             <div className="text-[11px] text-err pl-2">
@@ -437,14 +494,17 @@ export default function LabManagerPage() {
                       {rows.map((b: any, i: number) => (
                         <div key={i} className="flex items-center gap-2 text-[12px]">
                           <span className="font-mono font-semibold text-text">{b.batch}</span>
-                          <span className="text-text-muted">· {b.product} {b.grade ? `· ${b.grade}` : ''} ·</span>
+                          <span className="text-text-muted">· {b.date || '—'} · {b.product} {b.grade ? `· ${b.grade}` : ''} ·</span>
                           <span className={b.fail ? 'text-err font-semibold' : 'text-ok'}>{b.fail ? '⚠ Fail' : 'Pass'}</span>
                           {b.fail && b.violations.length > 0 && <span className="text-[11px] text-err">({b.violations.join(', ')})</span>}
+                          {soForStation[b.date] && <span className="text-[10px] text-ok">✓ signed</span>}
                         </div>
                       ))}
                     </div>
                   )}
-                  {so?.notes && <div className="mt-2 text-[11px] text-text-muted italic">📝 {so.notes}</div>}
+                  {signedDates.filter(d => soForStation[d]?.notes).map(d => (
+                    <div key={d} className="mt-2 text-[11px] text-text-muted italic">📝 {d}: {soForStation[d].notes}</div>
+                  ))}
                 </div>
               </div>
             )
