@@ -73,6 +73,8 @@ export async function POST(
     hard_deadline, deadline_reason,
     tracks,
     it_audit_checklist,  // Code Contribution IT audit sign-off
+    resolution_note,     // Free-text summary of what was done
+    github_pr_url,       // Link to the GitHub PR that delivered this
   } = body
 
   if (!VALID_PRIORITY.includes(priority))    return NextResponse.json({ error: 'Invalid priority' }, { status: 400 })
@@ -141,10 +143,21 @@ export async function POST(
     await axis.from('project_requests').update({ it_audit_checklist }).eq('id', id)
   }
 
-  // 6. Mark the request approved
+  // 6. Mark the request approved — store reviewer name so the board doesn't need a join
+  const { data: reviewerRow } = await (getAdminClient() as any)
+    .schema('shared').from('app_roles').select('full_name').eq('user_id', caller.userId).single()
+  const reviewerName = reviewerRow?.full_name ?? null
+
   const { error: updErr } = await axis
     .from('project_requests')
-    .update({ status: 'approved', reviewed_by: caller.userId, reviewed_at: new Date().toISOString() })
+    .update({
+      status:           'approved',
+      reviewed_by:      caller.userId,
+      reviewed_by_name: reviewerName,
+      reviewed_at:      new Date().toISOString(),
+      ...(resolution_note ? { resolution_note: String(resolution_note).trim() } : {}),
+      ...(github_pr_url   ? { github_pr_url:   String(github_pr_url).trim()   } : {}),
+    })
     .eq('id', id)
   if (updErr) console.error('[approve] request update', updErr)
 

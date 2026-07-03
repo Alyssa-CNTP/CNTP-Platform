@@ -5,6 +5,32 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (AXIS: comments fix, notifications bell, consideration board resolution tracking)
+
+**Files changed:** `supabase/migrations/20260703_001_axis_comments_parent_id.sql`, `supabase/migrations/20260703_002_axis_notifications_resolution.sql`, `app/api/axis/github-pr/route.ts`, `app/api/axis/requests/[id]/approve/route.ts`, `components/layout/NotificationBell.tsx`, `app/(app)/axis/consideration/page.tsx`
+
+- **AXIS comments fixed.** `axis.comments` was missing `parent_id`, `deleted_at`, `edited_at`, and `mentions` columns — PostgREST was rejecting every comment fetch on the consideration board. Migration adds all four columns idempotently.
+- **Notification bell now shows AXIS alerts.** Previously the bell only showed `maintenance.notifications` and management announcements. Now also fetches `axis.notifications` (project approved/rejected, comment mentions). AXIS notifications link directly to the consideration board or projects list. Both sources are marked read when the panel opens.
+- **axis.notifications: read_at column + RLS added.** The table existed but had no `read_at` column, making unread state impossible. Migration adds `read_at` and row-level security so users only see their own notifications.
+- **Consideration board: resolution tracking.** Approved/rejected requests now display who reviewed them (by name), a resolution note, and a live GitHub PR card showing branch, merge status, PR title and body preview.
+- **Approval form: resolution fields added.** IT can now add a resolution note and paste a GitHub PR URL when approving. The PR card previews live (title, branch, merged status) before the approval is submitted. These are optional — existing approvals are unaffected.
+- **New `/api/axis/github-pr` route.** Server-side GitHub API proxy that fetches PR details from a URL. Keeps the `GITHUB_API_TOKEN` env var server-side. Requires `GITHUB_API_TOKEN` in `.env.local` for authenticated requests (unauthenticated hits GitHub's 60 req/hr limit).
+
+---
+
+## 2026-07-04 — Alyssa (Settings, Audit log, Platform Health)
+
+**Files changed:** `app/layout.tsx`, `app/(app)/settings/page.tsx`, `app/(app)/users/page.tsx`, `app/api/admin/audit/route.ts`, `app/(app)/management/platform/page.tsx`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`
+
+- **Theme flash bug fixed.** Added a blocking `<script>` in the root layout that reads `cntp_theme` from localStorage and sets `data-theme` before first paint. Previously the settings page was the only place `applyTheme()` ran — navigating to it would apply the stored dark theme and make the whole app stay dark-green until a reload.
+- **Settings: removed Security and About tabs.** Password change and app info sections removed from user settings. Password resets are still available to admins via Users & Access.
+- **Audit log: IT department access.** Audit log tab in Users & Access is now visible to all IT users (not just Alyssa and Jan by UUID). The API also enriches each entry with `actor_department` and `actor_role`.
+- **Audit log UI rebuilt.** New table layout with columns: Person, Department, Event, Role, Time. Added summary strip (total events, sign-ins, sign-outs, active users). Added department filter dropdown and A–Z sort toggle. Increased fetch limit to 500 events. People dropdown is sorted alphabetically.
+- **Platform Health: auto-refresh.** Page now auto-refreshes every 60 seconds. Manual Refresh button added to header with spinner. Last-updated timestamp shown alongside subtitle.
+- **Unassigned users redirect (from staging).** Users with no role/department are redirected to `/home` and see only Submit Request + Settings in the sidebar.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: add P4 to PA Level dropdown)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
