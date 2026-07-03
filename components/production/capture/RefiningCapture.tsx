@@ -269,26 +269,9 @@ function ScanRow({
           </select>
         </div>
         <div className="space-y-1">
-          <label className={LBL}>Variant</label>
-          <select value={row.variant} disabled={locked}
-            onChange={e => onUpdate('variant', e.target.value)}
-            className={INP + ' cursor-pointer'}>
-            <option value="">Select…</option>
-            <option value="CON">CON — Conventional</option>
-            <option value="ORG">ORG — Organic</option>
-            <option value="RA CON">RA CON — RA Conventional</option>
-            <option value="RA ORG">RA ORG — RA Organic</option>
-          </select>
-        </div>
-        <div className="space-y-1">
           <label className={LBL}>Weight (kg)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={row.weight} disabled={locked}
             onChange={e => onUpdate('weight', e.target.value)} className={INP} />
-        </div>
-        <div className="space-y-1">
-          <label className={LBL}>Bag date</label>
-          <input type="text" value={row.deliveryDate} disabled={locked} placeholder="e.g. 29-06-26"
-            onChange={e => onUpdate('deliveryDate', e.target.value)} className={INP} />
         </div>
         {needsLot && (
           <div className="space-y-1 col-span-2">
