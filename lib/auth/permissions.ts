@@ -176,9 +176,10 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'it_admin',         label: 'IT Admin',         desc: 'User management only — no data or dev access' },
   ],
   Quality: [
-    { role: 'quality_default',  label: 'Quality (Default)', desc: 'All permissions off — toggle on what they need' },
-    { role: 'lab_manager',      label: 'Lab Manager',       desc: 'Approves runs and signs off daily overviews' },
-    { role: 'quality_manager',  label: 'Quality Manager',   desc: 'Full quality access plus specs and deletes' },
+    { role: 'quality_default',       label: 'Quality (Default)',    desc: 'All permissions off — toggle on what they need' },
+    { role: 'quality_lab_assistant', label: 'Lab Assistant',        desc: 'PIN-based tablet access — capture runs, samples, tastings, sieving' },
+    { role: 'lab_manager',           label: 'Lab Manager',          desc: 'Approves runs and signs off daily overviews' },
+    { role: 'quality_manager',       label: 'Quality Manager',      desc: 'Full quality access plus specs and deletes' },
   ],
   Production: [
     { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
@@ -296,6 +297,15 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_invite_users:   true,
     can_confirm_emails: true,
     can_view_audit_log: true,
+  },
+
+  // ── Quality — Lab Assistant: PIN-based capture only ───────────────────────
+  quality_lab_assistant: {
+    can_save_records:     true,
+    can_create_runs:      true,
+    can_add_samples:      true,
+    can_add_tastings:     true,
+    can_add_sieving_runs: true,
   },
 
   // ── Quality — Lab Manager: captures + approves runs and signs off days ─────

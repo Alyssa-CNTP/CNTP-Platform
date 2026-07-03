@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Quality lab assistant PIN login + manager PIN management)
+
+**Files changed:**
+- `supabase/migrations/20260704_002_quality_lab_auth.sql` *(new)*
+- `lib/quality/lab-auth.ts` *(new)*
+- `app/quality-login/page.tsx` *(new)*
+- `app/api/quality/lab-assistants/route.ts` *(new)*
+- `app/api/quality/lab-assistants/manage/route.ts` *(new)*
+- `app/(app)/quality/lab-assistants/page.tsx` *(new)*
+- `app/login/page.tsx`
+- `components/layout/Sidebar.tsx`
+- `lib/auth/permissions.ts`
+
+**Changes:**
+- **Quality lab assistant PIN login**: lab assistants now sign in at the tablet via `/quality-login` — select name from list, enter 4-digit PIN, redirects to `/quality/lab-results`. Mirrors the maintenance technician and floor operator pattern.
+- **DB table `qms.lab_auth`**: stores `user_id`, `auth_email`, `full_name`, `pin` (plaintext for manager visibility), `active`. RLS restricts access to quality managers, lab managers, and IT.
+- **Auth helpers** (`lib/quality/lab-auth.ts`): `deriveLabPassword` (`lab_{pin}_{email}` max 64 chars), `newLabEmail` (`lab-{rand}@lab.rooibostea.co.za`), `LAB_ASSISTANT_PERMISSIONS` (save records, create/add runs/samples/tastings/sieving).
+- **Admin PIN management page** (`/quality/lab-assistants`): quality managers and lab managers can add new assistants, see their PIN (eye reveal/hide toggle), change PIN, and toggle active status. Accessible from the Quality sidebar group.
+- **Login page** (`/login`): added Quality Lab card alongside Maintenance Tech and Floor Operator.
+- **Permissions registry**: added `quality_lab_assistant` role to `DEPARTMENT_ROLES` (Quality group) and `ROLE_PERMISSION_DEFAULTS` with capture-only permissions.
+
+---
+
 ## 2026-07-03 — Alyssa (Explicit confirm checks + QC serial bag tag lookup)
 
 **Files changed:**
