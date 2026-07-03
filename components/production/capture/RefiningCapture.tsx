@@ -231,7 +231,7 @@ function ScanRow({
             value={row.serial}
             disabled={locked}
             placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
-            onChange={e => { onUpdate('serial', e.target.value); onUpdate('notInSystem', '') }}
+            onChange={e => onUpdate('serial', e.target.value)}
             onKeyDown={handleKeyDown}
             className={INP + ' flex-1'}
           />
@@ -482,7 +482,9 @@ export function RefiningCapture({
   }
 
   function updateInput(id: string, k: keyof RefiningInputBag, v: string) {
-    patch({ inputs: value.inputs.map(r => r.id === id ? { ...r, [k]: v } : r) })
+    patch({ inputs: value.inputs.map(r =>
+      r.id === id ? { ...r, [k]: v, ...(k === 'serial' ? { notInSystem: '' } : {}) } : r
+    ) })
   }
 
   function secureInput(id: string) {
