@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Refining: remove grade, fix serial input access, negative angle keypad)
+
+**Files changed:**
+- `app/(app)/production/capture/[section]/page.tsx`
+- `components/production/capture/ChecksPanel.tsx`
+
+**Changes:**
+- **Refining 1 & 2 — grade removed**: grade selector hidden for refining sections; variant is the only session-level label. The capture screen gate changed from requiring variant + grade to variant-only for refining, which also fixed operators being unable to reach the serial input (the gate was blocking capture entirely since grade was never set).
+- **Sieving Tower unchanged**: still requires variant + grade as before.
+- **Indent screen angle — negative keypad fix**: replaced `inputMode="text"` (which forced full keyboard) with a `−` toggle button next to the decimal keypad. Tap it to flip the value negative/positive. Only appears when `allowNegative: true` on the check definition.
+
+---
+
 ## 2026-07-04 — Gustav (Granule: typed bag serial + Lab Manager per-bag OOS listing)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/lab-manager/page.tsx`
