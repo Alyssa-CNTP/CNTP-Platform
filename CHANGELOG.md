@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-03 — Alyssa (Quality: remove Lab Assistant PINs sidebar entry; redirect to Lab Manager)
+
+**Files changed:**
+- `components/layout/Sidebar.tsx`
+- `app/(app)/quality/lab-assistants/page.tsx`
+
+**Changes:**
+- Removed "Lab Assistant PINs" entry from the Quality section of the sidebar — the page was redundant since the same functionality is accessible via Lab Manager.
+- Replaced the `/quality/lab-assistants` page with a server-side `redirect()` to `/quality/lab-manager`.
+- *Deployed to production — PRs #319, #320.*
+
+---
+
+
 ## 2026-07-04 — Alyssa (Quality lab assistant PIN login — roster-driven, sections, prod deploy)
 
 **Files changed:**

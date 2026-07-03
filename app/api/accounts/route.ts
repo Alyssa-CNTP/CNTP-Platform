@@ -83,18 +83,24 @@ export async function POST(req: Request) {
     .select('id, name, stage')
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('[accounts POST] upsert error:', error.message, error.details, error.hint, JSON.stringify(row))
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
 
-  // log genesis interaction when promoted from a signal
+  // log genesis interaction when promoted from a signal (best-effort)
   if (body.source_signal_id && data?.id) {
-    await salesDb.from('account_interactions').insert({
-      account_id:       data.id,
-      interaction_type: 'note',
-      summary:          `Promoted from signal: ${body.signal_title ?? body.source_signal_id}`,
-      ai_assisted:      false,
-      next_step:        body.sales_angle ?? null,
-      logged_by:        user.id,
-    })
+    try {
+      await salesDb.from('account_interactions').insert({
+        account_id:       data.id,
+        interaction_type: 'note',
+        summary:          `Promoted from signal: ${body.signal_title ?? body.source_signal_id}`,
+        ai_assisted:      false,
+        logged_by:        user.id,
+      })
+    } catch (interactionErr) {
+      console.warn('[accounts POST] interaction log failed (non-fatal):', interactionErr)
+    }
   }
 
   return NextResponse.json({ account: data }, { status: 201 })
