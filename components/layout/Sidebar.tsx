@@ -116,7 +116,10 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
     { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
   ]
 
+  const isUnassigned = !role && !department
   const visibleNav = isFloorOperator ? FLOOR_NAV : NAV.filter(item => {
+    // Unassigned users (no role, no department) see only Submit Request + Settings
+    if (isUnassigned) return item.href === '/axis/request' || item.href === '/settings'
     if (item.href === '/settings') return true
     if (item.href === '/suggest') return true
     if (item.itOnly && !isIT && !isFullAdmin) return false
