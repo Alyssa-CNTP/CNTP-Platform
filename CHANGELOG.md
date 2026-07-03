@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Sieving: add P4 to PA Level dropdown)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **PA Level dropdown now includes P4.** The dropdown (both the quick-edit table cell and the main Add Run form) previously only offered P0–P3 and FAIL. Raw material PA/TA records with a P4 grade auto-filled into `paLevel`, but since P4 wasn't a valid `<option>`, it didn't render/select correctly in the Sieving Tower tab. Added P4 as a selectable option; raw material's own PA level logic is unchanged.
+
+---
+
 ## 2026-07-03 — Alyssa (Quality: remove Lab Assistant PINs sidebar entry; redirect to Lab Manager)
 
 **Files changed:**
