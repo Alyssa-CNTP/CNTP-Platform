@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     if (!body?.full_name?.trim()) return NextResponse.json({ error: 'full_name is required' }, { status: 400 })
     if (!/^\d{4}$/.test(body?.pin ?? '')) return NextResponse.json({ error: 'PIN must be exactly 4 digits' }, { status: 400 })
+    const sectionIds: string[] = Array.isArray(body?.section_ids) ? body.section_ids : []
 
     const admin   = getAdminClient()
     const session = await getSessionClient()
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
       await admin
         .schema('qms' as any)
         .from('lab_auth')
-        .update({ pin, updated_at: new Date().toISOString() })
+        .update({ pin, section_ids: sectionIds, updated_at: new Date().toISOString() })
         .eq('full_name', name)
       return NextResponse.json({ success: true, updated: true })
     }
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
     const { error: insertErr } = await admin
       .schema('qms' as any)
       .from('lab_auth')
-      .insert({ user_id: userId, auth_email: email, full_name: name, pin, active: true })
+      .insert({ user_id: userId, auth_email: email, full_name: name, pin, section_ids: sectionIds, active: true })
     if (insertErr) {
       await admin.auth.admin.deleteUser(userId).catch(() => {})
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
@@ -153,10 +154,18 @@ export async function PATCH(req: NextRequest) {
         password: deriveLabPassword(body.pin, authEmail),
       })
       if (pwErr) return NextResponse.json({ error: pwErr.message }, { status: 500 })
+      const pinUpdate: any = { pin: body.pin, updated_at: new Date().toISOString() }
+      if (Array.isArray(body.section_ids)) pinUpdate.section_ids = body.section_ids
       await admin
         .schema('qms' as any)
         .from('lab_auth')
-        .update({ pin: body.pin, updated_at: new Date().toISOString() })
+        .update(pinUpdate)
+        .eq('full_name', body.full_name.trim())
+    } else if (Array.isArray(body.section_ids)) {
+      await admin
+        .schema('qms' as any)
+        .from('lab_auth')
+        .update({ section_ids: body.section_ids, updated_at: new Date().toISOString() })
         .eq('full_name', body.full_name.trim())
     }
 
