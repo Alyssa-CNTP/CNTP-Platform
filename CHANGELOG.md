@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (PIN reveal for maintenance technicians and production operators — deployed to prod)
+
+**Files changed:**
+- `supabase/migrations/20260704_003_maintenance_tech_auth_pin.sql` *(new)*
+- `app/(app)/maintenance/technicians/page.tsx`
+- `app/(app)/production/operators/page.tsx`
+- `app/api/maintenance/technicians/route.ts`
+- `app/api/maintenance/technicians/manage/route.ts`
+
+**Changes:**
+- **maintenance.tech_auth**: added `pin` column (nullable); POST and PATCH now store the PIN alongside the Supabase password; manage endpoint returns it.
+- **Maintenance Technician PINs** and **Production Operators** admin pages: eye toggle on each row to reveal/hide the 4-digit PIN inline.
+- Deployed to production (PRs #302 → #303, staging → main).
+- **Run in Supabase production SQL editor:** `alter table maintenance.tech_auth add column if not exists pin text;`
+
+---
+
 ## 2026-07-03 — Alyssa (Alara: Lead fix, South Africa tab, SignalCard title fallback, prod deploy)
 
 **Files changed:** `app/(app)/research/page.tsx`, `components/intelligence/SignalCard.tsx`
