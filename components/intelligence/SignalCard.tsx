@@ -29,6 +29,18 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
       : undefined
   const showRawType = rawType && rawType !== signal.classification
 
+  // Title fallback chain: title → summary_en → intel.title → keyword_group + source
+  const intelTitle = signal.intel && typeof signal.intel === 'object'
+    ? ((signal.intel as Record<string, unknown>).title as string | undefined)
+    : undefined
+  const displayTitle =
+    signal.title?.trim() ||
+    signal.summary_en?.trim() ||
+    intelTitle?.trim() ||
+    (signal.keyword_group ? `${signal.keyword_group} · ${signal.classification}` : null) ||
+    signal.source_domain?.replace(/^https?:\/\/(www\.)?/, '') ||
+    null
+
   const handleClick = () => onClick?.(signal)
 
   return (
@@ -87,19 +99,19 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
       </div>
 
       {/* Title */}
-      {(signal.title || signal.summary_en) && (
+      {displayTitle && (
         <h3
           className={clsx(
             'font-display font-semibold text-text leading-snug',
             compact ? 'text-[13px]' : 'text-[15px]'
           )}
         >
-          {signal.title || signal.summary_en}
+          {displayTitle}
         </h3>
       )}
 
-      {/* Summary */}
-      {signal.summary_en && !compact && (
+      {/* Summary — only if distinct from the title we're already showing */}
+      {signal.summary_en?.trim() && signal.summary_en.trim() !== displayTitle && !compact && (
         <p className="text-[13px] text-text-muted mt-1.5 leading-relaxed line-clamp-2">
           {signal.summary_en}
         </p>
