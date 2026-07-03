@@ -231,7 +231,7 @@ function ScanRow({
             value={row.serial}
             disabled={locked}
             placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
-            onChange={e => { onUpdate('serial', e.target.value); onUpdate('notInSystem', 'false') }}
+            onChange={e => { onUpdate('serial', e.target.value); onUpdate('notInSystem', '') }}
             onKeyDown={handleKeyDown}
             className={INP + ' flex-1'}
           />
@@ -242,7 +242,7 @@ function ScanRow({
             </button>
           )}
         </div>
-        {row.notInSystem && (
+        {(row.notInSystem === true || row.notInSystem === 'true') && row.inputMode !== 'manual' && (
           <p className="text-[11px] text-amber-600 flex items-center gap-1.5">
             <AlertTriangle size={12} /> Not found in system — fill in the details below.
           </p>
