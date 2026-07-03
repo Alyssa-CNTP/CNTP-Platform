@@ -377,7 +377,11 @@ function CaptureScreen() {
           if (n(r.weight) === 0) return
           rows.push({
             session_id: sid, bag_no: bagNo++,
-            bag_serial_no: r.serial || null, lot_number: r.lot || prod.lot || null,
+            // bag_serial_no is a FK to bag_tags — only set for scan/system bags
+            // guaranteed to exist there. Manual serials go in notes to avoid FK failure.
+            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+            notes: r.inputMode === 'manual' ? r.serial || null : null,
+            lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
             kg_nett: n(r.weight),
             delivery_date: r.deliveryDate || null, is_spillage: false,

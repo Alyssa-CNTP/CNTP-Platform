@@ -45,6 +45,17 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${playfair.variable}`}>
+      <head>
+        {/* Initialise theme synchronously before first paint — prevents the green flash when settings page loads */}
+        <script dangerouslySetInnerHTML={{ __html: `
+          try {
+            var t = localStorage.getItem('cntp_theme') || 'light';
+            if (t === 'dark') document.documentElement.dataset.theme = 'dark';
+            else if (t === 'system') document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            else document.documentElement.dataset.theme = 'light';
+          } catch(e) {}
+        `}} />
+      </head>
       <body>
         <AuthProvider>
           <ToastProvider>

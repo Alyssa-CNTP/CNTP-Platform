@@ -651,7 +651,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
           <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>PA Level</label>
           <select value={fields.paLevel} onChange={e=>setF('paLevel',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
             <option value="">— not set —</option>
-            {['P0','P1','P2','P3','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
+            {['P0','P1','P2','P3','P4','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
           </select>
         </div>
       </div>
@@ -1389,7 +1389,7 @@ export default function SievingPage() {
               <select value={form.paLevel||form.manualPaLevel} onChange={e=>setF('paLevel',e.target.value)}
                 style={{...inputSt,background:form.paLevel?'#f0fdf4':'#fff',borderColor:form.paLevel?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}>
                 <option value="">— not set —</option>
-                {['P0','P1','P2','P3','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
+                {['P0','P1','P2','P3','P4','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
               </select>
             </div>
             {specDef.hasLeafShade&&<div>

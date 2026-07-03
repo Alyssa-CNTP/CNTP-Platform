@@ -238,6 +238,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       return
     }
 
+    // Unassigned users (no role, no department) — only home, settings, and submit request
+    const isUnassigned = !role && !department
+    if (isUnassigned) {
+      if (
+        pathname !== '/home' &&
+        pathname !== '/settings' &&
+        pathname !== '/axis/request' &&
+        !pathname.startsWith('/axis/request/')
+      ) { router.replace('/home'); return }
+      return
+    }
+
     // Always-open routes
     if (
       pathname === '/home'      ||
