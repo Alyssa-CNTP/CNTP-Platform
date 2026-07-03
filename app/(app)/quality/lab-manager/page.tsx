@@ -13,6 +13,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
+import { Eye, EyeOff, Pencil, UserCheck, UserX, X, KeyRound, Loader2, Search } from 'lucide-react'
+import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
 // computePastOosFlags removed — was never exported from pasteuriser
 function computePastOosFlags(_d: any): any[] { return [] }
 import LmDecisionModal from '@/components/shared/LmDecisionModal'
@@ -72,7 +74,63 @@ export default function LabManagerPage() {
   const canSignoff = p('can_signoff_day')
   const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
 
-  const [tab, setTab] = useState<'approvals' | 'daily' | 'history'>('approvals')
+  const [tab, setTab] = useState<'approvals' | 'daily' | 'history' | 'pins'>('approvals')
+
+  // ── Lab assistant PINs ─────────────────────────────────────────────────────
+  interface LabAsst { full_name: string; role: string; has_pin: boolean; pin: string | null; section_ids: string[]; is_active: boolean; user_id: string | null }
+  interface PinForm { full_name: string; pin: string; section_ids: string[] }
+  const [labAsstList,  setLabAsstList]  = useState<LabAsst[]>([])
+  const [labAsstLoad,  setLabAsstLoad]  = useState(false)
+  const [pinEditing,   setPinEditing]   = useState<PinForm | null>(null)
+  const [pinSaving,    setPinSaving]    = useState(false)
+  const [pinError,     setPinError]     = useState<string | null>(null)
+  const [pinQuery,     setPinQuery]     = useState('')
+  const [revealedPin,  setRevealedPin]  = useState<string | null>(null)
+
+  const ROLE_LABELS: Record<string, string> = { qc_supervisor: 'QC Supervisor', qc: 'QC', lab_analyst: 'Lab Analyst', incoming_goods_qc: 'Incoming Goods QC' }
+
+  async function loadLabAssts() {
+    setLabAsstLoad(true)
+    const res = await fetch('/api/quality/lab-assistants/manage')
+    const data = await res.json()
+    setLabAsstList(Array.isArray(data) ? data : [])
+    setLabAsstLoad(false)
+  }
+
+  useEffect(() => { if (tab === 'pins') loadLabAssts() }, [tab])
+
+  function togglePinSection(id: string) {
+    setPinEditing(e => e ? { ...e, section_ids: e.section_ids.includes(id) ? e.section_ids.filter(s => s !== id) : [...e.section_ids, id] } : e)
+  }
+
+  async function savePin() {
+    if (!pinEditing) return
+    if (pinEditing.pin && !/^\d{4}$/.test(pinEditing.pin)) { setPinError('PIN must be exactly 4 digits'); return }
+    setPinSaving(true); setPinError(null)
+    try {
+      const res = await fetch('/api/quality/lab-assistants', {
+        method: pinEditing.pin ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ full_name: pinEditing.full_name, ...(pinEditing.pin ? { pin: pinEditing.pin } : {}), section_ids: pinEditing.section_ids }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Save failed')
+      setPinEditing(null)
+      await loadLabAssts()
+    } catch (e: any) { setPinError(e.message) }
+    setPinSaving(false)
+  }
+
+  async function toggleLabAsstActive(asst: LabAsst) {
+    if (!asst.user_id) return
+    await fetch('/api/quality/lab-assistants', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: asst.full_name, active: !asst.is_active }),
+    }).catch(() => {})
+    await loadLabAssts()
+  }
+
+  const pinFiltered = labAsstList.filter(a => !pinQuery.trim() || a.full_name.toLowerCase().includes(pinQuery.trim().toLowerCase()))
 
   // ── Pending approvals ──────────────────────────────────────────────────────
   const [pending, setPending] = useState<any[]>([])
@@ -315,8 +373,8 @@ export default function LabManagerPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-4">
-        {([['approvals', `✅ Pending Approvals${pending.length ? ` (${pending.length})` : ''}`], ['daily', '📅 Daily Overview & Sign-off'], ['history', '🗓 Approvals History']] as const).map(([k, l]) => (
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {([['approvals', `✅ Pending Approvals${pending.length ? ` (${pending.length})` : ''}`], ['daily', '📅 Daily Overview & Sign-off'], ['history', '🗓 Approvals History'], ['pins', '🔑 Lab Assistant PINs']] as const).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k as any)}
             className={`px-4 py-2 rounded-xl text-[12px] font-semibold border transition-colors ${tab === k ? 'bg-brand text-white border-brand' : 'bg-surface-card text-text-muted border-surface-rule hover:text-text'}`}>
             {l}
@@ -573,6 +631,110 @@ export default function LabManagerPage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Lab assistant PINs ── */}
+      {tab === 'pins' && (
+        <div className="space-y-4 max-w-[820px]">
+          <p className="text-[12px] text-text-muted">Names are sourced from the shift roster. Assign a PIN and sections so each assistant can sign in at the tablet.</p>
+
+          {labAsstList.length > 0 && (
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200 bg-white flex-1 min-w-[200px] focus-within:border-brand">
+                <Search size={15} className="text-stone-400" />
+                <input value={pinQuery} onChange={e => setPinQuery(e.target.value)} placeholder="Search assistants…"
+                  className="flex-1 py-2.5 text-[13px] outline-none bg-transparent" />
+              </div>
+              <span className="text-[12px] text-text-muted font-mono">{pinFiltered.length} / {labAsstList.length}</span>
+            </div>
+          )}
+
+          {labAsstLoad ? (
+            <div className="flex items-center justify-center h-32"><Loader2 size={20} className="animate-spin text-text-muted" /></div>
+          ) : labAsstList.length === 0 ? (
+            <div className="bg-surface-card border border-surface-rule rounded-xl p-8 text-center text-[13px] text-text-muted">No lab assistants found in the shift roster.</div>
+          ) : (
+            <div className="space-y-2">
+              {pinFiltered.map(asst => (
+                <div key={asst.full_name} className={`flex items-center gap-3 px-4 py-3 bg-white border border-stone-200 rounded-2xl ${!asst.is_active ? 'opacity-50' : ''}`}>
+                  <div className="w-9 h-9 rounded-xl bg-stone-100 flex items-center justify-center shrink-0">
+                    <span className="font-mono font-bold text-[11px] text-stone-600">{asst.full_name.slice(0, 2).toUpperCase()}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-[14px] text-text flex items-center gap-2 flex-wrap">
+                      {asst.full_name}
+                      <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{ROLE_LABELS[asst.role] ?? asst.role}</span>
+                      {!asst.has_pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                      {asst.pin ? (
+                        <>
+                          <span className="font-mono text-[12px] text-text-muted tracking-widest">{revealedPin === asst.full_name ? asst.pin : '••••'}</span>
+                          <button onClick={() => setRevealedPin(revealedPin === asst.full_name ? null : asst.full_name)} className="text-stone-400 hover:text-text p-0.5" title={revealedPin === asst.full_name ? 'Hide PIN' : 'Reveal PIN'}>
+                            {revealedPin === asst.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
+                          </button>
+                          {asst.section_ids?.length > 0 && <><span className="text-[11px] text-text-faint">·</span><span className="text-[11px] text-text-muted font-mono">{asst.section_ids.map(s => sectionMeta(s).code).join(' · ')}</span></>}
+                        </>
+                      ) : asst.section_ids?.length > 0 ? (
+                        <span className="text-[11px] text-text-muted font-mono">{asst.section_ids.map(s => sectionMeta(s).code).join(' · ')}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  {asst.user_id && (
+                    <button onClick={() => toggleLabAsstActive(asst)} title={asst.is_active ? 'Deactivate' : 'Activate'} className="p-2 text-stone-400 hover:text-text">
+                      {asst.is_active ? <UserCheck size={16} className="text-ok" /> : <UserX size={16} />}
+                    </button>
+                  )}
+                  <button onClick={() => { setPinError(null); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [] }) }} className="p-2 text-stone-400 hover:text-brand">
+                    <Pencil size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {pinEditing && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[88vh] overflow-y-auto">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-stone-100">
+                  <span className="font-semibold text-[16px] text-text">{pinEditing.full_name}</span>
+                  <button onClick={() => setPinEditing(null)} className="p-1.5 rounded-lg hover:bg-stone-100 text-stone-400"><X size={16} /></button>
+                </div>
+                <div className="p-5 space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">4-digit PIN (leave blank to keep current)</label>
+                    <input value={pinEditing.pin} inputMode="numeric" maxLength={4} autoFocus
+                      onChange={e => setPinEditing({ ...pinEditing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                      className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-brand font-mono tracking-[0.4em] text-center text-[18px]"
+                      placeholder="••••" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Assigned sections</label>
+                    <div className="flex flex-wrap gap-2">
+                      {SECTION_ORDER.map(id => {
+                        const m = sectionMeta(id)
+                        const on = pinEditing.section_ids.includes(id)
+                        return (
+                          <button key={id} type="button" onClick={() => togglePinSection(id)}
+                            className={`px-3 py-2 rounded-xl border text-[12px] font-medium transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
+                            {m.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  {pinError && <p className="text-[12px] text-err">{pinError}</p>}
+                  <div className="flex gap-2 pt-1">
+                    <button onClick={() => setPinEditing(null)} className="flex-1 py-3 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500">Cancel</button>
+                    <button onClick={savePin} disabled={pinSaving} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40">
+                      {pinSaving ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />} Save
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
