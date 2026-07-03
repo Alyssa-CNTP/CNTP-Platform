@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Settings, Audit log, Platform Health)
+
+**Files changed:** `app/layout.tsx`, `app/(app)/settings/page.tsx`, `app/(app)/users/page.tsx`, `app/api/admin/audit/route.ts`, `app/(app)/management/platform/page.tsx`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`
+
+- **Theme flash bug fixed.** Added a blocking `<script>` in the root layout that reads `cntp_theme` from localStorage and sets `data-theme` before first paint. Previously the settings page was the only place `applyTheme()` ran — navigating to it would apply the stored dark theme and make the whole app stay dark-green until a reload.
+- **Settings: removed Security and About tabs.** Password change and app info sections removed from user settings. Password resets are still available to admins via Users & Access.
+- **Audit log: IT department access.** Audit log tab in Users & Access is now visible to all IT users (not just Alyssa and Jan by UUID). The API also enriches each entry with `actor_department` and `actor_role`.
+- **Audit log UI rebuilt.** New table layout with columns: Person, Department, Event, Role, Time. Added summary strip (total events, sign-ins, sign-outs, active users). Added department filter dropdown and A–Z sort toggle. Increased fetch limit to 500 events. People dropdown is sorted alphabetically.
+- **Platform Health: auto-refresh.** Page now auto-refreshes every 60 seconds. Manual Refresh button added to header with spinner. Last-updated timestamp shown alongside subtitle.
+- **Unassigned users redirect (from staging).** Users with no role/department are redirected to `/home` and see only Submit Request + Settings in the sidebar.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: add P4 to PA Level dropdown)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
