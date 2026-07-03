@@ -28,7 +28,7 @@ const STATUS_META: Record<string, { label: string; cls: string; icon: any }> = {
 
 export default function CaptureLandingPage() {
   const router = useRouter()
-  const { isSupervisor, isIT, role, displayName } = useAuth()
+  const { user, isSupervisor, isIT, role, displayName } = useAuth()
   const canAssign = isSupervisor || isIT || role === 'admin'
   const isFloorOperator = role === 'floor_operator'
   const firstName = (displayName ?? '').split(' ')[0] || 'there'
@@ -38,13 +38,14 @@ export default function CaptureLandingPage() {
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([])
   const [opMap, setOpMap] = useState<Record<string, string>>({})
   const [statusMap, setStatusMap] = useState<Record<string, string>>({})
+  const [myOperatorId, setMyOperatorId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function load() {
       const db = getDb()
       const [{ data: ops }, { data: assigns }, { data: sessions }] = await Promise.all([
-        db.schema('production').from('operators').select('id,name,display_name').eq('active', true),
+        db.schema('production').from('operators').select('id,name,display_name,user_id').eq('active', true),
         db.schema('production').from('shift_assignments').select('*').eq('date', date).eq('shift', shift),
         db.schema('production').from('prod_sessions').select('section_id,status').eq('date', date).eq('shift', shift),
       ])
@@ -55,12 +56,25 @@ export default function CaptureLandingPage() {
       const sm: Record<string, string> = {}
       ;(sessions ?? []).forEach((s: any) => { sm[s.section_id] = s.status })
       setStatusMap(sm)
+      // Resolve which operator record belongs to the logged-in user
+      if (user?.id) {
+        const me = (ops as Operator[] ?? []).find(o => o.user_id === user.id)
+        if (me) setMyOperatorId(me.id)
+      }
       setLoading(false)
     }
     load()
-  }, [date, shift])
+  }, [date, shift, user?.id])
 
-  const assignedSections = SECTION_ORDER.filter(id => assignments.some(a => a.section_id === id))
+  // Supervisors/admins see all rostered sections.
+  // Floor operators only see sections where they are listed as an assigned operator.
+  const assignedSections = SECTION_ORDER.filter(id => {
+    const a = assignments.find(x => x.section_id === id)
+    if (!a) return false
+    if (canAssign) return true
+    if (!myOperatorId) return true   // operator record not found — show all as fallback
+    return (a.operator_ids ?? []).includes(myOperatorId)
+  })
 
   return (
     <div className="px-4 py-5 max-w-[900px] space-y-5">
