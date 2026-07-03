@@ -14,7 +14,7 @@ import {
   Loader2, CheckCircle2, XCircle, Inbox,
   GitBranch, Link2, Database, Bot, User, Shield,
   CheckSquare, Square, AlertTriangle, ExternalLink, Search,
-  ChevronDown, Filter, Github,
+  ChevronDown, Filter,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ interface ApprovalForm {
   github_pr_url: string
 }
 
-interface GithubPR {
+interface GitBranchPR {
   number: number; title: string; body: string | null
   state: string; merged: boolean; merged_at: string | null
   merged_by: string | null; head_ref: string | null; html_url: string
@@ -128,8 +128,8 @@ function timeAgo(s: string) {
 
 // ─── GitHub PR card ───────────────────────────────────────────────────────────
 
-function GithubPRCard({ url }: { url: string }) {
-  const [pr,      setPR]      = useState<GithubPR | null>(null)
+function GitBranchPRCard({ url }: { url: string }) {
+  const [pr,      setPR]      = useState<GitBranchPR | null>(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState<string | null>(null)
 
@@ -150,7 +150,7 @@ function GithubPRCard({ url }: { url: string }) {
   if (error || !pr) return (
     <a href={url} target="_blank" rel="noopener noreferrer"
       className="flex items-center gap-2 px-4 py-3 rounded-xl border border-surface-rule text-[12px] text-brand hover:underline">
-      <Github size={13} /> View PR on GitHub <ExternalLink size={11} />
+      <GitBranch size={13} /> View PR on GitHub <ExternalLink size={11} />
     </a>
   )
 
@@ -161,7 +161,7 @@ function GithubPRCard({ url }: { url: string }) {
     <a href={pr.html_url} target="_blank" rel="noopener noreferrer"
       className="block px-4 py-3 rounded-xl border border-surface-rule hover:border-brand/30 hover:bg-surface-card transition-colors no-underline">
       <div className="flex items-start gap-3">
-        <Github size={14} className={isMerged ? 'text-purple-600 flex-shrink-0 mt-0.5' : 'text-ok flex-shrink-0 mt-0.5'} />
+        <GitBranch size={14} className={isMerged ? 'text-purple-600 flex-shrink-0 mt-0.5' : 'text-ok flex-shrink-0 mt-0.5'} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded-full border font-bold ${
@@ -368,7 +368,7 @@ function RequestDetail({ req, onApprove, onReject }: {
               {req.github_pr_url && (
                 <div className="space-y-1.5">
                   <p className="font-mono text-[9px] uppercase tracking-wide text-text-faint">GitHub PR</p>
-                  <GithubPRCard url={req.github_pr_url} />
+                  <GitBranchPRCard url={req.github_pr_url} />
                 </div>
               )}
             </div>
@@ -588,7 +588,7 @@ function RequestDetail({ req, onApprove, onReject }: {
                   />
                   {form.github_pr_url && form.github_pr_url.includes('/pull/') && (
                     <div className="mt-2">
-                      <GithubPRCard url={form.github_pr_url} />
+                      <GitBranchPRCard url={form.github_pr_url} />
                     </div>
                   )}
                 </div>
