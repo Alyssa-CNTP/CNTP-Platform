@@ -5,6 +5,31 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Alyssa (Quality lab assistant PIN login — roster-driven, sections, prod deploy)
+
+**Files changed:**
+- `supabase/migrations/20260704_002_quality_lab_auth.sql` *(new — run in prod)*
+- `supabase/migrations/20260704_004_lab_auth_sections_roster.sql` *(new — run in prod)*
+- `lib/quality/lab-auth.ts` *(new)*
+- `lib/auth/permissions.ts`
+- `app/quality-login/page.tsx` *(new)*
+- `app/api/quality/lab-assistants/route.ts` *(new)*
+- `app/api/quality/lab-assistants/manage/route.ts` *(new)*
+- `app/(app)/quality/lab-assistants/page.tsx` *(new)*
+- `app/login/page.tsx`
+- `components/layout/Sidebar.tsx`
+
+**Changes:**
+- **`qms.lab_auth` table**: stores user_id, auth_email, full_name, pin (plaintext), section_ids, active. RLS restricts to quality_manager, lab_manager, and IT.
+- **`/quality-login`**: PIN login page — lab assistant picks name from roster list, enters 4-digit PIN, lands on `/quality/lab-results`.
+- **Manage API** (`/api/quality/lab-assistants/manage`): pulls names from `production.roster_entries` (qc/qc_supervisor/lab_analyst/incoming_goods_qc roles). Excludes Monique, Tamlyn, Shannon, Cyril, Michelle, Lucinda, Amoretta (Microsoft SSO) by first name. Returns PIN and section_ids for manager view.
+- **Admin UI** (`/quality/lab-assistants`): roster-driven list, eye toggle to reveal/hide PIN, section picker in edit modal, active/inactive toggle.
+- **`quality_lab_assistant` role**: added to `DEPARTMENT_ROLES` (Quality) and `ROLE_PERMISSION_DEFAULTS` (save records, create runs, add samples/tastings/sieving). Shows in role preset buttons in Users & Roles. Quality read columns display "by dept" in the permissions matrix.
+- **Login page**: Quality Lab card added alongside Maintenance Tech and Floor Operator.
+- *Deployed to production — PRs #299, #317, #318.*
+
+---
+
 ## 2026-07-04 — Alyssa (Refining capture: DB save correctness — column fixes, mass balance, Coarse Leaf batch, auto date)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/RefiningCapture.tsx`, `lib/production/live-types.ts`, `supabase/migrations/20260704_005_prod_sessions_section_direct.sql`
