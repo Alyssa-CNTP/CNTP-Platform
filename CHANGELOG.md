@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Granule: typed bag serial + Lab Manager per-bag OOS listing)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/lab-manager/page.tsx`
+
+- **Granule Add Sample — Bulk Bag Serial is now typed directly**, replacing the old "Bag Number" input that auto-generated the serial as `DD.MM.<bagnumber>`. The Edit Sample modal already took a typed serial; Add Sample now matches it.
+- **Lab Manager Daily Overview — out-of-spec listing restructured per bag/serial.** Previously all OOS entries for a batch were concatenated into one run-on line (unreadable once a run had many samples, e.g. Granule Line with 37 runs). Now each out-of-spec bag/serial gets its own line with the serial clearly tagged (🏷), for both Pasteuriser and Granule Line sections.
+
+---
+
 ## 2026-07-04 — Gustav (Lab Manager: station-grouped Pending Approvals + date-range Daily Overview)
 
 **Files changed:** `app/(app)/quality/lab-manager/page.tsx`

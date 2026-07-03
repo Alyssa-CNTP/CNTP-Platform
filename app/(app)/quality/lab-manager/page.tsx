@@ -464,8 +464,13 @@ export default function LabManagerPage() {
                             {soForStation[b.date] && <span className="text-[10px] text-ok">✓ signed</span>}
                           </div>
                           {b.oos.length > 0 && (
-                            <div className="text-[11px] text-err pl-2">
-                              ⚠ {b.oos.map((f: any) => `${f.bag}${f.time ? ` (${f.time})` : ''}: ${f.fails.map((x: any) => x.field).join(', ')}`).join('  •  ')}
+                            <div className="pl-2 space-y-0.5">
+                              <div className="text-[11px] font-semibold text-err">⚠ {b.oos.length} out-of-spec bag/box{b.oos.length > 1 ? 'es' : ''}:</div>
+                              {b.oos.map((f: any, j: number) => (
+                                <div key={j} className="text-[11px] text-text-muted">
+                                  <span className="font-mono font-semibold text-err">🏷 {f.bag}</span>{f.time ? ` (${f.time})` : ''} — {f.fails.map((x: any) => x.field).join(', ')}
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
@@ -482,8 +487,13 @@ export default function LabManagerPage() {
                             {soForStation[b.date] && <span className="text-[10px] text-ok">✓ signed</span>}
                           </div>
                           {b.oos.length > 0 && (
-                            <div className="text-[11px] text-err pl-2">
-                              ⚠ {b.oos.map((f: any) => `${f.bag}${f.time ? ` (${f.time})` : ''}: ${f.fails.map((x: any) => x.field).join(', ')}`).join('  •  ')}
+                            <div className="pl-2 space-y-0.5">
+                              <div className="text-[11px] font-semibold text-err">⚠ {b.oos.length} out-of-spec bag{b.oos.length > 1 ? 's' : ''}:</div>
+                              {b.oos.map((f: any, j: number) => (
+                                <div key={j} className="text-[11px] text-text-muted">
+                                  <span className="font-mono font-semibold text-err">🏷 {f.bag}</span>{f.time ? ` (${f.time})` : ''} — {f.fails.map((x: any) => x.field).join(', ')}
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
