@@ -29,7 +29,7 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
       : undefined
   const showRawType = rawType && rawType !== signal.classification
 
-  // Title fallback chain: title → summary_en → intel.title → keyword_group + source
+  // Title fallback: title → summary_en → intel.title → keyword_group → source
   const intelTitle = signal.intel && typeof signal.intel === 'object'
     ? ((signal.intel as Record<string, unknown>).title as string | undefined)
     : undefined
@@ -110,7 +110,7 @@ export default function SignalCard({ signal, compact = false, onClick }: SignalC
         </h3>
       )}
 
-      {/* Summary — only if distinct from the title we're already showing */}
+      {/* Summary — only if distinct from the title we're showing */}
       {signal.summary_en?.trim() && signal.summary_en.trim() !== displayTitle && !compact && (
         <p className="text-[13px] text-text-muted mt-1.5 leading-relaxed line-clamp-2">
           {signal.summary_en}

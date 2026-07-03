@@ -16,7 +16,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Section    = 'signals' | 'gap' | 'loopholes' | 'intel' | 'vault' | 'compass' | 'about'
+type Section    = 'signals' | 'gap' | 'loopholes' | 'intel' | 'vault' | 'compass' | 'south-africa' | 'about'
 type IntelTool  = 'briefing' | 'frontier' | 'competitors' | 'profiler' | 'pitch' | 'alerts'
 type CompassVec = 'red_espresso' | 'k_beauty' | 'clinical' | 'functional_oem' | 'agriculture' | 'appellation' | 'japan'
 
@@ -385,15 +385,16 @@ function SignalCard({ signal, onClick, onSendTo }: {
     e.stopPropagation()
     if (promoted || promoting) return
     setPromoting(true); setPromoteErr(false)
+    const acctName = (signal.title?.trim() || signal.summary_en?.trim() || signal.keyword_group || signal.source_domain || 'Signal').slice(0, 120)
     try {
       const r = await fetch('/api/accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name:             signal.title.slice(0, 120),
+          name:             acctName,
           source_signal_id: signal.id,
           signal_ids:       [signal.id],
-          signal_title:     signal.title,
+          signal_title:     acctName,
           stage:            'lead',
           notes:            signal.summary_en ?? '',
         }),
@@ -567,15 +568,16 @@ function SignalDrawer({ signal, onClose }: { signal: Signal | null; onClose: () 
   const promoteToLead = async () => {
     if (!signal || promoting || promoted) return
     setPromoting(true); setPromoteErr(false)
+    const acctName = (signal.title?.trim() || signal.summary_en?.trim() || signal.keyword_group || signal.source_domain || 'Signal').slice(0, 120)
     try {
       const r = await fetch('/api/accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name:             signal.title.slice(0, 120),
+          name:             acctName,
           source_signal_id: signal.id,
           signal_ids:       [signal.id],
-          signal_title:     signal.title,
+          signal_title:     acctName,
           stage:            'lead',
           notes:            signal.summary_en ?? '',
         }),
@@ -1538,13 +1540,126 @@ function AboutSection({ onNavigate }: { onNavigate: (s: Section) => void }) {
 
 // ─── Page root ────────────────────────────────────────────────────────────────
 
+// ─── South Africa section ─────────────────────────────────────────────────────
+
+const ZA_CLS: { id: ClsFilter; label: string; color: string; bg: string }[] = [
+  { id: 'all',          label: 'All',         color: C.text,    bg: C.surfaceDim  },
+  { id: 'opportunity',  label: 'Opportunity', color: C.green,   bg: C.greenBg    },
+  { id: 'threat',       label: 'Threat',      color: C.red,     bg: C.redBg      },
+  { id: 'competitor',   label: 'Competitor',  color: C.amber,   bg: C.amberBg    },
+  { id: 'regulation',   label: 'Regulation',  color: '#2A7CB8', bg: '#EBF4FB'    },
+  { id: 'neutral',      label: 'Neutral',     color: C.muted,   bg: C.surfaceDim },
+]
+
+function SouthAfricaSection({ onSendTo }: { onSendTo: (s: 'gap' | 'loopholes', term: string) => void }) {
+  const [signals,  setSignals]  = useState<Signal[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [selected, setSelected] = useState<Signal | null>(null)
+  const [filter,   setFilter]   = useState<ClsFilter>('all')
+
+  useEffect(() => {
+    fetch('/api/signals?limit=300')
+      .then(r => r.json())
+      .then(({ signals: data }) => setSignals((data ?? []).filter((s: Signal) => s.region === 'ZA')))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {}
+    signals.forEach(s => { c[s.classification] = (c[s.classification] ?? 0) + 1 })
+    return c
+  }, [signals])
+
+  const filtered = useMemo(() =>
+    (filter === 'all' ? signals : signals.filter(s => s.classification === filter))
+      .sort((a, b) => b.relevance_score - a.relevance_score),
+    [signals, filter]
+  )
+
+  return (
+    <div style={{ display: 'flex', minHeight: 'calc(100vh - 88px)' }}>
+      {/* Filter sidebar */}
+      <aside style={{ width: 220, flexShrink: 0, position: 'sticky', top: 88, height: 'calc(100vh - 88px)', overflowY: 'auto', background: C.surface, borderRight: `1px solid ${C.border}`, padding: '20px 14px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div>
+          <p style={{ fontSize: 10, fontWeight: 700, color: C.faint, textTransform: 'uppercase' as const, letterSpacing: '0.08em', marginBottom: 10 }}>Filter</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {ZA_CLS.map(({ id, label, color, bg }) => {
+              const active = filter === id
+              const count = id === 'all' ? signals.length : (counts[id] ?? 0)
+              return (
+                <button key={id} onClick={() => setFilter(id)}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 10px', borderRadius: 8, border: `1px solid ${active ? color + '44' : C.border}`, background: active ? bg : 'transparent', fontSize: 13, color: active ? color : C.muted, cursor: 'pointer', fontWeight: active ? 600 : 400 }}>
+                  {label}
+                  <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', opacity: 0.7 }}>{count}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div style={{ flex: 1, minWidth: 0, padding: '24px 28px' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20, padding: '16px 20px', background: C.surface, borderRadius: 12, boxShadow: C.shadow }}>
+          <span style={{ fontSize: 30 }}>🇿🇦</span>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>South Africa</h2>
+            <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>Domestic signals — competitor activity, regulation, and opportunity flow</p>
+          </div>
+          <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 11, color: C.faint, padding: '4px 10px', background: C.surfaceDim, borderRadius: 6 }}>
+            {signals.length} ZA signals
+          </span>
+        </div>
+
+        {/* Stat chips */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' as const, marginBottom: 20 }}>
+          {ZA_CLS.filter(c => c.id !== 'all').map(({ id, label, color, bg }) => {
+            const n = counts[id] ?? 0
+            if (!n) return null
+            return (
+              <button key={id} onClick={() => setFilter(id)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, border: `1px solid ${color}33`, background: bg, fontSize: 12, color, cursor: 'pointer', fontWeight: filter === id ? 700 : 500 }}>
+                <span style={{ fontWeight: 700 }}>{n}</span> {label}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Cards */}
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Spinner /><span style={{ fontSize: 14, color: C.faint }}>Loading ZA signals…</span></div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div style={{ textAlign: 'center', paddingTop: 60 }}>
+            <Flag size={28} style={{ color: C.border, margin: '0 auto 12px', display: 'block' }} />
+            <p style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 8 }}>No {filter === 'all' ? '' : filter} signals for South Africa</p>
+            <button onClick={() => setFilter('all')} style={{ ...outlineBtn, fontSize: 13 }}>Show all</button>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+            {filtered.map(s => (
+              <SignalCard key={s.id} signal={s} onClick={() => setSelected(s)} onSendTo={onSendTo} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SignalDrawer signal={selected} onClose={() => setSelected(null)} />
+    </div>
+  )
+}
+
 const SECTIONS: { id: Section; label: string; Icon: React.ElementType }[] = [
-  { id: 'signals',   label: 'Signal Feed',  Icon: Radio         },
-  { id: 'gap',       label: 'Gap Finder',   Icon: Zap           },
-  { id: 'loopholes', label: 'Loopholes',    Icon: AlertTriangle },
-  { id: 'intel',     label: 'Intelligence', Icon: Sparkles      },
-  { id: 'vault',     label: 'Vault',        Icon: Lock          },
-  { id: 'compass',   label: 'Compass',      Icon: Compass       },
+  { id: 'signals',      label: 'Signal Feed',   Icon: Radio         },
+  { id: 'gap',          label: 'Gap Finder',    Icon: Zap           },
+  { id: 'loopholes',    label: 'Loopholes',     Icon: AlertTriangle },
+  { id: 'intel',        label: 'Intelligence',  Icon: Sparkles      },
+  { id: 'vault',        label: 'Vault',         Icon: Lock          },
+  { id: 'compass',      label: 'Compass',       Icon: Compass       },
+  { id: 'south-africa', label: 'South Africa',  Icon: Flag          },
 ]
 
 export default function ResearchPage() {
@@ -1606,10 +1721,11 @@ export default function ResearchPage() {
       {section === 'signals'   && <SignalsSection   onSendTo={handleSendTo} />}
       {section === 'gap'       && <GapSection       preload={gapPreload} />}
       {section === 'loopholes' && <LoopholesSection preload={loopholePreload} />}
-      {section === 'intel'     && <IntelSection     />}
-      {section === 'vault'     && <VaultSection     />}
-      {section === 'compass'   && <CompassSection   />}
-      {section === 'about'     && <AboutSection     onNavigate={setSection} />}
+      {section === 'intel'        && <IntelSection        />}
+      {section === 'vault'        && <VaultSection        />}
+      {section === 'compass'      && <CompassSection      />}
+      {section === 'south-africa' && <SouthAfricaSection  onSendTo={handleSendTo} />}
+      {section === 'about'        && <AboutSection        onNavigate={setSection} />}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
