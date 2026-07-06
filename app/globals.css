@@ -365,6 +365,7 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
 @media print {
   /* App chrome + interactive-only controls drop out of the printout */
   aside            { display: none !important; }
+  header           { display: none !important; } /* Topbar — breadcrumb/bell/date bar */
   .no-print        { display: none !important; }
   .print-only      { display: block !important; }
   /* Let the printout use the full page width, not the app's centred column */

@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Roster print fix: app chrome still bleeding through, duplicated header text)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **The app's Topbar (breadcrumb, notification bell, date) was still printing.** The previous print fix hid the sidebar and the roster page's own on-screen content, but the shared `Topbar` component is rendered by the app-wide layout (`app/(app)/layout.tsx`), outside the roster page — `.no-print` never touched it. Added `header { display: none !important; }` to the print media query (Topbar is the only `<header>` in the app), matching the existing `aside` rule for the sidebar.
+- **Duplicated shift-time text fixed.** Some older periods store the raw time range as the shift label (e.g. `day_label = "07h00 till 16h00"`) instead of a shift letter ("Shift A") — the print header was unconditionally appending "· 07h00–16h00" regardless, producing "07h00 till 16h00 · 07h00–16h00". Now only appends the fixed time suffix when the stored label doesn't already look like one.
+- **Duplicated date-range text fixed.** The print subtitle showed the formatted range and the period's auto-generated name side by side (e.g. "6 Jul – 10 Jul 2026 · 6–10 Jul") — near-identical, just missing the year. The name is now only shown when it's a genuine custom label (contains no digits), not an auto-generated short date.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster: printable noticeboard layout, help guide, bigger add-person UI, phantom scrollbar fix)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`, `components/production/WorkforceTabs.tsx`
