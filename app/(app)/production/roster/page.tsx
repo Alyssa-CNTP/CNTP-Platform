@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { addDays, format, parseISO } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
   RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Download, Printer,
+  Info, Eye, Edit3, ShieldCheck,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -75,6 +76,7 @@ export default function RosterPage() {
   const [dbReady, setDbReady]   = useState(true)
   const [showNew,      setShowNew]      = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
+  const [showHelp,     setShowHelp]     = useState(false)
   const [generating,   setGenerating]   = useState(false)
   const [publishing,   setPublishing]   = useState(false)
   // which cell editor is open: `add:${roleKey}:${shift}` for an add, entry id for edit
@@ -421,14 +423,23 @@ export default function RosterPage() {
   }
 
   return (
-    <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5 print-full-width">
+      <div className="no-print flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
+          <div className="flex items-center gap-1.5">
+            <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
+            <button
+              onClick={() => setShowHelp(true)}
+              title="How this page works"
+              className="p-1 rounded-full text-stone-300 hover:text-brand hover:bg-brand/8 transition-colors"
+            >
+              <Info size={16} />
+            </button>
+          </div>
           <p className="text-[12px] text-stone-400 mt-0.5">The whole-site shift layout — every role and shift across all departments.</p>
         </div>
         {/* Wednesday deadline badge */}
-        <div className={`no-print inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] font-medium
+        <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] font-medium
           ${todayWed ? 'bg-err/8 border-err/30 text-err' : daysLeft <= 2 ? 'bg-warn/8 border-warn/30 text-warn' : 'bg-stone-50 border-stone-200 text-stone-600'}`}>
           {todayWed ? <AlertTriangle size={14} /> : <CalendarRange size={14} />}
           {todayWed
@@ -442,14 +453,14 @@ export default function RosterPage() {
       <div className="no-print"><WorkforceTabs /></div>
 
       {!dbReady && (
-        <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
+        <div className="no-print flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
           <AlertTriangle size={15} className="shrink-0 mt-0.5" />
           <span>Roster tables aren&apos;t set up yet. Run the roster migrations on the database, then reload.</span>
         </div>
       )}
 
       {/* Period bar */}
-      <div className="flex flex-wrap items-center gap-3 bg-surface-card border border-surface-rule rounded-2xl p-4">
+      <div className="no-print flex flex-wrap items-center gap-3 bg-surface-card border border-surface-rule rounded-2xl p-4">
         <CalendarRange size={16} className="text-text-muted shrink-0" />
         {periods.length > 0 ? (
           <div className="relative">
@@ -539,7 +550,7 @@ export default function RosterPage() {
 
       {/* Published notice */}
       {isPublished && period?.published_at && (
-        <div className="flex items-center gap-2.5 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">
+        <div className="no-print flex items-center gap-2.5 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">
           <Lock size={14} className="shrink-0" />
           <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — maintenance duty roster has been synced. Changes are still possible but will require re-publishing.</span>
         </div>
@@ -550,7 +561,7 @@ export default function RosterPage() {
       ) : !period ? (
         <EmptyState canCreate={dbReady} onCreate={() => setShowNew(true)} />
       ) : (
-        <>
+        <div className="no-print space-y-5">
           <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} leaveEmpIds={leaveEmpIds} />
           <RosterGrid
             period={period}
@@ -572,7 +583,7 @@ export default function RosterPage() {
             onSubmitSection={submitSection}
             currentUserId={user?.id ?? null}
           />
-        </>
+        </div>
       )}
 
       {/* Legend */}
@@ -592,6 +603,12 @@ export default function RosterPage() {
         </p>
       </div>
 
+      {/* Print-only layout — the on-screen interactive grid is hidden via
+          .no-print above; this plain, noticeboard-friendly table is shown
+          only inside @media print (see globals.css). */}
+      {period && <PrintRoster period={period} rolesByCategory={rolesByCategory} cellEntries={cellEntries} />}
+
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
       {showNew && <NewPeriodModal onClose={() => setShowNew(false)} onCreate={createPeriod} prevPeriod={period} />}
       {showGenerate && period && (
         <GenerateModal
@@ -603,6 +620,140 @@ export default function RosterPage() {
           onGenerate={generateNextPeriod}
         />
       )}
+    </div>
+  )
+}
+
+// ── Print-only layout: a plain, full-width table per section, sized for a
+// noticeboard rather than a screenshot of the interactive grid. Hidden on
+// screen (.print-only), shown only inside @media print — see globals.css.
+function PrintRoster({ period, rolesByCategory, cellEntries }: {
+  period: Period
+  rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
+  cellEntries: (roleKey: string, shift: RosterShift) => Entry[]
+}) {
+  const dayLabel = period.day_label || 'Day Shift'
+  const nightLabel = period.night_label || 'Night Shift'
+  const fmtPeople = (list: Entry[]) => list.length
+    ? list.map(e => e.person_name + (e.tags.length ? ` (${e.tags.join(' ')})` : '')).join(', ')
+    : '—'
+  const th: CSSProperties = { textAlign: 'left', padding: '6px 10px', borderBottom: '2px solid #333', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#555' }
+  const td: CSSProperties = { padding: '7px 10px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 13 }
+
+  return (
+    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '24px 32px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '3px solid #1A3A0E', paddingBottom: 10, marginBottom: 18 }}>
+        <div>
+          <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
+          <p style={{ fontSize: 14, margin: '4px 0 0', color: '#555' }}>{fmtRange(period)} · {period.name}</p>
+        </div>
+        <p style={{ fontSize: 11, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
+      </div>
+
+      {rolesByCategory.map(({ cat, items }) => (
+        <div key={cat.key} style={{ marginBottom: 20, breakInside: 'avoid' }}>
+          <div style={{ borderLeft: `5px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '6px 12px', marginBottom: 6 }}>
+            <span style={{ fontWeight: 700, fontSize: 15, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.5 }}>{cat.label}</span>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ ...th, width: '22%' }}>Role</th>
+                <th style={th}>{dayLabel} · 07h00–16h00</th>
+                <th style={th}>{nightLabel} · 16h00–01h00</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(role => (
+                <tr key={role.key}>
+                  <td style={{ ...td, fontWeight: 600 }}>{role.name}</td>
+                  <td style={td}>{fmtPeople(cellEntries(role.key, 'day'))}</td>
+                  <td style={td}>{fmtPeople(cellEntries(role.key, 'night'))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+
+      <div style={{ marginTop: 24, paddingTop: 12, borderTop: '1px solid #ccc', fontSize: 11, color: '#555' }}>
+        <strong style={{ color: '#111' }}>Skill / certification tags: </strong>
+        {SKILL_TAGS.map(t => `${t.code} = ${t.label}`).join('   ·   ')}
+      </div>
+    </div>
+  )
+}
+
+// ── Help modal: how the roster page works (view/edit/submit/delete, rotation,
+// deadline, publish). Opened from the info icon next to the page title.
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[560px] max-h-[85vh] overflow-y-auto p-5 space-y-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-display font-bold text-[17px] text-text">How the Shift Roster works</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={16} /></button>
+        </div>
+
+        {/* Four permissions */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Four separate permissions per section</p>
+          <div className="grid grid-cols-2 gap-2.5">
+            {[
+              { icon: Eye, label: 'View', desc: 'See all sections, read-only' },
+              { icon: Edit3, label: 'Edit', desc: 'Add, move or remove people' },
+              { icon: Send, label: 'Submit', desc: 'Sign the section off' },
+              { icon: ShieldCheck, label: 'Delete', desc: 'Remove entries or periods' },
+            ].map(({ icon: Icon, label, desc }) => (
+              <div key={label} className="flex items-start gap-2 rounded-xl border border-stone-200 bg-stone-50 p-2.5">
+                <Icon size={14} className="text-brand shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-[12px] font-semibold text-text">{label}</div>
+                  <div className="text-[11px] text-stone-500">{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-stone-400 mt-2">Granted per section (Production, Store, Quality, Cleaning, Maintenance, H&amp;S) under Users &amp; Roles → Shift Roster. A lock icon on a section means you can view it but not edit it.</p>
+        </div>
+
+        {/* Editing */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Adding &amp; moving people</p>
+          <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
+            <li>Click <strong className="text-text">Add</strong> under a Day/Night cell, search for the person, tick any skill tags, then <strong className="text-text">Save</strong>.</li>
+            <li>Hover a person&apos;s chip and click the pencil to edit them, or drag the chip to a different role/shift.</li>
+            <li>Changes are local until you click <strong className="text-text">Save [Section]</strong> — the status chip flips to Draft while you edit.</li>
+          </ul>
+        </div>
+
+        {/* Submit / deadline / rotation */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Submitting, the deadline &amp; rotation</p>
+          <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
+            <li>Click <strong className="text-text">Submit [Section]</strong> once it&apos;s final — this is what the Wednesday deadline badge is tracking.</li>
+            <li>Every <strong className="text-text">Sunday night</strong>, next week&apos;s roster is generated automatically with day/night shifts swapped, and every section resets to Draft.</li>
+            <li><strong className="text-text">Monday &amp; Wednesday mornings</strong>, anyone who holds the Submit permission for a section that&apos;s still Draft gets a reminder email.</li>
+          </ul>
+        </div>
+
+        {/* Publish */}
+        <div className="flex items-start gap-2.5 px-3.5 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-[12px] text-amber-800"><strong>Publish is manual — it does not happen automatically on the Wednesday deadline.</strong> Someone with edit rights has to click the green <strong>Publish</strong> button. Publishing syncs the Maintenance section to the maintenance duty roster; the roster stays visible across the app whether or not it&apos;s been published, but publishing is what feeds Maintenance&apos;s own schedule.</p>
+        </div>
+
+        {/* Export / print */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Export &amp; print</p>
+          <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
+            <li><strong className="text-text">Export</strong> downloads a branded, colour-coded <code className="text-[11px] bg-stone-100 px-1 rounded">.xlsx</code> matching what&apos;s on screen.</li>
+            <li><strong className="text-text">Print</strong> produces a plain, full-width table — one section per block — sized for a noticeboard rather than a screenshot of the app.</li>
+          </ul>
+        </div>
+
+        <button onClick={onClose} className="w-full py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium hover:bg-brand-mid transition-colors">Got it</button>
+      </div>
     </div>
   )
 }
@@ -882,8 +1033,8 @@ function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, 
             onSave={(empId, n, t) => onAdd(roleKey, shift, empId, n, t)} onCancel={() => setEditing(null)} />
         ) : (
           <button onClick={() => setEditing(addKey)}
-            className="self-start inline-flex items-center gap-1 text-[11px] text-stone-300 hover:text-brand transition-colors py-0.5 no-print">
-            <Plus size={12} /> Add
+            className="self-start inline-flex items-center gap-1 text-[12px] text-stone-400 hover:text-brand transition-colors py-1 no-print">
+            <Plus size={13} /> Add
           </button>
         ))}
       </div>
@@ -900,23 +1051,23 @@ function PersonChip({ entry, away, canEdit = true, onEdit, onDragStart, onDragEn
       draggable={canEdit}
       onDragStart={canEdit ? (e => { e.dataTransfer.setData('entryId', entry.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(entry.id) }) : undefined}
       onDragEnd={canEdit ? (() => onDragEnd?.()) : undefined}
-      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-2.5 py-1.5 rounded-lg border transition-colors
+      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-3 py-2 rounded-lg border transition-colors
         ${canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}
         ${away ? 'bg-amber-50 border-amber-200 hover:border-amber-300' : 'bg-stone-50 border-stone-200 hover:border-brand/40 hover:bg-white'}`}
       title={!canEdit ? 'View only' : away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
     >
       {away && <span title="On leave" className="text-amber-600 shrink-0">✈</span>}
-      <span className={`text-[12px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
+      <span className={`text-[13px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
       {entry.tags.map(code => (
         <span key={code} title={tagLabel(code)}
-          className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
+          className="font-mono font-semibold text-[9px] px-1.5 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
       ))}
       {canEdit && (
         <button
           onClick={e => { e.stopPropagation(); onEdit() }}
           className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 shrink-0 no-print"
         >
-          <Pencil size={10} className="text-stone-300" />
+          <Pencil size={11} className="text-stone-300" />
         </button>
       )}
     </div>
@@ -948,58 +1099,58 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
   }
 
   return (
-    <div className="rounded-xl border border-brand/40 bg-white p-2.5 shadow-sm space-y-2 w-[240px] max-w-full">
+    <div className="rounded-xl border border-brand/40 bg-white p-3.5 shadow-lg space-y-3 w-[320px] max-w-full">
       {name && !open ? (
         <button type="button" onClick={() => setOpen(true)}
-          className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border border-stone-200 bg-stone-50 text-left">
-          <span className="text-[12px] font-medium text-text truncate">{name}</span>
-          <Pencil size={11} className="text-stone-300 shrink-0" />
+          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-stone-200 bg-stone-50 text-left">
+          <span className="text-[14px] font-medium text-text truncate">{name}</span>
+          <Pencil size={13} className="text-stone-300 shrink-0" />
         </button>
       ) : (
         <div className="relative">
-          <div className="flex items-center gap-1.5 px-2.5 rounded-lg border border-stone-200 bg-white focus-within:border-brand">
-            <Search size={13} className="text-stone-400" />
+          <div className="flex items-center gap-2 px-3 rounded-lg border border-stone-200 bg-white focus-within:border-brand">
+            <Search size={15} className="text-stone-400" />
             <input
               autoFocus value={query} onChange={e => setQuery(e.target.value)}
               onKeyDown={e => { if (e.key === 'Escape') onCancel() }}
               placeholder="Search staff…"
-              className="flex-1 py-1.5 text-[12px] text-text outline-none bg-transparent"
+              className="flex-1 py-2.5 text-[14px] text-text outline-none bg-transparent"
             />
           </div>
           {matches.length > 0 && (
-            <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-52 overflow-y-auto divide-y divide-stone-100">
+            <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-72 overflow-y-auto divide-y divide-stone-100">
               {matches.map(e => (
                 <button key={e.id} type="button" onMouseDown={ev => { ev.preventDefault(); pick(e) }}
-                  className="w-full flex items-center gap-2 px-2.5 py-2 text-left text-[12px] text-text hover:bg-brand/5">
-                  <Plus size={12} className="text-stone-400 shrink-0" />
+                  className="w-full flex items-center gap-2.5 px-3 py-3 text-left text-[13px] text-text hover:bg-brand/5">
+                  <Plus size={13} className="text-stone-400 shrink-0" />
                   <span className="flex-1 truncate">{empLabel(e)}</span>
-                  {leaveEmpIds?.has(e.id) && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full bg-amber-100 text-amber-700">leave</span>}
-                  <span className="text-[10px] text-text-muted capitalize">{e.department}</span>
+                  {leaveEmpIds?.has(e.id) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">leave</span>}
+                  <span className="text-[11px] text-text-muted capitalize">{e.department}</span>
                 </button>
               ))}
             </div>
           )}
         </div>
       )}
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap gap-1.5">
         {SKILL_TAGS.map(t => {
           const on = tags.includes(t.code)
           return (
             <button key={t.code} type="button" onClick={() => toggle(t.code)} title={t.label}
-              className={`font-mono font-semibold text-[9px] px-1.5 py-1 rounded border transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-500 border-stone-200 hover:border-brand/40'}`}>
+              className={`font-mono font-semibold text-[11px] px-2 py-1.5 rounded-lg border transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-500 border-stone-200 hover:border-brand/40'}`}>
               {t.code}
             </button>
           )
         })}
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2">
         <button onClick={() => name.trim() && onSave(employeeId, name, tags)} disabled={!name.trim()}
-          className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-brand text-white text-[11px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
-          <Check size={12} /> Save
+          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
+          <Check size={14} /> Save
         </button>
-        <button onClick={onCancel} className="p-1.5 rounded-lg border border-stone-200 text-stone-400 hover:text-text"><X size={13} /></button>
+        <button onClick={onCancel} className="p-2.5 rounded-lg border border-stone-200 text-stone-400 hover:text-text"><X size={15} /></button>
         {onDelete && (
-          <button onClick={onDelete} className="p-1.5 rounded-lg border border-stone-200 text-stone-400 hover:text-err hover:border-err/40"><Trash2 size={13} /></button>
+          <button onClick={onDelete} className="p-2.5 rounded-lg border border-stone-200 text-stone-400 hover:text-err hover:border-err/40"><Trash2 size={15} /></button>
         )}
       </div>
     </div>

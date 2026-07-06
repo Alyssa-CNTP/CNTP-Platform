@@ -12,7 +12,7 @@ export function WorkforceTabs() {
   const active = pathname === '/production/roster' || pathname.startsWith('/production/roster/')
   return (
     <div className="flex items-center justify-between border-b border-stone-200">
-      <div className="flex items-center gap-0 overflow-x-auto">
+      <div className="flex items-center gap-0">
         <Link href="/production/roster"
           className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors -mb-px whitespace-nowrap ${active ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
           <CalendarRange size={14} /> Shift Roster
