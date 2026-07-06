@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Resilience: run_id load no longer blocks capture)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+- **Capture load no longer depends on the run migration being present.** The core session load selected `run_id`; on a database where the run migration hadn't fully applied (e.g. `ALTER … ADD COLUMN run_id` didn't stick due to lock contention), that select 400'd and took capture down entirely — refining (and all sections) appeared not to save. `run_id` is now dropped from the core select and fetched in a separate best-effort query, and the run linking/rollup in `persist()` is wrapped so a run schema/write hiccup can never affect the already-committed capture save.
+
+---
+
 ## 2026-07-06 — Alyssa (Shift Roster: per-section permissions, auto-rotation, submission tracking, reminders & export)
 
 **Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/production/roster/page.tsx`, `lib/notifications/recipients.ts`, `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`, `supabase/migrations/20260706_003_roster_section_status.sql`, `.github/workflows/roster-rotate.yml`, `app/globals.css`
