@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Roster export: upgraded from plain CSV to branded, colour-coded .xlsx)
+
+**Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/production/roster/page.tsx`
+
+- **Roster export now matches the Quality workcenter standard.** The roster's Export button previously produced a plain, unstyled CSV — nothing like the branded ExcelJS workbooks used by Pasteuriser/Granule/Sieving exports (title block + logo, bold coloured header row, frozen header, autofilter, auto-sized columns). Replaced with a real `.xlsx` export using the same shared engine (`buildStyledWorkbook`).
+- **Colour-coded by section.** Each row is tinted with a light wash of its section's colour (Production/Store/Quality/Cleaning/Maintenance/H&S — the same colours used in the on-screen grid), with the Section column bolded, so the exported file visually matches what's on screen.
+- **Engine extended, not duplicated.** Added optional `rowFill` (arbitrary ARGB row tint, for category-coded exports) and `boldCols` to the shared `StyledSheet` type in `exportExcel.ts` alongside the existing pass/fail tone system — new `exportRosterPeriod()` reuses `buildStyledWorkbook()` rather than a bespoke roster-only implementation.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster CSV export: wide layout for readability)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`
