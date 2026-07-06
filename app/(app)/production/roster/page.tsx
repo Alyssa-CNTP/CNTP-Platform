@@ -632,8 +632,19 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
   cellEntries: (roleKey: string, shift: RosterShift) => Entry[]
 }) {
+  // Some older periods store the raw time range as the label (e.g. "07h00
+  // till 16h00") instead of a shift letter ("Shift A") — only append the
+  // fixed time suffix when the label doesn't already read like one, so the
+  // header doesn't repeat itself ("07h00 till 16h00 · 07h00–16h00").
+  const looksLikeTime = (label: string) => /till|\d{1,2}h\d{2}/i.test(label)
   const dayLabel = period.day_label || 'Day Shift'
   const nightLabel = period.night_label || 'Night Shift'
+  const dayHeader = looksLikeTime(dayLabel) ? dayLabel : `${dayLabel} · 07h00–16h00`
+  const nightHeader = looksLikeTime(nightLabel) ? nightLabel : `${nightLabel} · 16h00–01h00`
+  // Auto-generated names are just a short form of the date range (e.g. "6–10
+  // Jul" for "6 Jul – 10 Jul 2026") — showing both is redundant. Only append
+  // the name when it's a genuine custom label (no digits in it).
+  const hasCustomName = !/\d/.test(period.name)
   const fmtPeople = (list: Entry[]) => list.length
     ? list.map(e => e.person_name + (e.tags.length ? ` (${e.tags.join(' ')})` : '')).join(', ')
     : '—'
@@ -645,7 +656,9 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '3px solid #1A3A0E', paddingBottom: 10, marginBottom: 18 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
-          <p style={{ fontSize: 14, margin: '4px 0 0', color: '#555' }}>{fmtRange(period)} · {period.name}</p>
+          <p style={{ fontSize: 14, margin: '4px 0 0', color: '#555' }}>
+            {fmtRange(period)}{hasCustomName ? ` · ${period.name}` : ''}
+          </p>
         </div>
         <p style={{ fontSize: 11, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
       </div>
@@ -659,8 +672,8 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
             <thead>
               <tr>
                 <th style={{ ...th, width: '22%' }}>Role</th>
-                <th style={th}>{dayLabel} · 07h00–16h00</th>
-                <th style={th}>{nightLabel} · 16h00–01h00</th>
+                <th style={th}>{dayHeader}</th>
+                <th style={th}>{nightHeader}</th>
               </tr>
             </thead>
             <tbody>
