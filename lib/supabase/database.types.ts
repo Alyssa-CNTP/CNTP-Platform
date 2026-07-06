@@ -45,6 +45,7 @@ export interface Database {
           comments:           string | null
           submitted_at:       string | null
           draft_data:         Json
+          run_id:             string | null
           created_by:         string | null
           created_at:         string
           updated_at:         string
@@ -54,6 +55,34 @@ export interface Database {
           'id' | 'created_at' | 'updated_at'
         > & { id?: string }
         Update: Partial<Database['production']['Tables']['prod_sessions']['Insert']>
+      }
+
+      // ── production_runs ─────────────────────────────────────
+      production_runs: {
+        Row: {
+          id:                string
+          section_id:        SectionId
+          production_day:    string
+          production_order:  string | null
+          variant:           Variant | null
+          grade:             string | null
+          lot_number:        string | null
+          status:            'open' | 'closed'
+          total_input_kg:    number
+          total_output_kg:   number
+          balance_kg:        number
+          tolerance_kg:      number
+          opened_at:         string
+          closed_at:         string | null
+          created_by:        string | null
+          created_at:        string
+          updated_at:        string
+        }
+        Insert: Omit<
+          Database['production']['Tables']['production_runs']['Row'],
+          'id' | 'balance_kg' | 'created_at' | 'updated_at'
+        > & { id?: string }
+        Update: Partial<Database['production']['Tables']['production_runs']['Insert']>
       }
 
       // ── bag_tags ────────────────────────────────────────────
@@ -429,6 +458,7 @@ export type ProdSession       = Database['production']['Tables']['prod_sessions'
 export type ProdDebagging     = Database['production']['Tables']['prod_debagging']['Row']
 export type ProdBagging       = Database['production']['Tables']['prod_bagging']['Row']
 export type ProdMassBalance   = Database['production']['Tables']['prod_mass_balance']['Row']
+export type ProductionRun     = Database['production']['Tables']['production_runs']['Row']
 export type BagTag            = Database['production']['Tables']['bag_tags']['Row']
 export type SessionSignature  = Database['production']['Tables']['session_signatures']['Row']
 export type ScanEvent         = Database['production']['Tables']['scan_events']['Row']
