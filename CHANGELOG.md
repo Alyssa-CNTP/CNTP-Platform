@@ -5,6 +5,28 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Duplicate-session fix + 16h00 shift-changeover PIN)
+
+**Files changed:** `supabase/migrations/20260706_002_shift_takeovers.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Duplicate empty sessions fixed.** Opening a capture section no longer eagerly inserts a draft `prod_sessions` row — that open-time insert raced with the first autosave (the select-first check ran before the insert committed), producing duplicate "No data" sessions in production. Sessions are now created lazily on first real capture, and `ensureSession()` coalesces concurrent callers onto a single in-flight insert (with a synchronously-updated `sessionRef`) so it can never double-insert. localStorage still backs up any typing before the row exists.
+- **16h00 shift-changeover PIN gate (audit).** When 16h00 passes and a morning session is still being captured (not signed off), capture is blocked behind a modal until the incoming operator enters their PIN. The PIN is validated against the section’s afternoon-rostered operators (fallback: any active operator, flagged), and each hand-over is recorded in the new `production.shift_takeovers` table (who, when, rostered-or-not) — an audit trail of who captured after the changeover. Subsequent capture and sign-off are attributed to the operator who took over.
+
+---
+
+## 2026-07-06 — Alyssa (Cross-shift production runs, full-day mass balance, numeric keypad)
+
+**Files changed:** `supabase/migrations/20260706_001_production_runs.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/NumericKeypad.tsx`, `components/production/capture/ChecksPanel.tsx`
+
+- **Production runs (cross-shift continuity).** New `production.production_runs` table models one production order (PO + variant + grade) that can span several shifts of a production day (07h00–01h00). Each shift still writes its own `prod_sessions` + `prod_mass_balance` row; `prod_sessions.run_id` links them and the run row holds the durable full-day rollup. A partial unique index enforces one *open* run per (section, day, PO, variant, grade).
+- **Continue-run prompt at shift hand-over.** When the incoming operator picks variant (+ grade for non-refining) and an open run from an earlier shift matches PO + variant + grade, the Capture tab prompts *“Continue the production run from the previous shift?”* with **Continue run** / **Start new run**. Continue links the session so the mass balance carries over; Start new closes the previous run and opens a fresh one. Opening a genuinely new product opens a run silently.
+- **Full-day mass balance carried over.** `persist()` recomputes the run rollup by summing every linked session's mass balance and writes `total_input_kg` / `total_output_kg` / generated `balance_kg` onto the run. The Overview now widens to all sessions sharing the run (morning + afternoon + night), not just morning↔afternoon.
+- **One unified mass balance for everyone.** The Capture card, Checks panel and Sign-off now all show a single run-level mass balance (in / out / variance) combined across every shift and batch on the run — not a per-shift or per-batch slice — so operators on every shift read the same figure. When the run spans shifts, a sub-line notes what the current shift added.
+- **End-of-run control.** Supervisor approval gains an optional “End of production run” checkbox that closes the run so the next shift isn't prompted to continue.
+- **Custom on-screen numeric keypad.** New `NumericKeypad` component (digits, decimal, backspace, clear, and a dash key) replaces the native `type="number"` input in the machine-checks `ValueCapture`. Tablets' native decimal pad has no minus key, so negative readings (e.g. indent screen angle, `allowNegative`) can now be entered reliably; the minus key shows only where negatives are allowed.
+
+---
+
 ## 2026-07-03 — Alyssa (AXIS: comments fix, notifications bell, consideration board resolution tracking)
 
 **Files changed:** `supabase/migrations/20260703_001_axis_comments_parent_id.sql`, `supabase/migrations/20260703_002_axis_notifications_resolution.sql`, `app/api/axis/github-pr/route.ts`, `app/api/axis/requests/[id]/approve/route.ts`, `components/layout/NotificationBell.tsx`, `app/(app)/axis/consideration/page.tsx`
@@ -28,6 +50,23 @@ Format: date · developer · files changed · description of code changes.
 - **Audit log UI rebuilt.** New table layout with columns: Person, Department, Event, Role, Time. Added summary strip (total events, sign-ins, sign-outs, active users). Added department filter dropdown and A–Z sort toggle. Increased fetch limit to 500 events. People dropdown is sorted alphabetically.
 - **Platform Health: auto-refresh.** Page now auto-refreshes every 60 seconds. Manual Refresh button added to header with spinner. Last-updated timestamp shown alongside subtitle.
 - **Unassigned users redirect (from staging).** Users with no role/department are redirected to `/home` and see only Submit Request + Settings in the sidebar.
+
+---
+
+## 2026-07-03 — Alyssa (Refining capture fixes, server recovery, Github icon build fix)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/live-types.ts`, `app/(app)/axis/consideration/page.tsx`, `supabase/migrations/20260704_004_refining_section_constraints.sql`, `supabase/migrations/20260704_005_prod_sessions_section_direct.sql`
+
+- **`notInSystem` false-positive fixed.** Manual entry rows were showing "Not found in system" warning incorrectly. The warning now only appears for non-manual rows where `notInSystem === true`, and clearing the serial field properly resets the flag via a single merged `patch()` call (fixes React stale-closure bug).
+- **Serial input losing keystrokes fixed.** Two sequential `patch()` calls with the same stale `value` prop caused the second to overwrite the first. Fixed by merging serial and notInSystem updates into a single patch inside `updateInput`.
+- **400 on `prod_sessions` INSERT fixed.** Production DB `section_id` CHECK constraint didn't include `'refining1'`/`'refining2'`. Added migrations to widen the constraint (NOT VALID so existing rows aren't re-checked). `ensureSession()` now does a SELECT-first before INSERT so duplicate session creates are avoided.
+- **`prod_debagging`/`prod_bagging` empty fixed.** FK violation: manually-entered serials weren't in `bag_tags` so `bag_serial_no` references failed. Manual rows now use `bag_serial_no: null` with serial stored in `notes`; `secureInput` always upserts manual bags into `bag_tags`.
+- **`grade`/`logged_at` columns removed from build payloads.** These columns don't exist in `prod_debagging`/`prod_bagging` — removing them from `buildDebag` and `buildBag` resolved silent insert failures.
+- **Mass balance split fixed.** All refining output was previously written to `total_output_b_kg`. Fixed to correctly split B/C/D totals across their respective columns in `prod_mass_balance`.
+- **Variant and bag date removed from input rows.** Variant is now inherited from session-level selection; bag date auto-populates from system date. Both fields removed from the per-row UI.
+- **Coarse Leaf added as refining 2 input type.** Added to `live-types.ts` inputTypes and a required batch number field appears when Coarse Leaf is selected (`needsLot` flag).
+- **`Github` lucide icon replaced.** `Github` is not exported from lucide-react in this version. Replaced with `GitBranch` across `axis/consideration/page.tsx` — resolves the production build failure.
+- **Server recovery after disk full.** VPS hit 97.2% disk usage causing `npm run build` to fail and `cntp-production` to error (396 restarts). Freed space by cleaning npm cache, flushing pm2 logs, removing stale `.next-old` dirs, and running `apt clean`. Production and staging both restored to online.
 
 ---
 

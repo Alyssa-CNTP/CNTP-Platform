@@ -77,6 +77,14 @@ function CaptureScreen() {
   const [productions, setProductions] = useState<Production[]>([])
   const [activeIdx, setActiveIdx]     = useState(0)
   const [otherShiftProductions, setOtherShiftProductions] = useState<Production[]>([])
+  const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
+  const [continueRun, setContinueRun] = useState<{ id: string; production_order: string | null; variant: string | null; grade: string | null } | null>(null)
+  const [endOfRun, setEndOfRun]   = useState(false)       // supervisor: close the run on approval
+  // 16h00 shift-changeover: block a still-open morning session until the incoming
+  // afternoon operator confirms by PIN — audit trail of who captured after 16h00.
+  const [afternoonOps, setAfternoonOps]     = useState<{ id: string; name: string; pin: string }[]>([])
+  const [takenOver, setTakenOver]           = useState(false)
+  const [changeoverNeeded, setChangeoverNeeded] = useState(false)
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   const [tab, setTab]             = useState<Tab>(() => {
@@ -94,6 +102,9 @@ function CaptureScreen() {
   const seqRef = useRef(0)
   const productionsRef = useRef<Production[]>(productions); productionsRef.current = productions
   const sessionRef = useRef<string | null>(null); sessionRef.current = sessionId
+  const runIdRef   = useRef<string | null>(null); runIdRef.current = runId
+  const continueRunRef = useRef<typeof continueRun>(null); continueRunRef.current = continueRun
+  const creatingSessionRef = useRef<Promise<string> | null>(null)  // in-flight guard: never double-insert a session
   const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
@@ -128,9 +139,10 @@ function CaptureScreen() {
       }
 
       const { data: sess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data,comments').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .select('id,status,draft_data,comments,run_id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
         .order('created_at', { ascending: false }).limit(1).maybeSingle()
       if ((sess as any)?.comments) setComments((sess as any).comments)
+      if ((sess as any)?.run_id) setRunId((sess as any).run_id)
 
       // Surface the most recent handover note left on this line (previous shift).
       const { data: prev } = await db.schema('production').from('prod_sessions')
@@ -185,24 +197,12 @@ function CaptureScreen() {
         resolvedSid = (sess as any).id
         setSessionId(resolvedSid)
         setStatus((sess as any).status)
-      } else if (assign) {
-        // Create the draft session immediately so autosave always has a target —
-        // nothing is lost if the inactivity timeout signs the operator out.
-        const ids = (assign as any).operator_ids ?? []
-        let opNm: string[] = []
-        if (ids.length) {
-          const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name').in('id', ids)
-          opNm = (ops as Operator[] ?? []).map(o => o.display_name || o.name)
-        }
-        const { data: row } = await db.schema('production').from('prod_sessions').insert({
-          section_id: sectionId, date: dateParam, shift, status: 'draft',
-          operator_names: opNm.length ? opNm : null,
-          lot_number: aLot || null, variant: aVariant || null,
-          production_orders: (assign as any).production_orders ?? null,
-          created_by: user?.id ?? null,
-        } as any).select('id').maybeSingle()
-        if (row) { resolvedSid = (row as any).id; setSessionId(resolvedSid); setStatus('draft') }
       }
+      // No eager creation on open. The session is created lazily on first real
+      // capture via ensureSession(). Creating a draft just by opening a section
+      // previously raced with the first autosave (open-insert not yet committed
+      // when ensureSession's select ran), producing duplicate empty "No data"
+      // sessions. localStorage still backs up any typing before the row exists.
 
       // Log page-open as shift start — written only if no prior stamps exist so
       // the first timestamp always reflects actual login time, not data-entry time.
@@ -339,32 +339,213 @@ function CaptureScreen() {
   }
 
   async function ensureSession(): Promise<string> {
-    if (sessionId) return sessionId
-    // Recover an existing session first — handles case where page-load insert
-    // failed silently (constraint violation) but a session exists from a prior attempt.
-    const { data: existing } = await getDb().schema('production').from('prod_sessions')
-      .select('id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-    if (existing) {
-      const id = (existing as any).id
-      setSessionId(id)
+    // Fast path off the ref (updated synchronously below) so back-to-back callers
+    // in the same tick don't each start a create.
+    if (sessionRef.current) return sessionRef.current
+    // Coalesce concurrent callers onto one in-flight create — the root cause of
+    // duplicate sessions was two callers both passing the select-first check
+    // before either insert committed.
+    if (creatingSessionRef.current) return creatingSessionRef.current
+    const p = (async (): Promise<string> => {
+      // Recover an existing session first (select-then-insert; the in-flight guard
+      // above prevents the same-client race, this handles a prior committed row).
+      const { data: existing } = await getDb().schema('production').from('prod_sessions')
+        .select('id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (existing) {
+        const id = (existing as any).id
+        sessionRef.current = id; setSessionId(id)
+        return id
+      }
+      const { data: row, error: e } = await getDb().schema('production').from('prod_sessions').insert({
+        section_id: sectionId, date: dateParam, shift, status: 'draft',
+        operator_names:    opNames.length ? opNames : null,
+        supervisor_name:   verifiedOp?.role === 'production_supervisor' ? (verifiedOp.display_name || verifiedOp.name) : null,
+        lot_number:        productions[0]?.lot || assignment?.lot_number || null,
+        variant:           productions[0]?.variant || assignment?.variant || null,
+        production_orders: assignment?.production_orders ?? null,
+        created_by:        user?.id ?? null,
+      } as any).select('id').single()
+      if (e) throw new Error(e.message)
+      const id = (row as any).id
+      sessionRef.current = id; setSessionId(id)
       return id
-    }
-    const { data: row, error: e } = await getDb().schema('production').from('prod_sessions').insert({
-      section_id: sectionId, date: dateParam, shift, status: 'draft',
-      operator_names:    opNames.length ? opNames : null,
-      supervisor_name:   verifiedOp?.role === 'production_supervisor' ? (verifiedOp.display_name || verifiedOp.name) : null,
-      lot_number:        productions[0]?.lot || assignment?.lot_number || null,
-      variant:           productions[0]?.variant || assignment?.variant || null,
-      production_orders: assignment?.production_orders ?? null,
-      created_by:        user?.id ?? null,
-    } as any).select('id').single()
-    if (e) throw new Error(e.message)
-    const id = (row as any).id
-    setSessionId(id)
-    return id
+    })()
+    creatingSessionRef.current = p
+    try { return await p } finally { creatingSessionRef.current = null }
   }
   ensureRef.current = ensureSession
+
+  // ── Production runs (cross-shift continuity) ─────────────────────────────
+  // A run = one production order (PO + variant + grade) that can span several
+  // shifts of the same production day. The production day is the session's own
+  // date: the afternoon shift (16h00–01h00) is opened once on that date, so its
+  // post-midnight tail rolls up under the same day.
+  const needsGrade = !sectionId.startsWith('refining')
+  // The PO anchor: the assignment's planned production orders, joined so it
+  // compares identically across shifts (supervisor sets the same POs each shift).
+  const poKey = (assignment?.production_orders ?? []).join(',') || null
+
+  async function findOpenRun(po: string | null, variant: string, grade: string) {
+    const gradeKey = needsGrade ? (grade || null) : null
+    const { data } = await getDb().schema('production').from('production_runs')
+      .select('*').eq('section_id', sectionId).eq('production_day', dateParam)
+      .eq('status', 'open').order('opened_at', { ascending: false })
+    return ((data as any[]) ?? []).find(r =>
+      (r.variant ?? null) === (variant || null) &&
+      (r.production_order ?? null) === (po ?? null) &&
+      (r.grade ?? null) === gradeKey) ?? null
+  }
+
+  async function openRun(po: string | null, variant: string, grade: string): Promise<string | null> {
+    const { data: row } = await getDb().schema('production').from('production_runs').insert({
+      section_id: sectionId, production_day: dateParam,
+      production_order: po, variant: (variant || null) as any,
+      grade: needsGrade ? (grade || null) : null,
+      lot_number: assignment?.lot_number ?? null,
+      status: 'open', created_by: user?.id ?? null,
+    } as any).select('id').maybeSingle()
+    return (row as any)?.id ?? null
+  }
+
+  async function linkSessionToRun(rid: string) {
+    const sid = sessionRef.current ?? (ensureRef.current ? await ensureRef.current() : null)
+    if (!sid) return
+    await getDb().schema('production').from('prod_sessions').update({ run_id: rid } as any).eq('id', sid)
+    setRunId(rid)
+  }
+
+  async function acceptContinueRun() {
+    const cr = continueRun; setContinueRun(null)
+    if (cr) await linkSessionToRun(cr.id)
+  }
+
+  async function declineContinueRun() {
+    // Not a continuation: close the previous shift's run so this shift can open
+    // a fresh one on the same product (one open run per key is enforced in DB).
+    const cr = continueRun; setContinueRun(null)
+    const p = productionsRef.current[activeIdx]
+    if (cr) {
+      await getDb().schema('production').from('production_runs')
+        .update({ status: 'closed', closed_at: new Date().toISOString() } as any).eq('id', cr.id)
+    }
+    if (p?.variant && (!needsGrade || p.grade)) {
+      const rid = await openRun(poKey, p.variant, p.grade)
+      if (rid) await linkSessionToRun(rid)
+    }
+  }
+
+  // Detection only: once variant (+ grade for non-refining) are chosen, look for
+  // an open run from an earlier shift matching PO + variant + grade and, if found,
+  // raise the continue prompt. Re-runs on selection changes so a grade correction
+  // updates/clears the prompt. The run itself is opened lazily on first capture
+  // (persist), using the settled grade — so a last-second change never mislabels it.
+  useEffect(() => {
+    if (loading || status === 'approved' || runId || runIdRef.current) return
+    const p = productions[activeIdx]
+    const variant = p?.variant ?? '', grade = p?.grade ?? ''
+    if (!variant || (needsGrade && !grade)) { if (continueRun) setContinueRun(null); return }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const found = await findOpenRun(poKey, variant, grade)
+        if (cancelled) return
+        setContinueRun(found
+          ? { id: found.id, production_order: found.production_order, variant: found.variant, grade: found.grade }
+          : null)
+      } catch { /* detection is best-effort */ }
+    })()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productions, activeIdx, runId, status, loading])
+
+  // Widen the Overview to the whole run once linked — pull every shift session
+  // sharing this run so combined totals span morning + afternoon (+ night).
+  useEffect(() => {
+    if (!runId) return
+    getDb().schema('production').from('prod_sessions').select('id,draft_data').eq('run_id', runId)
+      .then(({ data }: any) => {
+        const merged = ((data as any[]) ?? [])
+          .filter(s => s.id !== sessionRef.current)
+          .flatMap(s => (s.draft_data?.productions ?? []) as Production[])
+        setOtherShiftProductions(merged)
+      }, () => {})
+  }, [runId])
+
+  // ── 16h00 shift changeover (audit) ───────────────────────────────────────
+  // Only a morning session on today's date can hit the hand-over. Two shifts:
+  // Morning 07h00–16h00, Afternoon/Night 16h00–01h00.
+  function pastChangeover(): boolean {
+    const now = new Date()
+    return shift === 'morning' && dateParam === format(now, 'yyyy-MM-dd') && now.getHours() >= 16
+  }
+
+  // Load the afternoon roster for this section — their PINs unlock the hand-over.
+  useEffect(() => {
+    if (shift !== 'morning') return
+    const db = getDb()
+    db.schema('production').from('shift_assignments')
+      .select('operator_ids').eq('date', dateParam).eq('shift', 'afternoon').eq('section_id', sectionId).maybeSingle()
+      .then(async ({ data }: any) => {
+        const ids = data?.operator_ids ?? []
+        if (!ids.length) { setAfternoonOps([]); return }
+        const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name,pin').in('id', ids)
+        setAfternoonOps((ops as Operator[] ?? []).map(o => ({ id: o.id, name: o.display_name || o.name, pin: o.pin ?? '' })))
+      }, () => setAfternoonOps([]))
+  }, [shift, dateParam, sectionId])
+
+  // Already handed over on this session? Don't prompt again.
+  useEffect(() => {
+    if (!sessionId) return
+    getDb().schema('production').from('shift_takeovers').select('id').eq('session_id', sessionId).limit(1)
+      .then(({ data }: any) => { if (data?.length) setTakenOver(true) }, () => {})
+  }, [sessionId])
+
+  // Flip the block on at 16h00 while the session is still being captured.
+  useEffect(() => {
+    if (takenOver) { setChangeoverNeeded(false); return }
+    const check = () => {
+      const done = status === 'submitted' || status === 'approved'
+      setChangeoverNeeded(pastChangeover() && !done)
+    }
+    check()
+    const t = setInterval(check, 30_000)
+    return () => clearInterval(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shift, dateParam, status, takenOver])
+
+  // Confirm the incoming operator by PIN and stamp the audit trail.
+  async function recordTakeover(op: { id: string; name: string }, rostered: boolean) {
+    const sid = await ensureSession()
+    await getDb().schema('production').from('shift_takeovers').insert({
+      session_id: sid, section_id: sectionId, date: dateParam,
+      from_shift: shift, to_shift: 'afternoon',
+      operator_id: op.id, operator_name: op.name, rostered,
+    } as any)
+    // Attribute subsequent capture + sign-off to whoever took over.
+    try {
+      const { data: full } = await getDb().schema('production').from('operators').select('*').eq('id', op.id).maybeSingle()
+      if (full) setVerifiedOp(full as Operator)
+    } catch { /* attribution is best-effort */ }
+    setTakenOver(true)
+    setChangeoverNeeded(false)
+  }
+
+  // Validate a PIN at the hand-over: afternoon-rostered operators first, then a
+  // flagged fallback to any active operator so capture is never fully blocked.
+  async function confirmChangeover(pin: string): Promise<boolean> {
+    let match = afternoonOps.find(o => o.pin && o.pin === pin) ?? null
+    let rostered = true
+    if (!match) {
+      const { data } = await getDb().schema('production').from('operators')
+        .select('id,name,display_name,pin').eq('active', true)
+      const found = ((data as Operator[]) ?? []).find(o => o.pin && String(o.pin) === pin)
+      if (found) { match = { id: found.id, name: found.display_name || found.name, pin: String(found.pin) }; rostered = false }
+    }
+    if (!match) return false
+    await recordTakeover({ id: match.id, name: match.name }, rostered)
+    return true
+  }
 
   // ── Build structured rows from SievingData or RefiningData ───────────────
   function buildDebag(prods: Production[], sid: string) {
@@ -437,7 +618,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: 'B',
             bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
-            acumatica_id: b.code || null, variant: prod.variant, grade: prod.grade || null,
+            acumatica_id: b.code || null, variant: prod.variant,
             kg: n(b.weight),
           })
         })
@@ -499,6 +680,45 @@ function CaptureScreen() {
     if (serials.length) {
       await db.schema('production').from('bag_tags').update({ session_id: sid } as any).in('serial_number', serials)
     }
+
+    // Lazily open + link a run on the first real capture, using the settled
+    // variant/grade. Skipped while a continue prompt is pending — the operator
+    // must choose Continue / Start new rather than auto-forking a new run.
+    if (!runIdRef.current && !continueRunRef.current) {
+      const p0 = prods[0]
+      const variant = p0?.variant ?? ''
+      const grade   = p0?.grade ?? ''
+      const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
+      if (hasData && variant && (!sectionId.startsWith('refining') ? !!grade : true)) {
+        const found = await findOpenRun(poKey, variant, grade)
+        const newRid = found?.id ?? await openRun(poKey, variant, grade)
+        if (newRid) {
+          await db.schema('production').from('prod_sessions').update({ run_id: newRid } as any).eq('id', sid)
+          runIdRef.current = newRid
+          setRunId(newRid)
+        }
+      }
+    }
+
+    // Roll the run-level mass balance up across every shift session in this run,
+    // so production_runs holds the durable full-day figure. Each session's own
+    // prod_mass_balance row (above) stays the per-shift record.
+    const rid = runIdRef.current
+    if (rid) {
+      const { data: runSess } = await db.schema('production').from('prod_sessions').select('id').eq('run_id', rid)
+      const ids = ((runSess as any[]) ?? []).map(s => s.id)
+      if (ids.length) {
+        const { data: mbs } = await db.schema('production').from('prod_mass_balance')
+          .select('total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg').in('session_id', ids)
+        let tin = 0, tout = 0
+        ;((mbs as any[]) ?? []).forEach(m => {
+          tin  += Number(m.total_input_kg) || 0
+          tout += (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
+        })
+        await db.schema('production').from('production_runs')
+          .update({ total_input_kg: tin, total_output_kg: tout, updated_at: new Date().toISOString() } as any).eq('id', rid)
+      }
+    }
   }
   persistRef.current = persist
 
@@ -546,6 +766,11 @@ function CaptureScreen() {
       await getDb().schema('production').from('prod_sessions').update({
         status: 'approved', updated_at: new Date().toISOString(),
       } as any).eq('id', sessionId)
+      // Close the run if the supervisor marked this as the end of the production run.
+      if (endOfRun && runId) {
+        await getDb().schema('production').from('production_runs')
+          .update({ status: 'closed', closed_at: new Date().toISOString() } as any).eq('id', runId)
+      }
       setStatus('approved')
     } catch (e: any) { setError(e.message) }
     setSubmitting(false)
@@ -580,12 +805,16 @@ function CaptureScreen() {
 
   const locked = status === 'approved'
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0 }
-  const totalIn = at.totalIn, totalOut = at.totalOut
-  const variance  = totalIn - totalOut
-  const withinTol = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
-  const st = sessionTotals(productions)
-  const stVariance = st.totalIn - st.totalOut
-  const stWithinTol = Math.abs(stVariance) <= MASS_BALANCE_TOLERANCE_KG
+  const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
+  const st = sessionTotals(productions)   // this shift's own contribution (shown as a sub-line)
+  // The single mass balance everyone sees: the whole production run (every shift
+  // + every batch on it), so operators across shifts read one unified figure —
+  // not a per-shift or per-batch slice. Falls back to this session when unlinked.
+  const runProductions = runId ? [...productions, ...otherShiftProductions] : productions
+  const rt = sessionTotals(runProductions)
+  const rtVariance  = rt.totalIn - rt.totalOut
+  const rtWithinTol = Math.abs(rtVariance) <= MASS_BALANCE_TOLERANCE_KG
+  const runSpansShifts = runId != null && otherShiftProductions.length > 0
   const multi = productions.length > 1
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
@@ -638,10 +867,15 @@ function CaptureScreen() {
       production_orders: assignment?.production_orders ?? null, created_by: user?.id ?? null,
     } as any).select('id').maybeSingle()
     if (row) {
+      sessionRef.current = (row as any).id
       setSessionId((row as any).id)
       setStatus('draft')
       setProductions([emptyProduction(sectionId, null, aL)])
       setActiveIdx(0)
+      // Fresh session → resolve a run anew once variant/grade are picked.
+      setRunId(null)
+      setContinueRun(null)
+      setEndOfRun(false)
       setTab('production')
     }
   }
@@ -651,6 +885,16 @@ function CaptureScreen() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+
+      {/* 16h00 hand-over — blocks capture until the incoming operator PINs in */}
+      {changeoverNeeded && !takenOver && (
+        <ChangeoverModal
+          sectionName={meta.name}
+          hasRoster={afternoonOps.length > 0}
+          onConfirm={confirmChangeover}
+          onBack={() => router.push('/production/capture')}
+        />
+      )}
 
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
@@ -763,6 +1007,35 @@ function CaptureScreen() {
                   running={totalIn > 0} onOpen={() => setTab('checks')} />
               )}
 
+              {/* Continue the previous shift's run? Fires once variant (+ grade)
+                  are chosen and an open run from an earlier shift matches PO +
+                  variant + grade. Continue carries the mass balance forward. */}
+              {continueRun && !locked && (
+                <div className="bg-info/5 border-2 border-info/30 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-[14px] font-medium text-info">
+                    <ArrowRight size={16} /> Continue the production run from the previous shift?
+                  </div>
+                  <p className="text-[12px] text-text-muted">
+                    {meta.name} is mid-run
+                    {continueRun.production_order ? <> on <span className="font-mono">PO {continueRun.production_order}</span></> : ' on this order'}
+                    {' — '}
+                    <strong>{VARIANT_OPTIONS.find(v => v.value === continueRun.variant)?.label ?? continueRun.variant}</strong>
+                    {continueRun.grade ? <> · {DESTINATION_OPTIONS.find(o => o.value === continueRun.grade)?.label ?? continueRun.grade}</> : null}.
+                    {' '}Continue so the mass balance carries over into a full-day total.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={acceptContinueRun}
+                      className="flex items-center justify-center gap-2 py-3 rounded-xl bg-info text-white font-medium text-[14px] hover:opacity-90 transition-opacity">
+                      <CheckCircle2 size={16} /> Continue run
+                    </button>
+                    <button onClick={declineContinueRun}
+                      className="flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-white text-text font-medium text-[14px] hover:bg-stone-50 transition-colors">
+                      <Plus size={16} /> Start new run
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Batch set-up + live mass balance — one card. Variant and grade
                   are a mandatory, deliberate choice (no Export/Conventional
                   default); the balance appears here once material goes in. The
@@ -795,33 +1068,39 @@ function CaptureScreen() {
                   )}
                 </div>
 
-                {totalIn > 0 && (
+                {rt.totalIn > 0 && (
                   <div className="pt-3 border-t border-stone-100">
                     <div className="flex items-center justify-between mb-2.5">
                       <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
-                        <Scale size={13} /> Mass balance
+                        <Scale size={13} /> Mass balance{runSpansShifts ? ' · whole run (all shifts)' : ''}
                       </span>
-                      <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-                        {withinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-                        {withinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
+                      <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${rtWithinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+                        {rtWithinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                        {rtWithinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-1">
                       <div className="text-center flex-1">
-                        <div className="font-mono font-bold text-[20px] text-text leading-none">{totalIn.toFixed(1)}</div>
+                        <div className="font-mono font-bold text-[20px] text-text leading-none">{rt.totalIn.toFixed(1)}</div>
                         <div className="text-[10px] text-text-muted mt-1">kg in</div>
                       </div>
                       <ArrowRight size={16} className="text-stone-300 shrink-0" />
                       <div className="text-center flex-1">
-                        <div className="font-mono font-bold text-[20px] text-text leading-none">{totalOut.toFixed(1)}</div>
+                        <div className="font-mono font-bold text-[20px] text-text leading-none">{rt.totalOut.toFixed(1)}</div>
                         <div className="text-[10px] text-text-muted mt-1">kg out</div>
                       </div>
                       <span className="text-stone-300 font-bold text-[16px] shrink-0">=</span>
                       <div className="text-center flex-1">
-                        <div className={`font-mono font-bold text-[20px] leading-none ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div>
+                        <div className={`font-mono font-bold text-[20px] leading-none ${rtWithinTol ? 'text-ok' : 'text-warn'}`}>{rtVariance > 0 ? '+' : ''}{rtVariance.toFixed(1)}</div>
                         <div className="text-[10px] text-text-muted mt-1">variance</div>
                       </div>
                     </div>
+                    {runSpansShifts && (
+                      <p className="text-[11px] text-text-muted mt-2.5 flex items-center gap-1.5">
+                        <Info size={11} className="shrink-0" />
+                        One balance for the whole production run — combined across every shift. This shift added {st.totalIn.toFixed(1)} kg in / {st.totalOut.toFixed(1)} kg out.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -885,7 +1164,7 @@ function CaptureScreen() {
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
               operators={candidateOps}
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
-              massBalance={{ totalIn: st.totalIn, totalOut: st.totalOut, variance: stVariance, withinTol: stWithinTol }}
+              massBalance={{ totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rtVariance, withinTol: rtWithinTol }}
             />
           )}
 
@@ -900,7 +1179,7 @@ function CaptureScreen() {
             <>
               <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
                 <Info size={14} className="shrink-0 mt-0.5" />
-                <span>Totals are grouped and combined across both shifts where variant and grade match. Copy or print for Acumatica data entry.</span>
+                <span>{runId ? 'Totals are combined across the whole production run (all shifts), grouped by product, variant and grade.' : 'Totals are grouped and combined across both shifts where variant and grade match.'} Copy or print for Acumatica data entry.</span>
               </div>
               <CaptureOverview
                 productions={[...productions, ...otherShiftProductions]}
@@ -919,10 +1198,11 @@ function CaptureScreen() {
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-              variance={stVariance} withinTol={stWithinTol} totalIn={st.totalIn} totalOut={st.totalOut}
+              variance={rtVariance} withinTol={rtWithinTol} totalIn={rt.totalIn} totalOut={rt.totalOut}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
               comments={comments} onComments={setComments}
+              hasRun={!!runId} endOfRun={endOfRun} onEndOfRun={setEndOfRun}
               onSign={storeSignature} onSubmit={handleSubmit} onApprove={handleApprove} submitting={submitting}
             />
           )}
@@ -945,11 +1225,12 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, comments, onComments, onSign, onSubmit, onApprove, submitting }: {
+function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
   variance: number; withinTol: boolean; totalIn: number; totalOut: number
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   comments: string; onComments: (v: string) => void
+  hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
   onSign: (role: 'operator' | 'supervisor', name: string, sig: string) => Promise<void>
   onSubmit: () => void; onApprove: () => void; submitting: boolean
 }) {
@@ -969,7 +1250,7 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
       )}
       {/* Mass balance summary */}
       <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
-        <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Mass balance</span>
+        <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Mass balance{hasRun ? ' · whole production run' : ''}</span>
         <div className="grid grid-cols-3 gap-3 text-center">
           <div><div className="font-mono font-bold text-[18px] text-text">{totalIn.toFixed(1)}</div><div className="text-[10px] text-text-muted">kg in</div></div>
           <div><div className="font-mono font-bold text-[18px] text-text">{totalOut.toFixed(1)}</div><div className="text-[10px] text-text-muted">kg out</div></div>
@@ -1030,6 +1311,14 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
           <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Supervisor approval</span>
           <input value={supName} onChange={e => setSupName(e.target.value)} placeholder="Supervisor name"
             className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand" />
+          {hasRun && (
+            <label className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 cursor-pointer">
+              <input type="checkbox" checked={endOfRun} onChange={e => onEndOfRun(e.target.checked)} className="mt-0.5 accent-brand" />
+              <span className="text-[12px] text-text-muted">
+                <strong className="text-text">End of production run.</strong> Tick if this shift finishes the order — the run is closed and won't offer to continue on the next shift. Leave unticked if the same order carries on.
+              </span>
+            </label>
+          )}
           <SignaturePad label="Supervisor signature" signed={supSig} disabled={!supName.trim()}
             onSign={async sig => { await onSign('supervisor', supName.trim(), sig); setSupSig(true) }} />
           {supSig && (
@@ -1066,6 +1355,63 @@ function GradeHelp() {
           <div><span className="font-mono font-semibold">C</span> — Domestic / Local</div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── 16h00 shift-changeover PIN gate ─────────────────────────────────────────────
+// Blocks capture on a still-open morning session until the incoming operator
+// confirms by PIN, so the audit trail records who captured after the hand-over.
+function ChangeoverModal({ sectionName, hasRoster, onConfirm, onBack }: {
+  sectionName: string
+  hasRoster: boolean
+  onConfirm: (pin: string) => Promise<boolean>
+  onBack: () => void
+}) {
+  const [pin, setPin]   = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState<string | null>(null)
+
+  async function submit() {
+    if (pin.length < 4) return
+    setBusy(true); setErr(null)
+    try {
+      const ok = await onConfirm(pin)
+      if (!ok) { setErr('PIN not recognised. Check you are rostered for the afternoon shift.'); setPin('') }
+    } catch (e: any) { setErr(e?.message || 'Something went wrong — try again.') }
+    setBusy(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><Lock size={18} className="text-brand" /></div>
+          <div className="min-w-0">
+            <div className="font-semibold text-[16px] text-text leading-tight">Shift changed — confirm who’s capturing</div>
+            <div className="text-[12px] text-text-muted mt-0.5">It’s past 16h00 on {sectionName}.</div>
+          </div>
+        </div>
+        <p className="text-[12px] text-text-muted">
+          {hasRoster
+            ? 'Enter your operator PIN to take over capture. This records who captured from now on.'
+            : 'No afternoon operators are rostered for this section yet — any active operator’s PIN will be recorded.'}
+        </p>
+        <input
+          type="password" inputMode="numeric" maxLength={6} autoFocus
+          value={pin}
+          onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setErr(null) }}
+          onKeyDown={e => { if (e.key === 'Enter') submit() }}
+          placeholder="Enter PIN"
+          className="w-full px-3 py-3 rounded-xl border border-stone-200 bg-white text-center font-mono tracking-[0.4em] text-[18px] outline-none focus:border-brand"
+        />
+        {err && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} className="shrink-0" /> {err}</p>}
+        <button onClick={submit} disabled={busy || pin.length < 4}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-semibold text-[14px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Confirm &amp; continue
+        </button>
+        <button onClick={onBack} className="w-full text-[12px] text-stone-400 hover:text-stone-600">Back to sections</button>
+      </div>
     </div>
   )
 }
