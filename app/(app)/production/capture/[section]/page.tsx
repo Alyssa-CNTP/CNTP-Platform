@@ -80,6 +80,11 @@ function CaptureScreen() {
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
   const [continueRun, setContinueRun] = useState<{ id: string; production_order: string | null; variant: string | null; grade: string | null } | null>(null)
   const [endOfRun, setEndOfRun]   = useState(false)       // supervisor: close the run on approval
+  // 16h00 shift-changeover: block a still-open morning session until the incoming
+  // afternoon operator confirms by PIN — audit trail of who captured after 16h00.
+  const [afternoonOps, setAfternoonOps]     = useState<{ id: string; name: string; pin: string }[]>([])
+  const [takenOver, setTakenOver]           = useState(false)
+  const [changeoverNeeded, setChangeoverNeeded] = useState(false)
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   const [tab, setTab]             = useState<Tab>(() => {
@@ -99,6 +104,7 @@ function CaptureScreen() {
   const sessionRef = useRef<string | null>(null); sessionRef.current = sessionId
   const runIdRef   = useRef<string | null>(null); runIdRef.current = runId
   const continueRunRef = useRef<typeof continueRun>(null); continueRunRef.current = continueRun
+  const creatingSessionRef = useRef<Promise<string> | null>(null)  // in-flight guard: never double-insert a session
   const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
@@ -191,24 +197,12 @@ function CaptureScreen() {
         resolvedSid = (sess as any).id
         setSessionId(resolvedSid)
         setStatus((sess as any).status)
-      } else if (assign) {
-        // Create the draft session immediately so autosave always has a target —
-        // nothing is lost if the inactivity timeout signs the operator out.
-        const ids = (assign as any).operator_ids ?? []
-        let opNm: string[] = []
-        if (ids.length) {
-          const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name').in('id', ids)
-          opNm = (ops as Operator[] ?? []).map(o => o.display_name || o.name)
-        }
-        const { data: row } = await db.schema('production').from('prod_sessions').insert({
-          section_id: sectionId, date: dateParam, shift, status: 'draft',
-          operator_names: opNm.length ? opNm : null,
-          lot_number: aLot || null, variant: aVariant || null,
-          production_orders: (assign as any).production_orders ?? null,
-          created_by: user?.id ?? null,
-        } as any).select('id').maybeSingle()
-        if (row) { resolvedSid = (row as any).id; setSessionId(resolvedSid); setStatus('draft') }
       }
+      // No eager creation on open. The session is created lazily on first real
+      // capture via ensureSession(). Creating a draft just by opening a section
+      // previously raced with the first autosave (open-insert not yet committed
+      // when ensureSession's select ran), producing duplicate empty "No data"
+      // sessions. localStorage still backs up any typing before the row exists.
 
       // Log page-open as shift start — written only if no prior stamps exist so
       // the first timestamp always reflects actual login time, not data-entry time.
@@ -345,30 +339,40 @@ function CaptureScreen() {
   }
 
   async function ensureSession(): Promise<string> {
-    if (sessionId) return sessionId
-    // Recover an existing session first — handles case where page-load insert
-    // failed silently (constraint violation) but a session exists from a prior attempt.
-    const { data: existing } = await getDb().schema('production').from('prod_sessions')
-      .select('id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-    if (existing) {
-      const id = (existing as any).id
-      setSessionId(id)
+    // Fast path off the ref (updated synchronously below) so back-to-back callers
+    // in the same tick don't each start a create.
+    if (sessionRef.current) return sessionRef.current
+    // Coalesce concurrent callers onto one in-flight create — the root cause of
+    // duplicate sessions was two callers both passing the select-first check
+    // before either insert committed.
+    if (creatingSessionRef.current) return creatingSessionRef.current
+    const p = (async (): Promise<string> => {
+      // Recover an existing session first (select-then-insert; the in-flight guard
+      // above prevents the same-client race, this handles a prior committed row).
+      const { data: existing } = await getDb().schema('production').from('prod_sessions')
+        .select('id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (existing) {
+        const id = (existing as any).id
+        sessionRef.current = id; setSessionId(id)
+        return id
+      }
+      const { data: row, error: e } = await getDb().schema('production').from('prod_sessions').insert({
+        section_id: sectionId, date: dateParam, shift, status: 'draft',
+        operator_names:    opNames.length ? opNames : null,
+        supervisor_name:   verifiedOp?.role === 'production_supervisor' ? (verifiedOp.display_name || verifiedOp.name) : null,
+        lot_number:        productions[0]?.lot || assignment?.lot_number || null,
+        variant:           productions[0]?.variant || assignment?.variant || null,
+        production_orders: assignment?.production_orders ?? null,
+        created_by:        user?.id ?? null,
+      } as any).select('id').single()
+      if (e) throw new Error(e.message)
+      const id = (row as any).id
+      sessionRef.current = id; setSessionId(id)
       return id
-    }
-    const { data: row, error: e } = await getDb().schema('production').from('prod_sessions').insert({
-      section_id: sectionId, date: dateParam, shift, status: 'draft',
-      operator_names:    opNames.length ? opNames : null,
-      supervisor_name:   verifiedOp?.role === 'production_supervisor' ? (verifiedOp.display_name || verifiedOp.name) : null,
-      lot_number:        productions[0]?.lot || assignment?.lot_number || null,
-      variant:           productions[0]?.variant || assignment?.variant || null,
-      production_orders: assignment?.production_orders ?? null,
-      created_by:        user?.id ?? null,
-    } as any).select('id').single()
-    if (e) throw new Error(e.message)
-    const id = (row as any).id
-    setSessionId(id)
-    return id
+    })()
+    creatingSessionRef.current = p
+    try { return await p } finally { creatingSessionRef.current = null }
   }
   ensureRef.current = ensureSession
 
@@ -467,6 +471,81 @@ function CaptureScreen() {
         setOtherShiftProductions(merged)
       }, () => {})
   }, [runId])
+
+  // ── 16h00 shift changeover (audit) ───────────────────────────────────────
+  // Only a morning session on today's date can hit the hand-over. Two shifts:
+  // Morning 07h00–16h00, Afternoon/Night 16h00–01h00.
+  function pastChangeover(): boolean {
+    const now = new Date()
+    return shift === 'morning' && dateParam === format(now, 'yyyy-MM-dd') && now.getHours() >= 16
+  }
+
+  // Load the afternoon roster for this section — their PINs unlock the hand-over.
+  useEffect(() => {
+    if (shift !== 'morning') return
+    const db = getDb()
+    db.schema('production').from('shift_assignments')
+      .select('operator_ids').eq('date', dateParam).eq('shift', 'afternoon').eq('section_id', sectionId).maybeSingle()
+      .then(async ({ data }: any) => {
+        const ids = data?.operator_ids ?? []
+        if (!ids.length) { setAfternoonOps([]); return }
+        const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name,pin').in('id', ids)
+        setAfternoonOps((ops as Operator[] ?? []).map(o => ({ id: o.id, name: o.display_name || o.name, pin: o.pin ?? '' })))
+      }, () => setAfternoonOps([]))
+  }, [shift, dateParam, sectionId])
+
+  // Already handed over on this session? Don't prompt again.
+  useEffect(() => {
+    if (!sessionId) return
+    getDb().schema('production').from('shift_takeovers').select('id').eq('session_id', sessionId).limit(1)
+      .then(({ data }: any) => { if (data?.length) setTakenOver(true) }, () => {})
+  }, [sessionId])
+
+  // Flip the block on at 16h00 while the session is still being captured.
+  useEffect(() => {
+    if (takenOver) { setChangeoverNeeded(false); return }
+    const check = () => {
+      const done = status === 'submitted' || status === 'approved'
+      setChangeoverNeeded(pastChangeover() && !done)
+    }
+    check()
+    const t = setInterval(check, 30_000)
+    return () => clearInterval(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shift, dateParam, status, takenOver])
+
+  // Confirm the incoming operator by PIN and stamp the audit trail.
+  async function recordTakeover(op: { id: string; name: string }, rostered: boolean) {
+    const sid = await ensureSession()
+    await getDb().schema('production').from('shift_takeovers').insert({
+      session_id: sid, section_id: sectionId, date: dateParam,
+      from_shift: shift, to_shift: 'afternoon',
+      operator_id: op.id, operator_name: op.name, rostered,
+    } as any)
+    // Attribute subsequent capture + sign-off to whoever took over.
+    try {
+      const { data: full } = await getDb().schema('production').from('operators').select('*').eq('id', op.id).maybeSingle()
+      if (full) setVerifiedOp(full as Operator)
+    } catch { /* attribution is best-effort */ }
+    setTakenOver(true)
+    setChangeoverNeeded(false)
+  }
+
+  // Validate a PIN at the hand-over: afternoon-rostered operators first, then a
+  // flagged fallback to any active operator so capture is never fully blocked.
+  async function confirmChangeover(pin: string): Promise<boolean> {
+    let match = afternoonOps.find(o => o.pin && o.pin === pin) ?? null
+    let rostered = true
+    if (!match) {
+      const { data } = await getDb().schema('production').from('operators')
+        .select('id,name,display_name,pin').eq('active', true)
+      const found = ((data as Operator[]) ?? []).find(o => o.pin && String(o.pin) === pin)
+      if (found) { match = { id: found.id, name: found.display_name || found.name, pin: String(found.pin) }; rostered = false }
+    }
+    if (!match) return false
+    await recordTakeover({ id: match.id, name: match.name }, rostered)
+    return true
+  }
 
   // ── Build structured rows from SievingData or RefiningData ───────────────
   function buildDebag(prods: Production[], sid: string) {
@@ -788,6 +867,7 @@ function CaptureScreen() {
       production_orders: assignment?.production_orders ?? null, created_by: user?.id ?? null,
     } as any).select('id').maybeSingle()
     if (row) {
+      sessionRef.current = (row as any).id
       setSessionId((row as any).id)
       setStatus('draft')
       setProductions([emptyProduction(sectionId, null, aL)])
@@ -805,6 +885,16 @@ function CaptureScreen() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+
+      {/* 16h00 hand-over — blocks capture until the incoming operator PINs in */}
+      {changeoverNeeded && !takenOver && (
+        <ChangeoverModal
+          sectionName={meta.name}
+          hasRoster={afternoonOps.length > 0}
+          onConfirm={confirmChangeover}
+          onBack={() => router.push('/production/capture')}
+        />
+      )}
 
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
@@ -1265,6 +1355,63 @@ function GradeHelp() {
           <div><span className="font-mono font-semibold">C</span> — Domestic / Local</div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── 16h00 shift-changeover PIN gate ─────────────────────────────────────────────
+// Blocks capture on a still-open morning session until the incoming operator
+// confirms by PIN, so the audit trail records who captured after the hand-over.
+function ChangeoverModal({ sectionName, hasRoster, onConfirm, onBack }: {
+  sectionName: string
+  hasRoster: boolean
+  onConfirm: (pin: string) => Promise<boolean>
+  onBack: () => void
+}) {
+  const [pin, setPin]   = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState<string | null>(null)
+
+  async function submit() {
+    if (pin.length < 4) return
+    setBusy(true); setErr(null)
+    try {
+      const ok = await onConfirm(pin)
+      if (!ok) { setErr('PIN not recognised. Check you are rostered for the afternoon shift.'); setPin('') }
+    } catch (e: any) { setErr(e?.message || 'Something went wrong — try again.') }
+    setBusy(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><Lock size={18} className="text-brand" /></div>
+          <div className="min-w-0">
+            <div className="font-semibold text-[16px] text-text leading-tight">Shift changed — confirm who’s capturing</div>
+            <div className="text-[12px] text-text-muted mt-0.5">It’s past 16h00 on {sectionName}.</div>
+          </div>
+        </div>
+        <p className="text-[12px] text-text-muted">
+          {hasRoster
+            ? 'Enter your operator PIN to take over capture. This records who captured from now on.'
+            : 'No afternoon operators are rostered for this section yet — any active operator’s PIN will be recorded.'}
+        </p>
+        <input
+          type="password" inputMode="numeric" maxLength={6} autoFocus
+          value={pin}
+          onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setErr(null) }}
+          onKeyDown={e => { if (e.key === 'Enter') submit() }}
+          placeholder="Enter PIN"
+          className="w-full px-3 py-3 rounded-xl border border-stone-200 bg-white text-center font-mono tracking-[0.4em] text-[18px] outline-none focus:border-brand"
+        />
+        {err && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} className="shrink-0" /> {err}</p>}
+        <button onClick={submit} disabled={busy || pin.length < 4}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-semibold text-[14px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Confirm &amp; continue
+        </button>
+        <button onClick={onBack} className="w-full text-[12px] text-stone-400 hover:text-stone-600">Back to sections</button>
+      </div>
     </div>
   )
 }
