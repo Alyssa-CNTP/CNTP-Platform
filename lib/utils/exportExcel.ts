@@ -627,6 +627,7 @@ export async function exportRosterPeriod(
   roles: Array<{ key: string; name: string }>,
   roleCategory: Map<string, string>,
   categories: Array<{ key: string; label: string; colorHex: string }>,
+  dateRange: string,
 ) {
   const roleName = new Map(roles.map(r => [r.key, r.name]))
   const catName  = new Map(categories.map(c => [c.key, c.label]))
@@ -668,7 +669,7 @@ export async function exportRosterPeriod(
 
   await buildStyledWorkbook(
     [{ name: 'Roster', rows, rowFill, boldCols: ['Section'] }],
-    { subtitle: `Shift Roster — ${period.name}` },
-    `Roster_${period.name.replace(/[^\w-]+/g, '_')}.xlsx`,
+    { subtitle: `Shift Roster — ${dateRange}` },
+    `Shift Roster (${dateRange}).xlsx`,
   )
 }

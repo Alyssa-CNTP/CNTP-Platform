@@ -400,7 +400,7 @@ export default function RosterPage() {
   // ── Export the current period to a branded, colour-coded .xlsx ─────────────
   function exportXlsx() {
     if (!period) return
-    exportRosterPeriod(period, entries, roles, roleCategory, ROSTER_CATEGORIES)
+    exportRosterPeriod(period, entries, roles, roleCategory, ROSTER_CATEGORIES, fmtRange(period))
   }
 
   // Wednesday deadline
