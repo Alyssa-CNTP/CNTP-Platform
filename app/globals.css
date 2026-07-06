@@ -355,3 +355,13 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
 /* ── Scrollbar hide ── */
 .scrollbar-none                     { scrollbar-width: none; }
 .scrollbar-none::-webkit-scrollbar  { display: none; }
+
+/* ── Print — used by the Shift Roster "Print" button ── */
+@media print {
+  /* App chrome + interactive-only controls drop out of the printout */
+  aside            { display: none !important; }
+  .no-print        { display: none !important; }
+  /* Keep the colour-coded roster true on paper */
+  *                { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body             { background: #fff; }
+}

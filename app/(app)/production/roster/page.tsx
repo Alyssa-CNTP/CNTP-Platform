@@ -5,7 +5,7 @@ import { addDays, format, parseISO } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
-  RefreshCw, Send, CheckCircle2, ArrowRight, Lock,
+  RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Download, Printer,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -15,6 +15,7 @@ import {
   tagLabel,
   type RosterRole, type RosterShift,
 } from '@/lib/production/roster-config'
+import { rosterPerm, type RosterSectionKey } from '@/lib/auth/permissions'
 
 interface Period {
   id: string; name: string; start_date: string; end_date: string
@@ -29,6 +30,7 @@ interface Employee {
   id: string; name: string; display_name: string | null
   department: string; job_title: string | null; skills: string[]; operator_id: string | null
 }
+interface SectionStatus { section: string; status: string; submitted_by: string | null; submitted_at: string | null }
 
 const db = () => getDb().schema('production')
 const fmtRange = (p: Period) =>
@@ -51,12 +53,22 @@ function daysUntilWednesday(): number {
 }
 
 export default function RosterPage() {
-  const { user } = useAuth()
+  const { user, p, isFullAdmin } = useAuth()
+  // ── Roster permissions (view is global; edit/submit/delete are per section) ──
+  // Category keys in ROSTER_CATEGORIES match the RosterSectionKey enum exactly.
+  const canView   = isFullAdmin || p('can_view_roster')
+  const canEdit   = (s: string) => isFullAdmin || p(rosterPerm('edit',   s as RosterSectionKey))
+  const canSubmit = (s: string) => isFullAdmin || p(rosterPerm('submit', s as RosterSectionKey))
+  const canDelete = (s: string) => isFullAdmin || p(rosterPerm('delete', s as RosterSectionKey))
+  const canEditAny   = isFullAdmin || ROSTER_CATEGORIES.some(c => p(rosterPerm('edit',   c.key as RosterSectionKey)))
+  const canDeleteAny = isFullAdmin || ROSTER_CATEGORIES.some(c => p(rosterPerm('delete', c.key as RosterSectionKey)))
   const [roles, setRoles]       = useState<RosterRole[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
   const [periods, setPeriods]   = useState<Period[]>([])
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [entries, setEntries]   = useState<Entry[]>([])
+  const [sectionStatus, setSectionStatus] = useState<Record<string, SectionStatus>>({})
+  const [submittingSection, setSubmittingSection] = useState<string | null>(null)
   const [leaveEmpIds, setLeaveEmpIds] = useState<Set<string>>(new Set())
   const [loading, setLoading]   = useState(true)
   const [dbReady, setDbReady]   = useState(true)
@@ -119,6 +131,15 @@ export default function RosterPage() {
       .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
       .eq('period_id', periodId).order('sort_order')
       .then(({ data }: any) => setEntries((data as Entry[]) ?? []))
+    // Per-section submission status (graceful if the table isn't migrated yet)
+    db().from('roster_section_status')
+      .select('section,status,submitted_by,submitted_at')
+      .eq('period_id', periodId)
+      .then(({ data }: any) => {
+        const map: Record<string, SectionStatus> = {}
+        ;((data as SectionStatus[]) ?? []).forEach(r => { map[r.section] = r })
+        setSectionStatus(map)
+      }, () => setSectionStatus({}))
   }, [periodId])
 
   // Leave flags for the selected period
@@ -227,10 +248,38 @@ export default function RosterPage() {
       }
       setEntries(es => [...es.filter(e => !catRoleKeys.includes(e.role_key)), ...fresh])
       setDirtyCategories(s => { const n = new Set(s); n.delete(categoryKey); return n })
+      // A save means the section changed — it is no longer "submitted".
+      // Best-effort: don't let a missing status table break the save.
+      try {
+        await db().from('roster_section_status')
+          .upsert({ period_id: periodId, section: categoryKey, status: 'draft', submitted_by: null, submitted_at: null } as any,
+                   { onConflict: 'period_id,section' })
+        setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'draft', submitted_by: null, submitted_at: null } }))
+      } catch { /* table may not be migrated yet */ }
     } catch (err) {
       console.error('saveDepartment failed', err)
     } finally {
       setSavingCategory(null)
+    }
+  }
+
+  // Submit (sign off) a section for the period. Persists any pending edits first,
+  // then records the submission so the Wednesday reminder cron stops emailing it.
+  async function submitSection(categoryKey: string) {
+    if (!periodId) return
+    if (dirtyCategories.has(categoryKey)) await saveDepartment(categoryKey)
+    setSubmittingSection(categoryKey)
+    try {
+      const submitted_at = new Date().toISOString()
+      const { error } = await db().from('roster_section_status')
+        .upsert({ period_id: periodId, section: categoryKey, status: 'submitted', submitted_by: user?.id ?? null, submitted_at } as any,
+                 { onConflict: 'period_id,section' })
+      if (error) throw error
+      setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'submitted', submitted_by: user?.id ?? null, submitted_at } }))
+    } catch (err) {
+      console.error('submitSection failed', err)
+    } finally {
+      setSubmittingSection(null)
     }
   }
 
@@ -281,6 +330,11 @@ export default function RosterPage() {
       setPeriods(ps => [np as Period, ...ps])
       setPeriodId(np.id)
       setEntries((newEntries as Entry[]) ?? [])
+      setSectionStatus({})  // fresh period — every section starts as draft
+
+      // Email each section's responsible submitter that next week is ready to
+      // review/submit. Fire-and-forget; recipients derive from the submit perm.
+      fetch('/api/production/roster/cron?task=remind', { method: 'POST' }).catch(() => {})
     } finally {
       setGenerating(false)
       setShowGenerate(false)
@@ -342,9 +396,46 @@ export default function RosterPage() {
     setPeriodId(rest[0]?.id ?? null)
   }
 
+  // ── Export the current period to CSV ──────────────────────────────────────
+  function exportCsv() {
+    if (!period) return
+    const roleName = new Map(roles.map(r => [r.key, r.name]))
+    const catName  = new Map(ROSTER_CATEGORIES.map(c => [c.key, c.label]))
+    const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`
+    const header = ['Section', 'Role', 'Shift', 'Person', 'Tags', 'Notes']
+    const rows = [...entries]
+      .sort((a, b) => a.role_key.localeCompare(b.role_key) || a.shift.localeCompare(b.shift) || a.sort_order - b.sort_order)
+      .map(e => {
+        const cat = roleCategory.get(e.role_key) ?? ''
+        const shiftLabel = e.shift === 'day' ? (period.day_label || 'Day') : (period.night_label || 'Night')
+        return [catName.get(cat) ?? cat, roleName.get(e.role_key) ?? e.role_key, shiftLabel, e.person_name, e.tags.join(' '), '']
+      })
+    const csv = [header, ...rows].map(r => r.map(esc).join(',')).join('\r\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `roster-${period.name.replace(/[^\w-]+/g, '_')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   // Wednesday deadline
   const daysLeft  = daysUntilWednesday()
   const todayWed  = daysLeft === 0
+
+  // View gate — the roster is permission-gated; without view access, stop here.
+  if (!loading && !canView) {
+    return (
+      <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
+        <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
+        <div className="flex items-start gap-2.5 px-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl text-[13px] text-stone-600">
+          <Lock size={16} className="shrink-0 mt-0.5 text-stone-400" />
+          <span>You don&apos;t have permission to view the shift roster. Ask an administrator to grant you <strong>View the whole roster</strong> under Users &amp; Roles → Shift Roster.</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
@@ -354,7 +445,7 @@ export default function RosterPage() {
           <p className="text-[12px] text-stone-400 mt-0.5">The whole-site shift layout — every role and shift across all departments.</p>
         </div>
         {/* Wednesday deadline badge */}
-        <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] font-medium
+        <div className={`no-print inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] font-medium
           ${todayWed ? 'bg-err/8 border-err/30 text-err' : daysLeft <= 2 ? 'bg-warn/8 border-warn/30 text-warn' : 'bg-stone-50 border-stone-200 text-stone-600'}`}>
           {todayWed ? <AlertTriangle size={14} /> : <CalendarRange size={14} />}
           {todayWed
@@ -365,7 +456,7 @@ export default function RosterPage() {
         </div>
       </div>
 
-      <WorkforceTabs />
+      <div className="no-print"><WorkforceTabs /></div>
 
       {!dbReady && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
@@ -404,9 +495,27 @@ export default function RosterPage() {
           </span>
         )}
 
-        <div className="flex items-center gap-2 flex-wrap ml-auto">
-          {/* Generate next week */}
-          {period && !isPublished && (
+        <div className="flex items-center gap-2 flex-wrap ml-auto no-print">
+          {/* Export CSV — anyone who can view */}
+          {period && (
+            <button
+              onClick={exportCsv}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors"
+            >
+              <Download size={13} /> Export
+            </button>
+          )}
+          {/* Print — anyone who can view */}
+          {period && (
+            <button
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors"
+            >
+              <Printer size={13} /> Print
+            </button>
+          )}
+          {/* Generate next week — needs edit rights somewhere */}
+          {period && !isPublished && canEditAny && (
             <button
               onClick={() => setShowGenerate(true)} disabled={!dbReady || generating}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40 transition-colors"
@@ -414,15 +523,17 @@ export default function RosterPage() {
               <RefreshCw size={13} /> Generate next week
             </button>
           )}
-          {/* New period */}
-          <button
-            onClick={() => setShowNew(true)} disabled={!dbReady}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
-          >
-            <Plus size={14} /> New period
-          </button>
-          {/* Publish */}
-          {period && !isPublished && (
+          {/* New period — needs edit rights somewhere */}
+          {canEditAny && (
+            <button
+              onClick={() => setShowNew(true)} disabled={!dbReady}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
+            >
+              <Plus size={14} /> New period
+            </button>
+          )}
+          {/* Publish — needs edit rights somewhere */}
+          {period && !isPublished && canEditAny && (
             <button
               onClick={publishPeriod} disabled={publishing || !dbReady}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-ok text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-40 transition-colors"
@@ -431,8 +542,8 @@ export default function RosterPage() {
               Publish
             </button>
           )}
-          {/* Delete */}
-          {period && (
+          {/* Delete — needs delete rights somewhere */}
+          {period && canDeleteAny && (
             <button
               onClick={() => { if (confirm(`Delete roster period "${period.name}"? This removes all its entries.`)) deletePeriod(period.id) }}
               className="flex items-center gap-1.5 text-[12px] text-stone-400 hover:text-err transition-colors px-1"
@@ -472,12 +583,17 @@ export default function RosterPage() {
             dirtyCategories={dirtyCategories}
             savingCategory={savingCategory}
             onSaveDept={saveDepartment}
+            canEdit={canEdit} canSubmit={canSubmit}
+            sectionStatus={sectionStatus}
+            submittingSection={submittingSection}
+            onSubmitSection={submitSection}
+            currentUserId={user?.id ?? null}
           />
         </>
       )}
 
       {/* Legend */}
-      <div className="bg-surface-card border border-surface-rule rounded-2xl p-4">
+      <div className="no-print bg-surface-card border border-surface-rule rounded-2xl p-4">
         <p className="font-mono text-[10px] text-text-muted uppercase tracking-wide mb-2.5">Skill / certification tags</p>
         <div className="flex flex-wrap gap-x-4 gap-y-1.5">
           {SKILL_TAGS.map(t => (
@@ -594,6 +710,7 @@ function RosterGrid({
   period, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing,
   onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove,
   dirtyCategories, savingCategory, onSaveDept,
+  canEdit, canSubmit, sectionStatus, submittingSection, onSubmitSection, currentUserId,
 }: {
   period: Period
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
@@ -613,6 +730,12 @@ function RosterGrid({
   dirtyCategories: Set<string>
   savingCategory: string | null
   onSaveDept: (cat: string) => void
+  canEdit: (section: string) => boolean
+  canSubmit: (section: string) => boolean
+  sectionStatus: Record<string, SectionStatus>
+  submittingSection: string | null
+  onSubmitSection: (section: string) => void
+  currentUserId: string | null
 }) {
   const shiftLabel = (s: RosterShift) => s === 'day' ? period.day_label : period.night_label
   return (
@@ -645,7 +768,12 @@ function RosterGrid({
               onMove={onMove}
               isDirty={dirtyCategories.has(cat.key)}
               isSaving={savingCategory === cat.key}
-              onSave={() => onSaveDept(cat.key)} />
+              onSave={() => onSaveDept(cat.key)}
+              canEdit={canEdit(cat.key)} canSubmit={canSubmit(cat.key)}
+              status={sectionStatus[cat.key]}
+              isSubmitting={submittingSection === cat.key}
+              onSubmit={() => onSubmitSection(cat.key)}
+              currentUserId={currentUserId} />
           ))}
         </tbody>
       </table>
@@ -653,24 +781,53 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave }: any) {
+function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave, canEdit, canSubmit, status, isSubmitting, onSubmit, currentUserId }: any) {
+  const isSubmitted = status?.status === 'submitted'
+  const submittedByYou = isSubmitted && status?.submitted_by && status.submitted_by === currentUserId
   return (
     <>
       <tr>
         <td colSpan={3} className="px-3 py-1.5 border-y border-surface-rule"
           style={{ background: cat.colorHex + '14', borderLeft: `3px solid ${cat.colorHex}` }}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide font-semibold" style={{ color: cat.colorHex }}>
               <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex }} /> {cat.label}
             </span>
-            {isDirty && (
-              <button onClick={onSave} disabled={isSaving}
-                className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-ok text-white text-[10px] font-semibold disabled:opacity-60 hover:opacity-90 transition-opacity">
-                {isSaving
-                  ? <><Loader2 size={11} className="animate-spin" /> Saving…</>
-                  : <><Check size={11} /> Save {cat.label}</>}
-              </button>
+            {/* Read-only lock for sections the user cannot edit */}
+            {!canEdit && (
+              <span title="You can view this section but not edit it" className="inline-flex items-center gap-1 text-[9px] text-stone-400">
+                <Lock size={10} /> view only
+              </span>
             )}
+            {/* Submission status chip */}
+            {isSubmitted ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-ok/10 text-ok">
+                <CheckCircle2 size={11} /> Submitted{submittedByYou ? ' by you' : ''}
+                {status?.submitted_at ? ` · ${format(parseISO(status.submitted_at), 'd MMM HH:mm')}` : ''}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">
+                <Pencil size={10} /> Draft
+              </span>
+            )}
+            <div className="ml-auto inline-flex items-center gap-2">
+              {isDirty && canEdit && (
+                <button onClick={onSave} disabled={isSaving}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-ok/40 text-ok text-[10px] font-semibold disabled:opacity-60 hover:bg-ok/5 transition-colors">
+                  {isSaving
+                    ? <><Loader2 size={11} className="animate-spin" /> Saving…</>
+                    : <><Check size={11} /> Save {cat.label}</>}
+                </button>
+              )}
+              {canSubmit && !isSubmitted && (
+                <button onClick={onSubmit} disabled={isSubmitting}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-ok text-white text-[10px] font-semibold disabled:opacity-60 hover:opacity-90 transition-opacity">
+                  {isSubmitting
+                    ? <><Loader2 size={11} className="animate-spin" /> Submitting…</>
+                    : <><Send size={11} /> Submit {cat.label}</>}
+                </button>
+              )}
+            </div>
           </div>
         </td>
       </tr>
@@ -687,7 +844,7 @@ function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editin
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
               dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
               dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
-              onMove={onMove} />
+              onMove={onMove} canEdit={canEdit} />
           ))}
         </tr>
       ))}
@@ -695,7 +852,7 @@ function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editin
   )
 }
 
-function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove }: {
+function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, canEdit }: {
   roleKey: string; shift: RosterShift; employees: Employee[]; leaveEmpIds: Set<string>; entries: Entry[]
   editing: string | null; setEditing: (v: string | null) => void
   onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
@@ -704,63 +861,66 @@ function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, 
   dragEntryId: string | null; setDragEntryId: (id: string | null) => void
   dragOverCell: string | null; setDragOverCell: (key: string | null) => void
   onMove: (id: string, roleKey: string, shift: RosterShift) => void
+  canEdit: boolean
 }) {
   const addKey  = `add:${roleKey}:${shift}`
   const cellKey = `${roleKey}:${shift}`
-  const isDropTarget = dragEntryId !== null && dragOverCell === cellKey
+  const isDropTarget = canEdit && dragEntryId !== null && dragOverCell === cellKey
   const takenIds = entries.map(e => e.employee_id).filter(Boolean) as string[]
 
   return (
     <td
       className={`px-3 py-2 align-top transition-colors ${isDropTarget ? 'bg-brand/8 ring-1 ring-inset ring-brand/30' : ''}`}
-      onDragOver={e => { if (dragEntryId) { e.preventDefault(); setDragOverCell(cellKey) } }}
-      onDragLeave={() => setDragOverCell(null)}
-      onDrop={e => {
+      onDragOver={canEdit ? (e => { if (dragEntryId) { e.preventDefault(); setDragOverCell(cellKey) } }) : undefined}
+      onDragLeave={canEdit ? (() => setDragOverCell(null)) : undefined}
+      onDrop={canEdit ? (e => {
         e.preventDefault()
         const id = e.dataTransfer.getData('entryId')
         if (id) onMove(id, roleKey, shift)
         setDragOverCell(null); setDragEntryId(null)
-      }}
+      }) : undefined}
     >
       <div className="flex flex-col gap-1.5">
-        {entries.map(e => editing === e.id ? (
+        {entries.map(e => canEdit && editing === e.id ? (
           <PersonEditor key={e.id} employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds.filter(id => id !== e.employee_id)}
             initialEmployeeId={e.employee_id} initialName={e.person_name} initialTags={e.tags}
             onSave={(empId, n, t) => onUpdate(e.id, empId, n, t)} onCancel={() => setEditing(null)}
             onDelete={() => onDelete(e.id)} />
         ) : (
           <PersonChip key={e.id} entry={e} away={!!e.employee_id && leaveEmpIds.has(e.employee_id)}
+            canEdit={canEdit}
             onEdit={() => setEditing(e.id)}
             onDragStart={id => { setDragEntryId(id) }}
             onDragEnd={() => { setDragEntryId(null); setDragOverCell(null) }} />
         ))}
 
-        {editing === addKey ? (
+        {canEdit && (editing === addKey ? (
           <PersonEditor employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds}
             onSave={(empId, n, t) => onAdd(roleKey, shift, empId, n, t)} onCancel={() => setEditing(null)} />
         ) : (
           <button onClick={() => setEditing(addKey)}
-            className="self-start inline-flex items-center gap-1 text-[11px] text-stone-300 hover:text-brand transition-colors py-0.5">
+            className="self-start inline-flex items-center gap-1 text-[11px] text-stone-300 hover:text-brand transition-colors py-0.5 no-print">
             <Plus size={12} /> Add
           </button>
-        )}
+        ))}
       </div>
     </td>
   )
 }
 
-function PersonChip({ entry, away, onEdit, onDragStart, onDragEnd }: {
-  entry: Entry; away?: boolean; onEdit: () => void
+function PersonChip({ entry, away, canEdit = true, onEdit, onDragStart, onDragEnd }: {
+  entry: Entry; away?: boolean; canEdit?: boolean; onEdit: () => void
   onDragStart?: (id: string) => void; onDragEnd?: () => void
 }) {
   return (
     <div
-      draggable
-      onDragStart={e => { e.dataTransfer.setData('entryId', entry.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(entry.id) }}
-      onDragEnd={() => onDragEnd?.()}
-      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-2.5 py-1.5 rounded-lg border cursor-grab active:cursor-grabbing transition-colors
+      draggable={canEdit}
+      onDragStart={canEdit ? (e => { e.dataTransfer.setData('entryId', entry.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(entry.id) }) : undefined}
+      onDragEnd={canEdit ? (() => onDragEnd?.()) : undefined}
+      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-2.5 py-1.5 rounded-lg border transition-colors
+        ${canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}
         ${away ? 'bg-amber-50 border-amber-200 hover:border-amber-300' : 'bg-stone-50 border-stone-200 hover:border-brand/40 hover:bg-white'}`}
-      title={away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
+      title={!canEdit ? 'View only' : away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
     >
       {away && <span title="On leave" className="text-amber-600 shrink-0">✈</span>}
       <span className={`text-[12px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
@@ -768,12 +928,14 @@ function PersonChip({ entry, away, onEdit, onDragStart, onDragEnd }: {
         <span key={code} title={tagLabel(code)}
           className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
       ))}
-      <button
-        onClick={e => { e.stopPropagation(); onEdit() }}
-        className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 shrink-0"
-      >
-        <Pencil size={10} className="text-stone-300" />
-      </button>
+      {canEdit && (
+        <button
+          onClick={e => { e.stopPropagation(); onEdit() }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 shrink-0 no-print"
+        >
+          <Pencil size={10} className="text-stone-300" />
+        </button>
+      )}
     </div>
   )
 }
