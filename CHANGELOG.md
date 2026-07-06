@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Shift Roster: per-section permissions, auto-rotation, submission tracking, reminders & export)
+
+**Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/production/roster/page.tsx`, `lib/notifications/recipients.ts`, `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`, `supabase/migrations/20260706_003_roster_section_status.sql`, `.github/workflows/roster-rotate.yml`, `app/globals.css`
+
+- **Two new departments.** `Store` and `Health & Safety` added to the org `Department` list (with metadata + default roles `store_supervisor` / `hs_officer`), so users can be assigned to them across the app.
+- **Four-way roster permissions, per section.** New permission keys: one global `can_view_roster` plus `can_{edit,submit,delete}_roster_<section>` for each of the 6 roster sections (production, store, qc, cleaning, maintenance, hs). Rendered as a new **Shift Roster** group in the Users & Roles permission panel + matrix — nothing hardcoded, all set per user/role. Viewing, submitting, editing and deleting are now genuinely separate capabilities.
+- **Roster page is now permission-gated.** The sidebar link and page require `can_view_roster`. In the grid, Add / edit / drag / delete and the **Save** button appear only for sections you can edit (others show a *view only* lock); a new **Submit [section]** button (needs the submit permission) signs a section off. Each section shows a Draft / ✓ Submitted status chip. Top-bar New period / Generate / Publish / Delete are gated on having edit/delete rights somewhere.
+- **Section submission tracking.** New `production.roster_section_status` table records per-section draft/submitted state (+ who/when). Saving a section reverts it to draft; submitting stamps it.
+- **Automatic weekly rotation.** New `lib/production/roster-rotate.ts` holds the shared rotate logic (day↔night swap, Shift A/B labels follow the people; cadence is the one constant `ROSTER_PERIOD_DAYS`). A new `/api/production/roster/cron` endpoint runs `?task=rotate` (idempotently creates next week's rotated period) and `?task=remind`. Driven by `.github/workflows/roster-rotate.yml` (rotate Sun night; remind Mon + Wed mornings). Auth: `Bearer CRON_SECRET`, or a signed-in editor (so the manual **Generate next week** button also fires the reminder).
+- **Reminder emails — not hardcoded.** `remind` emails whoever holds `can_submit_roster_<section>` for each section not yet submitted, resolved live from role defaults + per-user overrides via the new `getRosterSubmitterIds()` helper (reads `shared.app_roles` through a `SECURITY DEFINER` `public.roster_submitter_candidates()` function, since the service-role cron can't reach the `shared` schema directly). Uses the existing `notify()` in-app + email pipeline.
+- **Export + print.** New CSV **Export** (section, role, shift, person, tags) and a colour-preserving **Print** view (`@media print` rules hide app chrome / interactive-only controls).
+- **Migration to run (staging first):** `supabase/migrations/20260706_003_roster_section_status.sql`. **Ops:** add the `roster-rotate.yml` schedule; `CRON_SECRET` already exists on the server.
+
+---
+
 ## 2026-07-06 — Alyssa (Duplicate-session fix + 16h00 shift-changeover PIN)
 
 **Files changed:** `supabase/migrations/20260706_002_shift_takeovers.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`

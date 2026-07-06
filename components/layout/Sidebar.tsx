@@ -46,7 +46,7 @@ const NAV: NavItem[] = [
   { href: '/production/floor-plan',     label: 'Floor Plan',                 icon: Map,             group: 'Production', departments: ['Production','Management'] },
 
   // ── Operations — cross-role, universal entries ──
-  { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations' },
+  { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/production/staff',          label: 'Staff & Skills',             icon: Users,           group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
 
