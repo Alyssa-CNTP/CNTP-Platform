@@ -150,7 +150,7 @@ export default function NotificationBell() {
           borderRadius: 14,
           boxShadow: '0 12px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)',
           overflow: 'hidden',
-          zIndex: 100,
+          zIndex: 9999,
           display: 'flex', flexDirection: 'column',
         }}>
           {/* Header */}
