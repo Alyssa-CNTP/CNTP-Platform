@@ -138,11 +138,13 @@ function CaptureScreen() {
         if (me) setVerifiedOp(me as Operator)
       }
 
+      // Keep run_id OUT of this core select: if the run migration hasn't been
+      // applied to a database yet, selecting a missing column 400s the whole load
+      // and takes capture down. run_id is fetched best-effort below instead.
       const { data: sess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data,comments,run_id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .select('id,status,draft_data,comments').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
         .order('created_at', { ascending: false }).limit(1).maybeSingle()
       if ((sess as any)?.comments) setComments((sess as any).comments)
-      if ((sess as any)?.run_id) setRunId((sess as any).run_id)
 
       // Surface the most recent handover note left on this line (previous shift).
       const { data: prev } = await db.schema('production').from('prod_sessions')
@@ -197,6 +199,12 @@ function CaptureScreen() {
         resolvedSid = (sess as any).id
         setSessionId(resolvedSid)
         setStatus((sess as any).status)
+        // Best-effort run link — isolated so a missing run_id column can't break load.
+        try {
+          const { data: rr } = await db.schema('production').from('prod_sessions')
+            .select('run_id').eq('id', resolvedSid).maybeSingle()
+          if ((rr as any)?.run_id) setRunId((rr as any).run_id)
+        } catch { /* run_id optional */ }
       }
       // No eager creation on open. The session is created lazily on first real
       // capture via ensureSession(). Creating a draft just by opening a section
@@ -681,44 +689,49 @@ function CaptureScreen() {
       await db.schema('production').from('bag_tags').update({ session_id: sid } as any).in('serial_number', serials)
     }
 
-    // Lazily open + link a run on the first real capture, using the settled
-    // variant/grade. Skipped while a continue prompt is pending — the operator
-    // must choose Continue / Start new rather than auto-forking a new run.
-    if (!runIdRef.current && !continueRunRef.current) {
-      const p0 = prods[0]
-      const variant = p0?.variant ?? ''
-      const grade   = p0?.grade ?? ''
-      const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
-      if (hasData && variant && (!sectionId.startsWith('refining') ? !!grade : true)) {
-        const found = await findOpenRun(poKey, variant, grade)
-        const newRid = found?.id ?? await openRun(poKey, variant, grade)
-        if (newRid) {
-          await db.schema('production').from('prod_sessions').update({ run_id: newRid } as any).eq('id', sid)
-          runIdRef.current = newRid
-          setRunId(newRid)
+    // Run linking + rollup is wrapped so it can NEVER affect the core save above:
+    // the draft_data + structured rows + per-session mass balance are already
+    // committed by this point. A run schema/write hiccup must not lose capture.
+    try {
+      // Lazily open + link a run on the first real capture, using the settled
+      // variant/grade. Skipped while a continue prompt is pending — the operator
+      // must choose Continue / Start new rather than auto-forking a new run.
+      if (!runIdRef.current && !continueRunRef.current) {
+        const p0 = prods[0]
+        const variant = p0?.variant ?? ''
+        const grade   = p0?.grade ?? ''
+        const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
+        if (hasData && variant && (!sectionId.startsWith('refining') ? !!grade : true)) {
+          const found = await findOpenRun(poKey, variant, grade)
+          const newRid = found?.id ?? await openRun(poKey, variant, grade)
+          if (newRid) {
+            await db.schema('production').from('prod_sessions').update({ run_id: newRid } as any).eq('id', sid)
+            runIdRef.current = newRid
+            setRunId(newRid)
+          }
         }
       }
-    }
 
-    // Roll the run-level mass balance up across every shift session in this run,
-    // so production_runs holds the durable full-day figure. Each session's own
-    // prod_mass_balance row (above) stays the per-shift record.
-    const rid = runIdRef.current
-    if (rid) {
-      const { data: runSess } = await db.schema('production').from('prod_sessions').select('id').eq('run_id', rid)
-      const ids = ((runSess as any[]) ?? []).map(s => s.id)
-      if (ids.length) {
-        const { data: mbs } = await db.schema('production').from('prod_mass_balance')
-          .select('total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg').in('session_id', ids)
-        let tin = 0, tout = 0
-        ;((mbs as any[]) ?? []).forEach(m => {
-          tin  += Number(m.total_input_kg) || 0
-          tout += (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
-        })
-        await db.schema('production').from('production_runs')
-          .update({ total_input_kg: tin, total_output_kg: tout, updated_at: new Date().toISOString() } as any).eq('id', rid)
+      // Roll the run-level mass balance up across every shift session in this run,
+      // so production_runs holds the durable full-day figure. Each session's own
+      // prod_mass_balance row (above) stays the per-shift record.
+      const rid = runIdRef.current
+      if (rid) {
+        const { data: runSess } = await db.schema('production').from('prod_sessions').select('id').eq('run_id', rid)
+        const ids = ((runSess as any[]) ?? []).map(s => s.id)
+        if (ids.length) {
+          const { data: mbs } = await db.schema('production').from('prod_mass_balance')
+            .select('total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg').in('session_id', ids)
+          let tin = 0, tout = 0
+          ;((mbs as any[]) ?? []).forEach(m => {
+            tin  += Number(m.total_input_kg) || 0
+            tout += (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
+          })
+          await db.schema('production').from('production_runs')
+            .update({ total_input_kg: tin, total_output_kg: tout, updated_at: new Date().toISOString() } as any).eq('id', rid)
+        }
       }
-    }
+    } catch { /* run linking/rollup is best-effort — never blocks the core save */ }
   }
   persistRef.current = persist
 
