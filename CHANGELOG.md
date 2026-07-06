@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Roster export: friendlier filename)
+
+**Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/production/roster/page.tsx`
+
+- **Download filename changed** from `Roster_<period-name>.xlsx` to `Shift Roster (<date range>).xlsx`, e.g. `Shift Roster (6 Jul – 12 Jul 2026).xlsx` — matches the date range shown on-screen instead of the internal period name/id.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster export: upgraded from plain CSV to branded, colour-coded .xlsx)
 
 **Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/production/roster/page.tsx`
