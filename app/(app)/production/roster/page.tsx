@@ -16,6 +16,7 @@ import {
   type RosterRole, type RosterShift,
 } from '@/lib/production/roster-config'
 import { rosterPerm, type RosterSectionKey } from '@/lib/auth/permissions'
+import { exportRosterPeriod } from '@/lib/utils/exportExcel'
 
 interface Period {
   id: string; name: string; start_date: string; end_date: string
@@ -396,55 +397,10 @@ export default function RosterPage() {
     setPeriodId(rest[0]?.id ?? null)
   }
 
-  // ── Export the current period to CSV ──────────────────────────────────────
-  function exportCsv() {
+  // ── Export the current period to a branded, colour-coded .xlsx ─────────────
+  function exportXlsx() {
     if (!period) return
-    const roleName = new Map(roles.map(r => [r.key, r.name]))
-    const catName  = new Map(ROSTER_CATEGORIES.map(c => [c.key, c.label]))
-    const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`
-
-    // Group entries by role, then by shift
-    const byRole = new Map<string, { day: Entry[]; night: Entry[] }>()
-    entries.forEach(e => {
-      if (!byRole.has(e.role_key)) byRole.set(e.role_key, { day: [], night: [] })
-      const bucket = byRole.get(e.role_key)!
-      if (e.shift === 'day') bucket.day.push(e)
-      else bucket.night.push(e)
-    })
-
-    // Sort roles by category then by name
-    const sorted = [...byRole.entries()].sort((a, b) => {
-      const catA = roleCategory.get(a[0]) ?? ''
-      const catB = roleCategory.get(b[0]) ?? ''
-      return catA.localeCompare(catB) || a[0].localeCompare(b[0])
-    })
-
-    // Header: Section | Role | Day [label] People | Day [label] Tags | Night [label] People | Night [label] Tags
-    const dayLabel = period.day_label || 'Day Shift'
-    const nightLabel = period.night_label || 'Night Shift'
-    const header = ['Section', 'Role', dayLabel + ' — People', dayLabel + ' — Tags', nightLabel + ' — People', nightLabel + ' — Tags']
-
-    const rows = sorted.map(([roleKey, shifts]) => {
-      const cat = roleCategory.get(roleKey) ?? ''
-      const section = catName.get(cat) ?? cat
-      const role = roleName.get(roleKey) ?? roleKey
-
-      const dayPeople = shifts.day.map(e => e.person_name).join('; ')
-      const dayTags = [...new Set(shifts.day.flatMap(e => e.tags))].join(' ')
-      const nightPeople = shifts.night.map(e => e.person_name).join('; ')
-      const nightTags = [...new Set(shifts.night.flatMap(e => e.tags))].join(' ')
-
-      return [section, role, dayPeople, dayTags, nightPeople, nightTags]
-    })
-
-    const csv = [header, ...rows].map(r => r.map(esc).join(',')).join('\r\n')
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `roster-${period.name.replace(/[^\w-]+/g, '_')}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    exportRosterPeriod(period, entries, roles, roleCategory, ROSTER_CATEGORIES)
   }
 
   // Wednesday deadline
@@ -523,10 +479,10 @@ export default function RosterPage() {
         )}
 
         <div className="flex items-center gap-2 flex-wrap ml-auto no-print">
-          {/* Export CSV — anyone who can view */}
+          {/* Export .xlsx — anyone who can view */}
           {period && (
             <button
-              onClick={exportCsv}
+              onClick={exportXlsx}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors"
             >
               <Download size={13} /> Export
