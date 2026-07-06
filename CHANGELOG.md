@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Roster CSV export: wide layout for readability)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+- **CSV export layout improved.** Changed from a tall format (one person per row) to a wide format (one role per row with Day and Night shifts side-by-side, deduped tags). Matches the grid's visual structure and is much easier to read/print in Excel. Example: `Bagging / Vacuum | Exavior; Siyavuya; Chuma | (empty) | Mawande; Sisonke; Luvo | FL` (instead of 7 separate rows).
+
+---
+
 ## 2026-07-06 — Alyssa (AXIS: ticket assignment, resolved-by tracking, notification bell z-index fix)
 
 **Files changed:** `supabase/migrations/20260703_003_axis_tickets_resolved_by.sql`, `app/api/axis/tickets/[id]/route.ts`, `app/(app)/axis/tickets/page.tsx`, `components/layout/NotificationBell.tsx`
