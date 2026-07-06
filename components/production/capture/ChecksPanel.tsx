@@ -10,6 +10,7 @@ import {
 import { loadCheckSpecs, outOfRange, scaleOutOfTolerance, loadQualitySieveHint, type CheckSpec } from '@/lib/production/check-specs'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { getDb } from '@/lib/supabase/db'
+import { NumericKeypad } from '@/components/production/capture/NumericKeypad'
 
 const INP = 'w-full px-3 py-2.5 min-h-[44px] rounded-xl border border-stone-200 bg-white text-[15px] text-text outline-none focus:border-brand'
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
@@ -503,15 +504,11 @@ function ValueCapture({ label, unit, value, onChange, disabled, spec, allowNegat
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
-        {allowNegative && !disabled && (
-          <button type="button" onClick={() => onChange(value.startsWith('-') ? value.slice(1) : value ? `-${value}` : '-')}
-            className="shrink-0 w-10 h-[42px] rounded-xl border border-stone-200 bg-white text-[18px] font-bold text-stone-500 hover:border-brand hover:text-brand flex items-center justify-center transition-colors">
-            −
-          </button>
-        )}
-        <input type="number" inputMode="decimal" value={value} disabled={disabled} onChange={e => onChange(e.target.value)}
-          placeholder={spec?.min != null || spec?.max != null ? `${spec?.min ?? ''}–${spec?.max ?? ''}` : ''}
-          className={INP + (oor ? ' border-warn' : '') + ' flex-1'} />
+        <NumericKeypad
+          value={value} onChange={onChange} disabled={disabled} allowNegative={allowNegative}
+          label={label} invalid={oor}
+          placeholder={spec?.min != null || spec?.max != null ? `${spec?.min ?? ''}–${spec?.max ?? ''}` : 'Tap to enter'}
+          className={INP + ' flex-1'} />
         {unit && <span className="text-[12px] text-text-muted w-8 shrink-0">{unit}</span>}
         {!disabled && (
           <button onClick={() => fileRef.current?.click()} disabled={busy}
