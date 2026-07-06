@@ -103,6 +103,15 @@ export type PermissionKey =
   | 'can_manage_sop_catalog'   // add / edit / retire SOPs in the catalogue
   | 'can_allocate_staff'       // Phase 2 — allocate staff & override competency warnings
   | 'can_delete_staff'         // Delete staff records
+  // Shift Roster — one global view + submit/edit/delete per roster section.
+  // Section keys match ROSTER_CATEGORIES in lib/production/roster-config.ts.
+  | 'can_view_roster'          // view ALL roster sections (read-only baseline)
+  | 'can_edit_roster_production'   | 'can_submit_roster_production'   | 'can_delete_roster_production'
+  | 'can_edit_roster_store'        | 'can_submit_roster_store'        | 'can_delete_roster_store'
+  | 'can_edit_roster_qc'           | 'can_submit_roster_qc'           | 'can_delete_roster_qc'
+  | 'can_edit_roster_cleaning'     | 'can_submit_roster_cleaning'     | 'can_delete_roster_cleaning'
+  | 'can_edit_roster_maintenance'  | 'can_submit_roster_maintenance'  | 'can_delete_roster_maintenance'
+  | 'can_edit_roster_hs'           | 'can_submit_roster_hs'           | 'can_delete_roster_hs'
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>
 
@@ -129,7 +138,29 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_view_staff','can_edit_staff_profiles','can_manage_competencies',
   'can_manage_sop_catalog','can_allocate_staff','can_delete_staff',
+  'can_view_roster',
+  'can_edit_roster_production','can_submit_roster_production','can_delete_roster_production',
+  'can_edit_roster_store','can_submit_roster_store','can_delete_roster_store',
+  'can_edit_roster_qc','can_submit_roster_qc','can_delete_roster_qc',
+  'can_edit_roster_cleaning','can_submit_roster_cleaning','can_delete_roster_cleaning',
+  'can_edit_roster_maintenance','can_submit_roster_maintenance','can_delete_roster_maintenance',
+  'can_edit_roster_hs','can_submit_roster_hs','can_delete_roster_hs',
 ]
+
+// Roster section keys (match ROSTER_CATEGORIES in lib/production/roster-config.ts).
+// Kept here so the roster UI, cron and recipient resolver share one list.
+export const ROSTER_SECTION_KEYS = ['production','store','qc','cleaning','maintenance','hs'] as const
+export type RosterSectionKey = typeof ROSTER_SECTION_KEYS[number]
+
+export const ROSTER_SECTION_LABEL: Record<RosterSectionKey, string> = {
+  production: 'Production', store: 'Store', qc: 'Quality',
+  cleaning: 'Cleaning', maintenance: 'Maintenance', hs: 'Health & Safety',
+}
+
+export const rosterPerm = (
+  action: 'edit' | 'submit' | 'delete',
+  section: RosterSectionKey,
+): PermissionKey => `can_${action}_roster_${section}` as PermissionKey
 
 // ─── Departments ──────────────────────────────────────────────────────────────
 
@@ -141,19 +172,23 @@ export type Department =
   | 'Management'
   | 'Sales'
   | 'Marketing'
+  | 'Store'
+  | 'Health & Safety'
 
 export const ALL_DEPARTMENTS: Department[] = [
-  'IT', 'Quality', 'Production', 'Maintenance', 'Management', 'Sales', 'Marketing',
+  'IT', 'Quality', 'Production', 'Maintenance', 'Management', 'Sales', 'Marketing', 'Store', 'Health & Safety',
 ]
 
 export const DEPARTMENT_META: Record<Department, { label: string; desc: string; color: string }> = {
-  IT:         { label: 'IT',         desc: 'Technology, infrastructure & development', color: 'bg-purple-100 text-purple-700 border-purple-200' },
-  Quality:    { label: 'Quality',    desc: 'QMS, lab results, sieving, pasteuriser, granule', color: 'bg-ok/10 text-ok border-ok/20' },
-  Production: { label: 'Production', desc: 'Operations, morning count, floor production', color: 'bg-warn/10 text-warn border-warn/20' },
-  Maintenance:{ label: 'Maintenance',desc: 'Job cards, breakdowns, scheduled maintenance & spares', color: 'bg-azure/10 text-azure border-azure/20' },
-  Management: { label: 'Management', desc: 'Directors, analysts — read-only across platform', color: 'bg-blue-50 text-blue-700 border-blue-200' },
-  Sales:      { label: 'Sales',      desc: 'Sales module & research engine', color: 'bg-brand/10 text-brand border-brand/20' },
-  Marketing:  { label: 'Marketing',  desc: 'Marketing module', color: 'bg-pink-50 text-pink-700 border-pink-200' },
+  IT:                { label: 'IT',              desc: 'Technology, infrastructure & development', color: 'bg-purple-100 text-purple-700 border-purple-200' },
+  Quality:           { label: 'Quality',         desc: 'QMS, lab results, sieving, pasteuriser, granule', color: 'bg-ok/10 text-ok border-ok/20' },
+  Production:        { label: 'Production',      desc: 'Operations, morning count, floor production', color: 'bg-warn/10 text-warn border-warn/20' },
+  Maintenance:       { label: 'Maintenance',     desc: 'Job cards, breakdowns, scheduled maintenance & spares', color: 'bg-azure/10 text-azure border-azure/20' },
+  Management:        { label: 'Management',      desc: 'Directors, analysts — read-only across platform', color: 'bg-blue-50 text-blue-700 border-blue-200' },
+  Sales:             { label: 'Sales',           desc: 'Sales module & research engine', color: 'bg-brand/10 text-brand border-brand/20' },
+  Marketing:         { label: 'Marketing',       desc: 'Marketing module', color: 'bg-pink-50 text-pink-700 border-pink-200' },
+  Store:             { label: 'Store',           desc: 'Warehouse, forklift, stock movement & dispatch', color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+  'Health & Safety': { label: 'Health & Safety', desc: 'H&S reps, incident response, fire & first aid', color: 'bg-red-50 text-red-700 border-red-200' },
 }
 
 // ─── Roles per department ─────────────────────────────────────────────────────
@@ -202,6 +237,14 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
   ],
   Marketing: [
     { role: 'marketing_default',label: 'Marketing (Default)',desc: 'All permissions off — toggle on what they need' },
+  ],
+  Store: [
+    { role: 'store_default',    label: 'Store (Default)',    desc: 'All permissions off — toggle on what they need' },
+    { role: 'store_supervisor', label: 'Store Supervisor',   desc: 'Owns the Store roster section — edits & submits it' },
+  ],
+  'Health & Safety': [
+    { role: 'hs_default',       label: 'H&S (Default)',      desc: 'All permissions off — toggle on what they need' },
+    { role: 'hs_officer',       label: 'H&S Officer',        desc: 'Owns the H&S + Cleaning roster sections — edits & submits them' },
   ],
 }
 
@@ -252,6 +295,23 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
     can_delete_staff: true,
+    // Shift roster — owns Production + Maintenance sections
+    can_view_roster: true,
+    can_edit_roster_production: true, can_submit_roster_production: true, can_delete_roster_production: true,
+    can_edit_roster_maintenance: true, can_submit_roster_maintenance: true,
+  },
+
+  // ── Store — owns the Store roster section ──────────────────────────────────
+  store_supervisor: {
+    can_view_roster: true,
+    can_edit_roster_store: true, can_submit_roster_store: true, can_delete_roster_store: true,
+  },
+
+  // ── Health & Safety — owns H&S + Cleaning roster sections ──────────────────
+  hs_officer: {
+    can_view_roster: true,
+    can_edit_roster_hs: true, can_submit_roster_hs: true, can_delete_roster_hs: true,
+    can_edit_roster_cleaning: true, can_submit_roster_cleaning: true,
   },
 
   warehouse_supervisor: {
@@ -357,6 +417,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_export_reports:  true,
     // Staff directory (read-only)
     can_view_staff: true,
+    // Shift roster (read-only, all sections)
+    can_view_roster: true,
   },
 
   // ── All other roles: zero defaults — toggle on per person ──────────────────
@@ -555,6 +617,32 @@ export const PERMISSION_GROUPS: {
       { key: 'can_manage_sop_catalog',  label: 'Add, edit & retire SOPs in the catalogue' },
       { key: 'can_allocate_staff',      label: 'Allocate staff to floor sections & override competency warnings (Phase 2)' },
       { key: 'can_delete_staff',        label: 'Delete staff records' },
+    ],
+  },
+  {
+    group: 'Shift Roster',
+    // No single department — the roster spans every section. View is global;
+    // Submit/Edit/Delete are granted per section so a person changes only their own.
+    permissions: [
+      { key: 'can_view_roster',                 label: 'View the whole roster (all sections, read-only)' },
+      { key: 'can_edit_roster_production',      label: 'Production — edit & save people' },
+      { key: 'can_submit_roster_production',    label: 'Production — submit / sign off (receives reminders)' },
+      { key: 'can_delete_roster_production',    label: 'Production — delete entries' },
+      { key: 'can_edit_roster_store',           label: 'Store — edit & save people' },
+      { key: 'can_submit_roster_store',         label: 'Store — submit / sign off (receives reminders)' },
+      { key: 'can_delete_roster_store',         label: 'Store — delete entries' },
+      { key: 'can_edit_roster_qc',              label: 'Quality — edit & save people' },
+      { key: 'can_submit_roster_qc',            label: 'Quality — submit / sign off (receives reminders)' },
+      { key: 'can_delete_roster_qc',            label: 'Quality — delete entries' },
+      { key: 'can_edit_roster_cleaning',        label: 'Cleaning — edit & save people' },
+      { key: 'can_submit_roster_cleaning',      label: 'Cleaning — submit / sign off (receives reminders)' },
+      { key: 'can_delete_roster_cleaning',      label: 'Cleaning — delete entries' },
+      { key: 'can_edit_roster_maintenance',     label: 'Maintenance — edit & save people' },
+      { key: 'can_submit_roster_maintenance',   label: 'Maintenance — submit / sign off (receives reminders)' },
+      { key: 'can_delete_roster_maintenance',   label: 'Maintenance — delete entries' },
+      { key: 'can_edit_roster_hs',              label: 'Health & Safety — edit & save people' },
+      { key: 'can_submit_roster_hs',            label: 'Health & Safety — submit / sign off (receives reminders)' },
+      { key: 'can_delete_roster_hs',            label: 'Health & Safety — delete entries' },
     ],
   },
 ]

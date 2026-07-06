@@ -161,6 +161,31 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Cross-department — the whole-site shift layout. View is one global key;
+    // write/delete/submit are per section so a person changes only their own.
+    module: 'Shift Roster',
+    resources: [
+      { key: 'roster.production', label: 'Roster — Production',
+        read: 'can_view_roster', write: 'can_edit_roster_production', delete: 'can_delete_roster_production',
+        manage: [{ key: 'can_submit_roster_production', label: 'Submit / sign off (receives reminders)' }] },
+      { key: 'roster.store', label: 'Roster — Store',
+        read: 'can_view_roster', write: 'can_edit_roster_store', delete: 'can_delete_roster_store',
+        manage: [{ key: 'can_submit_roster_store', label: 'Submit / sign off (receives reminders)' }] },
+      { key: 'roster.qc', label: 'Roster — Quality',
+        read: 'can_view_roster', write: 'can_edit_roster_qc', delete: 'can_delete_roster_qc',
+        manage: [{ key: 'can_submit_roster_qc', label: 'Submit / sign off (receives reminders)' }] },
+      { key: 'roster.cleaning', label: 'Roster — Cleaning',
+        read: 'can_view_roster', write: 'can_edit_roster_cleaning', delete: 'can_delete_roster_cleaning',
+        manage: [{ key: 'can_submit_roster_cleaning', label: 'Submit / sign off (receives reminders)' }] },
+      { key: 'roster.maintenance', label: 'Roster — Maintenance',
+        read: 'can_view_roster', write: 'can_edit_roster_maintenance', delete: 'can_delete_roster_maintenance',
+        manage: [{ key: 'can_submit_roster_maintenance', label: 'Submit / sign off (receives reminders)' }] },
+      { key: 'roster.hs', label: 'Roster — Health & Safety',
+        read: 'can_view_roster', write: 'can_edit_roster_hs', delete: 'can_delete_roster_hs',
+        manage: [{ key: 'can_submit_roster_hs', label: 'Submit / sign off (receives reminders)' }] },
+    ],
+  },
+  {
     module: 'Administration', department: 'IT',
     resources: [
       { key: 'admin.users', label: 'User administration',
