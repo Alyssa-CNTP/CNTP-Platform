@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (AXIS: ticket assignment, resolved-by tracking, notification bell z-index fix)
+
+**Files changed:** `supabase/migrations/20260703_003_axis_tickets_resolved_by.sql`, `app/api/axis/tickets/[id]/route.ts`, `app/(app)/axis/tickets/page.tsx`, `components/layout/NotificationBell.tsx`
+
+- **Notification bell z-index fixed.** Dropdown was being hidden behind page content on tablets. z-index raised to 9999.
+- **"Assign to me" button added.** Ticket detail panel now has an Assign to me button. IT and users with `can_assign_tickets` can pick up unassigned tickets or reassign from someone else. "Unassign" button appears when the ticket is already yours.
+- **Ticket assignment notifies assignee.** When a ticket's `assigned_to` changes, the new assignee receives an AXIS notification that appears in their bell.
+- **Status buttons fixed.** Previously the buttons had a silent `&&` guard — non-permitted clicks did nothing with no feedback. Buttons are now properly `disabled` for users without permission, and errors are shown inline if a PATCH fails.
+- **Resolved-by tracking.** New `resolved_by_name` and `resolved_at` columns on `axis.tickets`. When IT marks a ticket resolved, their name + timestamp is captured. Re-opening a ticket clears these fields. Resolved-by is shown in the detail panel meta grid.
+- **Per-person resolved count strip.** Below the KPI cards, a row now shows how many tickets each person has resolved. Computed client-side from the ticket list.
+
+---
+
 ## 2026-07-06 — Alyssa (Resilience: run_id load no longer blocks capture)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
