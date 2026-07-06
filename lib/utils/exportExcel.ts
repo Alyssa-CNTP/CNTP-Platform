@@ -53,6 +53,22 @@ type StyledSheet = {
   rows: Record<string, any>[]
   numFmt?: Record<string, string>
   fill?: (row: Record<string, any>) => Record<string, Tone> | undefined
+  // Whole-row background tint (ARGB hex, e.g. from lighten()) — used for
+  // category-coded exports (e.g. roster) instead of pass/fail tones.
+  rowFill?: (row: Record<string, any>) => string | undefined
+  // Columns that should always render bold (e.g. a "Section" label column).
+  boldCols?: string[]
+}
+
+// Lighten a '#rrggbb' colour towards white by `amt` (0–1) and return an
+// ExcelJS-ready ARGB string. Used to tint whole rows by category colour
+// while keeping text legible.
+function lighten(hex: string, amt: number): string {
+  const h = hex.replace('#', '')
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
+  const mix = (c: number) => Math.round(c + (255 - c) * amt)
+  const toHex = (c: number) => c.toString(16).padStart(2, '0').toUpperCase()
+  return `FF${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`
 }
 
 async function buildStyledWorkbook(
@@ -116,6 +132,7 @@ async function buildStyledWorkbook(
     rows.forEach((r, ri) => {
       const rn = hr + 1 + ri
       const tones = spec.fill ? spec.fill(r) : undefined
+      const rowBg = spec.rowFill ? spec.rowFill(r) : undefined
       cols.forEach((c, ci) => {
         const cell = ws.getCell(rn, ci + 1)
         const v = r[c]
@@ -124,11 +141,14 @@ async function buildStyledWorkbook(
         if (fmt && typeof cell.value === 'number') cell.numFmt = fmt
         cell.border = BORDER
         cell.alignment = { horizontal: typeof cell.value === 'number' ? 'center' : 'left', vertical: 'middle' }
+        const bold = spec.boldCols?.includes(c)
         const tone = tones?.[c]
         if (tone === 'err')       { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.errBg } };  cell.font = { color: { argb: XS.errTx }, bold: true } }
         else if (tone === 'ok')   { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.okBg } };   cell.font = { color: { argb: XS.okTx } } }
         else if (tone === 'warn') { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.warnBg } }; cell.font = { color: { argb: XS.warnTx }, bold: true } }
-        else if (ri % 2 === 1)    { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.band } } }
+        else if (rowBg)           { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBg } }; if (bold) cell.font = { bold: true } }
+        else if (ri % 2 === 1)    { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XS.band } }; if (bold) cell.font = { bold: true } }
+        else if (bold)            { cell.font = { bold: true } }
       })
     })
 
@@ -597,4 +617,58 @@ export async function exportSievingRuns(
     { name: 'Daily Averages', rows: dailyRows, numFmt: dailyNumFmt, fill: dailyFill },
     { name: 'By Grade',       rows: gradeRows, numFmt: gradeNumFmt, fill: gradeFill },
   ], { subtitle: `Sieving — ${product}` }, `Sieving_${product.replace(/ /g, '_')}_${date}.xlsx`)
+}
+
+// ── Shift Roster ──────────────────────────────────────────────────────────────
+
+export async function exportRosterPeriod(
+  period: { name: string; day_label: string | null; night_label: string | null },
+  entries: Array<{ role_key: string; shift: 'day' | 'night'; person_name: string; tags: string[] }>,
+  roles: Array<{ key: string; name: string }>,
+  roleCategory: Map<string, string>,
+  categories: Array<{ key: string; label: string; colorHex: string }>,
+) {
+  const roleName = new Map(roles.map(r => [r.key, r.name]))
+  const catName  = new Map(categories.map(c => [c.key, c.label]))
+  const catColorByLabel = new Map(categories.map(c => [c.label, c.colorHex]))
+
+  // Group entries by role, then by shift
+  const byRole = new Map<string, { day: typeof entries; night: typeof entries }>()
+  entries.forEach(e => {
+    if (!byRole.has(e.role_key)) byRole.set(e.role_key, { day: [], night: [] })
+    const bucket = byRole.get(e.role_key)!
+    ;(e.shift === 'day' ? bucket.day : bucket.night).push(e)
+  })
+
+  const sorted = [...byRole.entries()].sort((a, b) => {
+    const catA = roleCategory.get(a[0]) ?? ''
+    const catB = roleCategory.get(b[0]) ?? ''
+    return catA.localeCompare(catB) || a[0].localeCompare(b[0])
+  })
+
+  const dayLabel = period.day_label || 'Day Shift'
+  const nightLabel = period.night_label || 'Night Shift'
+
+  const rows = sorted.map(([roleKey, shifts]) => {
+    const cat = roleCategory.get(roleKey) ?? ''
+    return {
+      'Section': catName.get(cat) ?? cat,
+      'Role': roleName.get(roleKey) ?? roleKey,
+      [`${dayLabel} — People`]: shifts.day.map(e => e.person_name).join('; '),
+      [`${dayLabel} — Tags`]: [...new Set(shifts.day.flatMap(e => e.tags))].join(' '),
+      [`${nightLabel} — People`]: shifts.night.map(e => e.person_name).join('; '),
+      [`${nightLabel} — Tags`]: [...new Set(shifts.night.flatMap(e => e.tags))].join(' '),
+    }
+  })
+
+  const rowFill = (r: Record<string, any>) => {
+    const hex = catColorByLabel.get(r['Section'])
+    return hex ? lighten(hex, 0.85) : undefined
+  }
+
+  await buildStyledWorkbook(
+    [{ name: 'Roster', rows, rowFill, boldCols: ['Section'] }],
+    { subtitle: `Shift Roster — ${period.name}` },
+    `Roster_${period.name.replace(/[^\w-]+/g, '_')}.xlsx`,
+  )
 }
