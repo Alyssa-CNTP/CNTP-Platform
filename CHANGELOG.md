@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Roster: printable noticeboard layout, help guide, bigger add-person UI, phantom scrollbar fix)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`, `components/production/WorkforceTabs.tsx`
+
+- **Print now produces a real printout, not a screenshot.** The Print button used to print the interactive on-screen grid (sticky columns, tiny UI chips, centred narrow layout). Added a dedicated `PrintRoster` view — a plain, full-width table per section with the section's colour as a left-border/header tint, large readable text, and a skill-tag legend at the foot — shown only inside `@media print` (new `.print-only` / `.print-full-width` CSS). The interactive grid, buttons, and period bar are hidden from the printout via `.no-print`.
+- **Help guide added.** New info icon next to the "Shift Rosters" title opens a modal explaining the four per-section permissions (View/Edit/Submit/Delete), how to add/move people, how the Wednesday deadline and Sunday auto-rotation work, and — importantly — that **Publish is manual, not automatic**. Someone with edit rights must click Publish; nothing publishes itself on the deadline.
+- **Bigger add/edit-person popover.** The search-and-tag popover used when adding someone to a role/shift was cramped (240px wide, 9–12px text). Widened to 320px with larger text, padding, and touch targets throughout (search input, staff dropdown, skill-tag buttons, Save/Cancel/Delete) for practical use on the shop floor. Person chips and the "Add" button in each cell were bumped slightly too for consistency.
+- **Phantom scrollbar fixed.** The `WorkforceTabs` sub-nav wrapped its single "Shift Roster" tab in an `overflow-x-auto` container (needed for future multi-tab cases, but wrong for the current one-tab reality) combined with a `-mb-px` trick — this produced a spurious thin horizontal scrollbar with nothing to scroll to. Removed the unneeded `overflow-x-auto`.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster export: friendlier filename)
 
 **Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/production/roster/page.tsx`
