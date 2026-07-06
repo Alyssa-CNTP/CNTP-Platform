@@ -85,6 +85,28 @@ export interface Database {
         Update: Partial<Database['production']['Tables']['production_runs']['Insert']>
       }
 
+      // ── shift_takeovers ─────────────────────────────────────
+      shift_takeovers: {
+        Row: {
+          id:            string
+          session_id:    string
+          section_id:    string
+          date:          string
+          from_shift:    string
+          to_shift:      string
+          operator_id:   string | null
+          operator_name: string
+          rostered:      boolean
+          taken_over_at: string
+          created_at:    string
+        }
+        Insert: Omit<
+          Database['production']['Tables']['shift_takeovers']['Row'],
+          'id' | 'created_at' | 'taken_over_at'
+        > & { id?: string; taken_over_at?: string }
+        Update: Partial<Database['production']['Tables']['shift_takeovers']['Insert']>
+      }
+
       // ── bag_tags ────────────────────────────────────────────
       bag_tags: {
         Row: {
@@ -459,6 +481,7 @@ export type ProdDebagging     = Database['production']['Tables']['prod_debagging
 export type ProdBagging       = Database['production']['Tables']['prod_bagging']['Row']
 export type ProdMassBalance   = Database['production']['Tables']['prod_mass_balance']['Row']
 export type ProductionRun     = Database['production']['Tables']['production_runs']['Row']
+export type ShiftTakeover     = Database['production']['Tables']['shift_takeovers']['Row']
 export type BagTag            = Database['production']['Tables']['bag_tags']['Row']
 export type SessionSignature  = Database['production']['Tables']['session_signatures']['Row']
 export type ScanEvent         = Database['production']['Tables']['scan_events']['Row']

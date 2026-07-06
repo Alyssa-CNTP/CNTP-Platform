@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Duplicate-session fix + 16h00 shift-changeover PIN)
+
+**Files changed:** `supabase/migrations/20260706_002_shift_takeovers.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Duplicate empty sessions fixed.** Opening a capture section no longer eagerly inserts a draft `prod_sessions` row — that open-time insert raced with the first autosave (the select-first check ran before the insert committed), producing duplicate "No data" sessions in production. Sessions are now created lazily on first real capture, and `ensureSession()` coalesces concurrent callers onto a single in-flight insert (with a synchronously-updated `sessionRef`) so it can never double-insert. localStorage still backs up any typing before the row exists.
+- **16h00 shift-changeover PIN gate (audit).** When 16h00 passes and a morning session is still being captured (not signed off), capture is blocked behind a modal until the incoming operator enters their PIN. The PIN is validated against the section’s afternoon-rostered operators (fallback: any active operator, flagged), and each hand-over is recorded in the new `production.shift_takeovers` table (who, when, rostered-or-not) — an audit trail of who captured after the changeover. Subsequent capture and sign-off are attributed to the operator who took over.
+
+---
+
 ## 2026-07-06 — Alyssa (Cross-shift production runs, full-day mass balance, numeric keypad)
 
 **Files changed:** `supabase/migrations/20260706_001_production_runs.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/NumericKeypad.tsx`, `components/production/capture/ChecksPanel.tsx`
