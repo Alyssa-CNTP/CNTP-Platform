@@ -663,19 +663,24 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
         <p style={{ fontSize: 9, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
       </div>
 
-      {/* Landscape + 3 columns packs the whole roster onto one page instead
-          of stacking every section's table down a single tall column. Each
-          section is break-inside:avoid so a table never splits mid-role. */}
-      <div style={{ columnCount: 3, columnGap: 16, columnFill: 'auto' }}>
+      {/* One full-width table per department, stacked top to bottom. CSS
+          multi-column (column-count) looked good but Chromium's print engine
+          balances column height to a single page and silently drops any
+          content that doesn't fit — it does not flow the rest onto page 2.
+          Plain block stacking has no such ceiling: the browser's normal print
+          pagination reliably continues onto as many landscape pages as the
+          roster needs. Each department is break-inside:avoid so its table
+          only splits across a page if it genuinely can't fit on one. */}
+      <div>
         {rolesByCategory.map(({ cat, items }) => (
-          <div key={cat.key} style={{ marginBottom: 10, breakInside: 'avoid' }}>
+          <div key={cat.key} style={{ marginBottom: 10, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
             <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '2px 8px', marginBottom: 3 }}>
               <span style={{ fontWeight: 700, fontSize: 10.5, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.3 }}>{cat.label}</span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{ ...th, width: '30%' }}>Role</th>
+                  <th style={{ ...th, width: '22%' }}>Role</th>
                   <th style={th}>{dayHeader}</th>
                   <th style={th}>{nightHeader}</th>
                 </tr>

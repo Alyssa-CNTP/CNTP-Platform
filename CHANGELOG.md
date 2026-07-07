@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Roster print: fix departments being cut off, drop 3-column layout)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **Print was still losing departments even across two pages.** The 3-column CSS multi-column layout (`column-count: 3`) added on 2026-07-06 relies on the print engine balancing column height to fit one page — any roster content beyond that calculated height is silently dropped rather than flowed onto a second page, which is exactly what was happening with the current 6-department, ~24-role roster. Replaced the multi-column block with plain full-width block stacking (one table per department, straight down the page). Normal block flow has no such height ceiling: the browser's print pagination reliably continues onto as many landscape pages as the content needs, so nothing gets lost regardless of roster size.
+- Each department block keeps `break-inside: avoid` (plus `page-break-inside: avoid` for older engines) so a table only splits across a page break if it genuinely doesn't fit on one — same protection as before, just without the column-balancing that was causing the clipping.
+- Widened the Day/Night columns (Role column narrowed from 30% to 22%) now that each table runs the full page width instead of a third of it.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster print: landscape, single-page, 3-column layout)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
