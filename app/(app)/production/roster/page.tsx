@@ -648,48 +648,53 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
   const fmtPeople = (list: Entry[]) => list.length
     ? list.map(e => e.person_name + (e.tags.length ? ` (${e.tags.join(' ')})` : '')).join(', ')
     : '—'
-  const th: CSSProperties = { textAlign: 'left', padding: '6px 10px', borderBottom: '2px solid #333', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#555' }
-  const td: CSSProperties = { padding: '7px 10px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 13 }
+  const th: CSSProperties = { textAlign: 'left', padding: '3px 6px', borderBottom: '1.5px solid #333', fontSize: 8.5, textTransform: 'uppercase', letterSpacing: 0.3, color: '#555' }
+  const td: CSSProperties = { padding: '3px 6px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 9.5, lineHeight: 1.3 }
 
   return (
-    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '24px 32px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '3px solid #1A3A0E', paddingBottom: 10, marginBottom: 18 }}>
+    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '10px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '2px solid #1A3A0E', paddingBottom: 6, marginBottom: 10 }}>
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
-          <p style={{ fontSize: 14, margin: '4px 0 0', color: '#555' }}>
+          <h1 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
+          <p style={{ fontSize: 11, margin: '2px 0 0', color: '#555' }}>
             {fmtRange(period)}{hasCustomName ? ` · ${period.name}` : ''}
           </p>
         </div>
-        <p style={{ fontSize: 11, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
+        <p style={{ fontSize: 9, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
       </div>
 
-      {rolesByCategory.map(({ cat, items }) => (
-        <div key={cat.key} style={{ marginBottom: 20, breakInside: 'avoid' }}>
-          <div style={{ borderLeft: `5px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '6px 12px', marginBottom: 6 }}>
-            <span style={{ fontWeight: 700, fontSize: 15, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.5 }}>{cat.label}</span>
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ ...th, width: '22%' }}>Role</th>
-                <th style={th}>{dayHeader}</th>
-                <th style={th}>{nightHeader}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(role => (
-                <tr key={role.key}>
-                  <td style={{ ...td, fontWeight: 600 }}>{role.name}</td>
-                  <td style={td}>{fmtPeople(cellEntries(role.key, 'day'))}</td>
-                  <td style={td}>{fmtPeople(cellEntries(role.key, 'night'))}</td>
+      {/* Landscape + 3 columns packs the whole roster onto one page instead
+          of stacking every section's table down a single tall column. Each
+          section is break-inside:avoid so a table never splits mid-role. */}
+      <div style={{ columnCount: 3, columnGap: 16, columnFill: 'auto' }}>
+        {rolesByCategory.map(({ cat, items }) => (
+          <div key={cat.key} style={{ marginBottom: 10, breakInside: 'avoid' }}>
+            <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '2px 8px', marginBottom: 3 }}>
+              <span style={{ fontWeight: 700, fontSize: 10.5, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.3 }}>{cat.label}</span>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, width: '30%' }}>Role</th>
+                  <th style={th}>{dayHeader}</th>
+                  <th style={th}>{nightHeader}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
+              </thead>
+              <tbody>
+                {items.map(role => (
+                  <tr key={role.key}>
+                    <td style={{ ...td, fontWeight: 600 }}>{role.name}</td>
+                    <td style={td}>{fmtPeople(cellEntries(role.key, 'day'))}</td>
+                    <td style={td}>{fmtPeople(cellEntries(role.key, 'night'))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
 
-      <div style={{ marginTop: 24, paddingTop: 12, borderTop: '1px solid #ccc', fontSize: 11, color: '#555' }}>
+      <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid #ccc', fontSize: 8.5, color: '#555' }}>
         <strong style={{ color: '#111' }}>Skill / certification tags: </strong>
         {SKILL_TAGS.map(t => `${t.code} = ${t.label}`).join('   ·   ')}
       </div>

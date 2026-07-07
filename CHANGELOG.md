@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-06 — Alyssa (Roster print: landscape, single-page, 3-column layout)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **Printout was cutting off after one portrait page.** The per-section tables stacked in a single tall column, so a 6-department, ~25-role roster ran past one page and the rest was silently lost. Forced `@page { size: landscape; margin: 10mm; }` in the print media query (~40% more usable width), and laid the section blocks out in a 3-column CSS multi-column flow (`column-count: 3`, sequential fill) instead of one long column.
+- **Sections still never split mid-table** — each department's block keeps `break-inside: avoid`, so a table can move to the next column but never breaks partway through a role's row.
+- **Trimmed print typography** (headers, row padding, section labels) to fit the full roster on one landscape page at the denser 3-column layout, while keeping it readable at arm's length for a noticeboard.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster print fix: app chrome still bleeding through, duplicated header text)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
