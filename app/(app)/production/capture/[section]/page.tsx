@@ -1162,9 +1162,9 @@ function CaptureScreen() {
                   <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">
                     Batch{multi ? ` · P${activeIdx + 1}` : ''}
                   </span>
-                  {!sectionId.startsWith('refining') && <GradeHelp />}
+                  {!gradeless && <GradeHelp />}
                 </div>
-                <div className={`grid gap-2.5 ${sectionId.startsWith('refining') ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                <div className={`grid gap-2.5 ${gradeless ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</label>
                     <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
@@ -1173,7 +1173,7 @@ function CaptureScreen() {
                       {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                     </select>
                   </div>
-                  {!sectionId.startsWith('refining') && (
+                  {!gradeless && (
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
                       <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}

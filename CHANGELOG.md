@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Granule: hide grade selector; granule quality + scale-health KPIs on the dashboard)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Grade selector hidden for Granule.** The run logic was already gradeless for granule, but the batch set-up card still rendered the Grade dropdown (and grade help) because they were gated on `!startsWith('refining')`. Switched those to the `gradeless` flag, so Granule (like Refining) shows only the Variant selector — traceability comes from the per-bag system serials.
+- **Granule KPI foundations added to the Production Dashboard** (`ProductionDashboard.tsx`): a new "Granule Line — quality & scale health" card with two daily-trend charts over the selected window — **granule quality** (avg moisture % + bulk density cc/100g, dual-axis — the digital version of the operators' hand-drawn graph) and **scale-verification health** (avg deviation = actual − standard test weight, with a zero reference line; drift away from zero is the early predictive-maintenance signal). Data is read directly: scale from `prod_sessions.scale_std_kg/scale_actual_kg`, quality readings from the session `draft_data`. Best-effort so a parse/schema hiccup can't take the dashboard down; shows an empty-state until data is captured.
+
+---
+
 ## 2026-07-07 — Alyssa (Granule: scale verification + quality readings; run continuity fix + item-switch fork)
 
 **Files changed:** `components/production/capture/GranuleCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
