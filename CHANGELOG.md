@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Sieving: bucket elevator by time of day — start-of-day IN on Debagging, end-of-day OUT on Bagging)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+- **Bucket elevator now sits on the tab that matches its direction.** Previously the single "Bucket elevator" field lived on the Debagging (in) tab on both shifts and only flipped its badge to "output" on the afternoon — so the **end-of-day** figure was captured under "what goes into the machine," an easy-to-miss mental-model mismatch. Now:
+  - **Morning · Debagging (in):** "Bucket elevator — start of day" (from yesterday · consumed this morning) — counts as **input**.
+  - **Afternoon · Bagging (out):** "Bucket elevator — end of day" (left in the tower for tomorrow) — counts as **output**, shown just above "Total bagged out".
+  - **Machine spillage** is split into its own card and stays on the Debagging tab on both shifts (always an input loss).
+- The mass-balance maths is unchanged (`sievingTotals(data, shift)` still reads `spillage[0]` as the elevator, `spillage[1]` as machine spillage); this is purely where/how the two fields are presented. `goToTab` no longer auto-locks the elevator when moving to Bagging on the afternoon shift (the operator fills it there). Card colour follows direction — blue for in, amber for out.
+
+---
+
 ## 2026-07-07 — Alyssa (Granule: hide grade selector; granule quality + scale-health KPIs on the dashboard)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
