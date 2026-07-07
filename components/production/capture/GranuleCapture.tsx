@@ -118,12 +118,19 @@ export interface GranuleDustOut {
 
 export interface GranuleWasteRow { id: string; wasteType: string; weight: string }
 
+// Quality reading taken through the shift — operators track moisture and granule
+// bulk density (cc/100g) over time; captured here as the data behind that graph.
+export interface GranuleQualityReading { id: string; time: string; moisture: string; bulkDensity: string }
+
 export interface GranuleData {
   item: string                 // SG / SF / Export Granules — chosen once per session
+  scaleStd: string             // scale verification — standard/certified test weight
+  scaleActual: string          // scale verification — actual reading
   blends: GranuleBlend[]
   outputs: GranuleOutBag[]
   dustOutputs: GranuleDustOut[]
   waste: GranuleWasteRow[]
+  quality: GranuleQualityReading[]
   dustNotRefed: string   // D — dust from sieve/drier not yet re-fed
   coarseNotFed: string   // E — coarse granules not yet fed to maize master
   meterStart: string     // Y
@@ -132,9 +139,9 @@ export interface GranuleData {
 
 export function emptyGranuleData(): GranuleData {
   return {
-    item: GRANULE_OUTPUT_ITEMS[0],
+    item: GRANULE_OUTPUT_ITEMS[0], scaleStd: '', scaleActual: '',
     blends: [{ id: crypto.randomUUID(), blendNo: '1', rows: [], water: '', done: false }],
-    outputs: [], dustOutputs: [], waste: [],
+    outputs: [], dustOutputs: [], waste: [], quality: [],
     dustNotRefed: '', coarseNotFed: '', meterStart: '', meterStop: '',
   }
 }
@@ -649,6 +656,15 @@ export function GranuleCapture({
   function updateWaste(id: string, k: keyof GranuleWasteRow, v: string) { patch({ waste: value.waste.map(w => w.id === id ? { ...w, [k]: v } : w) }) }
   function removeWaste(id: string) { patch({ waste: value.waste.filter(w => w.id !== id) }) }
 
+  // ── Quality readings (moisture · bulk density over time) ────────────────────────
+  function addQuality() { patch({ quality: [...(value.quality ?? []), { id: crypto.randomUUID(), time: clockNow(), moisture: '', bulkDensity: '' }] }) }
+  function updateQuality(id: string, k: keyof GranuleQualityReading, v: string) { patch({ quality: (value.quality ?? []).map(q => q.id === id ? { ...q, [k]: v } : q) }) }
+  function removeQuality(id: string) { patch({ quality: (value.quality ?? []).filter(q => q.id !== id) }) }
+
+  // Scale verification deviation — a KPI signal for the scale's health over time.
+  const scaleDev = n(value.scaleActual) - n(value.scaleStd)
+  const scaleSet = n(value.scaleStd) > 0 && n(value.scaleActual) > 0
+
   // ── Totals + derived ──────────────────────────────────────────────────────────
   const t = granuleTotals(value)
   const inputCount = value.blends.reduce((s, b) => s + b.rows.length, 0)
@@ -680,6 +696,33 @@ export function GranuleCapture({
           <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Lot</div>
           <div className="text-[14px] font-mono font-bold text-text">{lot || '—'}</div>
         </div>
+      </div>
+
+      {/* Scale verification — required for audit; deviation tracked as a KPI signal */}
+      <div className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-stone-200 bg-white">
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Scale verification</div>
+          <div className="grid grid-cols-2 gap-2 mt-1.5">
+            <div className="space-y-1">
+              <label className="text-[10px] text-stone-500">Std weight (kg)</label>
+              <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.scaleStd} disabled={locked}
+                onChange={e => patch({ scaleStd: e.target.value })} className="w-full px-2.5 py-1.5 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-brand" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] text-stone-500">Actual weight (kg)</label>
+              <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.scaleActual} disabled={locked}
+                onChange={e => patch({ scaleActual: e.target.value })} className="w-full px-2.5 py-1.5 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-brand" />
+            </div>
+          </div>
+        </div>
+        {scaleSet && (
+          <div className="text-right shrink-0">
+            <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Deviation</div>
+            <div className={`text-[15px] font-mono font-bold ${Math.abs(scaleDev) < 0.05 ? 'text-ok' : Math.abs(scaleDev) <= 0.5 ? 'text-amber-600' : 'text-red-500'}`}>
+              {scaleDev > 0 ? '+' : ''}{scaleDev.toFixed(2)} kg
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -878,6 +921,30 @@ export function GranuleCapture({
                 </div>
               ))}
               {!locked && <button onClick={addWaste} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-stone-200 text-[13px] font-medium text-stone-500 hover:border-stone-300"><Plus size={15} /> Add waste row</button>}
+            </div>
+          </div>
+
+          {/* Quality readings — moisture + bulk density over time (feeds the QC graph + KPIs) */}
+          <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-stone-100 bg-stone-50">
+              <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Quality readings</span>
+              <p className="text-[10px] text-stone-400 mt-0.5">Moisture &amp; bulk density (cc/100g) through the shift — plotted over time.</p>
+            </div>
+            <div className="p-3 space-y-2">
+              {(value.quality ?? []).length > 0 && (
+                <div className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 px-1 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
+                  <span className="w-14">Time</span><span>Moisture %</span><span>Bulk density</span><span className="w-6" />
+                </div>
+              )}
+              {(value.quality ?? []).map(q => (
+                <div key={q.id} className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 items-center">
+                  <input type="text" value={q.time} disabled={locked} onChange={e => updateQuality(q.id, 'time', e.target.value)} className={INP + ' w-14 !px-2 text-center'} />
+                  <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={q.moisture} disabled={locked} placeholder="%" onChange={e => updateQuality(q.id, 'moisture', e.target.value)} className={INP} />
+                  <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={q.bulkDensity} disabled={locked} placeholder="cc/100g" onChange={e => updateQuality(q.id, 'bulkDensity', e.target.value)} className={INP} />
+                  {!locked && <button onClick={() => removeQuality(q.id)} className="text-stone-300 hover:text-red-500 p-1 w-6"><Trash2 size={14} /></button>}
+                </div>
+              ))}
+              {!locked && <button onClick={addQuality} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-stone-200 text-[13px] font-medium text-stone-500 hover:border-stone-300"><Plus size={15} /> Add reading</button>}
             </div>
           </div>
 

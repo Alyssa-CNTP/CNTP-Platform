@@ -403,13 +403,21 @@ function CaptureScreen() {
   // shifts of the same production day. The production day is the session's own
   // date: the afternoon shift (16h00–01h00) is opened once on that date, so its
   // post-midnight tail rolls up under the same day.
-  const needsGrade = !sectionId.startsWith('refining')
+  // Grade must be chosen per batch on grade-driven sections (Sieving); Refining
+  // and Granule are variant-only, so no grade pick is required.
+  const needsGrade = !gradeless
+  const isGranule = sectionId === 'granule'
+  // The run discriminator stored in the run's `grade` column: the chosen grade on
+  // grade-driven sections, or — for Granule — the product item (SG / SF / Export).
+  // A run therefore continues across shifts while variant + item stay the same and
+  // forks when the operator switches SG → SF/Export, exactly as the paper works.
+  const runGrade = (p?: Production) => isGranule ? ((p?.data as GranuleData)?.item || '') : (p?.grade || '')
   // The PO anchor: the assignment's planned production orders, joined so it
   // compares identically across shifts (supervisor sets the same POs each shift).
   const poKey = (assignment?.production_orders ?? []).join(',') || null
 
   async function findOpenRun(po: string | null, variant: string, grade: string) {
-    const gradeKey = needsGrade ? (grade || null) : null
+    const gradeKey = (needsGrade || isGranule) ? (grade || null) : null
     const { data } = await getDb().schema('production').from('production_runs')
       .select('*').eq('section_id', sectionId).eq('production_day', dateParam)
       .eq('status', 'open').order('opened_at', { ascending: false })
@@ -423,7 +431,7 @@ function CaptureScreen() {
     const { data: row } = await getDb().schema('production').from('production_runs').insert({
       section_id: sectionId, production_day: dateParam,
       production_order: po, variant: (variant || null) as any,
-      grade: needsGrade ? (grade || null) : null,
+      grade: (needsGrade || isGranule) ? (grade || null) : null,
       lot_number: assignment?.lot_number ?? null,
       status: 'open', created_by: user?.id ?? null,
     } as any).select('id').maybeSingle()
@@ -452,7 +460,7 @@ function CaptureScreen() {
         .update({ status: 'closed', closed_at: new Date().toISOString() } as any).eq('id', cr.id)
     }
     if (p?.variant && (!needsGrade || p.grade)) {
-      const rid = await openRun(poKey, p.variant, p.grade)
+      const rid = await openRun(poKey, p.variant, runGrade(p))
       if (rid) await linkSessionToRun(rid)
     }
   }
@@ -465,7 +473,7 @@ function CaptureScreen() {
   useEffect(() => {
     if (loading || status === 'approved' || runId || runIdRef.current) return
     const p = productions[activeIdx]
-    const variant = p?.variant ?? '', grade = p?.grade ?? ''
+    const variant = p?.variant ?? '', grade = runGrade(p)
     if (!variant || (needsGrade && !grade)) { if (continueRun) setContinueRun(null); return }
     let cancelled = false
     ;(async () => {
@@ -715,8 +723,14 @@ function CaptureScreen() {
     const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
+    // Granule captures a scale verification per shift — persist it to the dedicated
+    // columns (audit + a KPI signal for scale health / predictive maintenance).
+    const gd0 = sectionId === 'granule' ? (prods[0]?.data as GranuleData | undefined) : undefined
+    const scalePatch = gd0
+      ? { scale_std_kg: n(gd0.scaleStd) || null, scale_actual_kg: n(gd0.scaleActual) || null }
+      : {}
     await db.schema('production').from('prod_sessions').update({
-      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(),
+      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(), ...scalePatch,
     } as any).eq('id', sid)
 
     const debag = buildDebag(prods, sid)
@@ -760,7 +774,7 @@ function CaptureScreen() {
       if (!runIdRef.current && !continueRunRef.current) {
         const p0 = prods[0]
         const variant = p0?.variant ?? ''
-        const grade   = p0?.grade ?? ''
+        const grade   = runGrade(p0)
         const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
         if (hasData && variant && (gradeless ? true : !!grade)) {
           const found = await findOpenRun(poKey, variant, grade)

@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Granule: scale verification + quality readings; run continuity fix + item-switch fork)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Scale verification captured** on the Granule Line (std weight / actual weight) — required for audit, and now persisted to the dedicated `prod_sessions.scale_std_kg` / `scale_actual_kg` columns (not just draft JSON) so it can be tracked as a metric. The UI shows the live **deviation** (green / amber / red bands) as an early KPI signal toward scale-health / predictive-maintenance dashboards.
+- **Quality readings** capture on the Granule Line — moisture (%) and bulk density (cc/100g) with time, the data behind the operators' hand-drawn graph, stored for later charting + KPIs.
+- **Run continuity fixed + made item-aware.** `needsGrade` was still `true` for granule, which (after granule went variant-only) broke its cross-shift run detection — the continue-run prompt never showed and the run wouldn't open on the variant path. Granule is now correctly gradeless for the run logic, so a run **continues across shifts** (07h00→01h00, operators change, mass balance keeps rolling up) as long as variant + item stay the same. Added an **item discriminator**: the granule product item (SG / SF / Export) is stored in the run's `grade` slot, so switching SG → SF/Export **forks a new run** — exactly as the floor treats it. (`runGrade()` helper threaded through `findOpenRun` / `openRun` and the detection/persist call sites.)
+
+---
+
 ## 2026-07-07 — Alyssa (Granule Line rework from floor feedback; unified mass-balance table; Sieving bucket-elevator direction)
 
 **Files changed:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/MassBalanceTable.tsx` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/label-print.ts`
