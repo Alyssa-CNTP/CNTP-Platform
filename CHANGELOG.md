@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Granule Line capture built; camera scanner fixed; bag label redesigned)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `lib/production/capture-config.ts`, `components/production/BagScanner.tsx`, `lib/production/label-print.ts`
+
+- **Granule Line is now a live capture section** (`/production/capture/granule`), built on the Sieving/Refining template but with the granule line's own blend-based layout, faithful to the paper forms PR-FM-026/7 (Plant Shift Mass Balance Report) and PR-FM-005.1 (Granule Bagging Station Report). New `GranuleCapture.tsx` with three sub-tabs:
+  - **Pellet Mill Feed (inputs):** dusts fed in, grouped into blends (1–5). Each dust input uses the same three modes as Refining — **scan / type serial**, **pick from system** (in-stock `bag_tags`), or **manual entry** — so every path from the paper-to-system transition is captured. Per-blend water is recorded but (confirmed from the paper) excluded from Total Mixed (A). Dust column totals (Brown/CP, White, Indent, Leaf, ALT, SG, Dust Extraction, Other) + Total Mixed (A) are shown as the primary overview figure.
+  - **Bagging (outputs):** one row per granule bag (item, auto time, target vs actual weight, auto-generated serial), a Dust-from-granule-line by-product table, and a Waste table. Output serials register in `bag_tags` + log a `bagging_out` scan event, exactly like Refining.
+  - **Mass Balance:** the PR-FM-026/7 report — A (auto), C\* from the bagging summary (auto), carry-overs D (dust not re-fed) and E (coarse not fed), waste F, Total Produced G = C\*+D+E+F, Balance = H−G (flagged beyond ±15 kg), % yield = G/H, and running hours = meter stop (Z) − start (Y).
+  - Wired into the orchestrator `[section]/page.tsx`: `buildDebag`/`buildBag`/`prodTotals`/`persist` now branch for granule (inputs → `prod_debagging`, outputs → `prod_bagging`, A vs G → `prod_mass_balance`), so cross-shift production-run continuity and the unified run mass balance work the same as the other sections. Flipped `built: true` for granule in `capture-config.ts`. `CaptureOverview` now groups granule debagging by dust type (the totals the plant reads first).
+- **Camera bag scanner fixed** (`BagScanner.tsx`). Three bugs: (1) the detector only looked for `qr_code`, but CNTP's printed labels are **Code128 1D barcodes**, so it could never decode a real label — now requests every format the browser supports (`code_128`, `qr_code`, EAN, etc.); (2) when `BarcodeDetector` was unavailable (iOS Safari, some Android browsers) the code called `stopCamera()` immediately, so the camera "opened then closed" — the reported symptom; it now keeps the preview open with a read-and-type fallback; (3) a mount race where the stream could attach before the `<video>` existed — acquisition moved into an effect that runs after the element mounts, with `await video.play()` and clearer permission-vs-unsupported error messages.
+- **Bag label redesigned** (`label-print.ts`). The old single cramped badge is replaced by two clearly-labelled fields — **Type** (RA Conventional / Conventional / Organic / RA Organic) and **Grade** (Export A / Export Blend B / Domestic C) — above a larger Code128 barcode + serial. The barcode still encodes only the serial (all metadata stays in `bag_tags`, so a data change never invalidates a printed tag). Printing stays gated behind `LABEL_PRINTING_ENABLED` (write-on-bag remains the default on the floor); this readies the template for when the printer is enabled.
+
+---
+
 ## 2026-07-07 — Alyssa (Roster print: fix real root cause — app shell clips print output to one page)
 
 **Files changed:** `app/(app)/layout.tsx`, `app/globals.css`

@@ -12,9 +12,10 @@ import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
 import { sievingTotals, type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
+import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
@@ -47,6 +48,18 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         const serial = r.serial || `Input bag ${i + 1}`
         const row: DebagRow = { bagNo: serial, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
         map.set(serial, { lot: serial, rows: [row], totalKg: num(r.weight) })
+      })
+    } else if ('blends' in d) {
+      // GranuleData: group dust inputs by dust type — the plant reads dust totals first.
+      ;(d.blends ?? []).forEach((bl: any) => {
+        ;(bl.rows ?? []).forEach((r: any) => {
+          if (num(r.weight) === 0) return
+          const label = dustProductType(r.dustKey)
+          const row: DebagRow = { bagNo: r.serial || label, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
+          const g = map.get(label)
+          if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
+          else map.set(label, { lot: label, rows: [row], totalKg: num(r.weight) })
+        })
       })
     } else {
       // SievingData: debag + spillage
@@ -103,6 +116,16 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
           destination: p.variant, // no grade — show variant instead
         }))
       })
+    } else if ('blends' in d) {
+      // GranuleData: granule bags + dust-from-granule-line by-products
+      ;(d.outputs ?? []).forEach((b: any) => addBag(p, {
+        productType: b.item, weight: b.weight, serial: b.serial, code: b.code,
+        batch: b.lot, destination: p.grade || p.variant, logged_at: b.logged_at,
+      }))
+      ;(d.dustOutputs ?? []).forEach((r: any) => addBag(p, {
+        productType: r.dustType, weight: r.weight, serial: r.serial, code: r.code,
+        batch: p.lot, destination: p.variant, logged_at: r.logged_at,
+      }))
     } else {
       // SievingData: flat outputs array
       ;(d.outputs ?? []).forEach((b: any) => addBag(p, b))

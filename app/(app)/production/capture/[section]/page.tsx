@@ -20,6 +20,10 @@ import {
   RefiningCapture, emptyRefiningData, refiningTotals,
   type RefiningData,
 } from '@/components/production/capture/RefiningCapture'
+import {
+  GranuleCapture, emptyGranuleData, granuleTotals, dustProductType,
+  type GranuleData,
+} from '@/components/production/capture/GranuleCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -46,13 +50,15 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 ]
 
 // A shift can contain several productions, each its own variant/destination/lot.
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
 const emptyProduction = (sectionId: string, variant?: string | null, lot?: string | null, grade: string = ''): Production =>
   ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
-     data: sectionId.startsWith('refining') ? emptyRefiningData() : emptySievingData() })
+     data: sectionId.startsWith('refining') ? emptyRefiningData()
+       : sectionId === 'granule' ? emptyGranuleData()
+       : emptySievingData() })
 
 function CaptureScreen() {
   const params = useParams()
@@ -110,7 +116,7 @@ function CaptureScreen() {
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
-  const updateActiveData = (d: SievingData | RefiningData) =>
+  const updateActiveData = (d: SievingData | RefiningData | GranuleData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
@@ -576,6 +582,23 @@ function CaptureScreen() {
             delivery_date: r.deliveryDate || null, is_spillage: false,
           })
         })
+      } else if (sectionId === 'granule') {
+        const gd = prod.data as GranuleData
+        ;(gd.blends ?? []).forEach(bl => {
+          (bl.rows ?? []).forEach(r => {
+            if (n(r.weight) === 0) return
+            rows.push({
+              session_id: sid, bag_no: bagNo++,
+              // bag_serial_no is a FK to bag_tags — only set for scan/system bags.
+              // Manual serials go in notes to avoid an FK failure.
+              bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+              notes: [`blend ${bl.blendNo}`, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+              lot_number: r.lot || prod.lot || null,
+              product_type: dustProductType(r.dustKey), variant: r.variant || prod.variant || null,
+              kg_nett: n(r.weight), is_spillage: false,
+            })
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.spillage.forEach(r => {
@@ -619,6 +642,26 @@ function CaptureScreen() {
             })
           })
         })
+      } else if (sectionId === 'granule') {
+        const gd = prod.data as GranuleData
+        ;(gd.outputs ?? []).forEach(b => {
+          if (n(b.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
+            product_type: b.item, acumatica_id: b.code || null, variant: prod.variant,
+            kg: n(b.weight), bagging_time: b.time || null,
+          })
+        })
+        ;(gd.dustOutputs ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: r.serial, lot_number: prod.lot || null,
+            product_type: r.dustType, acumatica_id: r.code || null, variant: prod.variant,
+            kg: n(r.weight),
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.outputs.forEach(b => {
@@ -639,6 +682,11 @@ function CaptureScreen() {
     if (sectionId.startsWith('refining')) {
       const r = refiningTotals(p.data as RefiningData)
       return { totalIn: r.totalIn, totalOut: r.totalA + r.totalB + r.totalC + r.totalD }
+    }
+    if (sectionId === 'granule') {
+      const g = granuleTotals(p.data as GranuleData)
+      // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
+      return { totalIn: g.totalA, totalOut: g.G }
     }
     return sievingTotals(p.data as SievingData)
   }
@@ -675,6 +723,9 @@ function CaptureScreen() {
         const t = refiningTotals(p.data as RefiningData)
         mbB += t.totalB; mbC += t.totalC; mbD += t.totalD
       })
+    } else if (sectionId === 'granule') {
+      // Total produced (G) is the single output figure — balance = A − G matches PR-FM-026/7.
+      prods.forEach(p => { mbB += granuleTotals(p.data as GranuleData).G })
     } else {
       prods.forEach(p => { mbB += sievingTotals(p.data as SievingData).totalOut })
     }
@@ -1139,6 +1190,18 @@ function CaptureScreen() {
                         variantWord={active.variant}
                         locked={locked}
                         value={active.data as RefiningData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
+                    : sectionId === 'granule'
+                    ? <GranuleCapture
+                        key={active.id}
+                        sectionId={sectionId}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        locked={locked}
+                        value={active.data as GranuleData}
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}

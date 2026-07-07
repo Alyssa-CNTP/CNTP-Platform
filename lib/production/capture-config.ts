@@ -47,7 +47,7 @@ export function sectionMeta(id: string): SectionMeta {
     code:        cfg?.code ?? '??',
     colorHex:    cfg?.colorHex ?? '#1A3A0E',
     outputTypes: cfg?.outputTypes ?? [],
-    built:       ['sieving', 'refining1', 'refining2'].includes(id),
+    built:       ['sieving', 'refining1', 'refining2', 'granule'].includes(id),
   }
 }
 
