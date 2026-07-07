@@ -10,10 +10,11 @@
 import React, { useState, useMemo } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
-import { sievingTotals, type SievingData } from '@/components/production/capture/SievingCapture'
+import { type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
 
@@ -148,10 +149,11 @@ const fmtTime = (iso?: string) =>
 
 export function CaptureOverview({
   productions, sectionName, sectionColor, date, shift, showSerials = false,
-  productionOrders, locked = false,
+  productionOrders, locked = false, balanceRows, balanceNote,
 }: {
   productions: Production[]; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
+  balanceRows?: BalanceRow[]; balanceNote?: string
 }) {
   const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
@@ -520,14 +522,19 @@ export function CaptureOverview({
               </div>
             )}
 
-            {/* Mass balance */}
-            <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
-              <span className="text-stone-500">Out {totalOut.toFixed(1)} − In {totalIncl.toFixed(1)} =</span>
-              <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
-                <span className={withinTol ? 'text-ok' : 'text-warn'}>{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg</span>
-                {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
-              </span>
-            </div>
+            {/* Mass balance — tabular (Morning / Afternoon / whole run) when the
+                page supplies per-shift rows; otherwise a single-line fallback. */}
+            {balanceRows && balanceRows.length > 0 ? (
+              <MassBalanceTable rows={balanceRows} tolerance={MASS_BALANCE_TOLERANCE_KG} note={balanceNote} />
+            ) : (
+              <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
+                <span className="text-stone-500">In {totalIncl.toFixed(1)} − Out {totalOut.toFixed(1)} =</span>
+                <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
+                  <span className={withinTol ? 'text-ok' : 'text-warn'}>{(-variance) > 0 ? '+' : ''}{(-variance).toFixed(1)} kg</span>
+                  {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>

@@ -7,7 +7,7 @@
 
 import type { OutputBag } from './live-types'
 import { VARIANT_LABELS, GRADE_LABELS } from './live-types'
-import { encodeCode128 } from '@/lib/production/code128'
+import { encodeCode128, getCode128Width } from '@/lib/production/code128'
 
 // Type = the organic/RA classification (RA CON / CON / ORG / RA ORG).
 // Grade = the export/domestic classification (Export A / Export Blend B / Domestic C).
@@ -29,8 +29,12 @@ function buildLabelHtml(bag: OutputBag): string {
 
   // The barcode encodes ONLY the serial — every other field lives in
   // production.bag_tags keyed by that serial, so a data change never invalidates
-  // a printed label.
-  const barcodeSvg = encodeCode128(bag.serial_number, { height: 20, moduleWidth: 1.9 })
+  // a printed label. It's the focal point of the label, so it's generated tall
+  // (~24% of its width) and printed to fill the full label width — a large, high
+  // quiet-zone symbol that a phone/scanner camera locks onto from across a bay.
+  const mw       = 2.0
+  const barWidth = getCode128Width(bag.serial_number, mw)
+  const barcodeSvg = encodeCode128(bag.serial_number, { height: Math.round(barWidth * 0.24), moduleWidth: mw })
 
   return `<!DOCTYPE html>
 <html>
@@ -47,41 +51,45 @@ function buildLabelHtml(bag: OutputBag): string {
   body {
     font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
     width: 100mm; min-height: 75mm;
-    padding: 3.5mm 4.5mm;
+    padding: 3.5mm 4mm 3mm;
     display: flex; flex-direction: column;
     background: #fff; color: #000;
   }
-  /* Header: product + section */
-  .head { border-bottom: 0.4mm solid #000; padding-bottom: 1.8mm; margin-bottom: 2mm; }
-  .product-name { font-size: 13pt; font-weight: 800; line-height: 1.05; }
-  .section-name { font-size: 6.5pt; color: #555; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.8mm; }
-  /* Type + Grade — the two classifications, side by side, each labelled */
-  .class-row { display: grid; grid-template-columns: 1fr 1fr; gap: 2mm; margin-bottom: 2mm; }
-  .class-cell { border: 0.3mm solid #000; border-radius: 1.5mm; padding: 1.3mm 2.2mm; }
-  .class-label { font-size: 5.5pt; text-transform: uppercase; letter-spacing: 0.1em; color: #666; font-weight: 700; }
-  .class-value { font-size: 9pt; font-weight: 800; line-height: 1.1; margin-top: 0.5mm; }
-  .class-value small { font-size: 6.5pt; font-weight: 700; color: #444; }
-  /* Barcode */
+  /* Header — product name owns the top line; type/grade sit as one quiet strip */
+  .head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 3mm;
+    border-bottom: 0.5mm solid #000; padding-bottom: 1.6mm;
+  }
+  .product-name { font-size: 13.5pt; font-weight: 800; line-height: 1.02; letter-spacing: -0.01em; }
+  .section-name { font-size: 6.5pt; color: #555; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap; }
+  .class-strip { display: flex; gap: 5mm; padding: 1.6mm 0 0; }
+  .class-cell { display: flex; align-items: baseline; gap: 1.4mm; }
+  .class-label { font-size: 5.5pt; text-transform: uppercase; letter-spacing: 0.12em; color: #888; font-weight: 700; }
+  .class-value { font-size: 8.5pt; font-weight: 800; line-height: 1; }
+  .class-value small { font-size: 6pt; font-weight: 700; color: #555; }
+  /* Barcode — the focal point: centred, fills the width, generous whitespace */
   .barcode-area {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    padding: 1.5mm 0;
+    padding: 2.5mm 0 1.5mm;
   }
-  .barcode-area svg { display: block; max-width: 100%; }
+  .barcode-area svg { display: block; width: 100%; height: auto; }
   .serial {
     font-family: 'Courier New', monospace;
-    font-size: 11pt; font-weight: 700;
-    letter-spacing: 0.14em; margin-top: 1.2mm;
+    font-size: 12pt; font-weight: 700;
+    letter-spacing: 0.18em; margin-top: 1.6mm; text-align: center;
   }
-  /* Footer facts */
+  /* Footer facts — one aligned row, hairline separators between the three cells */
   .footer-row {
-    display: grid; grid-template-columns: 1.3fr 1fr 1fr;
-    gap: 2mm; border-top: 0.3mm solid #ccc; padding-top: 1.8mm; margin-top: 1mm;
+    display: grid; grid-template-columns: 1.4fr 1fr 1.1fr;
+    border-top: 0.5mm solid #000; padding-top: 1.6mm;
   }
-  .footer-cell { display: flex; flex-direction: column; }
-  .footer-label { font-size: 5.5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #999; margin-bottom: 0.6mm; }
-  .footer-value { font-size: 8.5pt; font-weight: 700; word-break: break-all; }
-  .footer-brand { text-align: center; font-size: 5.5pt; color: #bbb; margin-top: 1.3mm; letter-spacing: 0.1em; }
+  .footer-cell { padding: 0 2.5mm; }
+  .footer-cell + .footer-cell { border-left: 0.2mm solid #ccc; }
+  .footer-cell:first-child { padding-left: 0; }
+  .footer-label { font-size: 5.5pt; text-transform: uppercase; letter-spacing: 0.1em; color: #999; margin-bottom: 0.6mm; font-weight: 700; }
+  .footer-value { font-size: 9pt; font-weight: 800; line-height: 1.05; word-break: break-word; }
+  .footer-brand { text-align: center; font-size: 5.5pt; color: #aaa; margin-top: 1.6mm; letter-spacing: 0.14em; text-transform: uppercase; }
   .print-btn {
     position: fixed; bottom: 12px; right: 12px;
     background: #1A3A0E; color: #fff; border: none; border-radius: 10px;
@@ -95,14 +103,14 @@ function buildLabelHtml(bag: OutputBag): string {
     <div class="section-name">${bag.section_name}</div>
   </div>
 
-  <div class="class-row">
+  <div class="class-strip">
     <div class="class-cell">
-      <div class="class-label">Type</div>
-      <div class="class-value">${typeLabel} <small>(${bag.variant})</small></div>
+      <span class="class-label">Type</span>
+      <span class="class-value">${typeLabel} <small>${bag.variant}</small></span>
     </div>
     <div class="class-cell">
-      <div class="class-label">Grade</div>
-      <div class="class-value">${gradeName} <small>(${bag.grade})</small></div>
+      <span class="class-label">Grade</span>
+      <span class="class-value">${gradeName} <small>${bag.grade}</small></span>
     </div>
   </div>
 

@@ -53,23 +53,37 @@ const BAG_ORANGE = '#d97706'
 // production's destination chosen at the top.
 const DEST_LABEL: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
 
-export function sievingTotals(d: SievingData) {
-  const debagIn  = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
-  const spillage = (d.spillage ?? []).reduce((s, r) => s + n(r.kg), 0)
-  const totalIn  = debagIn + spillage   // bucket elevator is part of total input
-  const totalOut = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
-  return { totalIn, totalOut, spillage }
+export type Shift = 'morning' | 'afternoon'
+
+// Mass balance for one Sieving production.
+//
+// The bucket elevator holds work-in-progress that carries across the production
+// day (07h00–01h00). The MORNING shift *consumes* what yesterday left in the
+// elevator — so it's an INPUT. The AFTERNOON shift *leaves* material in the
+// elevator for the next day — so it's an OUTPUT. The two are different material
+// and never cancel; keeping the distinction is what makes the run balance honest.
+// Machine spillage (spillage[1..]) is always counted on the input side.
+export function sievingTotals(d: SievingData, shift?: Shift) {
+  const debagIn   = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
+  const bucketKg  = n(d.spillage?.[0]?.kg)                                   // bucket elevator carryover
+  const machineKg = (d.spillage ?? []).slice(1).reduce((s, r) => s + n(r.kg), 0)  // machine spillage
+  const outputs   = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
+  const bucketIsOutput = shift === 'afternoon'
+  const totalIn  = debagIn + machineKg + (bucketIsOutput ? 0 : bucketKg)
+  const totalOut = outputs + (bucketIsOutput ? bucketKg : 0)
+  return { totalIn, totalOut, spillage: bucketKg + machineKg, bucketKg, machineKg, bucketIsOutput }
 }
 
 const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 
 export function SievingCapture({
-  assignment, variantWord, gradeLetter = 'A', locked, value, onChange, genSerial, operatorId,
+  assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId,
 }: {
   assignment: ShiftAssignment
   variantWord: string
   gradeLetter?: string
+  shift?: Shift
   locked: boolean
   value: SievingData
   onChange: (d: SievingData) => void
@@ -125,6 +139,16 @@ export function SievingCapture({
     setTab(next)
   }
   const spillageKg = value.spillage.reduce((s, r) => s + n(r.kg), 0)
+  const bucketKg   = n(value.spillage?.[0]?.kg)                                   // elevator carryover
+  const machineKg  = (value.spillage ?? []).slice(1).reduce((s, r) => s + n(r.kg), 0)
+  // On the afternoon shift the bucket elevator is left for the next day, so it
+  // reads as an OUTPUT; on the morning shift it's carried-in material consumed
+  // (an INPUT). The capture UI mirrors that so the operator sees where it lands.
+  const bucketIsOutput = shift === 'afternoon'
+  // Directional wording so the operator reads where the elevator figure lands.
+  const bucketDir  = bucketIsOutput
+    ? { verb: 'output', hint: 'left for next day', badge: 'counts as output' }
+    : { verb: 'input',  hint: 'from previous day', badge: 'counts as input'  }
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
@@ -172,7 +196,7 @@ export function SievingCapture({
     })
   }
 
-  const { totalIn, totalOut } = sievingTotals(value)
+  const { totalIn, totalOut } = sievingTotals(value, shift)
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
@@ -226,8 +250,10 @@ export function SievingCapture({
             <div className="flex items-center gap-3 bg-ok/5 border border-ok/30 rounded-2xl px-4 py-3">
               <Lock size={15} className="text-ok shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium text-text">Bucket elevator · {spillageKg.toFixed(1)} kg spillage</div>
-                <div className="font-mono text-[11px] text-text-muted">logged · included in balance</div>
+                <div className="text-[13px] font-medium text-text">
+                  Bucket elevator · {bucketKg.toFixed(1)} kg{machineKg > 0 ? ` · machine spillage ${machineKg.toFixed(1)} kg` : ''}
+                </div>
+                <div className="font-mono text-[11px] text-text-muted">logged · elevator {bucketDir.badge} ({bucketDir.hint})</div>
               </div>
               {!locked && (
                 <button onClick={() => patch({ bucketSecured: false })}
@@ -238,15 +264,18 @@ export function SievingCapture({
             </div>
           ) : (
             <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 space-y-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Scale size={14} className="text-amber-700" />
                 <span className="font-semibold text-[13px] text-amber-800">Bucket elevator</span>
-                <span className="text-[11px] text-amber-700/80">included in balance</span>
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${bucketIsOutput ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                  {bucketDir.badge}
+                </span>
+                <span className="text-[11px] text-amber-700/80">{shift} shift · {bucketDir.hint}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {value.spillage.map((r, i) => (
                   <div key={r.id} className="space-y-1">
-                    <label className={LBL}>{i === 0 ? 'Bucket elevator (kg)' : 'Machine spillage (kg)'}</label>
+                    <label className={LBL}>{i === 0 ? `Bucket elevator (kg) — ${bucketDir.verb}` : 'Machine spillage (kg)'}</label>
                     <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.kg} disabled={locked}
                       onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
                   </div>

@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Granule Line rework from floor feedback; unified mass-balance table; Sieving bucket-elevator direction)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/MassBalanceTable.tsx` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/label-print.ts`
+
+- **Unified mass balance** — new shared `MassBalanceTable` renders one balance for the whole production run as a table (Morning / Afternoon rows + whole-run total; variance vs ±15 kg). It's shown in **one place, the Overview** (via `balanceRows`/`balanceNote` from the capture page). Sieving now treats the **bucket elevator directionally**: consumed on the morning shift (input), left for the next day on the afternoon shift (output), so the run balance closes honestly (`sievingTotals(data, shift)`; `prodTotals`/`sessionTotals` take a shift arg).
+- **Granule Line reworked from floor feedback** (`GranuleCapture.tsx`):
+  - **Blends colour-coded** (per-blend colour + numbered chip) and **dust types colour-coded** throughout; a blend must be marked **complete before the next is added** (completed blends collapse to a coloured chip summary). Water is entered per blend and excluded from Total Mixed (A).
+  - **Product item chosen once per session** (SG / SF / Export Granules), which drives the by-product dust type (SG→SG Dust, SF→SF Dust) and locks after capture starts.
+  - **Per-lot serials `DD-MM-YY-NNN`** — the sequence continues across days/shifts for the same lot (looked up from `bag_tags` by lot), e.g. RSGG-04526 → `07-07-26-001…006` today, `08-07-26-007` tomorrow.
+  - Bagging table gains **Bag Weight (target)** + **Total Weight (actual)**, auto time, and an **auto-generated bagging summary** grouped by lot. An **amber warning** prompts recording the SG/SF dust output before finishing (it's consumed in the next production — the bucket-elevator analogue).
+  - **Grade removed** (granule is variant-only, like Refining). The Mass Balance sub-tab was **removed from the section page** — only end-of-shift readings (D / E / meter Y-Z) remain there; the calculated balance shows in the Overview with a `G = C* + carry-over/waste` and **% yield** note.
+- `CaptureOverview` groups granule debagging by dust type and renders the shared `MassBalanceTable`; the capture-page balance is suppressed for granule so its balance lives in exactly one place.
+
+---
+
 ## 2026-07-07 — Alyssa (Granule Line capture built; camera scanner fixed; bag label redesigned)
 
 **Files changed:** `components/production/capture/GranuleCapture.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `lib/production/capture-config.ts`, `components/production/BagScanner.tsx`, `lib/production/label-print.ts`

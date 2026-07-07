@@ -6,7 +6,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, Scale, ArrowRight,
+  FileText, Check, ArrowRight,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -14,8 +14,9 @@ import { SignaturePad } from '@/components/production/capture/SignaturePad'
 import { TimesheetConfirm } from '@/components/production/capture/TimesheetConfirm'
 import {
   SievingCapture, emptySievingData, sievingTotals,
-  type SievingData,
+  type SievingData, type Shift,
 } from '@/components/production/capture/SievingCapture'
+import { MassBalanceTable } from '@/components/production/capture/MassBalanceTable'
 import {
   RefiningCapture, emptyRefiningData, refiningTotals,
   type RefiningData,
@@ -67,7 +68,14 @@ function CaptureScreen() {
   const { user, role, isSupervisor, isIT } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
+  // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
+  // Granule are variant-only — traceability there comes from the system serials.
+  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule'
   const shift     = sp.get('shift') ?? 'morning'
+  // Which shift the bucket elevator carryover belongs to (afternoon = output,
+  // otherwise input), and the opposite shift whose capture we merge for the run.
+  const shiftBal: Shift   = shift === 'afternoon' ? 'afternoon' : 'morning'
+  const otherShiftBal: Shift = shiftBal === 'morning' ? 'afternoon' : 'morning'
   const dateParam = sp.get('date')  ?? format(new Date(), 'yyyy-MM-dd')
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
@@ -677,8 +685,10 @@ function CaptureScreen() {
     })
     return rows
   }
-  // Per-production totals — dispatches by section type.
-  function prodTotals(p: Production): { totalIn: number; totalOut: number } {
+  // Per-production totals — dispatches by section type. `sh` is the shift the
+  // production belongs to; Sieving uses it to place the bucket elevator on the
+  // input (morning) or output (afternoon) side of the balance.
+  function prodTotals(p: Production, sh: Shift = shiftBal): { totalIn: number; totalOut: number } {
     if (sectionId.startsWith('refining')) {
       const r = refiningTotals(p.data as RefiningData)
       return { totalIn: r.totalIn, totalOut: r.totalA + r.totalB + r.totalC + r.totalD }
@@ -688,12 +698,12 @@ function CaptureScreen() {
       // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
       return { totalIn: g.totalA, totalOut: g.G }
     }
-    return sievingTotals(p.data as SievingData)
+    return sievingTotals(p.data as SievingData, sh)
   }
-  // Session totals — summed across all productions.
-  function sessionTotals(prods: Production[]) {
+  // Session totals — summed across all productions on one shift.
+  function sessionTotals(prods: Production[], sh: Shift = shiftBal) {
     return prods.reduce((acc, p) => {
-      const t = prodTotals(p)
+      const t = prodTotals(p, sh)
       return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut }
     }, { totalIn: 0, totalOut: 0 })
   }
@@ -702,7 +712,7 @@ function CaptureScreen() {
   // Used by the explicit Save, the 30s autosave, and submit, so prod_debagging /
   // prod_bagging are always current and nothing is lost on the inactivity sign-out.
   async function persist(prods: Production[], sid: string) {
-    const { totalIn } = sessionTotals(prods)
+    const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
     await db.schema('production').from('prod_sessions').update({
@@ -727,7 +737,7 @@ function CaptureScreen() {
       // Total produced (G) is the single output figure — balance = A − G matches PR-FM-026/7.
       prods.forEach(p => { mbB += granuleTotals(p.data as GranuleData).G })
     } else {
-      prods.forEach(p => { mbB += sievingTotals(p.data as SievingData).totalOut })
+      prods.forEach(p => { mbB += sievingTotals(p.data as SievingData, shiftBal).totalOut })
     }
     await db.schema('production').from('prod_mass_balance').upsert({
       session_id: sid, total_input_kg: totalIn,
@@ -752,7 +762,7 @@ function CaptureScreen() {
         const variant = p0?.variant ?? ''
         const grade   = p0?.grade ?? ''
         const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
-        if (hasData && variant && (!sectionId.startsWith('refining') ? !!grade : true)) {
+        if (hasData && variant && (gradeless ? true : !!grade)) {
           const found = await findOpenRun(poKey, variant, grade)
           const newRid = found?.id ?? await openRun(poKey, variant, grade)
           if (newRid) {
@@ -870,16 +880,45 @@ function CaptureScreen() {
   const locked = status === 'approved'
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
-  const st = sessionTotals(productions)   // this shift's own contribution (shown as a sub-line)
-  // The single mass balance everyone sees: the whole production run (every shift
-  // + every batch on it), so operators across shifts read one unified figure —
-  // not a per-shift or per-batch slice. Falls back to this session when unlinked.
-  const runProductions = runId ? [...productions, ...otherShiftProductions] : productions
-  const rt = sessionTotals(runProductions)
+  // This shift's own contribution, and the other shift's (each with its own
+  // bucket-elevator direction), so the balance can be shown per shift and totalled.
+  const st = sessionTotals(productions, shiftBal)
+  const ot = sessionTotals(otherShiftProductions, otherShiftBal)
+  const morningTotals   = shiftBal === 'morning'   ? st : ot
+  const afternoonTotals = shiftBal === 'afternoon' ? st : ot
+  const runSpansShifts = runId != null && otherShiftProductions.length > 0
+  // The single mass balance everyone sees: the whole production run (07h00–01h00,
+  // every shift + batch), so operators across shifts read one unified figure.
+  // Falls back to this session when the run isn't linked across shifts yet.
+  const rt = runSpansShifts
+    ? { totalIn: st.totalIn + ot.totalIn, totalOut: st.totalOut + ot.totalOut }
+    : st
   const rtVariance  = rt.totalIn - rt.totalOut
   const rtWithinTol = Math.abs(rtVariance) <= MASS_BALANCE_TOLERANCE_KG
-  const runSpansShifts = runId != null && otherShiftProductions.length > 0
   const multi = productions.length > 1
+  // Rows for the tabular balance — only shifts that actually captured material.
+  const balanceRows = [
+    (morningTotals.totalIn > 0 || morningTotals.totalOut > 0) ? { shift: 'Morning' as const, ...morningTotals } : null,
+    (afternoonTotals.totalIn > 0 || afternoonTotals.totalOut > 0) ? { shift: 'Afternoon' as const, ...afternoonTotals } : null,
+  ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number }[]
+  // The bucket-elevator note only applies to Sieving; Granule shows its custom
+  // PR-FM-026/7 decomposition (G = C* + carry-over/waste, and % yield); other
+  // lines get a generic run note.
+  let balanceNote: string | undefined =
+    sectionId === 'sieving'
+      ? undefined
+      : 'One balance for the whole production run (07h00–01h00), combined across every shift.'
+  if (sectionId === 'granule') {
+    const runProds = runSpansShifts ? [...productions, ...otherShiftProductions] : productions
+    let A = 0, cStar = 0, carry = 0
+    runProds.forEach(p => {
+      const g = granuleTotals(p.data as GranuleData)
+      A += g.totalA; cStar += g.cStar; carry += g.D + g.E + g.wasteF
+    })
+    const G = cStar + carry
+    const yieldPct = A > 0 ? (G / A) * 100 : 0
+    balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
+  }
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
   // a section/machine tablet resolves the signer from the rostered operators by PIN.
@@ -1132,39 +1171,11 @@ function CaptureScreen() {
                   )}
                 </div>
 
-                {rt.totalIn > 0 && (
+                {/* Granule's balance is custom and lives in one place only — the
+                    Overview. Other sections show the quick balance here too. */}
+                {rt.totalIn > 0 && sectionId !== 'granule' && (
                   <div className="pt-3 border-t border-stone-100">
-                    <div className="flex items-center justify-between mb-2.5">
-                      <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
-                        <Scale size={13} /> Mass balance{runSpansShifts ? ' · whole run (all shifts)' : ''}
-                      </span>
-                      <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${rtWithinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-                        {rtWithinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-                        {rtWithinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-1">
-                      <div className="text-center flex-1">
-                        <div className="font-mono font-bold text-[20px] text-text leading-none">{rt.totalIn.toFixed(1)}</div>
-                        <div className="text-[10px] text-text-muted mt-1">kg in</div>
-                      </div>
-                      <ArrowRight size={16} className="text-stone-300 shrink-0" />
-                      <div className="text-center flex-1">
-                        <div className="font-mono font-bold text-[20px] text-text leading-none">{rt.totalOut.toFixed(1)}</div>
-                        <div className="text-[10px] text-text-muted mt-1">kg out</div>
-                      </div>
-                      <span className="text-stone-300 font-bold text-[16px] shrink-0">=</span>
-                      <div className="text-center flex-1">
-                        <div className={`font-mono font-bold text-[20px] leading-none ${rtWithinTol ? 'text-ok' : 'text-warn'}`}>{rtVariance > 0 ? '+' : ''}{rtVariance.toFixed(1)}</div>
-                        <div className="text-[10px] text-text-muted mt-1">variance</div>
-                      </div>
-                    </div>
-                    {runSpansShifts && (
-                      <p className="text-[11px] text-text-muted mt-2.5 flex items-center gap-1.5">
-                        <Info size={11} className="shrink-0" />
-                        One balance for the whole production run — combined across every shift. This shift added {st.totalIn.toFixed(1)} kg in / {st.totalOut.toFixed(1)} kg out.
-                      </p>
-                    )}
+                    <MassBalanceTable rows={balanceRows} tolerance={MASS_BALANCE_TOLERANCE_KG} note={balanceNote} />
                   </div>
                 )}
               </div>
@@ -1179,8 +1190,9 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {/* Capture only opens once variant (and grade for non-refining) are chosen. */}
-              {(sectionId.startsWith('refining') ? !!active.variant : !!(active.variant && active.grade)) || locked ? (
+              {/* Capture opens once variant is chosen; grade is only needed on grade-driven
+                  sections (Sieving). Refining and Granule are variant-only. */}
+              {(gradeless ? !!active.variant : !!(active.variant && active.grade)) || locked ? (
                 <>
                   {sectionId.startsWith('refining')
                     ? <RefiningCapture
@@ -1211,6 +1223,7 @@ function CaptureScreen() {
                         assignment={assignment}
                         variantWord={active.variant}
                         gradeLetter={active.grade || 'A'}
+                        shift={shiftBal}
                         locked={locked}
                         value={active.data as SievingData}
                         onChange={updateActiveData}
@@ -1229,7 +1242,7 @@ function CaptureScreen() {
               ) : (
                 <div className="flex items-start gap-2.5 px-4 py-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-[13px] text-amber-800">
                   <Info size={16} className="shrink-0 mt-0.5" />
-                  <span>Choose a <strong>variant</strong>{sectionId.startsWith('refining') ? '' : ' and grade'} above to start capturing this batch.</span>
+                  <span>Choose a <strong>variant</strong>{gradeless ? '' : ' and grade'} above to start capturing this batch.</span>
                 </div>
               )}
             </>
@@ -1266,6 +1279,8 @@ function CaptureScreen() {
                 showSerials={isIT}
                 productionOrders={assignment?.production_orders}
                 locked={locked}
+                balanceRows={balanceRows}
+                balanceNote={balanceNote}
               />
             </>
           )}
