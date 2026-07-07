@@ -318,9 +318,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <LanguageProvider>
-      <div className="flex h-screen overflow-hidden bg-surface">
+      <div className="flex h-screen overflow-hidden bg-surface app-shell">
         <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden app-shell-col">
           <Topbar
             title={meta.title}
             onMobileMenu={() => setMobileOpen(true)}
@@ -329,7 +329,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             acumaticaSync={routeKey === '/sales' ? 'ok' : undefined}
             rightSlot={<NotificationBell />}
           />
-          <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <main className="flex-1 overflow-y-auto overflow-x-hidden app-shell-main">
             {children}
           </main>
         </div>

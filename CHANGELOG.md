@@ -5,6 +5,25 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Roster print: fix real root cause — app shell clips print output to one page)
+
+**Files changed:** `app/(app)/layout.tsx`, `app/globals.css`
+
+- **Departments (Maintenance, Health & Safety) were still missing from the printout after the 3-column-layout fix.** Root cause was one level up from the roster page: `app/(app)/layout.tsx` wraps every page in a fixed-height shell (`h-screen overflow-hidden`) with an internally-scrolling `<main overflow-y-auto>`. That clipping applies during print too — only the one screen's worth of scrolled content ever reaches the print surface, so the printout was always exactly 1 page regardless of how the roster's own markup was laid out. Confirmed with a real headless-Chromium print-to-PDF test reproducing the shell: without this fix the roster is silently truncated at 1 page; with it, the same content correctly spans 2 pages with every department present.
+- Added `.app-shell` / `.app-shell-col` / `.app-shell-main` marker classes to the three shell containers (outer flex wrapper, inner column wrapper, `<main>`) and reset them (plus `html`/`body`) to `height: auto; overflow: visible` inside `@media print`, so print always uses natural, unclipped document flow. This is a shared-layout fix — it applies to print output for every page under `(app)`, not just the roster.
+
+---
+
+## 2026-07-07 — Alyssa (Roster print: fix departments being cut off, drop 3-column layout)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **Print was still losing departments even across two pages.** The 3-column CSS multi-column layout (`column-count: 3`) added on 2026-07-06 relies on the print engine balancing column height to fit one page — any roster content beyond that calculated height is silently dropped rather than flowed onto a second page, which is exactly what was happening with the current 6-department, ~24-role roster. Replaced the multi-column block with plain full-width block stacking (one table per department, straight down the page). Normal block flow has no such height ceiling: the browser's print pagination reliably continues onto as many landscape pages as the content needs, so nothing gets lost regardless of roster size.
+- Each department block keeps `break-inside: avoid` (plus `page-break-inside: avoid` for older engines) so a table only splits across a page break if it genuinely doesn't fit on one — same protection as before, just without the column-balancing that was causing the clipping.
+- Widened the Day/Night columns (Role column narrowed from 30% to 22%) now that each table runs the full page width instead of a third of it.
+
+---
+
 ## 2026-07-06 — Alyssa (Roster print: landscape, single-page, 3-column layout)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`

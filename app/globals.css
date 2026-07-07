@@ -363,8 +363,9 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
    as-is, so the printout isn't a cramped screenshot of the app UI. */
 .print-only { display: none; }
 @media print {
-  /* Landscape gives ~40% more usable width than portrait — needed so the
-     roster's per-section tables can run in columns and fit one page. */
+  /* Landscape gives ~40% more usable width than portrait for the roster's
+     full-width per-department tables. No page-count limit here — the
+     printout flows onto as many landscape pages as the roster needs. */
   @page            { size: landscape; margin: 10mm; }
   /* App chrome + interactive-only controls drop out of the printout */
   aside            { display: none !important; }
@@ -373,6 +374,16 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
   .print-only      { display: block !important; }
   /* Let the printout use the full page width, not the app's centred column */
   .print-full-width { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+  /* The app shell is a fixed-height (h-screen), overflow-hidden layout with
+     an internally-scrolling <main> — that's what actually caps every printout
+     to a single page, regardless of how the printed content itself is laid
+     out: only the one viewport's worth of scrolled content ever reaches the
+     print surface. Reset the shell to natural, unclipped flow so the full
+     roster (or any other page) can print across as many pages as it needs. */
+  html, body, .app-shell, .app-shell-col, .app-shell-main {
+    height: auto !important;
+    overflow: visible !important;
+  }
   /* Keep the colour-coded roster true on paper */
   *                { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body             { background: #fff; }
