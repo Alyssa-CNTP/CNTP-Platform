@@ -6,7 +6,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, Scale, ArrowRight,
+  FileText, Check, ArrowRight,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -14,12 +14,17 @@ import { SignaturePad } from '@/components/production/capture/SignaturePad'
 import { TimesheetConfirm } from '@/components/production/capture/TimesheetConfirm'
 import {
   SievingCapture, emptySievingData, sievingTotals,
-  type SievingData,
+  type SievingData, type Shift,
 } from '@/components/production/capture/SievingCapture'
+import { MassBalanceTable } from '@/components/production/capture/MassBalanceTable'
 import {
   RefiningCapture, emptyRefiningData, refiningTotals,
   type RefiningData,
 } from '@/components/production/capture/RefiningCapture'
+import {
+  GranuleCapture, emptyGranuleData, granuleTotals, dustProductType,
+  type GranuleData,
+} from '@/components/production/capture/GranuleCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -46,13 +51,15 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 ]
 
 // A shift can contain several productions, each its own variant/destination/lot.
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
 const emptyProduction = (sectionId: string, variant?: string | null, lot?: string | null, grade: string = ''): Production =>
   ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
-     data: sectionId.startsWith('refining') ? emptyRefiningData() : emptySievingData() })
+     data: sectionId.startsWith('refining') ? emptyRefiningData()
+       : sectionId === 'granule' ? emptyGranuleData()
+       : emptySievingData() })
 
 function CaptureScreen() {
   const params = useParams()
@@ -61,7 +68,14 @@ function CaptureScreen() {
   const { user, role, isSupervisor, isIT } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
+  // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
+  // Granule are variant-only — traceability there comes from the system serials.
+  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule'
   const shift     = sp.get('shift') ?? 'morning'
+  // Which shift the bucket elevator carryover belongs to (afternoon = output,
+  // otherwise input), and the opposite shift whose capture we merge for the run.
+  const shiftBal: Shift   = shift === 'afternoon' ? 'afternoon' : 'morning'
+  const otherShiftBal: Shift = shiftBal === 'morning' ? 'afternoon' : 'morning'
   const dateParam = sp.get('date')  ?? format(new Date(), 'yyyy-MM-dd')
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
@@ -110,7 +124,7 @@ function CaptureScreen() {
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
-  const updateActiveData = (d: SievingData | RefiningData) =>
+  const updateActiveData = (d: SievingData | RefiningData | GranuleData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
@@ -389,13 +403,21 @@ function CaptureScreen() {
   // shifts of the same production day. The production day is the session's own
   // date: the afternoon shift (16h00–01h00) is opened once on that date, so its
   // post-midnight tail rolls up under the same day.
-  const needsGrade = !sectionId.startsWith('refining')
+  // Grade must be chosen per batch on grade-driven sections (Sieving); Refining
+  // and Granule are variant-only, so no grade pick is required.
+  const needsGrade = !gradeless
+  const isGranule = sectionId === 'granule'
+  // The run discriminator stored in the run's `grade` column: the chosen grade on
+  // grade-driven sections, or — for Granule — the product item (SG / SF / Export).
+  // A run therefore continues across shifts while variant + item stay the same and
+  // forks when the operator switches SG → SF/Export, exactly as the paper works.
+  const runGrade = (p?: Production) => isGranule ? ((p?.data as GranuleData)?.item || '') : (p?.grade || '')
   // The PO anchor: the assignment's planned production orders, joined so it
   // compares identically across shifts (supervisor sets the same POs each shift).
   const poKey = (assignment?.production_orders ?? []).join(',') || null
 
   async function findOpenRun(po: string | null, variant: string, grade: string) {
-    const gradeKey = needsGrade ? (grade || null) : null
+    const gradeKey = (needsGrade || isGranule) ? (grade || null) : null
     const { data } = await getDb().schema('production').from('production_runs')
       .select('*').eq('section_id', sectionId).eq('production_day', dateParam)
       .eq('status', 'open').order('opened_at', { ascending: false })
@@ -409,7 +431,7 @@ function CaptureScreen() {
     const { data: row } = await getDb().schema('production').from('production_runs').insert({
       section_id: sectionId, production_day: dateParam,
       production_order: po, variant: (variant || null) as any,
-      grade: needsGrade ? (grade || null) : null,
+      grade: (needsGrade || isGranule) ? (grade || null) : null,
       lot_number: assignment?.lot_number ?? null,
       status: 'open', created_by: user?.id ?? null,
     } as any).select('id').maybeSingle()
@@ -438,7 +460,7 @@ function CaptureScreen() {
         .update({ status: 'closed', closed_at: new Date().toISOString() } as any).eq('id', cr.id)
     }
     if (p?.variant && (!needsGrade || p.grade)) {
-      const rid = await openRun(poKey, p.variant, p.grade)
+      const rid = await openRun(poKey, p.variant, runGrade(p))
       if (rid) await linkSessionToRun(rid)
     }
   }
@@ -451,7 +473,7 @@ function CaptureScreen() {
   useEffect(() => {
     if (loading || status === 'approved' || runId || runIdRef.current) return
     const p = productions[activeIdx]
-    const variant = p?.variant ?? '', grade = p?.grade ?? ''
+    const variant = p?.variant ?? '', grade = runGrade(p)
     if (!variant || (needsGrade && !grade)) { if (continueRun) setContinueRun(null); return }
     let cancelled = false
     ;(async () => {
@@ -576,6 +598,23 @@ function CaptureScreen() {
             delivery_date: r.deliveryDate || null, is_spillage: false,
           })
         })
+      } else if (sectionId === 'granule') {
+        const gd = prod.data as GranuleData
+        ;(gd.blends ?? []).forEach(bl => {
+          (bl.rows ?? []).forEach(r => {
+            if (n(r.weight) === 0) return
+            rows.push({
+              session_id: sid, bag_no: bagNo++,
+              // bag_serial_no is a FK to bag_tags — only set for scan/system bags.
+              // Manual serials go in notes to avoid an FK failure.
+              bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+              notes: [`blend ${bl.blendNo}`, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+              lot_number: r.lot || prod.lot || null,
+              product_type: dustProductType(r.dustKey), variant: r.variant || prod.variant || null,
+              kg_nett: n(r.weight), is_spillage: false,
+            })
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.spillage.forEach(r => {
@@ -619,6 +658,26 @@ function CaptureScreen() {
             })
           })
         })
+      } else if (sectionId === 'granule') {
+        const gd = prod.data as GranuleData
+        ;(gd.outputs ?? []).forEach(b => {
+          if (n(b.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
+            product_type: b.item, acumatica_id: b.code || null, variant: prod.variant,
+            kg: n(b.weight), bagging_time: b.time || null,
+          })
+        })
+        ;(gd.dustOutputs ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: r.serial, lot_number: prod.lot || null,
+            product_type: r.dustType, acumatica_id: r.code || null, variant: prod.variant,
+            kg: n(r.weight),
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.outputs.forEach(b => {
@@ -634,18 +693,25 @@ function CaptureScreen() {
     })
     return rows
   }
-  // Per-production totals — dispatches by section type.
-  function prodTotals(p: Production): { totalIn: number; totalOut: number } {
+  // Per-production totals — dispatches by section type. `sh` is the shift the
+  // production belongs to; Sieving uses it to place the bucket elevator on the
+  // input (morning) or output (afternoon) side of the balance.
+  function prodTotals(p: Production, sh: Shift = shiftBal): { totalIn: number; totalOut: number } {
     if (sectionId.startsWith('refining')) {
       const r = refiningTotals(p.data as RefiningData)
       return { totalIn: r.totalIn, totalOut: r.totalA + r.totalB + r.totalC + r.totalD }
     }
-    return sievingTotals(p.data as SievingData)
+    if (sectionId === 'granule') {
+      const g = granuleTotals(p.data as GranuleData)
+      // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
+      return { totalIn: g.totalA, totalOut: g.G }
+    }
+    return sievingTotals(p.data as SievingData, sh)
   }
-  // Session totals — summed across all productions.
-  function sessionTotals(prods: Production[]) {
+  // Session totals — summed across all productions on one shift.
+  function sessionTotals(prods: Production[], sh: Shift = shiftBal) {
     return prods.reduce((acc, p) => {
-      const t = prodTotals(p)
+      const t = prodTotals(p, sh)
       return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut }
     }, { totalIn: 0, totalOut: 0 })
   }
@@ -654,11 +720,17 @@ function CaptureScreen() {
   // Used by the explicit Save, the 30s autosave, and submit, so prod_debagging /
   // prod_bagging are always current and nothing is lost on the inactivity sign-out.
   async function persist(prods: Production[], sid: string) {
-    const { totalIn } = sessionTotals(prods)
+    const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
+    // Granule captures a scale verification per shift — persist it to the dedicated
+    // columns (audit + a KPI signal for scale health / predictive maintenance).
+    const gd0 = sectionId === 'granule' ? (prods[0]?.data as GranuleData | undefined) : undefined
+    const scalePatch = gd0
+      ? { scale_std_kg: n(gd0.scaleStd) || null, scale_actual_kg: n(gd0.scaleActual) || null }
+      : {}
     await db.schema('production').from('prod_sessions').update({
-      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(),
+      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(), ...scalePatch,
     } as any).eq('id', sid)
 
     const debag = buildDebag(prods, sid)
@@ -675,8 +747,11 @@ function CaptureScreen() {
         const t = refiningTotals(p.data as RefiningData)
         mbB += t.totalB; mbC += t.totalC; mbD += t.totalD
       })
+    } else if (sectionId === 'granule') {
+      // Total produced (G) is the single output figure — balance = A − G matches PR-FM-026/7.
+      prods.forEach(p => { mbB += granuleTotals(p.data as GranuleData).G })
     } else {
-      prods.forEach(p => { mbB += sievingTotals(p.data as SievingData).totalOut })
+      prods.forEach(p => { mbB += sievingTotals(p.data as SievingData, shiftBal).totalOut })
     }
     await db.schema('production').from('prod_mass_balance').upsert({
       session_id: sid, total_input_kg: totalIn,
@@ -699,9 +774,9 @@ function CaptureScreen() {
       if (!runIdRef.current && !continueRunRef.current) {
         const p0 = prods[0]
         const variant = p0?.variant ?? ''
-        const grade   = p0?.grade ?? ''
+        const grade   = runGrade(p0)
         const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
-        if (hasData && variant && (!sectionId.startsWith('refining') ? !!grade : true)) {
+        if (hasData && variant && (gradeless ? true : !!grade)) {
           const found = await findOpenRun(poKey, variant, grade)
           const newRid = found?.id ?? await openRun(poKey, variant, grade)
           if (newRid) {
@@ -819,16 +894,45 @@ function CaptureScreen() {
   const locked = status === 'approved'
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
-  const st = sessionTotals(productions)   // this shift's own contribution (shown as a sub-line)
-  // The single mass balance everyone sees: the whole production run (every shift
-  // + every batch on it), so operators across shifts read one unified figure —
-  // not a per-shift or per-batch slice. Falls back to this session when unlinked.
-  const runProductions = runId ? [...productions, ...otherShiftProductions] : productions
-  const rt = sessionTotals(runProductions)
+  // This shift's own contribution, and the other shift's (each with its own
+  // bucket-elevator direction), so the balance can be shown per shift and totalled.
+  const st = sessionTotals(productions, shiftBal)
+  const ot = sessionTotals(otherShiftProductions, otherShiftBal)
+  const morningTotals   = shiftBal === 'morning'   ? st : ot
+  const afternoonTotals = shiftBal === 'afternoon' ? st : ot
+  const runSpansShifts = runId != null && otherShiftProductions.length > 0
+  // The single mass balance everyone sees: the whole production run (07h00–01h00,
+  // every shift + batch), so operators across shifts read one unified figure.
+  // Falls back to this session when the run isn't linked across shifts yet.
+  const rt = runSpansShifts
+    ? { totalIn: st.totalIn + ot.totalIn, totalOut: st.totalOut + ot.totalOut }
+    : st
   const rtVariance  = rt.totalIn - rt.totalOut
   const rtWithinTol = Math.abs(rtVariance) <= MASS_BALANCE_TOLERANCE_KG
-  const runSpansShifts = runId != null && otherShiftProductions.length > 0
   const multi = productions.length > 1
+  // Rows for the tabular balance — only shifts that actually captured material.
+  const balanceRows = [
+    (morningTotals.totalIn > 0 || morningTotals.totalOut > 0) ? { shift: 'Morning' as const, ...morningTotals } : null,
+    (afternoonTotals.totalIn > 0 || afternoonTotals.totalOut > 0) ? { shift: 'Afternoon' as const, ...afternoonTotals } : null,
+  ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number }[]
+  // The bucket-elevator note only applies to Sieving; Granule shows its custom
+  // PR-FM-026/7 decomposition (G = C* + carry-over/waste, and % yield); other
+  // lines get a generic run note.
+  let balanceNote: string | undefined =
+    sectionId === 'sieving'
+      ? undefined
+      : 'One balance for the whole production run (07h00–01h00), combined across every shift.'
+  if (sectionId === 'granule') {
+    const runProds = runSpansShifts ? [...productions, ...otherShiftProductions] : productions
+    let A = 0, cStar = 0, carry = 0
+    runProds.forEach(p => {
+      const g = granuleTotals(p.data as GranuleData)
+      A += g.totalA; cStar += g.cStar; carry += g.D + g.E + g.wasteF
+    })
+    const G = cStar + carry
+    const yieldPct = A > 0 ? (G / A) * 100 : 0
+    balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
+  }
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
   // a section/machine tablet resolves the signer from the rostered operators by PIN.
@@ -1058,9 +1162,9 @@ function CaptureScreen() {
                   <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">
                     Batch{multi ? ` · P${activeIdx + 1}` : ''}
                   </span>
-                  {!sectionId.startsWith('refining') && <GradeHelp />}
+                  {!gradeless && <GradeHelp />}
                 </div>
-                <div className={`grid gap-2.5 ${sectionId.startsWith('refining') ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                <div className={`grid gap-2.5 ${gradeless ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</label>
                     <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
@@ -1069,7 +1173,7 @@ function CaptureScreen() {
                       {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                     </select>
                   </div>
-                  {!sectionId.startsWith('refining') && (
+                  {!gradeless && (
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
                       <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
@@ -1081,39 +1185,11 @@ function CaptureScreen() {
                   )}
                 </div>
 
-                {rt.totalIn > 0 && (
+                {/* Granule's balance is custom and lives in one place only — the
+                    Overview. Other sections show the quick balance here too. */}
+                {rt.totalIn > 0 && sectionId !== 'granule' && (
                   <div className="pt-3 border-t border-stone-100">
-                    <div className="flex items-center justify-between mb-2.5">
-                      <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
-                        <Scale size={13} /> Mass balance{runSpansShifts ? ' · whole run (all shifts)' : ''}
-                      </span>
-                      <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${rtWithinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-                        {rtWithinTol ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-                        {rtWithinTol ? `Within ±${MASS_BALANCE_TOLERANCE_KG}` : `Outside ±${MASS_BALANCE_TOLERANCE_KG}`}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-1">
-                      <div className="text-center flex-1">
-                        <div className="font-mono font-bold text-[20px] text-text leading-none">{rt.totalIn.toFixed(1)}</div>
-                        <div className="text-[10px] text-text-muted mt-1">kg in</div>
-                      </div>
-                      <ArrowRight size={16} className="text-stone-300 shrink-0" />
-                      <div className="text-center flex-1">
-                        <div className="font-mono font-bold text-[20px] text-text leading-none">{rt.totalOut.toFixed(1)}</div>
-                        <div className="text-[10px] text-text-muted mt-1">kg out</div>
-                      </div>
-                      <span className="text-stone-300 font-bold text-[16px] shrink-0">=</span>
-                      <div className="text-center flex-1">
-                        <div className={`font-mono font-bold text-[20px] leading-none ${rtWithinTol ? 'text-ok' : 'text-warn'}`}>{rtVariance > 0 ? '+' : ''}{rtVariance.toFixed(1)}</div>
-                        <div className="text-[10px] text-text-muted mt-1">variance</div>
-                      </div>
-                    </div>
-                    {runSpansShifts && (
-                      <p className="text-[11px] text-text-muted mt-2.5 flex items-center gap-1.5">
-                        <Info size={11} className="shrink-0" />
-                        One balance for the whole production run — combined across every shift. This shift added {st.totalIn.toFixed(1)} kg in / {st.totalOut.toFixed(1)} kg out.
-                      </p>
-                    )}
+                    <MassBalanceTable rows={balanceRows} tolerance={MASS_BALANCE_TOLERANCE_KG} note={balanceNote} />
                   </div>
                 )}
               </div>
@@ -1128,8 +1204,9 @@ function CaptureScreen() {
                 </div>
               )}
 
-              {/* Capture only opens once variant (and grade for non-refining) are chosen. */}
-              {(sectionId.startsWith('refining') ? !!active.variant : !!(active.variant && active.grade)) || locked ? (
+              {/* Capture opens once variant is chosen; grade is only needed on grade-driven
+                  sections (Sieving). Refining and Granule are variant-only. */}
+              {(gradeless ? !!active.variant : !!(active.variant && active.grade)) || locked ? (
                 <>
                   {sectionId.startsWith('refining')
                     ? <RefiningCapture
@@ -1143,11 +1220,24 @@ function CaptureScreen() {
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
                       />
+                    : sectionId === 'granule'
+                    ? <GranuleCapture
+                        key={active.id}
+                        sectionId={sectionId}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        locked={locked}
+                        value={active.data as GranuleData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
                     : <SievingCapture
                         key={active.id}
                         assignment={assignment}
                         variantWord={active.variant}
                         gradeLetter={active.grade || 'A'}
+                        shift={shiftBal}
                         locked={locked}
                         value={active.data as SievingData}
                         onChange={updateActiveData}
@@ -1166,7 +1256,7 @@ function CaptureScreen() {
               ) : (
                 <div className="flex items-start gap-2.5 px-4 py-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-[13px] text-amber-800">
                   <Info size={16} className="shrink-0 mt-0.5" />
-                  <span>Choose a <strong>variant</strong>{sectionId.startsWith('refining') ? '' : ' and grade'} above to start capturing this batch.</span>
+                  <span>Choose a <strong>variant</strong>{gradeless ? '' : ' and grade'} above to start capturing this batch.</span>
                 </div>
               )}
             </>
@@ -1203,6 +1293,8 @@ function CaptureScreen() {
                 showSerials={isIT}
                 productionOrders={assignment?.production_orders}
                 locked={locked}
+                balanceRows={balanceRows}
+                balanceNote={balanceNote}
               />
             </>
           )}

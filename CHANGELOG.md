@@ -5,6 +5,66 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Sieving: bucket elevator by time of day — start-of-day IN on Debagging, end-of-day OUT on Bagging)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+- **Bucket elevator now sits on the tab that matches its direction.** Previously the single "Bucket elevator" field lived on the Debagging (in) tab on both shifts and only flipped its badge to "output" on the afternoon — so the **end-of-day** figure was captured under "what goes into the machine," an easy-to-miss mental-model mismatch. Now:
+  - **Morning · Debagging (in):** "Bucket elevator — start of day" (from yesterday · consumed this morning) — counts as **input**.
+  - **Afternoon · Bagging (out):** "Bucket elevator — end of day" (left in the tower for tomorrow) — counts as **output**, shown just above "Total bagged out".
+  - **Machine spillage** is split into its own card and stays on the Debagging tab on both shifts (always an input loss).
+- The mass-balance maths is unchanged (`sievingTotals(data, shift)` still reads `spillage[0]` as the elevator, `spillage[1]` as machine spillage); this is purely where/how the two fields are presented. `goToTab` no longer auto-locks the elevator when moving to Bagging on the afternoon shift (the operator fills it there). Card colour follows direction — blue for in, amber for out.
+
+---
+
+## 2026-07-07 — Alyssa (Granule: hide grade selector; granule quality + scale-health KPIs on the dashboard)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Grade selector hidden for Granule.** The run logic was already gradeless for granule, but the batch set-up card still rendered the Grade dropdown (and grade help) because they were gated on `!startsWith('refining')`. Switched those to the `gradeless` flag, so Granule (like Refining) shows only the Variant selector — traceability comes from the per-bag system serials.
+- **Granule KPI foundations added to the Production Dashboard** (`ProductionDashboard.tsx`): a new "Granule Line — quality & scale health" card with two daily-trend charts over the selected window — **granule quality** (avg moisture % + bulk density cc/100g, dual-axis — the digital version of the operators' hand-drawn graph) and **scale-verification health** (avg deviation = actual − standard test weight, with a zero reference line; drift away from zero is the early predictive-maintenance signal). Data is read directly: scale from `prod_sessions.scale_std_kg/scale_actual_kg`, quality readings from the session `draft_data`. Best-effort so a parse/schema hiccup can't take the dashboard down; shows an empty-state until data is captured.
+
+---
+
+## 2026-07-07 — Alyssa (Granule: scale verification + quality readings; run continuity fix + item-switch fork)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Scale verification captured** on the Granule Line (std weight / actual weight) — required for audit, and now persisted to the dedicated `prod_sessions.scale_std_kg` / `scale_actual_kg` columns (not just draft JSON) so it can be tracked as a metric. The UI shows the live **deviation** (green / amber / red bands) as an early KPI signal toward scale-health / predictive-maintenance dashboards.
+- **Quality readings** capture on the Granule Line — moisture (%) and bulk density (cc/100g) with time, the data behind the operators' hand-drawn graph, stored for later charting + KPIs.
+- **Run continuity fixed + made item-aware.** `needsGrade` was still `true` for granule, which (after granule went variant-only) broke its cross-shift run detection — the continue-run prompt never showed and the run wouldn't open on the variant path. Granule is now correctly gradeless for the run logic, so a run **continues across shifts** (07h00→01h00, operators change, mass balance keeps rolling up) as long as variant + item stay the same. Added an **item discriminator**: the granule product item (SG / SF / Export) is stored in the run's `grade` slot, so switching SG → SF/Export **forks a new run** — exactly as the floor treats it. (`runGrade()` helper threaded through `findOpenRun` / `openRun` and the detection/persist call sites.)
+
+---
+
+## 2026-07-07 — Alyssa (Granule Line rework from floor feedback; unified mass-balance table; Sieving bucket-elevator direction)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/MassBalanceTable.tsx` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/label-print.ts`
+
+- **Unified mass balance** — new shared `MassBalanceTable` renders one balance for the whole production run as a table (Morning / Afternoon rows + whole-run total; variance vs ±15 kg). It's shown in **one place, the Overview** (via `balanceRows`/`balanceNote` from the capture page). Sieving now treats the **bucket elevator directionally**: consumed on the morning shift (input), left for the next day on the afternoon shift (output), so the run balance closes honestly (`sievingTotals(data, shift)`; `prodTotals`/`sessionTotals` take a shift arg).
+- **Granule Line reworked from floor feedback** (`GranuleCapture.tsx`):
+  - **Blends colour-coded** (per-blend colour + numbered chip) and **dust types colour-coded** throughout; a blend must be marked **complete before the next is added** (completed blends collapse to a coloured chip summary). Water is entered per blend and excluded from Total Mixed (A).
+  - **Product item chosen once per session** (SG / SF / Export Granules), which drives the by-product dust type (SG→SG Dust, SF→SF Dust) and locks after capture starts.
+  - **Per-lot serials `DD-MM-YY-NNN`** — the sequence continues across days/shifts for the same lot (looked up from `bag_tags` by lot), e.g. RSGG-04526 → `07-07-26-001…006` today, `08-07-26-007` tomorrow.
+  - Bagging table gains **Bag Weight (target)** + **Total Weight (actual)**, auto time, and an **auto-generated bagging summary** grouped by lot. An **amber warning** prompts recording the SG/SF dust output before finishing (it's consumed in the next production — the bucket-elevator analogue).
+  - **Grade removed** (granule is variant-only, like Refining). The Mass Balance sub-tab was **removed from the section page** — only end-of-shift readings (D / E / meter Y-Z) remain there; the calculated balance shows in the Overview with a `G = C* + carry-over/waste` and **% yield** note.
+- `CaptureOverview` groups granule debagging by dust type and renders the shared `MassBalanceTable`; the capture-page balance is suppressed for granule so its balance lives in exactly one place.
+
+---
+
+## 2026-07-07 — Alyssa (Granule Line capture built; camera scanner fixed; bag label redesigned)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `lib/production/capture-config.ts`, `components/production/BagScanner.tsx`, `lib/production/label-print.ts`
+
+- **Granule Line is now a live capture section** (`/production/capture/granule`), built on the Sieving/Refining template but with the granule line's own blend-based layout, faithful to the paper forms PR-FM-026/7 (Plant Shift Mass Balance Report) and PR-FM-005.1 (Granule Bagging Station Report). New `GranuleCapture.tsx` with three sub-tabs:
+  - **Pellet Mill Feed (inputs):** dusts fed in, grouped into blends (1–5). Each dust input uses the same three modes as Refining — **scan / type serial**, **pick from system** (in-stock `bag_tags`), or **manual entry** — so every path from the paper-to-system transition is captured. Per-blend water is recorded but (confirmed from the paper) excluded from Total Mixed (A). Dust column totals (Brown/CP, White, Indent, Leaf, ALT, SG, Dust Extraction, Other) + Total Mixed (A) are shown as the primary overview figure.
+  - **Bagging (outputs):** one row per granule bag (item, auto time, target vs actual weight, auto-generated serial), a Dust-from-granule-line by-product table, and a Waste table. Output serials register in `bag_tags` + log a `bagging_out` scan event, exactly like Refining.
+  - **Mass Balance:** the PR-FM-026/7 report — A (auto), C\* from the bagging summary (auto), carry-overs D (dust not re-fed) and E (coarse not fed), waste F, Total Produced G = C\*+D+E+F, Balance = H−G (flagged beyond ±15 kg), % yield = G/H, and running hours = meter stop (Z) − start (Y).
+  - Wired into the orchestrator `[section]/page.tsx`: `buildDebag`/`buildBag`/`prodTotals`/`persist` now branch for granule (inputs → `prod_debagging`, outputs → `prod_bagging`, A vs G → `prod_mass_balance`), so cross-shift production-run continuity and the unified run mass balance work the same as the other sections. Flipped `built: true` for granule in `capture-config.ts`. `CaptureOverview` now groups granule debagging by dust type (the totals the plant reads first).
+- **Camera bag scanner fixed** (`BagScanner.tsx`). Three bugs: (1) the detector only looked for `qr_code`, but CNTP's printed labels are **Code128 1D barcodes**, so it could never decode a real label — now requests every format the browser supports (`code_128`, `qr_code`, EAN, etc.); (2) when `BarcodeDetector` was unavailable (iOS Safari, some Android browsers) the code called `stopCamera()` immediately, so the camera "opened then closed" — the reported symptom; it now keeps the preview open with a read-and-type fallback; (3) a mount race where the stream could attach before the `<video>` existed — acquisition moved into an effect that runs after the element mounts, with `await video.play()` and clearer permission-vs-unsupported error messages.
+- **Bag label redesigned** (`label-print.ts`). The old single cramped badge is replaced by two clearly-labelled fields — **Type** (RA Conventional / Conventional / Organic / RA Organic) and **Grade** (Export A / Export Blend B / Domestic C) — above a larger Code128 barcode + serial. The barcode still encodes only the serial (all metadata stays in `bag_tags`, so a data change never invalidates a printed tag). Printing stays gated behind `LABEL_PRINTING_ENABLED` (write-on-bag remains the default on the floor); this readies the template for when the printer is enabled.
+
+---
+
 ## 2026-07-07 — Alyssa (Roster print: fix real root cause — app shell clips print output to one page)
 
 **Files changed:** `app/(app)/layout.tsx`, `app/globals.css`

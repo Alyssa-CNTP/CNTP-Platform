@@ -53,23 +53,37 @@ const BAG_ORANGE = '#d97706'
 // production's destination chosen at the top.
 const DEST_LABEL: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
 
-export function sievingTotals(d: SievingData) {
-  const debagIn  = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
-  const spillage = (d.spillage ?? []).reduce((s, r) => s + n(r.kg), 0)
-  const totalIn  = debagIn + spillage   // bucket elevator is part of total input
-  const totalOut = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
-  return { totalIn, totalOut, spillage }
+export type Shift = 'morning' | 'afternoon'
+
+// Mass balance for one Sieving production.
+//
+// The bucket elevator holds work-in-progress that carries across the production
+// day (07h00–01h00). The MORNING shift *consumes* what yesterday left in the
+// elevator — so it's an INPUT. The AFTERNOON shift *leaves* material in the
+// elevator for the next day — so it's an OUTPUT. The two are different material
+// and never cancel; keeping the distinction is what makes the run balance honest.
+// Machine spillage (spillage[1..]) is always counted on the input side.
+export function sievingTotals(d: SievingData, shift?: Shift) {
+  const debagIn   = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
+  const bucketKg  = n(d.spillage?.[0]?.kg)                                   // bucket elevator carryover
+  const machineKg = (d.spillage ?? []).slice(1).reduce((s, r) => s + n(r.kg), 0)  // machine spillage
+  const outputs   = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
+  const bucketIsOutput = shift === 'afternoon'
+  const totalIn  = debagIn + machineKg + (bucketIsOutput ? 0 : bucketKg)
+  const totalOut = outputs + (bucketIsOutput ? bucketKg : 0)
+  return { totalIn, totalOut, spillage: bucketKg + machineKg, bucketKg, machineKg, bucketIsOutput }
 }
 
 const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 
 export function SievingCapture({
-  assignment, variantWord, gradeLetter = 'A', locked, value, onChange, genSerial, operatorId,
+  assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId,
 }: {
   assignment: ShiftAssignment
   variantWord: string
   gradeLetter?: string
+  shift?: Shift
   locked: boolean
   value: SievingData
   onChange: (d: SievingData) => void
@@ -118,13 +132,23 @@ export function SievingCapture({
   const updateSpillage = (id: string, v: string) =>
     patch({ spillage: value.spillage.map(r => r.id === id ? { ...r, kg: v } : r) })
 
-  // Leaving the inbound (debag) step locks the bucket elevator + any finished
-  // bulk bags for this grade. A new grade is a fresh record, so it starts open.
+  // Leaving the inbound (debag) step locks any finished bulk bags. On the MORNING
+  // shift the bucket elevator is a start-of-day input captured here, so it locks
+  // too; on the AFTERNOON shift it's an end-of-day output captured on the Bagging
+  // tab, so it must stay open when the operator moves across.
   function goToTab(next: 'debag' | 'bag') {
-    if (next === 'bag') patch({ debag: lockCompleted(value.debag), bucketSecured: true })
+    if (next === 'bag') patch({ debag: lockCompleted(value.debag), ...(shift === 'morning' ? { bucketSecured: true } : {}) })
     setTab(next)
   }
-  const spillageKg = value.spillage.reduce((s, r) => s + n(r.kg), 0)
+  const bucketKg   = n(value.spillage?.[0]?.kg)                                   // elevator carryover (shown in the locked summary)
+  // On the afternoon shift the bucket elevator is left for the next day, so it's
+  // an END-OF-DAY OUTPUT captured on the Bagging tab; on the morning shift it's
+  // the START-OF-DAY carry-in consumed that morning — an INPUT captured on the
+  // Debagging tab. Same figure, placed on the tab that matches its direction.
+  const bucketIsOutput = shift === 'afternoon'
+  const bucketDir  = bucketIsOutput
+    ? { title: 'Bucket elevator — end of day',   badge: 'counts as output', hint: 'left in the tower for tomorrow' }
+    : { title: 'Bucket elevator — start of day', badge: 'counts as input',  hint: 'from yesterday · consumed this morning' }
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
@@ -172,7 +196,7 @@ export function SievingCapture({
     })
   }
 
-  const { totalIn, totalOut } = sievingTotals(value)
+  const { totalIn, totalOut } = sievingTotals(value, shift)
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
@@ -180,6 +204,64 @@ export function SievingCapture({
   // Live counts so the in/out split reads as two clear jobs with visible progress.
   const debagCount = value.debag.filter(r => n(r.nett) > 0).length
   const bagCount   = value.outputs.length
+
+  // Bucket elevator — one figure, shown on the tab that matches its direction:
+  // start-of-day input on Debagging (morning), end-of-day output on Bagging
+  // (afternoon). Colour follows direction (blue = in, amber = out).
+  const bucketRow = value.spillage?.[0]
+  const bucketCard = bucketRow && (value.bucketSecured ? (
+    <div className="flex items-center gap-3 bg-ok/5 border border-ok/30 rounded-2xl px-4 py-3">
+      <Lock size={15} className="text-ok shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-medium text-text">{bucketDir.title} · {bucketKg.toFixed(1)} kg</div>
+        <div className="font-mono text-[11px] text-text-muted">logged · {bucketDir.badge} ({bucketDir.hint})</div>
+      </div>
+      {!locked && (
+        <button onClick={() => patch({ bucketSecured: false })}
+          className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg">
+          <Pencil size={13} /> Edit
+        </button>
+      )}
+    </div>
+  ) : (
+    <div className={`border rounded-2xl p-4 space-y-3 ${bucketIsOutput ? 'bg-amber-50/60 border-amber-200' : 'bg-blue-50/50 border-blue-200'}`}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Scale size={14} className={bucketIsOutput ? 'text-amber-700' : 'text-blue-700'} />
+        <span className={`font-semibold text-[13px] ${bucketIsOutput ? 'text-amber-800' : 'text-blue-800'}`}>{bucketDir.title}</span>
+        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${bucketIsOutput ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>{bucketDir.badge}</span>
+        <span className="text-[11px] text-stone-500">{bucketDir.hint}</span>
+      </div>
+      <div className="max-w-[52%]">
+        <label className={LBL}>Bucket elevator (kg)</label>
+        <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={bucketRow.kg} disabled={locked}
+          onChange={e => updateSpillage(bucketRow.id, e.target.value)} placeholder="0" className={INP} />
+      </div>
+      {!locked && (
+        <button onClick={() => patch({ bucketSecured: true })}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] hover:bg-ok/20 transition-colors">
+          <Check size={15} /> Done — lock bucket elevator
+        </button>
+      )}
+    </div>
+  ))
+
+  // Machine spillage — always an input loss, captured on the Debagging tab on
+  // either shift. Single field, no lock (it's one number).
+  const machineRow = value.spillage?.[1]
+  const machineCard = machineRow && (
+    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Scale size={14} className="text-stone-500" />
+        <span className="font-semibold text-[13px] text-stone-700">Machine spillage</span>
+        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">counts as input</span>
+      </div>
+      <div className="max-w-[52%]">
+        <label className={LBL}>Machine spillage (kg)</label>
+        <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={machineRow.kg} disabled={locked}
+          onChange={e => updateSpillage(machineRow.id, e.target.value)} placeholder="0" className={INP} />
+      </div>
+    </div>
+  )
 
   return (
     <div className="space-y-4">
@@ -220,46 +302,11 @@ export function SievingCapture({
 
       {tab === 'debag' && (
         <>
-          {value.bucketSecured ? (
-            // Locked once the operator finishes the inbound step — stays put until
-            // a new grade. Edit re-opens it if a correction is needed.
-            <div className="flex items-center gap-3 bg-ok/5 border border-ok/30 rounded-2xl px-4 py-3">
-              <Lock size={15} className="text-ok shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium text-text">Bucket elevator · {spillageKg.toFixed(1)} kg spillage</div>
-                <div className="font-mono text-[11px] text-text-muted">logged · included in balance</div>
-              </div>
-              {!locked && (
-                <button onClick={() => patch({ bucketSecured: false })}
-                  className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg">
-                  <Pencil size={13} /> Edit
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Scale size={14} className="text-amber-700" />
-                <span className="font-semibold text-[13px] text-amber-800">Bucket elevator</span>
-                <span className="text-[11px] text-amber-700/80">included in balance</span>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {value.spillage.map((r, i) => (
-                  <div key={r.id} className="space-y-1">
-                    <label className={LBL}>{i === 0 ? 'Bucket elevator (kg)' : 'Machine spillage (kg)'}</label>
-                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.kg} disabled={locked}
-                      onChange={e => updateSpillage(r.id, e.target.value)} placeholder="0" className={INP} />
-                  </div>
-                ))}
-              </div>
-              {!locked && (
-                <button onClick={() => patch({ bucketSecured: true })}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] hover:bg-ok/20 transition-colors">
-                  <Check size={15} /> Done — lock bucket elevator
-                </button>
-              )}
-            </div>
-          )}
+          {/* Start-of-day bucket elevator (input) lives here on the MORNING shift.
+              On the afternoon shift the elevator is an end-of-day output and moves
+              to the Bagging tab. Machine spillage is an input loss on both shifts. */}
+          {shift === 'morning' && bucketCard}
+          {machineCard}
 
           <div className="space-y-3">
             {value.debag.map((r, i) => {
@@ -374,6 +421,10 @@ export function SievingCapture({
                 <Plus size={16} /> Add output bag
               </button>
           )}
+
+          {/* End-of-day bucket elevator (output) is captured here on the AFTERNOON
+              shift — what's left in the tower to be consumed the next day. */}
+          {shift === 'afternoon' && bucketCard}
 
           <div className="flex items-center justify-between px-4 py-3 bg-stone-900 text-white rounded-2xl">
             <span className="text-[12px] font-medium opacity-80">Total bagged out</span>
