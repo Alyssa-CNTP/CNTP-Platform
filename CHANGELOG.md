@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-08 — Alyssa (Production Orders: record numbering + permissioned edit / soft-delete with audit trail)
+
+**Files changed:** `supabase/migrations/20260708_001_prod_record_mgmt.sql` (new), `lib/audit/write.ts` (new), `app/api/production/orders/[id]/route.ts` (new), `app/(app)/production/orders/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+**⚠ Requires the migration to be run in the Supabase SQL editor (staging then prod) before the edit/delete actions work — see `20260708_001_prod_record_mgmt.sql`.**
+
+- **PO / record numbering.** `prod_sessions` gains a `record_no` auto-assigned by a DB trigger — `<SECTIONCODE>-<DDMMYY>-<NN>` (e.g. `ST-080726-01`), backfilled for existing rows. Shown on every Production Orders card, alongside the Acumatica production order(s) where set.
+- **Edit / reopen / soft-delete / restore from the UI, permission-gated.** A per-card actions menu appears only for users with `can_edit_session` / `can_delete_session` (granted in Users & Roles):
+  - **Edit details** — inline panel to change operators, variant, lot, and production order(s).
+  - **Reopen for edits** — unlocks a submitted/approved record back to draft.
+  - **Archive** (soft-delete) — sets `deleted_at`/`deleted_by`; hidden from the list, kept for audit, restorable via the new **Archived** toggle.
+- **Audit trail.** All actions go through `PATCH /api/production/orders/[id]`, which verifies the caller's permission server-side and writes a before/after entry to `axis.audit_log` via the new `writeAudit()` helper. `edited_at`/`edited_by` are stamped on edits.
+- **Line-data editing** (weights/batches) routes through the existing capture screen: cards now link with `?session=<id>`, and the capture page loads that specific record so corrections keep serials, bag_tags, scan_events, mass balance and the run rollup consistent.
+- New `prod_sessions` columns: `deleted_at`, `deleted_by`, `edited_at`, `edited_by`, `record_no` (all additive/nullable). Reads are best-effort so the page still works before the migration is applied.
+
+---
+
 ## 2026-07-08 — Alyssa (Capture: stop duplicate empty "No data" production sessions)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`
