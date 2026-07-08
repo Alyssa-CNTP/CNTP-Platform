@@ -101,6 +101,12 @@ export default function ProductionOrdersPage() {
   }, [dateFrom, dateTo])
 
   const filtered = useMemo(() => sessions.filter(s => {
+    // Hide stray empty drafts — a draft/new session with no debagging, no bagging
+    // and no mass balance is an abandoned "No data" row (e.g. an opened-then-left
+    // section). Submitted/approved records always show. New captures create a row
+    // only once real weights are entered, so a real in-progress shift still appears.
+    const isEmpty = s.debag_count === 0 && s.bag_count === 0 && !s.total_input_kg && !s.total_output_b_kg
+    if (isEmpty && (s.status === 'draft' || s.status === 'new')) return false
     if (filterSection && s.section_id !== filterSection) return false
     if (filterStatus  && s.status !== filterStatus)      return false
     if (filterShift   && s.shift !== filterShift)        return false
