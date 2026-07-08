@@ -61,6 +61,26 @@ const emptyProduction = (sectionId: string, variant?: string | null, lot?: strin
        : sectionId === 'granule' ? emptyGranuleData()
        : emptySievingData() })
 
+// True only when a production actually has weighed capture (any section type).
+// Used to gate session creation so opening a section — or starting a new batch
+// record and then abandoning it — never leaves an empty "No data" session behind.
+function hasCaptureData(prods: Production[]): boolean {
+  const num = (v: any) => parseFloat(String(v ?? '').replace(',', '.')) || 0
+  return (prods ?? []).some((p: any) => {
+    const d = p?.data ?? {}
+    if (Array.isArray(d.debag)   && d.debag.some((r: any) => num(r.nett) > 0))    return true   // sieving in
+    if (Array.isArray(d.outputs) && d.outputs.some((b: any) => num(b.weight) > 0)) return true   // sieving/granule out
+    if (Array.isArray(d.spillage)&& d.spillage.some((r: any) => num(r.kg) > 0))   return true   // bucket/machine
+    if (Array.isArray(d.inputs)  && d.inputs.some((r: any) => num(r.weight) > 0)) return true   // refining in
+    for (const g of [d.outputA, d.outputB, d.outputC, d.outputD]) {                              // refining out
+      if (g && Array.isArray(g.bags) && g.bags.some((b: any) => num(b.weight) > 0)) return true
+    }
+    if (Array.isArray(d.blends) && d.blends.some((bl: any) => Array.isArray(bl.rows) && bl.rows.some((r: any) => num(r.weight) > 0))) return true // granule in
+    if (Array.isArray(d.dustOutputs) && d.dustOutputs.some((r: any) => num(r.weight) > 0)) return true // granule dust out
+    return false
+  })
+}
+
 function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
@@ -212,6 +232,7 @@ function CaptureScreen() {
       if (sess) {
         resolvedSid = (sess as any).id
         setSessionId(resolvedSid)
+        sessionRef.current = resolvedSid   // so autosave targets this row, never creates a duplicate
         setStatus((sess as any).status)
         // Best-effort run link — isolated so a missing run_id column can't break load.
         try {
@@ -297,8 +318,18 @@ function CaptureScreen() {
   // Reliable save — ensures a session exists (in case the open-time create
   // failed) then persists. Used by the debounce, the hide-flush, and the backstop.
   async function flushSave() {
+    // A submitted/approved session is read-only — nothing to save, and creating a
+    // row for it (via ensureSession) is exactly how empty duplicates appeared when
+    // a second person opened an already-signed-off shift.
+    if (status === 'submitted' || status === 'approved') return
     let sid = sessionRef.current
-    if (!sid && ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
+    if (!sid) {
+      // Never create a session with no captured data — this is the core guard that
+      // stops empty "No data" sessions from opening a section or an abandoned "start
+      // new batch record". A row is created only once real weights are entered.
+      if (!hasCaptureData(productionsRef.current)) return
+      if (ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
+    }
     if (sid && persistRef.current) { try { await persistRef.current(productionsRef.current, sid) } catch {} }
   }
   const flushRef = useRef(flushSave); flushRef.current = flushSave
@@ -371,10 +402,13 @@ function CaptureScreen() {
     const p = (async (): Promise<string> => {
       // Recover an existing session first (select-then-insert; the in-flight guard
       // above prevents the same-client race, this handles a prior committed row).
+      // Only reuse a still-editable DRAFT — if the most recent session for this
+      // shift is already submitted/approved, this capture is a NEW batch record
+      // and must get its own row rather than writing back into the signed-off one.
       const { data: existing } = await getDb().schema('production').from('prod_sessions')
-        .select('id').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .select('id,status').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
         .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      if (existing) {
+      if (existing && (existing as any).status === 'draft') {
         const id = (existing as any).id
         sessionRef.current = id; setSessionId(id)
         return id
@@ -813,7 +847,13 @@ function CaptureScreen() {
   async function saveDraft() {
     setSaving(true); setError(null)
     try {
-      const sid = await ensureSession()
+      // Don't materialise an empty session on an explicit save either — only create
+      // once there's real capture. Edits to an existing session still save.
+      let sid = sessionRef.current
+      if (!sid) {
+        if (!hasCaptureData(productions)) { setSaving(false); return }
+        sid = await ensureSession()
+      }
       await persist(productions, sid)
       setStatus(s => s === 'new' ? 'draft' : s)
       setSaved(true); setTimeout(() => setSaved(false), 2500)
@@ -973,28 +1013,26 @@ function CaptureScreen() {
     setTab('production')
   }
 
-  // After a session is locked, start a fresh session for the next variant/grade.
-  async function startNewProduction() {
-    const aV = assignment?.variant ?? ''
+  // Start a fresh batch record for the next variant/grade after the current one is
+  // submitted/locked. LAZY — reset local state only; the new prod_sessions row is
+  // created on the first real capture (ensureSession, gated by hasCaptureData). This
+  // is what stops an abandoned "start new batch record" from leaving an empty
+  // "No data" session behind (the duplicate-orders bug).
+  function startNewProduction() {
     const aL = assignment?.lot_number ?? ''
-    const { data: row } = await getDb().schema('production').from('prod_sessions').insert({
-      section_id: sectionId, date: dateParam, shift, status: 'draft',
-      operator_names: opNames.length ? opNames : null,
-      lot_number: aL || null, variant: aV || null,
-      production_orders: assignment?.production_orders ?? null, created_by: user?.id ?? null,
-    } as any).select('id').maybeSingle()
-    if (row) {
-      sessionRef.current = (row as any).id
-      setSessionId((row as any).id)
-      setStatus('draft')
-      setProductions([emptyProduction(sectionId, null, aL)])
-      setActiveIdx(0)
-      // Fresh session → resolve a run anew once variant/grade are picked.
-      setRunId(null)
-      setContinueRun(null)
-      setEndOfRun(false)
-      setTab('production')
-    }
+    sessionRef.current = null
+    setSessionId(null)
+    setStatus('new')
+    setProductions([emptyProduction(sectionId, null, aL)])
+    setActiveIdx(0)
+    // Fresh session → resolve a run anew once variant/grade are picked.
+    runIdRef.current = null
+    continueRunRef.current = null
+    setRunId(null)
+    setContinueRun(null)
+    setEndOfRun(false)
+    setComments('')
+    setTab('production')
   }
 
   const statusLabel = status === 'approved' ? 'Signed off' : status === 'submitted' ? 'Awaiting sign-off' : status === 'draft' ? 'Draft' : 'New'

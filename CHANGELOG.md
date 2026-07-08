@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-08 — Alyssa (Capture: stop duplicate empty "No data" production sessions)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`
+
+- **Root cause:** `startNewProduction()` ("Start new batch record", shown on a submitted session) **eagerly inserted** a `prod_sessions` row the instant it was clicked. When a second user opened an already-submitted shift and clicked it without capturing anything, an empty `status='draft'` session with one blank production was left behind — the duplicate "In progress · No data" order (confirmed on prod: the empty morning Sieving row was created 7h after the real one, by a different user).
+- **Fix — sessions are now created only when there's real capture:**
+  - `startNewProduction()` is **lazy** — it resets local state (clears `sessionId`/refs, fresh production, `status='new'`) instead of inserting; the row is created on the first weighed entry.
+  - `flushSave()` never creates a session unless `hasCaptureData()` is true, and **skips submitted/approved** sessions entirely (a second viewer of a signed-off shift can no longer spawn a row). Explicit **Save draft** is guarded the same way.
+  - `ensureSession()` only **reuses a `draft`** most-recent session; if the latest is submitted/approved it opens a new row, so a genuine next-batch capture doesn't write back into a signed-off session.
+  - The load now syncs `sessionRef` to the loaded session so autosave always targets it rather than creating a duplicate.
+  - New `hasCaptureData()` helper covers all section types (sieving/refining/granule).
+- **Production Orders list** hides stray empty drafts (a `draft`/`new` session with no debagging, bagging or mass balance) so any pre-existing empties don't clutter the view. Submitted/approved always show.
+
+---
+
+## 2026-07-08 — Alyssa (Sieving: output batch suggestions restricted to what was debagged)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/OutputPicker.tsx`
+
+- **Output batch numbers now suggest only the lots actually debagged this run.** Operators were still mis-picking batch numbers on outputs because the Bagging picker widened its suggestions with recent DB batches + the assignment lot + previous output batches. Now the Sieving output picker's batch suggestions (and the default batch) come **only from the lot numbers captured on the Debagging tab** this session — so a batch that was never fed in can't be suggested on an output. `OutputPicker` uses the supplied `batchHints` exclusively when present and only falls back to recent DB batches when a caller passes none.
+
+---
+
 ## 2026-07-07 — Alyssa (Sieving: bucket elevator by time of day — start-of-day IN on Debagging, end-of-day OUT on Bagging)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
