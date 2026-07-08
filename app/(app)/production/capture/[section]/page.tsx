@@ -92,6 +92,7 @@ function CaptureScreen() {
   // Granule are variant-only — traceability there comes from the system serials.
   const gradeless = sectionId.startsWith('refining') || sectionId === 'granule'
   const shift     = sp.get('shift') ?? 'morning'
+  const sessionParam = sp.get('session')   // edit a specific record opened from Production Orders
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
   // otherwise input), and the opposite shift whose capture we merge for the run.
   const shiftBal: Shift   = shift === 'afternoon' ? 'afternoon' : 'morning'
@@ -175,9 +176,14 @@ function CaptureScreen() {
       // Keep run_id OUT of this core select: if the run migration hasn't been
       // applied to a database yet, selecting a missing column 400s the whole load
       // and takes capture down. run_id is fetched best-effort below instead.
-      const { data: sess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data,comments').eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
-        .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      // A specific record can be opened for editing from Production Orders via
+      // ?session=<id> (there can be several sessions per section/shift once a batch
+      // is signed off and a new one starts); otherwise load this shift's latest.
+      const baseSel = db.schema('production').from('prod_sessions').select('id,status,draft_data,comments')
+      const { data: sess } = await (sessionParam
+        ? baseSel.eq('id', sessionParam)
+        : baseSel.eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift).order('created_at', { ascending: false }).limit(1)
+      ).maybeSingle()
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).
