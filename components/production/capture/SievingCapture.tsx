@@ -414,8 +414,11 @@ export function SievingCapture({
 
           {!locked && (picking
             ? <OutputPicker sectionId="sieving" variantWord={variantWord} gradeLetter={gradeLetter}
-                defaultBatch={[...value.debag].reverse().find(r => r.lot)?.lot ?? assignment.lot_number ?? ''}
-                batchHints={[assignment.lot_number ?? '', ...value.outputs.map(b => b.batch), ...value.debag.map(r => r.lot)].filter(Boolean) as string[]}
+                // Output batches must come from what was actually debagged this run —
+                // suggest only the lot numbers captured on the Debagging tab, so a
+                // typo on an output can't introduce a batch that was never fed in.
+                defaultBatch={[...value.debag].reverse().find(r => r.lot.trim())?.lot.trim() ?? ''}
+                batchHints={Array.from(new Set(value.debag.map(r => r.lot.trim()).filter(Boolean)))}
                 onAdd={addOutput} onClose={() => setPicking(false)} />
             : <button onClick={() => setPicking(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
                 <Plus size={16} /> Add output bag

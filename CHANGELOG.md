@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-08 — Alyssa (Sieving: output batch suggestions restricted to what was debagged)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/OutputPicker.tsx`
+
+- **Output batch numbers now suggest only the lots actually debagged this run.** Operators were still mis-picking batch numbers on outputs because the Bagging picker widened its suggestions with recent DB batches + the assignment lot + previous output batches. Now the Sieving output picker's batch suggestions (and the default batch) come **only from the lot numbers captured on the Debagging tab** this session — so a batch that was never fed in can't be suggested on an output. `OutputPicker` uses the supplied `batchHints` exclusively when present and only falls back to recent DB batches when a caller passes none.
+
+---
+
 ## 2026-07-07 — Alyssa (Sieving: bucket elevator by time of day — start-of-day IN on Debagging, end-of-day OUT on Bagging)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
