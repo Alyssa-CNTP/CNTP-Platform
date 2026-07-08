@@ -763,14 +763,8 @@ function CaptureScreen() {
     const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
-    // Granule captures a scale verification per shift — persist it to the dedicated
-    // columns (audit + a KPI signal for scale health / predictive maintenance).
-    const gd0 = sectionId === 'granule' ? (prods[0]?.data as GranuleData | undefined) : undefined
-    const scalePatch = gd0
-      ? { scale_std_kg: n(gd0.scaleStd) || null, scale_actual_kg: n(gd0.scaleActual) || null }
-      : {}
     await db.schema('production').from('prod_sessions').update({
-      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(), ...scalePatch,
+      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(),
     } as any).eq('id', sid)
 
     const debag = buildDebag(prods, sid)

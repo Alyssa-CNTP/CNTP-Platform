@@ -57,6 +57,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-07 — Alyssa (Granule: live quality graph in capture; scale verification → Checks; dashboard explains + audits pass/fail)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `lib/production/checks-config.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Live quality graph in capture.** The granule Quality readings section now renders a live dual-axis chart (moisture % + bulk density cc/100g vs time) built straight from the rows the operator enters — no separate drawing step. This is the data behind the operators' hand-drawn graph and the basis for AI/uniformity research.
+- **Scale verification moved to the Checks page.** Removed the scale std/actual capture from the granule capture header (and the `scaleStd`/`scaleActual` fields + the `prod_sessions` scale write). Added a granule Checks config — **Scale zero check → Scale verification (test load) → pre-start** — so it runs through the existing Checks engine, which already does pass/fail (deviation vs ±tolerance, default ±0.1 kg), maintenance-raise on fail, and audit-trail sign-off (`check_events`).
+- **Dashboard now explains, not just reports.** The Granule card gained two "what each entails" panels — granule quality (uniformity → density/flow/structural integrity, precise batching) and scale verification (verification ≠ calibration; zero check → test load → pass/fail; NRCS/SANAS + Legal Metrology Act, on-site providers). The scale-health chart now reads from the Checks audit (`check_records` → `check_events`, `scale_verification`), and a new **Scale verification audit** table lists each verification (date · shift · standard · actual · deviation · Verified/Fail) with a pass-rate badge — the per-production compliance audit.
+
+---
+
 ## 2026-07-07 — Alyssa (Granule: hide grade selector; granule quality + scale-health KPIs on the dashboard)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
