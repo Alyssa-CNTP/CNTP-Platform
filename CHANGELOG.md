@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (People Identity Links: Staff Directory as the single front door + full audit trail)
+
+Follow-up to the same day's Staff Directory work. CNTP had three "add a person" surfaces (Staff Directory, Operators/PIN, Users & Roles) that barely linked, so it was unclear where to add/remove someone and nothing was audited. This makes the **Staff Directory the single front door** for a person; PIN operators and login accounts become identity layers attached to that person; and every add/remove/relink is now audited.
+
+**⚠ Requires `supabase/migrations/20260709_001_people_links.sql` to be run in the Supabase SQL Editor (staging first) to fully activate the operator↔employee↔login linking. The code degrades gracefully (writes without the link) if run before the migration, so this is safe to deploy first — but linking/offboard features are inert until the migration runs.**
+
+**Files:** `supabase/migrations/20260709_001_people_links.sql` (new), `lib/audit/write.ts` usage added to `app/api/staff/route.ts`, `app/api/staff/[id]/route.ts`, `app/api/production/operators/route.ts`, `app/api/production/operators/[id]/route.ts`, `app/api/admin/users/route.ts`, `app/api/admin/users/[id]/route.ts`; `app/api/staff/[id]/identities/route.ts` (new), `app/api/staff/[id]/offboard/route.ts` (new), `lib/production/it-ticket.ts` (new), `lib/production/employee-payload.ts` (unchanged, reused), `app/(app)/production/staff/[id]/page.tsx`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/operators/page.tsx`, `app/(app)/users/page.tsx`, `lib/supabase/database.types.ts`
+
+- **Data model.** New migration adds `production.operators.employee_id` and `shared.app_roles.employee_id`, backfilled from the existing `employees.operator_id` reverse link. Every PIN and every login now traces back to one Staff Directory person.
+- **Full audit trail.** Every add/edit/remove across Staff Directory, PIN operators, and Users & Roles now writes to `axis.audit_log` via the existing `writeAudit()` helper (previously only the production-orders route used it). PINs and passwords are never written to the audit log — snapshots redact them. The Users & Roles → Audit tab gained a "People & Access" quick filter and a Record (schema.table) column so these events are easy to find.
+- **Employee profile is now the identity hub.** `/production/staff/[id]` shows the linked PIN operator (with an "Assign PIN & sections" action for supervisors) and linked login account (IT sees a link to Users & Roles; others see "Request login account", reusing the flow shipped earlier today).
+- **Coordinated offboard.** Removing someone from the Staff Directory now calls `POST /api/staff/[id]/offboard` instead of a hard delete: marks the employee inactive, deactivates their linked PIN and login (blocks sign-in immediately), and raises an Axis ticket asking IT to delete the auth account. Fully reversible via a new "Reactivate" action — nothing is hard-deleted, so roster/capture history is preserved.
+- **Closes the operator↔employee drift.** Creating a new PIN operator (via the Operators page) now requires linking to an existing Staff Directory person or creating one inline — so the two lists can no longer silently diverge. Editing a legacy (pre-migration) operator is not blocked on this.
+- All new/changed DB writes tolerate the migration not having run yet (`42703` undefined-column) by falling back to writing without the link, so deploy order relative to running the migration is not a footgun.
+
 ## 2026-07-09 — Alyssa (Staff Directory: server-enforced add/remove + login-account requests)
 
 Lets authorised people add and remove the staff who populate the Shift Roster, with the "function to do so" now actually enforced. **No database migration required.**

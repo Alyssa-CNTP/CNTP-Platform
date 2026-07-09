@@ -5,7 +5,7 @@ import { format, parseISO } from 'date-fns'
 import Link from 'next/link'
 import {
   Users, Loader2, Plus, X, Check, Trash2, Search, AlertTriangle,
-  Phone, Plane, ChevronDown, ChevronRight, ChevronUp, Pencil, KeyRound,
+  Phone, Plane, ChevronDown, ChevronRight, ChevronUp, Pencil, KeyRound, UserCheck,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -172,16 +172,29 @@ export default function StaffDirectoryPage() {
     setEditing(null)
   }
 
-  async function deleteEmployee(id: string) {
-    const res = await fetch(`/api/staff/${id}`, { method: 'DELETE' })
+  // Offboard = coordinated soft-deactivate (employee + linked PIN + linked
+  // login, plus an IT ticket to delete the auth account) — not a hard delete.
+  // See app/api/staff/[id]/offboard/route.ts.
+  async function offboardEmployee(id: string) {
+    const res = await fetch(`/api/staff/${id}/offboard`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      setActionError(data?.error || 'Could not remove this person')
+      setActionError(data?.error || 'Could not offboard this person')
       setConfirmDelete(null)
       return
     }
-    setEmployees(es => es.filter(e => e.id !== id))
+    setEmployees(es => es.map(e => e.id === id ? { ...e, active: false } : e))
     setConfirmDelete(null)
+  }
+
+  async function reactivateEmployee(id: string) {
+    const res = await fetch(`/api/staff/${id}/offboard`, { method: 'PATCH' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      setActionError(data?.error || 'Could not reactivate this person')
+      return
+    }
+    setEmployees(es => es.map(e => e.id === id ? { ...e, active: true } : e))
   }
 
   async function addLeave(employeeId: string, l: { start: string; end: string; kind: string; reason: string }) {
@@ -281,15 +294,15 @@ export default function StaffDirectoryPage() {
                         return (
                           <div key={e.id} className="flex items-center gap-3 px-4 py-3 border-b border-surface-rule last:border-0 bg-err/5">
                             <span className="text-[13px] text-err font-medium flex-1">
-                              Delete <strong>{e.display_name || e.name}</strong>? This cannot be undone.
+                              Offboard <strong>{e.display_name || e.name}</strong>? Deactivates their PIN and login and marks them inactive — history is kept, and this can be reversed.
                             </span>
                             <button onClick={() => setConfirmDelete(null)}
                               className="px-3 py-1.5 rounded-lg border border-stone-200 text-[12px] font-medium text-stone-500 hover:bg-stone-50 transition-colors">
                               Cancel
                             </button>
-                            <button onClick={() => deleteEmployee(e.id)}
+                            <button onClick={() => offboardEmployee(e.id)}
                               className="px-3 py-1.5 rounded-lg bg-err text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                              Delete
+                              Offboard
                             </button>
                           </div>
                         )
@@ -353,10 +366,16 @@ export default function StaffDirectoryPage() {
                                 <Pencil size={14} />
                               </button>
                             )}
-                            {canDelete && (
-                              <button onClick={() => setConfirmDelete(e.id)} title="Delete"
+                            {canDelete && e.active && (
+                              <button onClick={() => setConfirmDelete(e.id)} title="Offboard"
                                 className="flex items-center px-2.5 py-3 text-stone-300 hover:text-err transition-colors">
                                 <Trash2 size={14} />
+                              </button>
+                            )}
+                            {canDelete && !e.active && (
+                              <button onClick={() => reactivateEmployee(e.id)} title="Reactivate"
+                                className="flex items-center px-2.5 py-3 text-stone-300 hover:text-ok transition-colors">
+                                <UserCheck size={14} />
                               </button>
                             )}
                             <Link href={`/production/staff/${e.id}`}
@@ -413,15 +432,15 @@ export default function StaffDirectoryPage() {
                         return (
                           <div key={e.id} className="flex items-center gap-3 px-4 py-3 border-b border-surface-rule last:border-0 bg-err/5">
                             <span className="text-[13px] text-err font-medium flex-1">
-                              Delete <strong>{e.display_name || e.name}</strong>? This cannot be undone.
+                              Offboard <strong>{e.display_name || e.name}</strong>? Deactivates their PIN and login and marks them inactive — history is kept, and this can be reversed.
                             </span>
                             <button onClick={() => setConfirmDelete(null)}
                               className="px-3 py-1.5 rounded-lg border border-stone-200 text-[12px] font-medium text-stone-500 hover:bg-stone-50 transition-colors">
                               Cancel
                             </button>
-                            <button onClick={() => deleteEmployee(e.id)}
+                            <button onClick={() => offboardEmployee(e.id)}
                               className="px-3 py-1.5 rounded-lg bg-err text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                              Delete
+                              Offboard
                             </button>
                           </div>
                         )
@@ -467,10 +486,16 @@ export default function StaffDirectoryPage() {
                                 <Pencil size={14} />
                               </button>
                             )}
-                            {canDelete && (
-                              <button onClick={() => setConfirmDelete(e.id)} title="Delete"
+                            {canDelete && e.active && (
+                              <button onClick={() => setConfirmDelete(e.id)} title="Offboard"
                                 className="flex items-center px-2.5 py-3 text-stone-300 hover:text-err transition-colors">
                                 <Trash2 size={14} />
+                              </button>
+                            )}
+                            {canDelete && !e.active && (
+                              <button onClick={() => reactivateEmployee(e.id)} title="Reactivate"
+                                className="flex items-center px-2.5 py-3 text-stone-300 hover:text-ok transition-colors">
+                                <UserCheck size={14} />
                               </button>
                             )}
                             <Link href={`/production/staff/${e.id}`}
