@@ -20,6 +20,7 @@ import {
 import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { fetchGranuleQuality } from '@/lib/production/granule-quality'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
 import OperationalTrends from '@/components/management/OperationalTrends'
@@ -218,17 +219,15 @@ export default function ProductionDashboard() {
       const avg = (a: number[]) => a.length ? round1(a.reduce((x, y) => x + y, 0) / a.length) : null
       const lbl = (d: string) => format(new Date(d + 'T12:00:00'), 'd MMM')
 
-      // Quality readings from the granule capture sessions (draft_data).
-      const { data: gSess } = await db.schema('production').from('prod_sessions')
-        .select('date,draft_data').eq('section_id', 'granule').gte('date', windowStart)
+      // Quality readings come from the QC lab (qms.granule_*), linked by date —
+      // the same source the operators' graph is drawn from. Averaged per day.
+      const qpts = await fetchGranuleQuality({ fromDate: windowStart })
       const moistByDate = new Map<string, number[]>()
       const bdByDate = new Map<string, number[]>()
-      ;((gSess as any[]) ?? []).forEach(s => {
-        const prods = (s.draft_data?.productions ?? []) as any[]
-        prods.forEach(p => ((p?.data?.quality ?? []) as any[]).forEach(q => {
-          const m = num(q.moisture); if (m != null) { const a = moistByDate.get(s.date) ?? []; a.push(m); moistByDate.set(s.date, a) }
-          const b = num(q.bulkDensity); if (b != null) { const a = bdByDate.get(s.date) ?? []; a.push(b); bdByDate.set(s.date, a) }
-        }))
+      qpts.forEach(p => {
+        if (!p.date) return
+        if (p.moisture != null) { const a = moistByDate.get(p.date) ?? []; a.push(p.moisture); moistByDate.set(p.date, a) }
+        if (p.bulkDensity != null) { const a = bdByDate.get(p.date) ?? []; a.push(p.bulkDensity); bdByDate.set(p.date, a) }
       })
       setGranuleQuality(Array.from(new Set([...moistByDate.keys(), ...bdByDate.keys()])).sort().map(d => ({
         date: d, label: lbl(d), moisture: avg(moistByDate.get(d) ?? []), bulkDensity: avg(bdByDate.get(d) ?? []),
@@ -771,7 +770,7 @@ export default function ProductionDashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5 text-[11px] leading-relaxed text-text-muted">
           <div className="rounded-xl border p-3" style={{ borderColor: `${C.azure}30`, background: `${C.azure}08` }}>
             <div className="font-semibold text-text mb-0.5">Granule quality — why it matters</div>
-            Granule uniformity drives consistent product density, flow and structural integrity, and depends on precise raw-material batching in the pellet mill. Moisture (%) and bulk density (cc/100g) are the two in-process indicators operators track through the shift; trends here flag drift before it becomes off-spec product.
+            Granule uniformity drives consistent product density, flow and structural integrity, and depends on precise raw-material batching in the pellet mill. Moisture (%) and bulk density (cc/100g) are the two in-process indicators the QC lab measures per lot; linked here by lot number + date, trends flag drift before it becomes off-spec product.
           </div>
           <div className="rounded-xl border p-3" style={{ borderColor: `${C.warn}30`, background: `${C.warn}08` }}>
             <div className="font-semibold text-text mb-0.5">Scale verification — not calibration</div>
@@ -788,8 +787,8 @@ export default function ProductionDashboard() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Chart
                 title="Granule quality"
-                subtitle={`Daily avg moisture % & bulk density · last ${windowDays} days`}
-                info="Daily average of the moisture (%) and bulk-density (cc/100g) readings operators take through each granule shift. Moisture uses the left axis, bulk density the right. This is the digital version of the operators' hand-drawn quality graph — and the data behind future AI/uniformity research."
+                subtitle={`Daily avg moisture % & bulk density · from QC · last ${windowDays} days`}
+                info="Daily average of the moisture (%) and bulk-density (cc/100g) readings measured by the QC lab (qms.granule_samples), linked to production by lot number and date. Moisture uses the left axis, bulk density the right. Same data as the operators' QC graph — one source of truth, and the basis for future AI/uniformity research."
               >
                 <ComposedChart data={granuleQuality} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />

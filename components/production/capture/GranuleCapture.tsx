@@ -39,6 +39,7 @@ import { markBagConsumed } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
+import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
@@ -121,17 +122,12 @@ export interface GranuleDustOut {
 
 export interface GranuleWasteRow { id: string; wasteType: string; weight: string }
 
-// Quality reading taken through the shift — operators track moisture and granule
-// bulk density (cc/100g) over time; captured here as the data behind that graph.
-export interface GranuleQualityReading { id: string; time: string; moisture: string; bulkDensity: string }
-
 export interface GranuleData {
   item: string                 // SG / SF / Export Granules — chosen once per session
   blends: GranuleBlend[]
   outputs: GranuleOutBag[]
   dustOutputs: GranuleDustOut[]
   waste: GranuleWasteRow[]
-  quality: GranuleQualityReading[]
   dustNotRefed: string   // D — dust from sieve/drier not yet re-fed
   coarseNotFed: string   // E — coarse granules not yet fed to maize master
   meterStart: string     // Y
@@ -142,7 +138,7 @@ export function emptyGranuleData(): GranuleData {
   return {
     item: GRANULE_OUTPUT_ITEMS[0],
     blends: [{ id: crypto.randomUUID(), blendNo: '1', rows: [], water: '', done: false }],
-    outputs: [], dustOutputs: [], waste: [], quality: [],
+    outputs: [], dustOutputs: [], waste: [],
     dustNotRefed: '', coarseNotFed: '', meterStart: '', meterStop: '',
   }
 }
@@ -657,15 +653,20 @@ export function GranuleCapture({
   function updateWaste(id: string, k: keyof GranuleWasteRow, v: string) { patch({ waste: value.waste.map(w => w.id === id ? { ...w, [k]: v } : w) }) }
   function removeWaste(id: string) { patch({ waste: value.waste.filter(w => w.id !== id) }) }
 
-  // ── Quality readings (moisture · bulk density over time) ────────────────────────
-  function addQuality() { patch({ quality: [...(value.quality ?? []), { id: crypto.randomUUID(), time: clockNow(), moisture: '', bulkDensity: '' }] }) }
-  function updateQuality(id: string, k: keyof GranuleQualityReading, v: string) { patch({ quality: (value.quality ?? []).map(q => q.id === id ? { ...q, [k]: v } : q) }) }
-  function removeQuality(id: string) { patch({ quality: (value.quality ?? []).filter(q => q.id !== id) }) }
-
-  // Chart data for the live quality graph — numeric readings in capture order.
-  const qualityChart = (value.quality ?? [])
-    .map(q => ({ time: q.time, moisture: n(q.moisture) || null, bulkDensity: n(q.bulkDensity) || null }))
-    .filter(q => q.moisture != null || q.bulkDensity != null)
+  // ── Quality graph — pulled from the QC lab by lot number (one source of truth) ──
+  // The QC team captures moisture / bulk density on the Granule QC page; we read
+  // those readings back here for this lot and draw the same graph, so nothing is
+  // captured twice and the graph is always the measured QC data.
+  const [qcQuality, setQcQuality] = useState<QualityPoint[]>([])
+  useEffect(() => {
+    if (!lot) { setQcQuality([]); return }
+    let cancelled = false
+    fetchGranuleQuality({ lot }).then(pts => { if (!cancelled) setQcQuality(pts) })
+    return () => { cancelled = true }
+  }, [lot])
+  const qualityChart = qcQuality.map(p => ({
+    label: `${p.date?.slice(5)} ${p.time}`.trim(), moisture: p.moisture, bulkDensity: p.bulkDensity,
+  }))
 
   // ── Totals + derived ──────────────────────────────────────────────────────────
   const t = granuleTotals(value)
@@ -899,47 +900,37 @@ export function GranuleCapture({
             </div>
           </div>
 
-          {/* Quality readings — moisture + bulk density over time (feeds the QC graph + KPIs) */}
+          {/* Quality graph — moisture + bulk density from the QC lab, linked by lot */}
           <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-stone-100 bg-stone-50">
-              <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Quality readings</span>
-              <p className="text-[10px] text-stone-400 mt-0.5">Moisture &amp; bulk density (cc/100g) through the shift — plotted over time.</p>
+            <div className="px-4 py-2.5 border-b border-stone-100 bg-stone-50 flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Granule quality (from QC)</span>
+                <p className="text-[10px] text-stone-400 mt-0.5">Moisture &amp; bulk density (cc/100g) measured by QC for lot {lot || '—'} — captured on the Granule QC page.</p>
+              </div>
             </div>
-            <div className="p-3 space-y-2">
-              {(value.quality ?? []).length > 0 && (
-                <div className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 px-1 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
-                  <span className="w-14">Time</span><span>Moisture %</span><span>Bulk density</span><span className="w-6" />
-                </div>
+            <div className="p-3">
+              {qualityChart.length >= 2 ? (
+                <ResponsiveContainer width="100%" height={190}>
+                  <ComposedChart data={qualityChart} margin={{ top: 6, right: 4, left: -22, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis yAxisId="m" tick={{ fontSize: 10 }} unit="%" width={38} />
+                    <YAxis yAxisId="b" orientation="right" tick={{ fontSize: 10 }} width={40} />
+                    <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <Line yAxisId="m" type="monotone" dataKey="moisture" name="Moisture %" stroke="#2A7CB8" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                    <Line yAxisId="b" type="monotone" dataKey="bulkDensity" name="Bulk density (cc/100g)" stroke="#5A8A2A" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-[12px] text-stone-400 text-center py-6">
+                  {qualityChart.length === 1
+                    ? 'One QC reading so far — the graph plots once there are two or more.'
+                    : lot
+                      ? `No QC readings yet for lot ${lot}. They appear here automatically as QC captures moisture / bulk density for this lot.`
+                      : 'Set the lot number to link QC quality readings.'}
+                </p>
               )}
-              {(value.quality ?? []).map(q => (
-                <div key={q.id} className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 items-center">
-                  <input type="text" value={q.time} disabled={locked} onChange={e => updateQuality(q.id, 'time', e.target.value)} className={INP + ' w-14 !px-2 text-center'} />
-                  <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={q.moisture} disabled={locked} placeholder="%" onChange={e => updateQuality(q.id, 'moisture', e.target.value)} className={INP} />
-                  <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={q.bulkDensity} disabled={locked} placeholder="cc/100g" onChange={e => updateQuality(q.id, 'bulkDensity', e.target.value)} className={INP} />
-                  {!locked && <button onClick={() => removeQuality(q.id)} className="text-stone-300 hover:text-red-500 p-1 w-6"><Trash2 size={14} /></button>}
-                </div>
-              ))}
-              {!locked && <button onClick={addQuality} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-stone-200 text-[13px] font-medium text-stone-500 hover:border-stone-300"><Plus size={15} /> Add reading</button>}
-
-              {/* Live graph — built from the readings above, no separate drawing step */}
-              {qualityChart.length >= 2 && (
-                <div className="pt-2">
-                  <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-1.5">Live graph</div>
-                  <ResponsiveContainer width="100%" height={180}>
-                    <ComposedChart data={qualityChart} margin={{ top: 6, right: 4, left: -22, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
-                      <XAxis dataKey="time" tick={{ fontSize: 10 }} />
-                      <YAxis yAxisId="m" tick={{ fontSize: 10 }} unit="%" width={38} />
-                      <YAxis yAxisId="b" orientation="right" tick={{ fontSize: 10 }} width={38} />
-                      <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                      <Legend wrapperStyle={{ fontSize: 10 }} />
-                      <Line yAxisId="m" type="monotone" dataKey="moisture" name="Moisture %" stroke="#2A7CB8" strokeWidth={2} dot={{ r: 3 }} connectNulls />
-                      <Line yAxisId="b" type="monotone" dataKey="bulkDensity" name="Bulk density (cc/100g)" stroke="#5A8A2A" strokeWidth={2} dot={{ r: 3 }} connectNulls />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-              {qualityChart.length === 1 && <p className="text-[11px] text-stone-400 text-center">Add another reading to plot the graph.</p>}
             </div>
           </div>
 

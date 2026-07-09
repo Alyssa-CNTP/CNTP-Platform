@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Roster: fix staff-picker cancelling itself on selection — regression from same-day click-outside fix)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+- The click-outside dismissal added earlier today (`PersonEditor`) had a race: picking a match calls `setOpen(false)`, which synchronously unmounts the search/dropdown DOM as part of the same click. By the time the bubble-phase `mousedown` listener ran, the clicked button was already detached, so `rootRef.current.contains(ev.target)` read `false` and the handler wrongly fired `onCancel()` — cancelling the selection the instant it was made. Net effect: staff could not be added to the Shift Roster at all.
+- Fix: register the outside-click listener on the **capture** phase instead of bubble, so the containment check runs before React mutates the DOM in response to the click. Verified with an isolated DOM reproduction of the exact race (bubble-phase wrongly cancels; capture-phase does not) since the live app isn't reachable without auth from this environment.
+
 ## 2026-07-09 — Alyssa (Roster: staff-picker dropdown click-outside + redesign)
 
 **Files:** `app/(app)/production/roster/page.tsx`
@@ -125,6 +132,16 @@ Five changes shipped together. **No database migrations required.**
   - **Afternoon · Bagging (out):** "Bucket elevator — end of day" (left in the tower for tomorrow) — counts as **output**, shown just above "Total bagged out".
   - **Machine spillage** is split into its own card and stays on the Debagging tab on both shifts (always an input loss).
 - The mass-balance maths is unchanged (`sievingTotals(data, shift)` still reads `spillage[0]` as the elevator, `spillage[1]` as machine spillage); this is purely where/how the two fields are presented. `goToTab` no longer auto-locks the elevator when moving to Bagging on the afternoon shift (the operator fills it there). Card colour follows direction — blue for in, amber for out.
+
+---
+
+## 2026-07-07 — Alyssa (Granule quality graph now sourced from QC lab, linked by lot + date)
+
+**Files changed:** `lib/production/granule-quality.ts` (new), `components/production/capture/GranuleCapture.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **One source of truth for granule quality.** The QC lab already captures moisture / bulk density per sample on the Granule QC page (`qms.granule_runs` → `qms.granule_samples`). Instead of re-capturing those readings in production, the graph now **reads from QC, linked by lot number + date**. New shared helper `fetchGranuleQuality({ lot, fromDate })` joins `granule_runs` (matched on `batch_number` via the same `normBatch` rule QC uses) → `granule_samples`, returning the moisture/bulk-density time series.
+- **Granule capture**: removed the manual quality-readings entry (and the `quality` field on `GranuleData`); the Quality section now shows a **read-only graph pulled from QC for the current lot**, with a clear empty-state ("No QC readings yet for lot X…") until QC captures them. No more double capture.
+- **Production Dashboard**: the granule quality chart now sources from QC (`fetchGranuleQuality`, by date window) rather than the capture draft, so the dashboard, the capture screen, and the QC page all draw the same numbers. Wording updated to say the readings come from the QC lab, linked by lot + date.
 
 ---
 

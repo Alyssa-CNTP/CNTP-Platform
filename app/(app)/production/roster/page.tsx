@@ -1200,13 +1200,19 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
 
   // Click anywhere outside this card dismisses it, same as onCancel — the
   // search dropdown was otherwise staying open until Escape or Save/Cancel.
+  // Registered on the CAPTURE phase (not bubble): picking a match flips
+  // `open` to false, which unmounts the search/dropdown DOM synchronously
+  // as part of the same click — by the bubble phase, the clicked button is
+  // already detached, so contains(ev.target) would wrongly read "outside"
+  // and cancel the very selection just made. Capture runs before that
+  // mutation, while the DOM is still in its pre-click state.
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     function handle(ev: MouseEvent) {
       if (rootRef.current && !rootRef.current.contains(ev.target as Node)) onCancel()
     }
-    document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
+    document.addEventListener('mousedown', handle, true)
+    return () => document.removeEventListener('mousedown', handle, true)
   }, [onCancel])
 
   return (
