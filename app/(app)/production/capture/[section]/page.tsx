@@ -85,7 +85,7 @@ function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
   const router = useRouter()
-  const { user, role, isSupervisor, isIT } = useAuth()
+  const { user, role, isSupervisor, isIT, signOut } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
   // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
@@ -884,6 +884,13 @@ function CaptureScreen() {
         comments: comments.trim() || null,
       } as any).eq('id', sid)
       setStatus('submitted')
+      // A floor operator submitting = end of their shift on this tablet: sign
+      // them out so the next shift's operator has to sign in fresh. Supervisors
+      // / IT capturing on a shared device are not signed out. Short delay lets
+      // the "Submitted" confirmation render before the redirect to /login.
+      if (role === 'floor_operator') {
+        setTimeout(() => { signOut() }, 1500)
+      }
     } catch (e: any) { setError(e.message) }
     setSubmitting(false)
   }
