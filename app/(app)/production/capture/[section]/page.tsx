@@ -28,6 +28,7 @@ import {
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
+import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt'
 import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
@@ -1057,6 +1058,16 @@ function CaptureScreen() {
           onBack={() => router.push('/production/capture')}
         />
       )}
+
+      {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
+          and stays available after checks are signed (page-level, not in the
+          Checks tab). Only sections with an hourly VSD check surface it. */}
+      <HourlyVsdPrompt
+        sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
+        running={totalIn > 0}
+        active={status !== 'submitted' && status !== 'approved'}
+        operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
+      />
 
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
