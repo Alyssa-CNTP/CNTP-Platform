@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Roster: fix staff-picker cancelling itself on selection — regression from same-day click-outside fix)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+- The click-outside dismissal added earlier today (`PersonEditor`) had a race: picking a match calls `setOpen(false)`, which synchronously unmounts the search/dropdown DOM as part of the same click. By the time the bubble-phase `mousedown` listener ran, the clicked button was already detached, so `rootRef.current.contains(ev.target)` read `false` and the handler wrongly fired `onCancel()` — cancelling the selection the instant it was made. Net effect: staff could not be added to the Shift Roster at all.
+- Fix: register the outside-click listener on the **capture** phase instead of bubble, so the containment check runs before React mutates the DOM in response to the click. Verified with an isolated DOM reproduction of the exact race (bubble-phase wrongly cancels; capture-phase does not) since the live app isn't reachable without auth from this environment.
+
 ## 2026-07-09 — Alyssa (Roster: staff-picker dropdown click-outside + redesign)
 
 **Files:** `app/(app)/production/roster/page.tsx`
