@@ -128,6 +128,16 @@ Five changes shipped together. **No database migrations required.**
 
 ---
 
+## 2026-07-07 — Alyssa (Granule quality graph now sourced from QC lab, linked by lot + date)
+
+**Files changed:** `lib/production/granule-quality.ts` (new), `components/production/capture/GranuleCapture.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **One source of truth for granule quality.** The QC lab already captures moisture / bulk density per sample on the Granule QC page (`qms.granule_runs` → `qms.granule_samples`). Instead of re-capturing those readings in production, the graph now **reads from QC, linked by lot number + date**. New shared helper `fetchGranuleQuality({ lot, fromDate })` joins `granule_runs` (matched on `batch_number` via the same `normBatch` rule QC uses) → `granule_samples`, returning the moisture/bulk-density time series.
+- **Granule capture**: removed the manual quality-readings entry (and the `quality` field on `GranuleData`); the Quality section now shows a **read-only graph pulled from QC for the current lot**, with a clear empty-state ("No QC readings yet for lot X…") until QC captures them. No more double capture.
+- **Production Dashboard**: the granule quality chart now sources from QC (`fetchGranuleQuality`, by date window) rather than the capture draft, so the dashboard, the capture screen, and the QC page all draw the same numbers. Wording updated to say the readings come from the QC lab, linked by lot + date.
+
+---
+
 ## 2026-07-07 — Alyssa (Granule: live quality graph in capture; scale verification → Checks; dashboard explains + audits pass/fail)
 
 **Files changed:** `components/production/capture/GranuleCapture.tsx`, `lib/production/checks-config.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
