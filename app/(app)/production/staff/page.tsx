@@ -5,7 +5,7 @@ import { format, parseISO } from 'date-fns'
 import Link from 'next/link'
 import {
   Users, Loader2, Plus, X, Check, Trash2, Search, AlertTriangle,
-  Phone, Plane, ChevronDown, ChevronRight, ChevronUp, Pencil, KeyRound, UserCheck,
+  Phone, Plane, ChevronDown, ChevronRight, ChevronUp, Pencil, KeyRound, UserCheck, IdCard,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -29,6 +29,12 @@ interface Leave {
   id: string; employee_id: string; start_date: string; end_date: string
   kind: string; reason: string | null
 }
+interface OperatorBadge { operator_code: string | null; active: boolean }
+interface LoginBadge { has_login: true; is_active: boolean; email?: string | null; role?: string | null }
+interface IdentitiesMap {
+  operators: Record<string, OperatorBadge>
+  logins: Record<string, LoginBadge>
+}
 
 const db = () => getDb().schema('production')
 
@@ -46,12 +52,34 @@ const todaySAST = () =>
 
 const fmtD = (d: string) => format(parseISO(d + 'T12:00:00'), 'd MMM')
 
+// PIN + login status inline on the list row, so a supervisor can see who's
+// signed-in-capable without opening each profile. Login email is only ever
+// present when the API decided the caller may see it (IT / can_manage_users).
+function IdentityBadges({ operator, login }: { operator?: OperatorBadge; login?: LoginBadge }) {
+  if (!operator && !login) return null
+  return (
+    <div className="flex items-center gap-2 mt-0.5 text-[11px] flex-wrap">
+      {operator && (
+        <span className={`inline-flex items-center gap-1 font-mono ${operator.active ? 'text-brand' : 'text-stone-400'}`} title="PIN operator (Capture)">
+          <IdCard size={10} /> {operator.operator_code || 'PIN'}{!operator.active && ' (inactive)'}
+        </span>
+      )}
+      {login && (
+        <span className={`inline-flex items-center gap-1 ${login.is_active ? 'text-brand' : 'text-stone-400'}`} title="Login account (Users & Roles)">
+          <KeyRound size={10} /> {login.email || 'Login'}{!login.is_active && ' (inactive)'}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export default function StaffDirectoryPage() {
   const { p } = useAuth()
   const { user } = useAuth()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [leave, setLeave] = useState<Leave[]>([])
   const [competencySummaries, setCompetencySummaries] = useState<CompetencySummary[]>([])
+  const [identities, setIdentities] = useState<IdentitiesMap>({ operators: {}, logins: {} })
   const [loading, setLoading] = useState(true)
   const [dbReady, setDbReady] = useState(true)
   const [query, setQuery] = useState('')
@@ -89,6 +117,11 @@ export default function StaffDirectoryPage() {
     } catch {
       setDbReady(false)
     }
+    // Best-effort — a failed identities fetch shouldn't block the directory
+    // from loading, it just leaves the PIN/login badges blank.
+    fetch('/api/staff/identities').then(res => res.ok ? res.json() : null)
+      .then(data => { if (data) setIdentities({ operators: data.operators ?? {}, logins: data.logins ?? {} }) })
+      .catch(() => {})
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -338,6 +371,7 @@ export default function StaffDirectoryPage() {
                                   <span className="inline-flex items-center gap-1"><Phone size={9} />{e.phone}</span>
                                 )}
                               </div>
+                              <IdentityBadges operator={identities.operators[e.id]} login={identities.logins[e.id]} />
                             </div>
                             {/* Competency chip + skill tags */}
                             <div className="flex items-center gap-1.5 shrink-0">
@@ -465,6 +499,7 @@ export default function StaffDirectoryPage() {
                                 {(e.position || e.job_title) && <span className="truncate max-w-[220px]">{e.position || e.job_title}</span>}
                                 {e.employee_code && <span className="font-mono text-[10px] text-stone-400">{e.employee_code}</span>}
                               </div>
+                              <IdentityBadges operator={identities.operators[e.id]} login={identities.logins[e.id]} />
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
                               {comp && comp.total > 0 && (
