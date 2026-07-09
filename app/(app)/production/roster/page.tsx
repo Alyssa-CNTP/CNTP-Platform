@@ -13,7 +13,7 @@ import { useAuth } from '@/lib/auth/context'
 import { WorkforceTabs } from '@/components/production/WorkforceTabs'
 import {
   ROSTER_SHIFTS, ROSTER_CATEGORIES, ROSTER_ROLE_SEED, SKILL_TAGS,
-  tagLabel,
+  tagLabel, categoryMeta,
   type RosterRole, type RosterShift,
 } from '@/lib/production/roster-config'
 import { rosterPerm, ROSTER_SECTION_LABEL, type RosterSectionKey } from '@/lib/auth/permissions'
@@ -1198,8 +1198,19 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
     if (tags.length === 0 && e.skills?.length) setTags(e.skills)
   }
 
+  // Click anywhere outside this card dismisses it, same as onCancel — the
+  // search dropdown was otherwise staying open until Escape or Save/Cancel.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function handle(ev: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(ev.target as Node)) onCancel()
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [onCancel])
+
   return (
-    <div className="rounded-xl border border-brand/40 bg-white p-3.5 shadow-lg space-y-3 w-[320px] max-w-full">
+    <div ref={rootRef} className="rounded-xl border border-brand/40 bg-white p-3.5 shadow-lg space-y-3 w-[320px] max-w-full">
       {name && !open ? (
         <button type="button" onClick={() => setOpen(true)}
           className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-stone-200 bg-stone-50 text-left">
@@ -1208,7 +1219,7 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
         </button>
       ) : (
         <div className="relative">
-          <div className="flex items-center gap-2 px-3 rounded-lg border border-stone-200 bg-white focus-within:border-brand">
+          <div className="flex items-center gap-2 px-3 rounded-lg border border-stone-200 bg-white focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10 transition-shadow">
             <Search size={15} className="text-stone-400" />
             <input
               autoFocus value={query} onChange={e => setQuery(e.target.value)}
@@ -1217,17 +1228,33 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
               className="flex-1 py-2.5 text-[14px] text-text outline-none bg-transparent"
             />
           </div>
-          {matches.length > 0 && (
-            <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-72 overflow-y-auto divide-y divide-stone-100">
-              {matches.map(e => (
-                <button key={e.id} type="button" onMouseDown={ev => { ev.preventDefault(); pick(e) }}
-                  className="w-full flex items-center gap-2.5 px-3 py-3 text-left text-[13px] text-text hover:bg-brand/5">
-                  <Plus size={13} className="text-stone-400 shrink-0" />
-                  <span className="flex-1 truncate">{empLabel(e)}</span>
-                  {leaveEmpIds?.has(e.id) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">leave</span>}
-                  <span className="text-[11px] text-text-muted capitalize">{e.department}</span>
-                </button>
-              ))}
+          {(matches.length > 0 || query.trim() !== '') && (
+            <div className="absolute z-20 left-0 right-0 mt-1.5 bg-white border border-stone-200 rounded-xl shadow-xl overflow-hidden">
+              {matches.length > 0 ? (
+                <div className="max-h-72 overflow-y-auto divide-y divide-stone-100">
+                  {matches.map(e => {
+                    const meta = categoryMeta(e.department)
+                    return (
+                      <button key={e.id} type="button" onMouseDown={ev => { ev.preventDefault(); pick(e) }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-brand/5">
+                        <span className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0"
+                          style={{ background: meta.colorHex }}>
+                          {empLabel(e).charAt(0).toUpperCase()}
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[13px] font-medium text-text truncate">{empLabel(e)}</span>
+                          <span className="block text-[11px] mt-0.5" style={{ color: meta.colorHex }}>{meta.label}</span>
+                        </span>
+                        {leaveEmpIds?.has(e.id) && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">leave</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="px-3 py-4 text-[12px] text-text-muted text-center">No staff match &ldquo;{query.trim()}&rdquo;</p>
+              )}
             </div>
           )}
         </div>

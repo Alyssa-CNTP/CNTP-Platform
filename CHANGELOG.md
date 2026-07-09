@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Roster: staff-picker dropdown click-outside + redesign)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+- The "+ Add" staff-search popup on the Shift Roster grid (`PersonEditor`) had no click-outside dismissal — it only closed on Escape or Save/Cancel, so it stayed open and overlapping the rows below it. Added the same click-outside pattern already used elsewhere in the app (`NotificationBell.tsx`): a ref + `mousedown` listener that calls `onCancel()` when the click lands outside the card.
+- Redesigned the match list: colored department avatar (initial letter, reusing `categoryMeta`) + department label in matching color, replacing the plain text row; added a "No staff match…" empty state when a search finds nothing (previously showed nothing at all); rounder corners and a heavier shadow to read as a proper popover.
+
 ## 2026-07-09 — Alyssa (Staff Directory: show PIN + login status per person)
 
 Follow-up to the people-identity-links work (#362), once the migration was run on staging. The Staff Directory profile already showed a person's linked PIN operator and login account, but the list view didn't — you had to open each profile to check. **No database migration required.**
