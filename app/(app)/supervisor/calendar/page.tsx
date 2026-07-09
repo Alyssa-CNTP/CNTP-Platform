@@ -17,16 +17,16 @@ interface Assignment {
 interface DutySlot { technician: string; start_at: string; end_at: string }
 
 // The calendar standardises on the Shift Roster's two shifts (Day / Night) so the
-// whole app reads the same way. Capture stores three sub-shifts; morning +
-// afternoon both fall inside the Day shift (07h00–16h00), night is the Night
-// shift (16h00–01h00).
+// whole app reads the same way. Capture stores the same two shifts: 'morning'
+// (07h00–16h00 = Day) and 'afternoon' (16h00–01h00 = Night; 'night' is a legacy
+// alias). Rostering the Night column writes capture shift 'afternoon'.
 type RosterShift = 'day' | 'night'
 const SHIFT_VIEW: Record<RosterShift, { label: string; time: string; icon: typeof Sun; dot: string; chip: string; text: string }> = {
   day:   { label: 'Day Shift',   time: '07h00–16h00', icon: Sun,  dot: 'bg-amber-400',  chip: 'bg-amber-50 border-amber-200',   text: 'text-amber-600' },
   night: { label: 'Night Shift', time: '16h00–01h00', icon: Moon, dot: 'bg-indigo-400', chip: 'bg-indigo-50 border-indigo-200', text: 'text-indigo-600' },
 }
 const ROSTER_SHIFTS: RosterShift[] = ['day', 'night']
-const toRoster = (s: string): RosterShift => (s === 'night' ? 'night' : 'day')
+const toRoster = (s: string): RosterShift => (s === 'night' || s === 'afternoon' ? 'night' : 'day')
 const fmtDay = (d: Date) => format(d, 'yyyy-MM-dd')
 
 interface SectionRoster { sectionId: string; operatorIds: string[]; variant: string | null; lot: string | null }
@@ -96,7 +96,8 @@ export default function ShiftCalendar() {
   }
 
   function goAssign(dateStr: string, shift: RosterShift) {
-    router.push(`/production/capture/assign?date=${dateStr}&shift=${shift === 'night' ? 'night' : 'morning'}`)
+    // Night column rosters the capture 'afternoon' shift (16h00–01h00).
+    router.push(`/production/capture/assign?date=${dateStr}&shift=${shift === 'night' ? 'afternoon' : 'morning'}`)
   }
 
   const step = (dir: -1 | 1) => setAnchor(a => addDays(a, dir * (view === 'week' ? 7 : 1)))

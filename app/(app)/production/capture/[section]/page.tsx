@@ -555,9 +555,9 @@ function CaptureScreen() {
     if (shift !== 'morning') return
     const db = getDb()
     db.schema('production').from('shift_assignments')
-      .select('operator_ids').eq('date', dateParam).eq('shift', 'afternoon').eq('section_id', sectionId).maybeSingle()
+      .select('operator_ids,shift').eq('date', dateParam).in('shift', ['afternoon', 'night']).eq('section_id', sectionId)
       .then(async ({ data }: any) => {
-        const ids = data?.operator_ids ?? []
+        const ids = [...new Set((data ?? []).flatMap((r: any) => r.operator_ids ?? []))] as string[]
         if (!ids.length) { setAfternoonOps([]); return }
         const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name,pin').in('id', ids)
         setAfternoonOps((ops as Operator[] ?? []).map(o => ({ id: o.id, name: o.display_name || o.name, pin: o.pin ?? '' })))
