@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Staff Directory: server-enforced add/remove + login-account requests)
+
+Lets authorised people add and remove the staff who populate the Shift Roster, with the "function to do so" now actually enforced. **No database migration required.**
+
+**Files:** `app/api/staff/route.ts` (new), `app/api/staff/[id]/route.ts` (new), `app/api/staff/[id]/request-login/route.ts` (new), `lib/production/employee-payload.ts` (new), `app/(app)/production/staff/page.tsx`
+
+- **Add / edit / remove staff is now server-enforced.** `production.employees` has open RLS (`authenticated USING (true)`), and the Staff Directory wrote to it straight from the browser — so the `can_edit_staff_profiles` / `can_delete_staff` checks were cosmetic and *any* logged-in user could add or delete staff. Create/update/delete now go through new API routes that verify the caller's permission with `getCallerPermissions()` before touching the table. The two existing permissions are unchanged (grant them per-person in Users & Roles).
+- **Fixed a latent gate bug.** The page checked `p?.can_edit_staff_profiles` — a property read on the `p` **function**, always `undefined` — so the Add/Edit/Delete controls were hidden for everyone. Now calls `p('can_edit_staff_profiles')` / `p('can_delete_staff')` correctly.
+- **Request a login account (staff → auth-user bridge).** Creating sign-in accounts stays IT-only (at Users & Roles). On a staff person's editor, IT sees a link to Users & Roles; everyone else with staff-edit rights gets a "Request login account" action that opens an **Axis ticket** (category `app`, auto-routed to IT) describing who needs an account.
+- Add/edit modal now shows a spinner while saving and surfaces server errors instead of failing silently; delete surfaces a page-level error if the server rejects it.
+
 ## 2026-07-09 — Alyssa (Ops batch: cleaning compliance, afternoon shift, session, hourly VSD, roster auto-publish)
 
 Five changes shipped together. **No database migrations required.**
