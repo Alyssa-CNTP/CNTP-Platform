@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Staff Directory: show PIN + login status per person)
+
+Follow-up to the people-identity-links work (#362), once the migration was run on staging. The Staff Directory profile already showed a person's linked PIN operator and login account, but the list view didn't — you had to open each profile to check. **No database migration required.**
+
+**Files:** `app/api/staff/identities/route.ts` (new), `app/(app)/production/staff/page.tsx`
+
+- New bulk endpoint `GET /api/staff/identities` returns every linked PIN operator + login account in one call (avoids an N+1 fetch per row). Login email/role is only included for IT / `can_manage_users`; everyone else gets a has-login flag only, same visibility rule as the per-employee endpoint.
+- Each row in the Staff Directory list now shows a PIN badge (operator code) and a login badge (email for IT, "Login" otherwise) when present, dimmed if inactive.
+
 ## 2026-07-09 — Alyssa (People Identity Links: Staff Directory as the single front door + full audit trail)
 
 Follow-up to the same day's Staff Directory work. CNTP had three "add a person" surfaces (Staff Directory, Operators/PIN, Users & Roles) that barely linked, so it was unclear where to add/remove someone and nothing was audited. This makes the **Staff Directory the single front door** for a person; PIN operators and login accounts become identity layers attached to that person; and every add/remove/relink is now audited.
