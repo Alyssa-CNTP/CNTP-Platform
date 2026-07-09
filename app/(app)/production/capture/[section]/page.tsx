@@ -28,6 +28,7 @@ import {
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
+import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt'
 import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
@@ -85,7 +86,7 @@ function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
   const router = useRouter()
-  const { user, role, isSupervisor, isIT } = useAuth()
+  const { user, role, isSupervisor, isIT, signOut } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
   // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
@@ -555,9 +556,9 @@ function CaptureScreen() {
     if (shift !== 'morning') return
     const db = getDb()
     db.schema('production').from('shift_assignments')
-      .select('operator_ids').eq('date', dateParam).eq('shift', 'afternoon').eq('section_id', sectionId).maybeSingle()
+      .select('operator_ids,shift').eq('date', dateParam).in('shift', ['afternoon', 'night']).eq('section_id', sectionId)
       .then(async ({ data }: any) => {
-        const ids = data?.operator_ids ?? []
+        const ids = [...new Set((data ?? []).flatMap((r: any) => r.operator_ids ?? []))] as string[]
         if (!ids.length) { setAfternoonOps([]); return }
         const { data: ops } = await db.schema('production').from('operators').select('id,name,display_name,pin').in('id', ids)
         setAfternoonOps((ops as Operator[] ?? []).map(o => ({ id: o.id, name: o.display_name || o.name, pin: o.pin ?? '' })))
@@ -763,14 +764,8 @@ function CaptureScreen() {
     const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
-    // Granule captures a scale verification per shift — persist it to the dedicated
-    // columns (audit + a KPI signal for scale health / predictive maintenance).
-    const gd0 = sectionId === 'granule' ? (prods[0]?.data as GranuleData | undefined) : undefined
-    const scalePatch = gd0
-      ? { scale_std_kg: n(gd0.scaleStd) || null, scale_actual_kg: n(gd0.scaleActual) || null }
-      : {}
     await db.schema('production').from('prod_sessions').update({
-      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(), ...scalePatch,
+      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(),
     } as any).eq('id', sid)
 
     const debag = buildDebag(prods, sid)
@@ -890,6 +885,13 @@ function CaptureScreen() {
         comments: comments.trim() || null,
       } as any).eq('id', sid)
       setStatus('submitted')
+      // A floor operator submitting = end of their shift on this tablet: sign
+      // them out so the next shift's operator has to sign in fresh. Supervisors
+      // / IT capturing on a shared device are not signed out. Short delay lets
+      // the "Submitted" confirmation render before the redirect to /login.
+      if (role === 'floor_operator') {
+        setTimeout(() => { signOut() }, 1500)
+      }
     } catch (e: any) { setError(e.message) }
     setSubmitting(false)
   }
@@ -1056,6 +1058,16 @@ function CaptureScreen() {
           onBack={() => router.push('/production/capture')}
         />
       )}
+
+      {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
+          and stays available after checks are signed (page-level, not in the
+          Checks tab). Only sections with an hourly VSD check surface it. */}
+      <HourlyVsdPrompt
+        sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
+        running={totalIn > 0}
+        active={status !== 'submitted' && status !== 'approved'}
+        operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
+      />
 
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"

@@ -5,6 +5,70 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Staff Directory: show PIN + login status per person)
+
+Follow-up to the people-identity-links work (#362), once the migration was run on staging. The Staff Directory profile already showed a person's linked PIN operator and login account, but the list view didn't — you had to open each profile to check. **No database migration required.**
+
+**Files:** `app/api/staff/identities/route.ts` (new), `app/(app)/production/staff/page.tsx`
+
+- New bulk endpoint `GET /api/staff/identities` returns every linked PIN operator + login account in one call (avoids an N+1 fetch per row). Login email/role is only included for IT / `can_manage_users`; everyone else gets a has-login flag only, same visibility rule as the per-employee endpoint.
+- Each row in the Staff Directory list now shows a PIN badge (operator code) and a login badge (email for IT, "Login" otherwise) when present, dimmed if inactive.
+
+## 2026-07-09 — Alyssa (People Identity Links: Staff Directory as the single front door + full audit trail)
+
+Follow-up to the same day's Staff Directory work. CNTP had three "add a person" surfaces (Staff Directory, Operators/PIN, Users & Roles) that barely linked, so it was unclear where to add/remove someone and nothing was audited. This makes the **Staff Directory the single front door** for a person; PIN operators and login accounts become identity layers attached to that person; and every add/remove/relink is now audited.
+
+**⚠ Requires `supabase/migrations/20260709_001_people_links.sql` to be run in the Supabase SQL Editor (staging first) to fully activate the operator↔employee↔login linking. The code degrades gracefully (writes without the link) if run before the migration, so this is safe to deploy first — but linking/offboard features are inert until the migration runs.**
+
+**Files:** `supabase/migrations/20260709_001_people_links.sql` (new), `lib/audit/write.ts` usage added to `app/api/staff/route.ts`, `app/api/staff/[id]/route.ts`, `app/api/production/operators/route.ts`, `app/api/production/operators/[id]/route.ts`, `app/api/admin/users/route.ts`, `app/api/admin/users/[id]/route.ts`; `app/api/staff/[id]/identities/route.ts` (new), `app/api/staff/[id]/offboard/route.ts` (new), `lib/production/it-ticket.ts` (new), `lib/production/employee-payload.ts` (unchanged, reused), `app/(app)/production/staff/[id]/page.tsx`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/operators/page.tsx`, `app/(app)/users/page.tsx`, `lib/supabase/database.types.ts`
+
+- **Data model.** New migration adds `production.operators.employee_id` and `shared.app_roles.employee_id`, backfilled from the existing `employees.operator_id` reverse link. Every PIN and every login now traces back to one Staff Directory person.
+- **Full audit trail.** Every add/edit/remove across Staff Directory, PIN operators, and Users & Roles now writes to `axis.audit_log` via the existing `writeAudit()` helper (previously only the production-orders route used it). PINs and passwords are never written to the audit log — snapshots redact them. The Users & Roles → Audit tab gained a "People & Access" quick filter and a Record (schema.table) column so these events are easy to find.
+- **Employee profile is now the identity hub.** `/production/staff/[id]` shows the linked PIN operator (with an "Assign PIN & sections" action for supervisors) and linked login account (IT sees a link to Users & Roles; others see "Request login account", reusing the flow shipped earlier today).
+- **Coordinated offboard.** Removing someone from the Staff Directory now calls `POST /api/staff/[id]/offboard` instead of a hard delete: marks the employee inactive, deactivates their linked PIN and login (blocks sign-in immediately), and raises an Axis ticket asking IT to delete the auth account. Fully reversible via a new "Reactivate" action — nothing is hard-deleted, so roster/capture history is preserved.
+- **Closes the operator↔employee drift.** Creating a new PIN operator (via the Operators page) now requires linking to an existing Staff Directory person or creating one inline — so the two lists can no longer silently diverge. Editing a legacy (pre-migration) operator is not blocked on this.
+- All new/changed DB writes tolerate the migration not having run yet (`42703` undefined-column) by falling back to writing without the link, so deploy order relative to running the migration is not a footgun.
+
+## 2026-07-09 — Alyssa (Staff Directory: server-enforced add/remove + login-account requests)
+
+Lets authorised people add and remove the staff who populate the Shift Roster, with the "function to do so" now actually enforced. **No database migration required.**
+
+**Files:** `app/api/staff/route.ts` (new), `app/api/staff/[id]/route.ts` (new), `app/api/staff/[id]/request-login/route.ts` (new), `lib/production/employee-payload.ts` (new), `app/(app)/production/staff/page.tsx`
+
+- **Add / edit / remove staff is now server-enforced.** `production.employees` has open RLS (`authenticated USING (true)`), and the Staff Directory wrote to it straight from the browser — so the `can_edit_staff_profiles` / `can_delete_staff` checks were cosmetic and *any* logged-in user could add or delete staff. Create/update/delete now go through new API routes that verify the caller's permission with `getCallerPermissions()` before touching the table. The two existing permissions are unchanged (grant them per-person in Users & Roles).
+- **Fixed a latent gate bug.** The page checked `p?.can_edit_staff_profiles` — a property read on the `p` **function**, always `undefined` — so the Add/Edit/Delete controls were hidden for everyone. Now calls `p('can_edit_staff_profiles')` / `p('can_delete_staff')` correctly.
+- **Request a login account (staff → auth-user bridge).** Creating sign-in accounts stays IT-only (at Users & Roles). On a staff person's editor, IT sees a link to Users & Roles; everyone else with staff-edit rights gets a "Request login account" action that opens an **Axis ticket** (category `app`, auto-routed to IT) describing who needs an account.
+- Add/edit modal now shows a spinner while saving and surfaces server errors instead of failing silently; delete surfaces a page-level error if the server rejects it.
+
+## 2026-07-09 — Alyssa (Ops batch: cleaning compliance, afternoon shift, session, hourly VSD, roster auto-publish)
+
+Five changes shipped together. **No database migrations required.**
+
+### Cleaning checklist — explicit ticking (compliance)
+**Files:** `components/production/capture/CleaningPanel.tsx`, `lib/production/cleaning-config.ts`
+- The capture cleaning panel was exception-based: every task rendered pre-ticked and sign-off auto-confirmed all areas, so an operator could sign off without touching anything (non-compliant). Inverted to explicit confirmation — each due task starts **unchecked** and must be ticked done, or flagged not-done with a reason, before the PIN sign is enabled.
+- Per-task done proof is written to `cleaning_logs` (`area_confirmed` rows now carry `task_key`; `task_exception` unchanged) — no schema change.
+
+### Afternoon shift — operators can sign in (16h00–01h00)
+**Files:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/calendar/page.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/live/SessionModal.tsx`
+- CNTP runs two shifts: Morning (07h00–16h00) and Afternoon/Night (16h00–01h00). The capture flow stores the 16h00–01h00 shift as `afternoon`, but the supervisor calendar wrote it as `night` — a value nothing on the capture side read. Result: operators signing in during 16h00–23h00 saw "No sections assigned", and the 16h00 hand-over found no incoming operators.
+- Standardised the 16h00–01h00 shift on `afternoon` (displayed "Afternoon / Night"); `night` kept as a legacy alias, read via `shiftValuesFor()`. Clocks now resolve 16h00+ to `afternoon` (no more 23h00 split). Calendar Night column rosters `afternoon` and auto-fills from the roster's night band. Read paths accept both values for backward-compat.
+
+### Session — reliable idle logout + sign out on shift submit
+**Files:** `app/(app)/layout.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+- The 1-hour logout was a single `setTimeout` that browsers throttle in background tabs and drop when a device sleeps, leaving users logged in past the hour. Reworked to a wall-clock model (last-activity timestamp, re-evaluated on a 1s tick and on `visibilitychange`/`focus`) so a slept/throttled tab signs out the moment it wakes. Idle window unchanged (60m, 5m warning).
+- A **floor operator** is now signed out when they submit their shift, so the incoming shift signs in fresh. Supervisors/IT capturing on a shared tablet are not signed out.
+
+### Hourly VSD infeed prompt
+**Files:** `components/production/capture/HourlyVsdPrompt.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
+- Operators were never actively prompted to log the hourly infeed-VSD reading, and the passive nudge disappeared once checks were signed. Added a page-level modal that auto-pops whenever an hourly reading is due while the line is running and the session is open — **including after checks sign-off**. Readings append to `production.check_events` (flagged if outside the supervisor-set range); "Remind me shortly" snoozes 10 min. Only sections with an hourly numeric check (Sieving) surface it. Dashboard VSD KPIs already consume these events.
+
+### Roster — Wednesday workflow: outstanding tracker, auto-publish, green export
+**Files:** `app/(app)/production/roster/page.tsx`
+- Added a confirmations tracker (X/N departments confirmed + which are outstanding), emphasised red on the Wednesday deadline. Once every department shown in the grid has submitted, the period **auto-publishes** (and syncs the maintenance duty roster); manual early-publish still available. **Export/Print buttons turn green** once published to signal the confirmed roster is ready to share.
+
+---
+
 ## 2026-07-08 — Alyssa (Production Orders: record numbering + permissioned edit / soft-delete with audit trail)
 
 **Files changed:** `supabase/migrations/20260708_001_prod_record_mgmt.sql` (new), `lib/audit/write.ts` (new), `app/api/production/orders/[id]/route.ts` (new), `app/(app)/production/orders/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
@@ -54,6 +118,16 @@ Format: date · developer · files changed · description of code changes.
   - **Afternoon · Bagging (out):** "Bucket elevator — end of day" (left in the tower for tomorrow) — counts as **output**, shown just above "Total bagged out".
   - **Machine spillage** is split into its own card and stays on the Debagging tab on both shifts (always an input loss).
 - The mass-balance maths is unchanged (`sievingTotals(data, shift)` still reads `spillage[0]` as the elevator, `spillage[1]` as machine spillage); this is purely where/how the two fields are presented. `goToTab` no longer auto-locks the elevator when moving to Bagging on the afternoon shift (the operator fills it there). Card colour follows direction — blue for in, amber for out.
+
+---
+
+## 2026-07-07 — Alyssa (Granule: live quality graph in capture; scale verification → Checks; dashboard explains + audits pass/fail)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `lib/production/checks-config.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Live quality graph in capture.** The granule Quality readings section now renders a live dual-axis chart (moisture % + bulk density cc/100g vs time) built straight from the rows the operator enters — no separate drawing step. This is the data behind the operators' hand-drawn graph and the basis for AI/uniformity research.
+- **Scale verification moved to the Checks page.** Removed the scale std/actual capture from the granule capture header (and the `scaleStd`/`scaleActual` fields + the `prod_sessions` scale write). Added a granule Checks config — **Scale zero check → Scale verification (test load) → pre-start** — so it runs through the existing Checks engine, which already does pass/fail (deviation vs ±tolerance, default ±0.1 kg), maintenance-raise on fail, and audit-trail sign-off (`check_events`).
+- **Dashboard now explains, not just reports.** The Granule card gained two "what each entails" panels — granule quality (uniformity → density/flow/structural integrity, precise batching) and scale verification (verification ≠ calibration; zero check → test load → pass/fail; NRCS/SANAS + Legal Metrology Act, on-site providers). The scale-health chart now reads from the Checks audit (`check_records` → `check_events`, `scale_verification`), and a new **Scale verification audit** table lists each verification (date · shift · standard · actual · deviation · Verified/Fail) with a pass-rate badge — the per-production compliance audit.
 
 ---
 

@@ -124,7 +124,7 @@ export default function SessionModal({ sectionId, onConfirm, onClose }: Props) {
   // Session fields
   const [shift, setShift] = useState<ShiftType>(() => {
     const h = new Date().getHours()
-    return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night'
+    return h >= 7 && h < 16 ? 'morning' : 'afternoon'
   })
   const [lotNumber, setLotNumber] = useState('')
   const [variant, setVariant]     = useState<Variant | ''>('')
@@ -135,7 +135,7 @@ export default function SessionModal({ sectionId, onConfirm, onClose }: Props) {
   const needsLot     = NEEDS_LOT.has(sectionId)
   const needsVariant = NEEDS_VARIANT.has(sectionId)
   const today        = format(new Date(), 'EEEE, d MMMM yyyy')
-  const shifts: ShiftType[] = ['morning', 'afternoon', 'night']
+  const shifts: ShiftType[] = ['morning', 'afternoon']
 
   useEffect(() => {
     getDb().schema('production').from('operators')

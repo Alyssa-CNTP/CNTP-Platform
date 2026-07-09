@@ -45,7 +45,13 @@ export const MACHINE_CHECKS: Record<string, MachineCheckDef[]> = {
   ],
   refining1:   [],
   refining2:   [],
-  granule:     [],
+  granule: [
+    // ── Start-up ── scale verification is a legal-metrology requirement (NRCS/SANAS)
+    // and the source of the scale-health KPI. Zero check → test load → pass/fail.
+    { key: 'scale_zero_check',   phase: 'startup', label: 'Scale zero check',              kind: 'confirm', equipment: 'Scale — Granule', help: 'Zero the scale so no tare weight affects readings' },
+    { key: 'scale_verification', phase: 'startup', label: 'Scale verification (test load)', kind: 'scale', unit: 'kg', equipment: 'Scale — Granule', failRaisesMaintenance: true, help: 'Place the certified test mass — actual must fall within tolerance of the standard' },
+    { key: 'prestart_done',      phase: 'startup', label: 'Machine pre-start checks conducted', kind: 'confirm' },
+  ],
   blender:     [],
   pasteuriser: [],
 }

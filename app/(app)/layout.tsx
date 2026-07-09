@@ -189,38 +189,56 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
 
   // ── Inactivity auto sign-out ───────────────────────────────────────────────
-  const timeoutRef   = useRef<ReturnType<typeof setTimeout>  | null>(null)
-  const warningRef   = useRef<ReturnType<typeof setTimeout>  | null>(null)
-  const intervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Wall-clock based: we track the last-activity timestamp and re-evaluate on a
+  // tick AND whenever the tab regains focus/visibility. Comparing timestamps
+  // (rather than trusting a single long setTimeout to fire) means a device that
+  // slept or a tab the browser throttled in the background is still signed out
+  // correctly the moment it wakes — the old setTimeout approach silently missed
+  // those cases and left users logged in past the hour.
+  const lastActivityRef = useRef<number>(Date.now())
+  const intervalRef     = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const clearAll = useCallback(() => {
-    if (timeoutRef.current)  clearTimeout(timeoutRef.current)
-    if (warningRef.current)  clearTimeout(warningRef.current)
-    if (intervalRef.current) clearInterval(intervalRef.current)
-  }, [])
-
-  const resetTimer = useCallback(() => {
-    clearAll()
+  // "Stay signed in" / any interaction: bump the clock and clear the warning.
+  const stayActive = useCallback(() => {
+    lastActivityRef.current = Date.now()
     setShowWarning(false)
-    // Warning banner 5 mins before sign-out
-    warningRef.current = setTimeout(() => {
-      setShowWarning(true)
-      setCountdown(WARNING_MS / 1000)
-      intervalRef.current = setInterval(() =>
-        setCountdown(c => (c <= 1 ? (clearInterval(intervalRef.current!), 0) : c - 1)), 1000)
-    }, INACTIVITY_MS - WARNING_MS)
-    // Sign out after full inactivity period
-    timeoutRef.current = setTimeout(() => { clearAll(); signOut() }, INACTIVITY_MS)
-  }, [clearAll, signOut])
+  }, [])
 
   useEffect(() => {
     if (!user) return
+    lastActivityRef.current = Date.now()
+    setShowWarning(false)
+
+    const evaluate = () => {
+      const idle = Date.now() - lastActivityRef.current
+      if (idle >= INACTIVITY_MS) { setShowWarning(false); signOut(); return }
+      if (idle >= INACTIVITY_MS - WARNING_MS) {
+        setShowWarning(true)
+        setCountdown(Math.max(1, Math.ceil((INACTIVITY_MS - idle) / 1000)))
+      } else {
+        setShowWarning(false)
+      }
+    }
+
     const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'] as const
-    const handle = () => resetTimer()
-    events.forEach(e => window.addEventListener(e, handle, { passive: true }))
-    resetTimer()
-    return () => { clearAll(); events.forEach(e => window.removeEventListener(e, handle)) }
-  }, [user, resetTimer, clearAll])
+    const onActivity = () => { lastActivityRef.current = Date.now() }
+    events.forEach(e => window.addEventListener(e, onActivity, { passive: true }))
+    // Re-evaluate immediately on wake — this is what catches a device that slept
+    // past the timeout while the interval was throttled/paused.
+    const onWake = () => evaluate()
+    document.addEventListener('visibilitychange', onWake)
+    window.addEventListener('focus', onWake)
+
+    intervalRef.current = setInterval(evaluate, 1000)
+    evaluate()
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      events.forEach(e => window.removeEventListener(e, onActivity))
+      document.removeEventListener('visibilitychange', onWake)
+      window.removeEventListener('focus', onWake)
+    }
+  }, [user, signOut])
 
   // Session check — redirect to login if unauthenticated
   useEffect(() => {
@@ -347,7 +365,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         }}>
           <span>⚠️ Signing out in <strong>{fmtCountdown(countdown)}</strong> due to inactivity</span>
           <button
-            onClick={resetTimer}
+            onClick={stayActive}
             style={{
               background: '#fff', color: '#1A3A0E', border: 'none',
               borderRadius: 8, padding: '6px 18px', fontSize: 13,

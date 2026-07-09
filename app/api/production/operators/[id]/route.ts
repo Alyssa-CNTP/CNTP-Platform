@@ -3,6 +3,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
+import { writeAudit } from '@/lib/audit/write'
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -15,7 +16,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     const session = await getSessionClient()
 
     const { data: op } = await admin.schema('production').from('operators')
-      .select('user_id').eq('id', id).maybeSingle()
+      .select('user_id,name,display_name,operator_code,role,section_ids,active').eq('id', id).maybeSingle()
 
     await admin.schema('production').from('operators').delete().eq('id', id)
 
@@ -24,6 +25,12 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       await session.schema('shared' as any).from('app_roles').delete().eq('user_id', userId)
       await admin.auth.admin.deleteUser(userId).catch(() => {})
     }
+
+    await writeAudit({
+      actorId: caller.userId, action: 'delete',
+      schema: 'production', table: 'operators', recordId: id,
+      before: op,
+    })
 
     return NextResponse.json({ success: true })
   } catch (err: any) {

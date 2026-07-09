@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { addDays, format, parseISO } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
@@ -16,7 +16,7 @@ import {
   tagLabel,
   type RosterRole, type RosterShift,
 } from '@/lib/production/roster-config'
-import { rosterPerm, type RosterSectionKey } from '@/lib/auth/permissions'
+import { rosterPerm, ROSTER_SECTION_LABEL, type RosterSectionKey } from '@/lib/auth/permissions'
 import { exportRosterPeriod } from '@/lib/utils/exportExcel'
 
 interface Period {
@@ -409,6 +409,27 @@ export default function RosterPage() {
   const daysLeft  = daysUntilWednesday()
   const todayWed  = daysLeft === 0
 
+  // ── Confirmation progress ──────────────────────────────────────────────────
+  // Every department shown in the grid must be submitted before the period is
+  // considered confirmed. These drive the outstanding tracker + auto-publish.
+  const requiredSections  = useMemo(() => rolesByCategory.map(g => g.cat), [rolesByCategory])
+  const outstandingSections = requiredSections.filter(c => sectionStatus[c.key]?.status !== 'submitted')
+  const submittedCount    = requiredSections.length - outstandingSections.length
+  const allSubmitted      = requiredSections.length > 0 && outstandingSections.length === 0
+
+  // Auto-publish once every department has confirmed. This is a system action
+  // triggered by the data condition (the last submit, or the first load that
+  // observes a fully-confirmed period), so it fires regardless of who completes
+  // the set. The ref stops it re-firing for the same period.
+  const autoPublishedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!period || isPublished || !allSubmitted) return
+    if (autoPublishedRef.current === period.id) return
+    autoPublishedRef.current = period.id
+    publishPeriod()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, isPublished, allSubmitted])
+
   // View gate — the roster is permission-gated; without view access, stop here.
   if (!loading && !canView) {
     return (
@@ -490,11 +511,15 @@ export default function RosterPage() {
         )}
 
         <div className="flex items-center gap-2 flex-wrap ml-auto no-print">
-          {/* Export .xlsx — anyone who can view */}
+          {/* Export .xlsx — anyone who can view. Turns green once published so the
+              confirmed roster is clearly ready to print/share. */}
           {period && (
             <button
               onClick={exportXlsx}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors"
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-medium transition-colors ${
+                isPublished
+                  ? 'bg-ok text-white hover:opacity-90'
+                  : 'border border-stone-200 bg-white text-stone-600 hover:border-brand hover:text-brand'}`}
             >
               <Download size={13} /> Export
             </button>
@@ -503,7 +528,10 @@ export default function RosterPage() {
           {period && (
             <button
               onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors"
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-medium transition-colors ${
+                isPublished
+                  ? 'bg-ok text-white hover:opacity-90'
+                  : 'border border-stone-200 bg-white text-stone-600 hover:border-brand hover:text-brand'}`}
             >
               <Printer size={13} /> Print
             </button>
@@ -552,7 +580,55 @@ export default function RosterPage() {
       {isPublished && period?.published_at && (
         <div className="no-print flex items-center gap-2.5 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">
           <Lock size={14} className="shrink-0" />
-          <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — maintenance duty roster has been synced. Changes are still possible but will require re-publishing.</span>
+          <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — maintenance duty roster has been synced. Printing/export is ready (green buttons above). Changes are still possible but will require re-publishing.</span>
+        </div>
+      )}
+
+      {/* Confirmation tracker — who's still outstanding. Emphasised on Wednesday
+          (the change deadline). Once every department confirms, the period
+          auto-publishes and this is replaced by the published notice above. */}
+      {period && !isPublished && requiredSections.length > 0 && (
+        <div className={`no-print rounded-2xl border p-4 space-y-3 ${
+          todayWed ? 'bg-err/5 border-err/30' : 'bg-surface-card border-surface-rule'}`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            {allSubmitted
+              ? <Loader2 size={15} className="text-ok animate-spin shrink-0" />
+              : todayWed
+                ? <AlertTriangle size={15} className="text-err shrink-0" />
+                : <Send size={15} className="text-text-muted shrink-0" />}
+            <span className="font-display font-semibold text-[13px] text-text">
+              {allSubmitted
+                ? 'All departments confirmed — publishing…'
+                : `Roster confirmations · ${submittedCount}/${requiredSections.length}`}
+            </span>
+            {todayWed && !allSubmitted && (
+              <span className="text-[11px] font-semibold text-err">Deadline today (Wed)</span>
+            )}
+          </div>
+
+          {!allSubmitted && (
+            <>
+              <p className="text-[12px] text-text-muted">
+                Waiting on {outstandingSections.length} department{outstandingSections.length === 1 ? '' : 's'} to confirm.
+                The roster publishes automatically once everyone has submitted.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {requiredSections.map(c => {
+                  const done = sectionStatus[c.key]?.status === 'submitted'
+                  const at   = sectionStatus[c.key]?.submitted_at
+                  return (
+                    <span key={c.key}
+                      title={done && at ? `Confirmed ${format(parseISO(at), 'd MMM HH:mm')}` : 'Not yet confirmed'}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                        done ? 'bg-ok/10 text-ok border-ok/30' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                      {done ? <CheckCircle2 size={11} /> : <Pencil size={11} />}
+                      {ROSTER_SECTION_LABEL[c.key as RosterSectionKey] ?? c.label}
+                    </span>
+                  )
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -755,15 +831,16 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Submitting, the deadline &amp; rotation</p>
           <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
             <li>Click <strong className="text-text">Submit [Section]</strong> once it&apos;s final — this is what the Wednesday deadline badge is tracking.</li>
+            <li>The <strong className="text-text">confirmations tracker</strong> shows which departments are still outstanding. It&apos;s highlighted red on Wednesday (the change deadline).</li>
             <li>Every <strong className="text-text">Sunday night</strong>, next week&apos;s roster is generated automatically with day/night shifts swapped, and every section resets to Draft.</li>
             <li><strong className="text-text">Monday &amp; Wednesday mornings</strong>, anyone who holds the Submit permission for a section that&apos;s still Draft gets a reminder email.</li>
           </ul>
         </div>
 
         {/* Publish */}
-        <div className="flex items-start gap-2.5 px-3.5 py-3 bg-amber-50 border border-amber-200 rounded-xl">
-          <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
-          <p className="text-[12px] text-amber-800"><strong>Publish is manual — it does not happen automatically on the Wednesday deadline.</strong> Someone with edit rights has to click the green <strong>Publish</strong> button. Publishing syncs the Maintenance section to the maintenance duty roster; the roster stays visible across the app whether or not it&apos;s been published, but publishing is what feeds Maintenance&apos;s own schedule.</p>
+        <div className="flex items-start gap-2.5 px-3.5 py-3 bg-ok/5 border border-ok/20 rounded-xl">
+          <CheckCircle2 size={14} className="text-ok shrink-0 mt-0.5" />
+          <p className="text-[12px] text-text-muted"><strong className="text-text">The roster publishes automatically once every department has confirmed.</strong> You can still publish early with the green <strong>Publish</strong> button (needs edit rights). Publishing syncs the Maintenance section to the maintenance duty roster and turns the <strong>Export</strong> / <strong>Print</strong> buttons green so the confirmed roster is ready to share. The roster stays visible across the app whether or not it&apos;s been published.</p>
         </div>
 
         {/* Export / print */}

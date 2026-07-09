@@ -29,6 +29,9 @@ import {
   Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X,
   AlertTriangle, Droplets, Layers, CheckCircle2,
 } from 'lucide-react'
+import {
+  ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from 'recharts'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
@@ -124,8 +127,6 @@ export interface GranuleQualityReading { id: string; time: string; moisture: str
 
 export interface GranuleData {
   item: string                 // SG / SF / Export Granules — chosen once per session
-  scaleStd: string             // scale verification — standard/certified test weight
-  scaleActual: string          // scale verification — actual reading
   blends: GranuleBlend[]
   outputs: GranuleOutBag[]
   dustOutputs: GranuleDustOut[]
@@ -139,7 +140,7 @@ export interface GranuleData {
 
 export function emptyGranuleData(): GranuleData {
   return {
-    item: GRANULE_OUTPUT_ITEMS[0], scaleStd: '', scaleActual: '',
+    item: GRANULE_OUTPUT_ITEMS[0],
     blends: [{ id: crypto.randomUUID(), blendNo: '1', rows: [], water: '', done: false }],
     outputs: [], dustOutputs: [], waste: [], quality: [],
     dustNotRefed: '', coarseNotFed: '', meterStart: '', meterStop: '',
@@ -661,9 +662,10 @@ export function GranuleCapture({
   function updateQuality(id: string, k: keyof GranuleQualityReading, v: string) { patch({ quality: (value.quality ?? []).map(q => q.id === id ? { ...q, [k]: v } : q) }) }
   function removeQuality(id: string) { patch({ quality: (value.quality ?? []).filter(q => q.id !== id) }) }
 
-  // Scale verification deviation — a KPI signal for the scale's health over time.
-  const scaleDev = n(value.scaleActual) - n(value.scaleStd)
-  const scaleSet = n(value.scaleStd) > 0 && n(value.scaleActual) > 0
+  // Chart data for the live quality graph — numeric readings in capture order.
+  const qualityChart = (value.quality ?? [])
+    .map(q => ({ time: q.time, moisture: n(q.moisture) || null, bulkDensity: n(q.bulkDensity) || null }))
+    .filter(q => q.moisture != null || q.bulkDensity != null)
 
   // ── Totals + derived ──────────────────────────────────────────────────────────
   const t = granuleTotals(value)
@@ -696,33 +698,6 @@ export function GranuleCapture({
           <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Lot</div>
           <div className="text-[14px] font-mono font-bold text-text">{lot || '—'}</div>
         </div>
-      </div>
-
-      {/* Scale verification — required for audit; deviation tracked as a KPI signal */}
-      <div className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-stone-200 bg-white">
-        <div className="flex-1 min-w-0">
-          <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Scale verification</div>
-          <div className="grid grid-cols-2 gap-2 mt-1.5">
-            <div className="space-y-1">
-              <label className="text-[10px] text-stone-500">Std weight (kg)</label>
-              <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.scaleStd} disabled={locked}
-                onChange={e => patch({ scaleStd: e.target.value })} className="w-full px-2.5 py-1.5 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-brand" />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] text-stone-500">Actual weight (kg)</label>
-              <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.scaleActual} disabled={locked}
-                onChange={e => patch({ scaleActual: e.target.value })} className="w-full px-2.5 py-1.5 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-brand" />
-            </div>
-          </div>
-        </div>
-        {scaleSet && (
-          <div className="text-right shrink-0">
-            <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Deviation</div>
-            <div className={`text-[15px] font-mono font-bold ${Math.abs(scaleDev) < 0.05 ? 'text-ok' : Math.abs(scaleDev) <= 0.5 ? 'text-amber-600' : 'text-red-500'}`}>
-              {scaleDev > 0 ? '+' : ''}{scaleDev.toFixed(2)} kg
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Tabs */}
@@ -945,6 +920,26 @@ export function GranuleCapture({
                 </div>
               ))}
               {!locked && <button onClick={addQuality} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-stone-200 text-[13px] font-medium text-stone-500 hover:border-stone-300"><Plus size={15} /> Add reading</button>}
+
+              {/* Live graph — built from the readings above, no separate drawing step */}
+              {qualityChart.length >= 2 && (
+                <div className="pt-2">
+                  <div className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-1.5">Live graph</div>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={qualityChart} margin={{ top: 6, right: 4, left: -22, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
+                      <XAxis dataKey="time" tick={{ fontSize: 10 }} />
+                      <YAxis yAxisId="m" tick={{ fontSize: 10 }} unit="%" width={38} />
+                      <YAxis yAxisId="b" orientation="right" tick={{ fontSize: 10 }} width={38} />
+                      <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                      <Legend wrapperStyle={{ fontSize: 10 }} />
+                      <Line yAxisId="m" type="monotone" dataKey="moisture" name="Moisture %" stroke="#2A7CB8" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                      <Line yAxisId="b" type="monotone" dataKey="bulkDensity" name="Bulk density (cc/100g)" stroke="#5A8A2A" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {qualityChart.length === 1 && <p className="text-[11px] text-stone-400 text-center">Add another reading to plot the graph.</p>}
             </div>
           </div>
 

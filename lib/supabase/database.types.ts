@@ -379,6 +379,7 @@ export interface Database {
           active:        boolean
           user_id:       string | null
           auth_email:    string | null
+          employee_id:   string | null
           created_at:    string
         }
         Insert: Omit<Database['production']['Tables']['operators']['Row'], 'id' | 'created_at'> & { id?: string }
