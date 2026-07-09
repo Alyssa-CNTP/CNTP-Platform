@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
 import { buildEmployeePayload, EMPLOYEE_COLS } from '@/lib/production/employee-payload'
+import { writeAudit } from '@/lib/audit/write'
 
 export async function POST(req: NextRequest) {
   const caller = await getCallerPermissions()
@@ -37,5 +38,13 @@ export async function POST(req: NextRequest) {
     console.error('[api/staff POST]', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  await writeAudit({
+    actorId: caller.userId, action: 'create',
+    schema: 'production', table: 'employees',
+    recordId: (data as any)?.id ?? null,
+    after: data,
+  })
+
   return NextResponse.json(data)
 }

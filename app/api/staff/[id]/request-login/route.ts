@@ -12,7 +12,8 @@
 // a staff manager won't have.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
+import { raiseItTicket } from '@/lib/production/it-ticket'
 
 export async function POST(
   req: NextRequest,
@@ -45,24 +46,6 @@ export async function POST(
   const requestedEmail: string | null = body.email?.trim() || null
   const note:           string | null = body.note?.trim() || null
 
-  const admin = getAdminClient()
-
-  // Auto-routing (mirrors resolveRouting for the 'app' category in axis/tickets).
-  const { data: users } = await (admin as any)
-    .schema('shared')
-    .from('app_roles')
-    .select('user_id, full_name')
-  const find = (namePart: string) =>
-    (users ?? []).find((u: any) => u.full_name?.toLowerCase().includes(namePart.toLowerCase()))
-  const alyssa = find('Alyssa')
-  const jan    = find('Jan')
-
-  const notifyIds: string[] = []
-  let assignTo:   string | null = null
-  let assignName: string | null = null
-  if (alyssa) { assignTo = alyssa.user_id; assignName = alyssa.full_name }
-  if (jan)    notifyIds.push(jan.user_id)
-
   const person = emp.display_name || emp.name
   const description = [
     'Please create a login account for a staff member (requested from the Staff Directory).',
@@ -76,40 +59,14 @@ export async function POST(
     note ? `\nNote: ${note}` : null,
   ].filter(Boolean).join('\n')
 
-  const { data: ticket, error } = await (admin as any)
-    .schema('axis')
-    .from('tickets')
-    .insert({
-      title:           `Login account request — ${person}`,
+  try {
+    const { ticket_number } = await raiseItTicket({
+      title: `Login account request — ${person}`,
       description,
-      category:        'app',
-      ticket_type:     'task',
-      priority:        'medium',
-      assigned_to:     assignTo,
-      assigned_name:   assignName,
-      created_by:      caller.userId,
-      created_by_name: null,
-      due_date:        null,
-      notify_user_ids: notifyIds,
-      auto_routed:     true,
-      status:          'open',
+      createdBy: caller.userId,
     })
-    .select('id, ticket_number')
-    .single()
-
-  if (error) {
-    console.error('[api/staff request-login] ticket insert', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: true, ticket_number })
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message ?? 'Could not send the request' }, { status: 500 })
   }
-
-  if (notifyIds.length > 0 && ticket) {
-    const notifications = notifyIds.map((uid: string) => ({
-      ticket_id: ticket.id,
-      user_id:   uid,
-      message:   `${ticket.ticket_number}: Login account request for ${person} — app ticket auto-routed`,
-    }))
-    await (admin as any).schema('axis').from('ticket_notifications').insert(notifications)
-  }
-
-  return NextResponse.json({ ok: true, ticket_number: ticket?.ticket_number })
 }

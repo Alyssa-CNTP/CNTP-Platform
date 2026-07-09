@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
+import { writeAudit } from '@/lib/audit/write'
 
 // ─── GET — list all users ─────────────────────────────────────────────────────
 
@@ -151,6 +152,12 @@ export async function POST(req: NextRequest) {
       console.error('[api/admin/users POST] insert app_roles error:', roleErr)
       return NextResponse.json({ error: roleErr.message }, { status: 500 })
     }
+
+    await writeAudit({
+      actorId: caller.userId, action: 'create',
+      schema: 'shared', table: 'app_roles', recordId: userId,
+      after: { email: email.trim().toLowerCase(), full_name: full_name.trim(), department, role, section_id },
+    })
 
     return NextResponse.json({ success: true, userId })
   } catch (err: any) {

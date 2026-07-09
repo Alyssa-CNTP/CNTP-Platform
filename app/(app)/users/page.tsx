@@ -77,6 +77,7 @@ function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
   const [filterActor,  setFilterActor]  = useState('')
   const [filterDept,   setFilterDept]   = useState('')
   const [filterAction, setFilterAction] = useState('')
+  const [filterTable,  setFilterTable]  = useState('')
   const [sortAlpha,    setSortAlpha]    = useState(false)
 
   const isAllowed = isIT || myId === ALYSSA_UUID || myId === JAN_UUID
@@ -138,10 +139,15 @@ function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
 
   const uniqueActions = [...new Set(entries.map(e => e.action))].sort()
 
-  // Apply department filter client-side (dept not queryable server-side directly)
-  let filtered = filterDept
-    ? entries.filter(e => e.actor_department === filterDept)
-    : entries
+  // "People & Access" = every table involved in adding/removing/relinking a
+  // person across Staff Directory, Operators (PIN), and Users & Roles.
+  const PEOPLE_TABLES = ['employees', 'operators', 'app_roles', 'users']
+  const isPeopleRecord = (e: AuditEntry) => !!e.table_name && PEOPLE_TABLES.includes(e.table_name)
+
+  // Apply department + table filters client-side (not queryable server-side directly)
+  let filtered = entries
+  if (filterDept)  filtered = filtered.filter(e => e.actor_department === filterDept)
+  if (filterTable === 'people') filtered = filtered.filter(isPeopleRecord)
 
   // Apply alphabetical sort by actor name (default is chronological)
   if (sortAlpha) {
@@ -199,6 +205,13 @@ function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
           {uniqueActions.map(a => <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>)}
         </select>
         <button
+          onClick={() => setFilterTable(t => t === 'people' ? '' : 'people')}
+          title="Add/remove/relink events for staff, PIN operators, and login accounts"
+          style={{ ...FONT, display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', border: `1px solid ${filterTable === 'people' ? '#1A3A0E' : '#E0E0E0'}`, borderRadius: 6, background: filterTable === 'people' ? '#1A3A0E' : 'white', cursor: 'pointer', fontSize: 12, color: filterTable === 'people' ? 'white' : '#6B7280', fontWeight: filterTable === 'people' ? 600 : 400 }}
+        >
+          People &amp; Access
+        </button>
+        <button
           onClick={() => setSortAlpha(s => !s)}
           style={{ ...FONT, display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', border: `1px solid ${sortAlpha ? '#1A3A0E' : '#E0E0E0'}`, borderRadius: 6, background: sortAlpha ? '#1A3A0E' : 'white', cursor: 'pointer', fontSize: 12, color: sortAlpha ? 'white' : '#6B7280', fontWeight: sortAlpha ? 600 : 400 }}
         >
@@ -238,8 +251,8 @@ function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
       {!loading && filtered.length > 0 && (
         <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, overflow: 'hidden' }}>
           {/* Table header */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 120px 140px 160px', background: '#F9FAFB', borderBottom: '1.5px solid #E5E7EB', padding: '8px 14px' }}>
-            {['Person', 'Department', 'Event', 'Role', 'Time (SAST)'].map(h => (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 120px 140px 130px 160px', background: '#F9FAFB', borderBottom: '1.5px solid #E5E7EB', padding: '8px 14px' }}>
+            {['Person', 'Department', 'Event', 'Role', 'Record', 'Time (SAST)'].map(h => (
               <span key={h} style={{ ...FONT, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#6B7280' }}>{h}</span>
             ))}
           </div>
@@ -249,7 +262,7 @@ function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
             const role = e.actor_role ?? e.after_state?.role ?? null
             return (
               <div key={e.id} style={{
-                display: 'grid', gridTemplateColumns: '1fr 110px 120px 140px 160px',
+                display: 'grid', gridTemplateColumns: '1fr 110px 120px 140px 130px 160px',
                 padding: '11px 14px',
                 borderBottom: i < filtered.length - 1 ? '1px solid #F3F4F6' : 'none',
                 background: 'white',
@@ -273,6 +286,10 @@ function AuditLogTab({ myId, isIT }: { myId: string | null; isIT: boolean }) {
                 </span>
                 {/* Role */}
                 <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF' }}>{role?.replace(/_/g, ' ') ?? '—'}</span>
+                {/* Record (schema.table) — the actual thing changed */}
+                <span style={{ ...FONT, fontSize: 10, color: '#9CA3AF', fontFamily: 'monospace' }}>
+                  {e.table_name ? `${e.schema_name ?? ''}.${e.table_name}` : '—'}
+                </span>
                 {/* Time */}
                 <span style={{ ...FONT, fontSize: 11, color: '#9CA3AF' }}>{fmtTs(e.created_at)}</span>
               </div>

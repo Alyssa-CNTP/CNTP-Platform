@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getSessionClient } from '@/lib/auth/server-helpers'
 import { buildEmployeePayload, EMPLOYEE_COLS } from '@/lib/production/employee-payload'
+import { writeAudit } from '@/lib/audit/write'
 
 export async function PATCH(
   req: NextRequest,
@@ -26,6 +27,13 @@ export async function PATCH(
     return NextResponse.json({ error: 'Full name is required' }, { status: 400 })
 
   const db = await getSessionClient()
+  const { data: before } = await db
+    .schema('production' as any)
+    .from('employees')
+    .select(EMPLOYEE_COLS)
+    .eq('id', id)
+    .maybeSingle()
+
   const { data, error } = await db
     .schema('production' as any)
     .from('employees')
@@ -38,6 +46,13 @@ export async function PATCH(
     console.error('[api/staff PATCH]', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  await writeAudit({
+    actorId: caller.userId, action: 'update',
+    schema: 'production', table: 'employees', recordId: id,
+    before, after: data,
+  })
+
   return NextResponse.json(data)
 }
 
@@ -53,6 +68,13 @@ export async function DELETE(
     return NextResponse.json({ error: 'You don’t have permission to remove staff' }, { status: 403 })
 
   const db = await getSessionClient()
+  const { data: before } = await db
+    .schema('production' as any)
+    .from('employees')
+    .select(EMPLOYEE_COLS)
+    .eq('id', id)
+    .maybeSingle()
+
   const { error } = await db
     .schema('production' as any)
     .from('employees')
@@ -63,5 +85,12 @@ export async function DELETE(
     console.error('[api/staff DELETE]', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  await writeAudit({
+    actorId: caller.userId, action: 'delete',
+    schema: 'production', table: 'employees', recordId: id,
+    before,
+  })
+
   return NextResponse.json({ success: true })
 }
