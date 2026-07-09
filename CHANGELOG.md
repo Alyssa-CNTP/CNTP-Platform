@@ -5,6 +5,35 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Ops batch: cleaning compliance, afternoon shift, session, hourly VSD, roster auto-publish)
+
+Five changes shipped together. **No database migrations required.**
+
+### Cleaning checklist — explicit ticking (compliance)
+**Files:** `components/production/capture/CleaningPanel.tsx`, `lib/production/cleaning-config.ts`
+- The capture cleaning panel was exception-based: every task rendered pre-ticked and sign-off auto-confirmed all areas, so an operator could sign off without touching anything (non-compliant). Inverted to explicit confirmation — each due task starts **unchecked** and must be ticked done, or flagged not-done with a reason, before the PIN sign is enabled.
+- Per-task done proof is written to `cleaning_logs` (`area_confirmed` rows now carry `task_key`; `task_exception` unchanged) — no schema change.
+
+### Afternoon shift — operators can sign in (16h00–01h00)
+**Files:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/calendar/page.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/live/SessionModal.tsx`
+- CNTP runs two shifts: Morning (07h00–16h00) and Afternoon/Night (16h00–01h00). The capture flow stores the 16h00–01h00 shift as `afternoon`, but the supervisor calendar wrote it as `night` — a value nothing on the capture side read. Result: operators signing in during 16h00–23h00 saw "No sections assigned", and the 16h00 hand-over found no incoming operators.
+- Standardised the 16h00–01h00 shift on `afternoon` (displayed "Afternoon / Night"); `night` kept as a legacy alias, read via `shiftValuesFor()`. Clocks now resolve 16h00+ to `afternoon` (no more 23h00 split). Calendar Night column rosters `afternoon` and auto-fills from the roster's night band. Read paths accept both values for backward-compat.
+
+### Session — reliable idle logout + sign out on shift submit
+**Files:** `app/(app)/layout.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+- The 1-hour logout was a single `setTimeout` that browsers throttle in background tabs and drop when a device sleeps, leaving users logged in past the hour. Reworked to a wall-clock model (last-activity timestamp, re-evaluated on a 1s tick and on `visibilitychange`/`focus`) so a slept/throttled tab signs out the moment it wakes. Idle window unchanged (60m, 5m warning).
+- A **floor operator** is now signed out when they submit their shift, so the incoming shift signs in fresh. Supervisors/IT capturing on a shared tablet are not signed out.
+
+### Hourly VSD infeed prompt
+**Files:** `components/production/capture/HourlyVsdPrompt.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
+- Operators were never actively prompted to log the hourly infeed-VSD reading, and the passive nudge disappeared once checks were signed. Added a page-level modal that auto-pops whenever an hourly reading is due while the line is running and the session is open — **including after checks sign-off**. Readings append to `production.check_events` (flagged if outside the supervisor-set range); "Remind me shortly" snoozes 10 min. Only sections with an hourly numeric check (Sieving) surface it. Dashboard VSD KPIs already consume these events.
+
+### Roster — Wednesday workflow: outstanding tracker, auto-publish, green export
+**Files:** `app/(app)/production/roster/page.tsx`
+- Added a confirmations tracker (X/N departments confirmed + which are outstanding), emphasised red on the Wednesday deadline. Once every department shown in the grid has submitted, the period **auto-publishes** (and syncs the maintenance duty roster); manual early-publish still available. **Export/Print buttons turn green** once published to signal the confirmed roster is ready to share.
+
+---
+
 ## 2026-07-08 — Alyssa (Production Orders: record numbering + permissioned edit / soft-delete with audit trail)
 
 **Files changed:** `supabase/migrations/20260708_001_prod_record_mgmt.sql` (new), `lib/audit/write.ts` (new), `app/api/production/orders/[id]/route.ts` (new), `app/(app)/production/orders/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
