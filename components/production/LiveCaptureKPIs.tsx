@@ -30,7 +30,7 @@ const STATUS = {
 
 export function LiveCaptureKPIs() {
   const today = format(new Date(), 'yyyy-MM-dd')
-  const shiftNow = (() => { const h = new Date().getHours(); return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night' })()
+  const shiftNow = (() => { const h = new Date().getHours(); return h >= 7 && h < 16 ? 'morning' : 'afternoon' })()
   const [rows, setRows] = useState<SectionRow[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)

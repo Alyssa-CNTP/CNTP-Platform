@@ -26,8 +26,16 @@ interface SectionDraft {
 
 const emptyDraft = (): SectionDraft => ({ operatorIds: [], lotNumber: '', variant: '', prodOrders: [] })
 
-// Capture's 3 shifts collapse onto the roster's 2 (day 07–16 / night 16–01).
-const ROSTER_SHIFT: Record<Shift, 'day' | 'night'> = { morning: 'day', afternoon: 'day', night: 'night' }
+// Capture's shift maps onto the roster's two bands (day 07–16 / night 16–01).
+// The Afternoon/Night capture shift (16h00–01h00) draws from the roster's night
+// band. 'night' is a legacy alias of 'afternoon'.
+const ROSTER_SHIFT: Record<Shift, 'day' | 'night'> = { morning: 'day', afternoon: 'night', night: 'night' }
+// User-facing shift labels (the 16h00–01h00 shift is the "Afternoon / Night" shift).
+const SHIFT_BTN: Record<Shift, string> = {
+  morning:   'Morning · 07h00–16h00',
+  afternoon: 'Afternoon / Night · 16h00–01h00',
+  night:     'Night',
+}
 // Which roster role(s) feed each capture section, for autofill.
 const SECTION_ROLES: Record<string, string[]> = {
   sieving:     ['sieving_tower'],
@@ -48,9 +56,10 @@ function AssignScreen() {
   const [date, setDate]   = useState(sp.get('date') ?? format(new Date(), 'yyyy-MM-dd'))
   const [shift, setShift] = useState<Shift>(() => {
     const q = sp.get('shift')
-    if (q === 'morning' || q === 'afternoon' || q === 'night') return q
+    if (q === 'morning' || q === 'afternoon') return q
+    if (q === 'night') return 'afternoon'   // legacy deep-links → afternoon/night shift
     const h = new Date().getHours()
-    return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night'
+    return h >= 7 && h < 16 ? 'morning' : 'afternoon'
   })
 
   const [operators, setOperators] = useState<Operator[]>([])
@@ -230,7 +239,7 @@ function AssignScreen() {
     setSavingSection(null)
   }
 
-  const shifts: Shift[] = ['morning', 'afternoon', 'night']
+  const shifts: Shift[] = ['morning', 'afternoon']
 
   return (
     <div className="px-4 py-5 max-w-[900px] space-y-5">
@@ -259,9 +268,9 @@ function AssignScreen() {
           {shifts.map(s => (
             <button
               key={s} onClick={() => setShift(s)}
-              className={`px-4 py-2 rounded-lg border font-medium text-[13px] capitalize transition-colors ${shift === s ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}
+              className={`px-4 py-2 rounded-lg border font-medium text-[13px] transition-colors ${shift === s ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}
             >
-              {s}
+              {SHIFT_BTN[s]}
             </button>
           ))}
         </div>
