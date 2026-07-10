@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ResponsiveContainer, ReferenceLine, Cell,
+  Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, Cell,
 } from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
@@ -387,8 +387,15 @@ function monthRangeLabel(monthOffset: number): string {
   return d.toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' })
 }
 
-function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
-  runs: any[]; activeProduct: string; specDef: any; onPointClick?: (runId: any) => void
+// Representative spec key used for the mesh-trend reference band. The %
+// mesh bounds are identical across Export/Domestic for a given CON/ORG
+// mesh set in every product in SIEVING_SPECS_DB — only Leaf Shade differs
+// by grade — so "Export|CON" is a safe stand-in for the trend view, which
+// isn't scoped to one grade/variant.
+const TREND_SPEC_KEY = 'Export|CON'
+
+function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPointClick }: {
+  runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>; onPointClick?: (runId: any) => void
 }) {
   const [view, setView]           = useState<'week' | 'month'>('week')
   const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
@@ -425,13 +432,23 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
 
   const inWindow = runs.filter((r: any) => r.date && bucketOf(r.date) != null)
 
+  // Spec band per mesh — see TREND_SPEC_KEY note above.
+  const specSource = activeSpecs || specDef.variants
+  const specBoundsFor = (m: string): { min: number; max: number } | null => {
+    const range = specSource?.[TREND_SPEC_KEY]?.[m]
+    return Array.isArray(range) ? { min: range[0], max: range[1] } : null
+  }
+
   // ── Mesh Trend data: one row per bucket, one column per sieve fraction (mean) ──
   const trendData = bucketLabels.map(b => {
     const rows = inWindow.filter((r: any) => r.runType === 'in-process' && bucketOf(r.date) === b.key)
     const entry: any = { period: b.label }
     meshOptions.forEach(m => {
       const vals = rows.map((r: any) => parseFloat(r[m])).filter((v: number) => !isNaN(v))
-      entry[m] = vals.length ? +mean(vals).toFixed(1) : null
+      const val = vals.length ? +mean(vals).toFixed(1) : null
+      entry[m] = val
+      const bounds = specBoundsFor(m)
+      entry[`${m}__oos`] = val != null && !!bounds && (val < bounds.min || val > bounds.max)
     })
     return entry
   })
@@ -502,19 +519,51 @@ function SievingOutlierChart({ runs, activeProduct, specDef, onPointClick }: {
             No in-process sieve results for {rangeLabel} yet.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={trendData} margin={{ top:8, right:20, left:0, bottom:4 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" tick={{ fontSize:10 }} />
-              <YAxis tick={{ fontSize:10 }} unit="%" width={40} />
-              <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
-              <Legend wrapperStyle={{ fontSize:10 }} />
-              {meshOptions.map((m,i) => (
-                <Line key={m} dataKey={m} name={m.replace(' (%)','')} stroke={TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]}
-                  strokeWidth={2} dot={{ r:3 }} connectNulls />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:14 }}>
+            {meshOptions.map((m,i) => {
+              const bounds = specBoundsFor(m)
+              const oosCount = trendData.filter(row => row[`${m}__oos`]).length
+              const lineColor = TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]
+              return (
+                <div key={m} style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 12px 4px' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+                    <span style={{ fontSize:12, fontWeight:700, color:'#1f2937' }}>{m.replace(' (%)','')}</span>
+                    <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      {bounds && <span style={{ fontSize:10, color:'#6b7280', fontWeight:600 }}>Spec {bounds.min}–{bounds.max}%</span>}
+                      {oosCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>🚩 {oosCount} out of spec</span>}
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                      <XAxis dataKey="period" tick={{ fontSize:9 }} />
+                      <YAxis tick={{ fontSize:9 }} unit="%" width={36} />
+                      <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
+                      {/* Spec band — solid dark boundary lines so it's unmistakable whether the trend is running in-spec */}
+                      {bounds && (
+                        <ReferenceArea y1={bounds.min} y2={bounds.max} fill="#16a34a" fillOpacity={0.07} />
+                      )}
+                      {bounds && (
+                        <ReferenceLine y={bounds.min} stroke="#111827" strokeWidth={1.5} label={{ value:`min ${bounds.min}%`, fontSize:9, fill:'#111827', position:'insideBottomLeft' }} />
+                      )}
+                      {bounds && (
+                        <ReferenceLine y={bounds.max} stroke="#111827" strokeWidth={1.5} label={{ value:`max ${bounds.max}%`, fontSize:9, fill:'#111827', position:'insideTopLeft' }} />
+                      )}
+                      <Line
+                        dataKey={m} name={m.replace(' (%)','')} stroke={lineColor} strokeWidth={2} connectNulls
+                        dot={(props: any) => {
+                          const { cx, cy, payload, index } = props
+                          if (payload[m] == null) return <React.Fragment key={`d-${m}-${index}`} />
+                          const bad = payload[`${m}__oos`]
+                          return <circle key={`d-${m}-${index}`} cx={cx} cy={cy} r={bad?5:3.5} fill={bad?'#dc2626':lineColor} stroke={bad?'#7f1d1d':'#fff'} strokeWidth={bad?1.5:1} />
+                        }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )
+            })}
+          </div>
         )
       ) : (
         scatterData.length < 3 ? (
@@ -1482,7 +1531,7 @@ export default function SievingPage() {
         </button>
       </div>
       {showOutlierChart && productRuns.length>0 && (
-        <SievingOutlierChart runs={productRuns} activeProduct={activeProduct} specDef={specDef}
+        <SievingOutlierChart runs={productRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
           onPointClick={(runId)=>{
             setChartHighlightId(runId)
             const el = document.getElementById(`run-row-${runId}`)

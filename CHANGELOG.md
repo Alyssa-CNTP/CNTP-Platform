@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Sieving: split Mesh Trend chart into per-mesh charts with spec bands)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **Mesh Trend view is now one small chart per mesh size** (>6, >12/>10, >18, >40, Dust, and Fine Leaf where applicable), instead of every mesh overlaid on a single combined chart — applies to all four products (Fine Leaf, Coarse Leaf, Indent Sticks, Rooibos Blocks).
+- **Each mesh chart shows a clear spec band**: a shaded green region between the spec min/max plus solid dark boundary reference lines labelled with the actual min/max %, so it's unmistakable whether the trend is running inside spec.
+- **Out-of-spec points are flagged red** — any bucket average outside the spec band renders as a larger red dot, and the chart header shows a 🚩 out-of-spec count for that mesh.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: add P4 to PA Level dropdown)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
