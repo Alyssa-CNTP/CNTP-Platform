@@ -53,7 +53,7 @@ export const ROSTER_ROLE_SEED: RosterRole[] = [
   { key: 'sieving_tower',      name: 'Sieving Tower',               category: 'production', sort: 80 },
   { key: 'blender',            name: 'Blender',                     category: 'production', sort: 90 },
   { key: 'refining_2',         name: 'Refining 2',                  category: 'production', sort: 100 },
-  { key: 'rosehip',            name: 'Rosehip',                     category: 'production', sort: 110 },
+  { key: 'rosehip',            name: 'Value Added Product',         category: 'production', sort: 110 },
 
   { key: 'store_supervisor',   name: 'Store Supervisor',            category: 'store',      sort: 200 },
   { key: 'store_operator',     name: 'Store Operator',              category: 'store',      sort: 210 },
