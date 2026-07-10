@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Sieving: darker out-of-spec chart shading; Granule: one tasting per batch + QC batch delete)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `app/(app)/quality/granule/page.tsx`
+
+- **Sieving Mesh Trend charts:** out-of-spec zones (above/below the spec band) now shade a dark red, in addition to the existing red out-of-spec dots, so it's unmistakable at a glance. Y-axis domain is computed per mesh (data + spec band, padded) instead of a fixed 0–100%, so tight-spec meshes like Dust (0–1%) stay readable.
+- **Granule Line — one tasting per batch:** the "Add Tasting" button now only shows if the batch has zero tasting records; once one exists, it's replaced with a note to edit the existing tasting instead. Guarded both in the UI and in `handleAddTasting` itself.
+- **Granule Line — QC can now delete a batch, with extreme caution:** the delete button is no longer admin-only. Clicking it opens a confirmation modal that requires typing the exact batch number before "Delete Permanently" is enabled. Also fixed: deleting a run now explicitly deletes its `granule_samples`/`granule_tastings` rows first, since there's no FK/cascade between them — previously this would have left orphaned rows behind.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: split Mesh Trend chart into per-mesh charts with spec bands)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

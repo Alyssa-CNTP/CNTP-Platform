@@ -524,6 +524,15 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
               const bounds = specBoundsFor(m)
               const oosCount = trendData.filter(row => row[`${m}__oos`]).length
               const lineColor = TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]
+              // Padded domain covering both the data and the spec band, so the
+              // out-of-spec shading never forces the axis to a fixed 0-100 —
+              // that would flatten a tight-spec mesh like Dust (0-1%) flat.
+              const vals = trendData.map(row => row[m]).filter((v: any) => v != null)
+              const lo = Math.min(...vals, bounds?.min ?? Infinity)
+              const hi = Math.max(...vals, bounds?.max ?? -Infinity)
+              const finiteLo = isFinite(lo) ? lo : 0, finiteHi = isFinite(hi) ? hi : 100
+              const pad = Math.max(1, (finiteHi - finiteLo) * 0.2)
+              const domainMin = Math.max(0, finiteLo - pad), domainMax = finiteHi + pad
               return (
                 <div key={m} style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 12px 4px' }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
@@ -537,11 +546,15 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
                     <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
                       <XAxis dataKey="period" tick={{ fontSize:9 }} />
-                      <YAxis tick={{ fontSize:9 }} unit="%" width={36} />
+                      <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
                       <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
-                      {/* Spec band — solid dark boundary lines so it's unmistakable whether the trend is running in-spec */}
+                      {/* Spec band — in-spec shaded green, out-of-spec zones shaded a dark red so it's unmistakable at a glance, plus solid dark boundary lines */}
                       {bounds && (
-                        <ReferenceArea y1={bounds.min} y2={bounds.max} fill="#16a34a" fillOpacity={0.07} />
+                        <>
+                          <ReferenceArea y1={domainMin} y2={bounds.min} fill="#7f1d1d" fillOpacity={0.16} />
+                          <ReferenceArea y1={bounds.min} y2={bounds.max} fill="#16a34a" fillOpacity={0.07} />
+                          <ReferenceArea y1={bounds.max} y2={domainMax} fill="#7f1d1d" fillOpacity={0.16} />
+                        </>
                       )}
                       {bounds && (
                         <ReferenceLine y={bounds.min} stroke="#111827" strokeWidth={1.5} label={{ value:`min ${bounds.min}%`, fontSize:9, fill:'#111827', position:'insideBottomLeft' }} />

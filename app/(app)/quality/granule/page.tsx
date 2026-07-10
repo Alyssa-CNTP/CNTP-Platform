@@ -1302,13 +1302,57 @@ function GranuleEditSpecModal({ run, onSave, onClose }: { run: any; onSave: (id:
   )
 }
 
+// ─── GranuleDeleteRunModal ────────────────────────────────────────────────────
+// Extreme-caution confirmation — QC (not just admin) can delete a batch, but
+// only by typing the batch number exactly. This permanently removes the run,
+// all its samples, and all its tastings; there is no undo.
+
+function GranuleDeleteRunModal({ run, onConfirm, onClose }: { run: any; onConfirm: () => void; onClose: () => void }) {
+  const [typed, setTyped] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const matches = typed.trim() === run.batch_number
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4">
+      <div className="bg-surface-card border-2 border-err/40 rounded-2xl w-full max-w-md shadow-menu">
+        <div className="px-6 py-4 rounded-t-2xl bg-err/10 border-b border-err/20">
+          <div className="text-err font-bold text-[14px]">⚠ Permanently Delete Batch</div>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-[12px] text-text">
+            This will permanently delete batch <span className="font-mono font-bold">{run.batch_number}</span> —
+            all {run.samples?.length || 0} sample{run.samples?.length !== 1 ? 's' : ''} and {run.tastings?.length || 0} tasting record{run.tastings?.length !== 1 ? 's' : ''} will be lost. This cannot be undone.
+          </p>
+          <div>
+            <label className="block font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">
+              Type the batch number to confirm: <span className="font-bold text-text">{run.batch_number}</span>
+            </label>
+            <input value={typed} onChange={e => setTyped(e.target.value)} autoFocus
+              placeholder={run.batch_number}
+              className="w-full px-3 py-2 border-2 border-err/30 rounded-lg font-mono text-[13px] bg-surface outline-none focus:border-err" />
+          </div>
+          <div className="flex justify-end gap-3 pt-1">
+            <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
+            <button
+              onClick={async () => { setDeleting(true); await onConfirm(); setDeleting(false) }}
+              disabled={!matches || deleting}
+              className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: '#991b1b' }}>
+              {deleting ? 'Deleting…' : '🗑 Delete Permanently'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── GranuleRunCard ───────────────────────────────────────────────────────────
 
 interface RunCardProps {
   run: any; isAdmin: boolean
   onAddSample: (r: any) => void
   onAddTasting: (r: any, sid: number | null) => void
-  onDelete: (id: number) => void
+  onDelete: (id: number) => Promise<void>
   onFinalise: (id: number, status: string, reason?: string) => void
   onUpdateSpec: (id: number, spec: any) => void
   onRecheckSample: (id: number, f: any) => void
@@ -1330,6 +1374,7 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
   const [batchDraft, setBatchDraft]     = useState(run.batch_number)
   const [batchSaving, setBatchSaving]   = useState(false)
   const [decisionResult, setDecisionResult] = useState<'Pass'|'Fail'|'Concession'|null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const handleBatchSave = async () => {
     const trimmed = batchDraft.trim()
@@ -1347,6 +1392,10 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
     <div className={`bg-surface-card rounded-xl mb-4 overflow-hidden border-2 ${hasViolations ? 'border-err/40' : 'border-surface-rule'}`}>
       {editingSpec && <GranuleEditSpecModal run={run} onSave={onUpdateSpec} onClose={() => setEditingSpec(false)} />}
       {editingSample && <GranuleEditSampleModal sample={editingSample} run={run} onSave={onEditSample} onClose={() => setEditingSample(null)} />}
+      {confirmingDelete && (
+        <GranuleDeleteRunModal run={run} onClose={() => setConfirmingDelete(false)}
+          onConfirm={async () => { await onDelete(run.id); setConfirmingDelete(false) }} />
+      )}
       {decisionResult && (
         <LmDecisionModal
           result={decisionResult}
@@ -1428,7 +1477,8 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
             </button>
           )}
           <button onClick={() => exportGranuleRun(run, GRANULE_SIEVES)} className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer">⬇ Excel</button>
-          {isAdmin && <button onClick={() => onDelete(run.id)} className="px-2 py-1.5 rounded-lg border-none bg-err/10 text-err text-[12px] cursor-pointer">🗑</button>}
+          <button onClick={() => setConfirmingDelete(true)} title="Delete this batch — requires typing the batch number to confirm"
+            className="px-2 py-1.5 rounded-lg border border-err/20 bg-err/10 text-err text-[12px] cursor-pointer">🗑 Delete Batch</button>
         </div>
       </div>
 
@@ -1539,10 +1589,14 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                         {(run.tastings || []).filter((t: any) => t.sample_id === s.id).slice().reverse().map((t: any, ti: number) => (
                           <GranuleInlineTastingRow key={t.id} tasting={t} colCount={colCount} rowBg={ti % 2 === 0 ? '#fdf8f5' : '#faf5f0'} onSave={onEditTasting} />
                         ))}
-                        {/* Add tasting */}
+                        {/* Add tasting — capped at exactly one tasting per batch; once recorded, only editing the existing tasting (above) is allowed */}
                         <tr style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
                           <td colSpan={colCount} className="px-4 py-1.5 pl-7">
-                            <button onClick={() => onAddTasting(run, s.id)} className="text-[10px] px-2.5 py-1 rounded-lg font-semibold cursor-pointer" style={{ border: '1px solid #d97706', background: '#fef3c7', color: '#92400e' }}>🍵 Add Tasting</button>
+                            {noTastings ? (
+                              <button onClick={() => onAddTasting(run, s.id)} className="text-[10px] px-2.5 py-1 rounded-lg font-semibold cursor-pointer" style={{ border: '1px solid #d97706', background: '#fef3c7', color: '#92400e' }}>🍵 Add Tasting</button>
+                            ) : (
+                              <span className="text-[10px] text-text-muted italic">🍵 One tasting already recorded for this batch — edit it above instead of adding another.</span>
+                            )}
                           </td>
                         </tr>
                       </Fragment>
@@ -2091,6 +2145,8 @@ export default function GranulePage() {
   }
 
   async function handleAddTasting(form: any) {
+    const run = runs.find(r => r.id === form.run_id)
+    if (run && (run.tastings || []).length > 0) { alert('This batch already has a tasting record — edit the existing one instead of adding another.'); setTastingTarget(null); return }
     const { data, error } = await db.schema('qms').from('granule_tastings').insert({
       run_id: form.run_id, sample_id: form.sample_id || null, assessed_by: form.assessed_by || '',
       tasting_time: form.tasting_time || '', granule_aroma: form.granule_aroma || null,
@@ -2103,8 +2159,13 @@ export default function GranulePage() {
     setTastingTarget(null)
   }
 
+  // Confirmation (typing the exact batch number) already happened in
+  // GranuleDeleteRunModal — no browser confirm() needed here.
+  // No FK/cascade exists between granule_runs and its samples/tastings, so
+  // they're deleted explicitly to avoid leaving orphaned rows behind.
   async function handleDeleteRun(id: number) {
-    if (!confirm('Delete this granule run and all its samples?')) return
+    await db.schema('qms').from('granule_tastings').delete().eq('run_id', id)
+    await db.schema('qms').from('granule_samples').delete().eq('run_id', id)
     await db.schema('qms').from('granule_runs').delete().eq('id', id)
     setRuns(prev => prev.filter(r => r.id !== id))
   }
