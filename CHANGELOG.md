@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-09 — Alyssa (Shift Roster: rename "Rosehip" role to "Value Added Product")
+
+**Files:** `lib/production/roster-config.ts`
+
+- Renamed the `rosehip` role's display label from "Rosehip" to "Value Added Product" in the fallback role catalogue. The live label is actually seeded in `production.roster_roles.name` (DB row, `key='rosehip'` unchanged — nothing else references the name), so the visible rename requires running `UPDATE production.roster_roles SET name = 'Value Added Product' WHERE key = 'rosehip';` on staging and production.
+
 ## 2026-07-09 — Alyssa (Roster: fix staff-picker cancelling itself on selection — regression from same-day click-outside fix)
 
 **Files:** `app/(app)/production/roster/page.tsx`
