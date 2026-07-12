@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-12 — Alyssa (Training: staff portfolios — video lessons + digital assessments → auto-updates the competency matrix)
+
+Phase 1 of the long-parked "staff training profiles" initiative (raised 2026-07-09), driven by the need to get every operator trained on the new tablet-capture process (#361/#362) — efficiently, but still with the work-instruction + tested-competency audit trail FSSC requires. Digitizes the paper Refining 1 / Sieving Tower / Pasteuriser assessments into in-app courses: embedded YouTube work-instruction videos → a digital, mostly auto-graded assessment → a pass writes straight into the existing `production.employee_competencies` + `competency_history`, so the Skills Matrix reflects training automatically instead of a training officer marking paper by hand.
+
+**New DB schema:** `hr` (separate from `production`, which keeps owning competency *state*) — `training_courses`, `training_lessons`, `training_questions` + `training_question_options`, `course_sops` (course → one or many SOP competencies), `training_assignments`, `training_attempts` (the audit record), `lesson_progress`. Adds `production.sops.requires_practical_signoff` — theory-only SOPs auto-advance to `competent` on a pass; hands-on machine SOPs advance to `assessed` and wait for a supervisor's practical sign-off.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260710_001_hr_training.sql` then `supabase/seeds/training_seed.sql` in the **staging** Supabase SQL editor.
+2. Add `hr` to **Exposed schemas** (Supabase dashboard → API settings) on staging (and production, once promoted) — PostgREST can't reach a schema that isn't exposed.
+
+**Files:** `supabase/migrations/20260710_001_hr_training.sql`, `supabase/seeds/training_seed.sql` (new); `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts` (new `can_author_training`/`can_assign_training`/`can_view_all_competency` keys + a new **HR** department with `training_officer`/`hr_manager` roles); `lib/training/*` (new — grading engine, shared question-kind config, PIN-identity helper); `app/api/training/**` (new — courses, assignments, attempts, manual-review); `app/(app)/training/**` (new — learner "My Training" + course player, and HR pages: manage courses/lessons/questions, assignments, review queue, practical sign-off, cross-department competency dashboard); `components/training/*` (new); `components/layout/Sidebar.tsx` + `app/(app)/layout.tsx` (new top-level Training nav group + route guards); `app/(app)/production/staff/[id]/page.tsx` (new Training portfolio panel); `app/api/staff/competencies/route.ts` (fixed a pre-existing bug — the route returned `{ok, id}` but the profile page's optimistic UI update expected `{competency, historyRow}`, so edits never reflected until a reload).
+
+- Grading is server-side only — `is_correct`/`match_key` never reach the learner's browser. Six question kinds (single/multi-choice, true/false, numeric-with-tolerance, matching, short-text) cover everything in the three paper memos; the ~4 "marker's-discretion" questions route to a training-officer review queue with a provisional score instead of blocking.
+- Floor operators are PIN-only (no login) and sandboxed to `/production/capture` by the layout guard — added a `/training` exception so they can reach their own training, plus a PIN-attested "take training as someone else" kiosk flow for shared tablets (mirrors the existing Capture shift-changeover PIN pattern).
+- Digitized all three memos' questions faithfully, including their standard weights, temperatures, and procedures; four repeated "who is responsible" questions (the memo's hand-marked correct answer didn't survive as text/formatting in the .docx) were confirmed directly with the training owner rather than guessed, given the FSSC/audit stakes of getting a competency test wrong.
+
 ## 2026-07-09 — Alyssa (Shift Roster: rename "Rosehip" role to "Value Added Product")
 
 **Files:** `lib/production/roster-config.ts`

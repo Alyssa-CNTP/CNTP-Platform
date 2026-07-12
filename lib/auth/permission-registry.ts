@@ -161,6 +161,18 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Cross-department — HR owns authoring org-wide; Production/Quality can author their own courses.
+    module: 'Training',
+    resources: [
+      { key: 'training.content', label: 'Courses, lessons & assessments',
+        read: 'dept', write: 'can_author_training' },
+      { key: 'training.assignments', label: 'Course assignments',
+        read: 'dept', write: 'can_assign_training' },
+      { key: 'training.competency', label: 'Cross-department competency dashboard',
+        read: 'can_view_all_competency' },
+    ],
+  },
+  {
     // Cross-department — the whole-site shift layout. View is one global key;
     // write/delete/submit are per section so a person changes only their own.
     module: 'Shift Roster',

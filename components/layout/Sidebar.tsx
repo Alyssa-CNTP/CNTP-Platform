@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
-  FileSpreadsheet,
+  FileSpreadsheet, GraduationCap, Users2, UserCheck2, BarChart3,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -49,6 +49,14 @@ const NAV: NavItem[] = [
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/production/staff',          label: 'Staff & Skills',             icon: Users,           group: 'Operations' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
+
+  // ── Training — universal learner entry + HR/training-officer authoring ──
+  { href: '/training',                  label: 'Training',                   icon: GraduationCap,   group: 'Training' },
+  { href: '/training/manage',           label: 'Manage Courses',             icon: GraduationCap,   group: 'Training', permission: 'can_author_training' },
+  { href: '/training/manage/assignments', label: 'Assignments',              icon: Users2,          group: 'Training', permission: 'can_assign_training' },
+  { href: '/training/manage/review',    label: 'Review Queue',               icon: ClipboardCheck,  group: 'Training', permission: 'can_manage_competencies' },
+  { href: '/training/signoff',          label: 'Practical Sign-off',         icon: UserCheck2,      group: 'Training', permission: 'can_manage_competencies' },
+  { href: '/training/competency',       label: 'Competency Dashboard',       icon: BarChart3,       group: 'Training', permission: 'can_view_all_competency' },
 
   // ── Quality ──
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
@@ -114,6 +122,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
   const isFloorOperator = role === 'floor_operator'
   const FLOOR_NAV: NavItem[] = [
     { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
+    { href: '/training',           label: 'Training',     icon: GraduationCap,   group: 'Production' },
   ]
 
   const isUnassigned = !role && !department
