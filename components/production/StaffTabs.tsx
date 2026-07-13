@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Users, BarChart2, BookOpen, CalendarRange } from 'lucide-react'
+import { Users, BarChart2, BookOpen, CalendarRange, ArrowLeft, GraduationCap } from 'lucide-react'
 
 const TABS = [
   { href: '/production/staff',        label: 'Directory',      icon: Users       },
@@ -20,26 +20,38 @@ export function StaffTabs() {
       : pathname === href || pathname.startsWith(href + '/')
 
   return (
-    <div className="flex items-center justify-between border-b border-stone-200">
-      <div className="flex items-center gap-0 overflow-x-auto">
-        {TABS.map(t => (
-          <Link key={t.href} href={t.href}
-            className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors -mb-px whitespace-nowrap ${
-              isActive(t.href)
-                ? 'border-brand text-brand'
-                : 'border-transparent text-stone-400 hover:text-stone-700'
-            }`}>
-            <t.icon size={14} /> {t.label}
-          </Link>
-        ))}
-      </div>
-
-      {/* Cross-reference to Shift Roster — always one click away */}
-      <Link href="/production/roster"
-        className="flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium text-stone-400 hover:text-brand transition-colors whitespace-nowrap border-b-2 border-transparent -mb-px">
-        <CalendarRange size={13} />
-        Shift Roster
+    <div>
+      <Link href="/hr" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand mb-2">
+        <ArrowLeft size={13} /> HR
       </Link>
+      <div className="flex items-center justify-between border-b border-stone-200">
+        <div className="flex items-center gap-0 overflow-x-auto">
+          {TABS.map(t => (
+            <Link key={t.href} href={t.href}
+              className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors -mb-px whitespace-nowrap ${
+                isActive(t.href)
+                  ? 'border-brand text-brand'
+                  : 'border-transparent text-stone-400 hover:text-stone-700'
+              }`}>
+              <t.icon size={14} /> {t.label}
+            </Link>
+          ))}
+        </div>
+
+        {/* Cross-references to related HR modules — always one click away */}
+        <div className="flex items-center">
+          <Link href="/training"
+            className="flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium text-stone-400 hover:text-brand transition-colors whitespace-nowrap border-b-2 border-transparent -mb-px">
+            <GraduationCap size={13} />
+            Training
+          </Link>
+          <Link href="/production/roster"
+            className="flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium text-stone-400 hover:text-brand transition-colors whitespace-nowrap border-b-2 border-transparent -mb-px">
+            <CalendarRange size={13} />
+            Shift Roster
+          </Link>
+        </div>
+      </div>
     </div>
   )
 }

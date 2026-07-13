@@ -103,8 +103,8 @@ export default function CoursePlayerPage() {
 
   return (
     <div className="px-4 py-6 max-w-[700px] mx-auto space-y-5">
-      <Link href="/training" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand">
-        <ArrowLeft size={13} /> Training
+      <Link href="/training/my" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand">
+        <ArrowLeft size={13} /> My Training
       </Link>
 
       <div>
@@ -230,7 +230,7 @@ export default function CoursePlayerPage() {
           )}
 
           <div className="flex gap-2">
-            <Link href="/training" className="flex-1 text-center py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50">Back to Training</Link>
+            <Link href="/training/my" className="flex-1 text-center py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50">Back to My Training</Link>
             {!result.needsReview && !result.passed && (
               <button onClick={retake} className="flex-1 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium hover:bg-brand-mid transition-colors">Retake assessment</button>
             )}
