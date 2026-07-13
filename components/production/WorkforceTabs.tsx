@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { CalendarRange, Users } from 'lucide-react'
+import { CalendarRange, Users, ArrowLeft, GraduationCap } from 'lucide-react'
 
 // Planning sub-nav: only the Shift Roster tab (Staff Directory now lives under
 // the Staff & Skills section). Mirrors the StaffTabs cross-reference pattern —
@@ -11,20 +11,32 @@ export function WorkforceTabs() {
   const pathname = usePathname()
   const active = pathname === '/production/roster' || pathname.startsWith('/production/roster/')
   return (
-    <div className="flex items-center justify-between border-b border-stone-200">
-      <div className="flex items-center gap-0">
-        <Link href="/production/roster"
-          className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors -mb-px whitespace-nowrap ${active ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
-          <CalendarRange size={14} /> Shift Roster
-        </Link>
-      </div>
-
-      {/* Cross-reference to Staff & Skills — always one click away */}
-      <Link href="/production/staff"
-        className="flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium text-stone-400 hover:text-brand transition-colors whitespace-nowrap border-b-2 border-transparent -mb-px">
-        <Users size={13} />
-        Staff &amp; Skills
+    <div>
+      <Link href="/hr" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand mb-2">
+        <ArrowLeft size={13} /> HR
       </Link>
+      <div className="flex items-center justify-between border-b border-stone-200">
+        <div className="flex items-center gap-0">
+          <Link href="/production/roster"
+            className={`flex items-center gap-1.5 px-4 py-3 font-medium text-[13px] border-b-2 transition-colors -mb-px whitespace-nowrap ${active ? 'border-brand text-brand' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>
+            <CalendarRange size={14} /> Shift Roster
+          </Link>
+        </div>
+
+        {/* Cross-references to related HR modules — always one click away */}
+        <div className="flex items-center">
+          <Link href="/production/staff"
+            className="flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium text-stone-400 hover:text-brand transition-colors whitespace-nowrap border-b-2 border-transparent -mb-px">
+            <Users size={13} />
+            Staff &amp; Skills
+          </Link>
+          <Link href="/training"
+            className="flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium text-stone-400 hover:text-brand transition-colors whitespace-nowrap border-b-2 border-transparent -mb-px">
+            <GraduationCap size={13} />
+            Training
+          </Link>
+        </div>
+      </div>
     </div>
   )
 }

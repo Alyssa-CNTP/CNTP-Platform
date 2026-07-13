@@ -120,7 +120,9 @@ const ROUTE_META: Record<string, {
   '/production/staff/allocation': { title: 'Staff Allocation',   variant: 'default', chips: [{ label: 'Phase 2', color: 'purple' }] },
   '/production/operators':   { title: 'Operators',              variant: 'default' },
   '/info':                   { title: 'Section Information',    variant: 'default' },
+  '/hr':                     { title: 'HR',                      variant: 'default' },
   '/training':               { title: 'Training',                variant: 'default' },
+  '/training/my':            { title: 'My Training',             variant: 'default' },
   '/training/manage':        { title: 'Manage Courses',          variant: 'default' },
   '/training/manage/assignments': { title: 'Training Assignments', variant: 'default' },
   '/training/manage/review': { title: 'Review Queue',            variant: 'default' },
@@ -293,10 +295,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       // Shift Rosters + Staff Directory are universal (Operations, every role)
       pathname.startsWith('/production/roster') ||
       pathname.startsWith('/production/staff')  ||
-      // Training — the learner entry + course player are universal; the
-      // /training/manage, /manage/*, /signoff and /competency sub-routes are
+      // HR hub — a navigation hub; cards inside self-gate, so the page itself is open
+      pathname === '/hr' ||
+      // Training — the hub, the learner entry and course player are universal;
+      // the /training/manage, /manage/*, /signoff and /competency sub-routes are
       // NOT included here and stay gated by ROUTE_GUARDS below.
-      pathname === '/training' || pathname.startsWith('/training/course/') ||
+      pathname === '/training' || pathname === '/training/my' || pathname.startsWith('/training/course/') ||
       pathname === '/axis/request' ||
       pathname.startsWith('/axis/request/')
     ) return
