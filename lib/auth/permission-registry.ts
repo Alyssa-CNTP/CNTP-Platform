@@ -94,6 +94,10 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_bag_tag', label: 'Edit bag tag records' },
           { key: 'can_delete_bag_tag', label: 'Delete bag tag records' },
         ] },
+      { key: 'production.inventory', label: 'Master Inventory',
+        read: 'can_view_inventory', write: 'can_edit_inventory', delete: 'can_delete_inventory' },
+      { key: 'production.blends', label: 'Blends (BOM)',
+        read: 'can_view_blends', write: 'can_edit_blends', delete: 'can_delete_blends' },
     ],
   },
   {

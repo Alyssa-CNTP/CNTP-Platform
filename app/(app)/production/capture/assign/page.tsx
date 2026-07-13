@@ -13,6 +13,7 @@ import {
 } from '@/lib/production/capture-config'
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
+import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
@@ -359,9 +360,14 @@ function AssignScreen() {
                         </div>
                       )}
                       <div className="space-y-1.5 sm:col-span-2">
-                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Production orders</label>
+                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
+                          {sectionId === 'blender' ? 'Blend code' : 'Production orders'}
+                        </label>
                         {!draft.variant ? (
-                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see production-order items.</p>
+                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see {sectionId === 'blender' ? 'blends' : 'production-order items'}.</p>
+                        ) : sectionId === 'blender' ? (
+                          <BlendCodePicker variant={draft.variant} selected={draft.prodOrders}
+                            onSelect={bomId => setField(sectionId, 'prodOrders', [bomId])} />
                         ) : (() => {
                           const items = productionOrderItems(inventory, sectionId, draft.variant)
                           if (items.length === 0) return <p className="text-[12px] text-stone-400 px-1">No production-order items configured for this section yet.</p>
@@ -381,7 +387,9 @@ function AssignScreen() {
                             </div>
                           )
                         })()}
-                        <p className="text-[10px] text-stone-400 px-1">Orders are created against the phantom / final items above. Real Acumatica PO numbers slot in here once that sync is connected.</p>
+                        {sectionId !== 'blender' && (
+                          <p className="text-[10px] text-stone-400 px-1">Orders are created against the phantom / final items above. Real Acumatica PO numbers slot in here once that sync is connected.</p>
+                        )}
                       </div>
                     </div>
                   )}

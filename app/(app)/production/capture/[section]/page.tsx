@@ -25,6 +25,10 @@ import {
   GranuleCapture, emptyGranuleData, granuleTotals, dustProductType,
   type GranuleData,
 } from '@/components/production/capture/GranuleCapture'
+import {
+  BlenderCapture, emptyBlenderData, blenderTotals,
+  type BlenderData,
+} from '@/components/production/capture/BlenderCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -52,7 +56,7 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 ]
 
 // A shift can contain several productions, each its own variant/destination/lot.
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
@@ -60,6 +64,7 @@ const emptyProduction = (sectionId: string, variant?: string | null, lot?: strin
   ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
      data: sectionId.startsWith('refining') ? emptyRefiningData()
        : sectionId === 'granule' ? emptyGranuleData()
+       : sectionId === 'blender' ? emptyBlenderData()
        : emptySievingData() })
 
 // True only when a production actually has weighed capture (any section type).
@@ -78,6 +83,8 @@ function hasCaptureData(prods: Production[]): boolean {
     }
     if (Array.isArray(d.blends) && d.blends.some((bl: any) => Array.isArray(bl.rows) && bl.rows.some((r: any) => num(r.weight) > 0))) return true // granule in
     if (Array.isArray(d.dustOutputs) && d.dustOutputs.some((r: any) => num(r.weight) > 0)) return true // granule dust out
+    // Blender's { inputs, outputs } shape is already covered by the refining `d.inputs`
+    // check and the sieving/granule `d.outputs` check above — no extra branch needed.
     return false
   })
 }
@@ -91,7 +98,9 @@ function CaptureScreen() {
   const sectionId = (params.section as string) ?? ''
   // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
   // Granule are variant-only — traceability there comes from the system serials.
-  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule'
+  // Blender's Export/Export Blend/Domestic field lives per input row (matching the
+  // paper form), not as one whole-production Grade like Sieving — so it's gradeless too.
+  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || sectionId === 'blender'
   const shift     = sp.get('shift') ?? 'morning'
   const sessionParam = sp.get('session')   // edit a specific record opened from Production Orders
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
@@ -656,6 +665,21 @@ function CaptureScreen() {
             })
           })
         })
+      } else if (sectionId === 'blender') {
+        const bd = prod.data as BlenderData
+        ;(bd.inputs ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++,
+            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+            // Ingredient column (A-F) has no dedicated column on this table — carried
+            // in notes for traceability, same pattern Granule uses for its blend no.
+            notes: [`col:${r.column}`, r.destination || null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            lot_number: r.lot || prod.lot || null,
+            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            kg_nett: n(r.weight), is_spillage: false,
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.spillage.forEach(r => {
@@ -719,6 +743,18 @@ function CaptureScreen() {
             kg: n(r.weight),
           })
         })
+      } else if (sectionId === 'blender') {
+        const bd = prod.data as BlenderData
+        const bomId = (assignment?.production_orders ?? [])[0] ?? null
+        ;(bd.outputs ?? []).forEach(b => {
+          if (n(b.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: b.serial, lot_number: prod.lot || null,
+            product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
+            kg: n(b.weight), bagging_time: b.time || null,
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.outputs.forEach(b => {
@@ -746,6 +782,10 @@ function CaptureScreen() {
       const g = granuleTotals(p.data as GranuleData)
       // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
       return { totalIn: g.totalA, totalOut: g.G }
+    }
+    if (sectionId === 'blender') {
+      const b = blenderTotals(p.data as BlenderData)
+      return { totalIn: b.totalIn, totalOut: b.totalOut }
     }
     return sievingTotals(p.data as SievingData, sh)
   }
@@ -1272,6 +1312,18 @@ function CaptureScreen() {
                         variantWord={active.variant}
                         locked={locked}
                         value={active.data as RefiningData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
+                    : sectionId === 'blender'
+                    ? <BlenderCapture
+                        key={active.id}
+                        sectionId={sectionId}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        locked={locked}
+                        value={active.data as BlenderData}
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
