@@ -23,7 +23,7 @@ export async function PATCH(
   const { data: targetRow } = await sessionClient
     .schema('shared' as any)
     .from('app_roles')
-    .select('department, role, full_name, section_id, permissions, is_active')
+    .select('department, role, full_name, section_id, permissions, is_active, employee_id')
     .eq('user_id', id)
     .maybeSingle()
 
@@ -45,13 +45,14 @@ export async function PATCH(
         section_id:  body.sectionId ?? null,
         permissions: body.permissions ?? {},
         is_active:   true,
+        employee_id: body.employee_id || body.employeeId || null,
       }, { onConflict: 'user_id' })
     if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 })
 
     await writeAudit({
       actorId: caller.userId, action: 'create',
       schema: 'shared', table: 'app_roles', recordId: id,
-      after: { department: body.department, role: body.role, full_name: body.full_name || body.fullName },
+      after: { department: body.department, role: body.role, full_name: body.full_name || body.fullName, employee_id: body.employee_id || body.employeeId || null },
     })
 
     return NextResponse.json({ success: true })
@@ -112,6 +113,28 @@ export async function PATCH(
       schema: 'shared', table: 'app_roles', recordId: id,
       before: { full_name: (targetRow as any)?.full_name },
       after: { full_name: body.full_name },
+    })
+  }
+
+  // ── Link / unlink the Staff Directory person this login belongs to ─────────
+  if (body.employee_id !== undefined || body.employeeId !== undefined) {
+    if (!caller.can('can_manage_users'))
+      return NextResponse.json({ error: 'Permission denied — cannot change the Staff Directory link' }, { status: 403 })
+
+    const employeeId = body.employee_id ?? body.employeeId ?? null
+    const { error } = await sessionClient
+      .schema('shared' as any)
+      .from('app_roles')
+      .update({ employee_id: employeeId })
+      .eq('user_id', id)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      before: { employee_id: (targetRow as any)?.employee_id ?? null },
+      after: { employee_id: employeeId },
     })
   }
 

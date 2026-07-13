@@ -4,7 +4,10 @@
 
 import { useEffect, useState, useCallback, Fragment } from 'react'
 import Link from 'next/link'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useAuth }   from '@/lib/auth/context'
+import { getDb }     from '@/lib/supabase/db'
+import { PageInfoButton } from '@/components/hr/PageInfo'
 import {
   ALL_DEPARTMENTS, DEPARTMENT_META, DEPARTMENT_ROLES,
   PERMISSION_GROUPS, ROLE_PERMISSION_DEFAULTS,
@@ -32,6 +35,9 @@ interface AppUser {
   created_at:      string
   last_sign_in:    string | null
   no_role?:        boolean
+  employee_id?:    string | null
+  employee_name?:  string | null
+  suggested_employee?: { id: string; name: string } | null
 }
 
 interface AuditEntry {
@@ -603,10 +609,100 @@ function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
   )
 }
 
+// ─── Employee link field ────────────────────────────────────────────────────
+// Links this login account to its Staff Directory person (shared.app_roles.
+// employee_id). Search defaults to whatever name/email is already typed in
+// the form, with an exact-email match surfaced first — an admin still picks
+// the match rather than the system silently auto-linking two records.
+
+interface EmployeeHit { id: string; name: string; display_name: string | null; email: string | null }
+
+function EmployeeLinkField({ email, fullName, employeeId, employeeName, onChange }: {
+  email: string; fullName: string
+  employeeId: string | null; employeeName: string | null
+  onChange: (id: string | null, name: string | null) => void
+}) {
+  const [query,   setQuery]   = useState(fullName)
+  const [results, setResults] = useState<EmployeeHit[]>([])
+  const [open,    setOpen]    = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (employeeId) return // already linked — no need to keep searching
+    const q = query.trim()
+    if (q.length < 2) { setResults([]); return }
+    let cancelled = false
+    setLoading(true)
+    getDb().schema('production').from('employees').select('id,name,display_name,email').eq('active', true)
+      .or(`name.ilike.%${q}%,display_name.ilike.%${q}%`).limit(6)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        const hits = (data ?? []) as EmployeeHit[]
+        // Float an exact email match to the top, if the typed email matches one of the hits — or fetch it directly.
+        setResults(hits)
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [query, employeeId])
+
+  // Separate one-shot exact-email lookup, shown as a distinct suggestion even if
+  // the name search above doesn't happen to surface them.
+  const [emailMatch, setEmailMatch] = useState<EmployeeHit | null>(null)
+  useEffect(() => {
+    if (employeeId || !email.includes('@')) { setEmailMatch(null); return }
+    let cancelled = false
+    getDb().schema('production').from('employees').select('id,name,display_name,email').eq('active', true)
+      .ilike('email', email.trim()).maybeSingle()
+      .then(({ data }: any) => { if (!cancelled) setEmailMatch(data ?? null) })
+    return () => { cancelled = true }
+  }, [email, employeeId])
+
+  if (employeeId) {
+    return (
+      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-ok/30 bg-ok/5">
+        <span className="text-[12px] text-text">✓ Linked to <strong>{employeeName}</strong></span>
+        <button type="button" onClick={() => onChange(null, null)} className="text-[11px] text-text-muted hover:text-err">Unlink</button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      {emailMatch && (
+        <button type="button" onClick={() => { onChange(emailMatch.id, emailMatch.display_name || emailMatch.name); setOpen(false) }}
+          className="w-full flex items-center justify-between gap-2 px-3 py-2 mb-1.5 rounded-lg border border-brand/30 bg-brand/5 text-left hover:bg-brand/10 transition-colors">
+          <span className="text-[12px] text-text">Email matches <strong>{emailMatch.display_name || emailMatch.name}</strong> in Staff Directory</span>
+          <span className="text-[11px] text-brand font-medium shrink-0">Link →</span>
+        </button>
+      )}
+      <input value={query} onChange={e => { setQuery(e.target.value); setOpen(true) }} onFocus={() => setOpen(true)}
+        placeholder="Search Staff Directory by name…"
+        className="w-full px-3 py-2 border border-surface-rule rounded-lg bg-surface-card outline-none focus:border-brand"
+        style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#111827' }} />
+      {open && results.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full bg-white border border-surface-rule rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          {results.map(r => (
+            <button key={r.id} type="button"
+              onClick={() => { onChange(r.id, r.display_name || r.name); setOpen(false) }}
+              className="w-full text-left px-3 py-2 text-[12px] text-text hover:bg-surface transition-colors flex items-center justify-between">
+              <span>{r.display_name || r.name}</span>
+              {r.email && <span className="text-text-faint text-[11px]">{r.email}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {!loading && query.trim().length >= 2 && results.length === 0 && (
+        <p className="mt-1 text-[10px] text-text-faint">No match in Staff Directory — this account can stay unlinked, or add the person there first.</p>
+      )}
+    </div>
+  )
+}
+
 // ─── User Modal ───────────────────────────────────────────────────────────────
 
-function UserModal({ existing, onSave, onClose, isAssignRole }: {
+function UserModal({ existing, onSave, onClose, isAssignRole, prefill }: {
   existing?: AppUser | null; onSave: () => void; onClose: () => void; isAssignRole?: boolean
+  prefill?: { employeeId: string; name: string; email: string } | null
 }) {
   const { isIT } = useAuth()
   const isEdit = !!existing && !isAssignRole
@@ -616,14 +712,16 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
   const [role,       setRole]       = useState(existing?.role ?? '')
   const [customRole, setCustomRole] = useState('')
   const [useCustom,  setUseCustom]  = useState(false)
-  const [email,      setEmail]      = useState(existing?.email ?? '')
-  const [fullName,   setFullName]   = useState(existing?.display_name ?? '')
+  const [email,      setEmail]      = useState(existing?.email ?? prefill?.email ?? '')
+  const [fullName,   setFullName]   = useState(existing?.display_name ?? prefill?.name ?? '')
   const [password,   setPassword]   = useState('')
   const [sendInvite, setSendInvite] = useState(!isEdit)
   const [sectionId,  setSectionId]  = useState(existing?.section_id ?? '')
   const [overrides,  setOverrides]  = useState<Permissions>(existing?.permissions ?? {})
   const [saving,     setSaving]     = useState(false)
   const [error,      setError]      = useState('')
+  const [employeeId,   setEmployeeId]   = useState<string | null>(existing?.employee_id ?? existing?.suggested_employee?.id ?? prefill?.employeeId ?? null)
+  const [employeeName, setEmployeeName] = useState<string | null>(existing?.employee_name ?? existing?.suggested_employee?.name ?? prefill?.name ?? null)
 
   const effectiveRole = useCustom ? customRole : role
   const overrideCount = Object.keys(overrides).length
@@ -671,9 +769,13 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
       body.send_invite = sendInvite
       body.sendInvite  = sendInvite
       if (!sendInvite) body.password = password
+      body.employee_id = employeeId
     } else if (isEdit) {
       if (fullName !== existing?.display_name) body.fullName = fullName
       if (isIT && dept !== existing?.department) body.department = dept
+      if (employeeId !== (existing?.employee_id ?? null)) body.employee_id = employeeId
+    } else if (isAssignRole) {
+      body.employee_id = employeeId
     }
 
     const url    = (isEdit || isAssignRole) ? `/api/admin/users/${existing!.id}` : '/api/admin/users'
@@ -739,6 +841,20 @@ function UserModal({ existing, onSave, onClose, isAssignRole }: {
               <input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="e.g. Alyssa Krishna"
                 className="w-full px-3 py-2 border border-surface-rule rounded-lg bg-surface-card outline-none focus:border-brand"
                 style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#111827' }} />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontFamily: 'Arial, sans-serif', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#374151', marginBottom: 4 }}>
+                Staff Directory person
+              </label>
+              <EmployeeLinkField
+                email={email} fullName={fullName}
+                employeeId={employeeId} employeeName={employeeName}
+                onChange={(id, name) => { setEmployeeId(id); setEmployeeName(name) }}
+              />
+              <p className="mt-1 text-[10px] text-text-faint">
+                This login is a separate identity from their Staff Directory profile — link them so their profile shows this account and their role/permissions trace back to a real person.
+              </p>
             </div>
 
             {!isEdit && !isAssignRole && (
@@ -969,6 +1085,8 @@ function ResetPasswordModal({ user, onClose }: { user: AppUser; onClose: () => v
 
 export default function UsersPage() {
   const { p, department: callerDept, userId: myId, loading: authLoading, permissionsReady, isIT } = useAuth()
+  const searchParams = useSearchParams()
+  const router = useRouter()
 
   const canCreate  = p('can_manage_users')
   const canEdit    = p('can_edit_permissions') || canCreate
@@ -986,6 +1104,21 @@ export default function UsersPage() {
   const [assignFor, setAssignFor] = useState<AppUser | null>(null)
   const [filterD,   setFilterD]   = useState<Department | ''>('')
   const [search,    setSearch]    = useState('')
+  const [newUserPrefill, setNewUserPrefill] = useState<{ employeeId: string; name: string; email: string } | null>(null)
+
+  // Arriving from a Staff Directory profile's "Create login" link — open the
+  // New User modal pre-linked to that person instead of a blank form.
+  useEffect(() => {
+    const newFor = searchParams.get('newFor')
+    if (!newFor) return
+    setNewUserPrefill({
+      employeeId: newFor,
+      name:  searchParams.get('name')  ?? '',
+      email: searchParams.get('email') ?? '',
+    })
+    setModal('new')
+    router.replace('/users')
+  }, [searchParams, router])
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -1062,7 +1195,14 @@ export default function UsersPage() {
       {/* Page header */}
       <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div>
-          <h2 className="font-display font-extrabold text-3xl text-text mb-1">Users & Access</h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="font-display font-extrabold text-3xl text-text mb-1">Users & Access</h2>
+            <PageInfoButton title="What this page is (and isn't)">
+              <p>This is <strong className="text-text">IT-only</strong> — it assigns <strong className="text-text">login access</strong> (department, role, permission toggles). It does not create a person.</p>
+              <p>A person's actual profile — name, department, contact details, leave, PIN, training — lives in <strong className="text-text">Staff Directory</strong>. When you create or edit a login here, use the <strong className="text-text">Staff Directory person</strong> field to link this account to their profile, so the two stay connected and their access traces back to a real person.</p>
+              <p>If a login shows "Not linked" and looks like it should match someone, this page will suggest who by email — confirm it, don't assume it.</p>
+            </PageInfoButton>
+          </div>
           <p className="text-sm text-text-muted">
             {users.length} user{users.length !== 1 ? 's' : ''} across {depts.length} department{depts.length !== 1 ? 's' : ''}
             {callerDept && !isIT && <span className="ml-1 text-text-faint">· showing {callerDept} only</span>}
@@ -1175,6 +1315,15 @@ export default function UsersPage() {
                                   <span style={{ fontFamily: 'Arial, sans-serif', fontSize: 11, color: '#6B7280' }}>{u.email}</span>
                                   {!u.email_confirmed && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-warn/15 text-warn border border-warn/20 font-bold">unconfirmed</span>}
                                 </div>
+                                <div className="mt-0.5">
+                                  {u.employee_name ? (
+                                    <Link href={`/production/staff/${u.employee_id}`} className="text-[10px] text-brand hover:underline">↳ {u.employee_name} in Staff Directory</Link>
+                                  ) : u.suggested_employee ? (
+                                    <span className="text-[10px] text-warn">↳ Not linked — looks like <Link href={`/production/staff/${u.suggested_employee.id}`} className="hover:underline font-medium">{u.suggested_employee.name}</Link>?</span>
+                                  ) : (
+                                    <span className="text-[10px] text-text-faint">↳ Not linked to Staff Directory</span>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -1234,7 +1383,7 @@ export default function UsersPage() {
         </>
       )}
 
-      {modal === 'new' && <UserModal onSave={load} onClose={() => setModal(null)} />}
+      {modal === 'new' && <UserModal onSave={load} onClose={() => { setModal(null); setNewUserPrefill(null) }} prefill={newUserPrefill} />}
       {modal && modal !== 'new' && <UserModal existing={modal as AppUser} onSave={load} onClose={() => setModal(null)} />}
       {assignFor && <UserModal existing={assignFor} isAssignRole onSave={load} onClose={() => setAssignFor(null)} />}
       {resetFor && <ResetPasswordModal user={resetFor} onClose={() => setResetFor(null)} />}

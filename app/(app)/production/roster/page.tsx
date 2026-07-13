@@ -852,6 +852,12 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           </ul>
         </div>
 
+        {/* Where this fits */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Where this fits</p>
+          <p className="text-[12px] text-text-muted">Every person here comes from <strong className="text-text">Staff Directory</strong> — the roster doesn&apos;t hold its own people list. Add or edit someone in Staff Directory first, then roster them here. This page and the <strong className="text-text">HR</strong> hub are one click apart via the breadcrumb above.</p>
+        </div>
+
         <button onClick={onClose} className="w-full py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium hover:bg-brand-mid transition-colors">Got it</button>
       </div>
     </div>
