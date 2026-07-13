@@ -120,6 +120,11 @@ interface BatchSample {
   sensorial_pass: string
   sensorial_note: string
   comment:        string
+  recheck_done?:     boolean
+  recheck_moisture?: string
+  recheck_temp?:     string
+  recheck_time?:     string
+  recheck_pass?:      boolean
 }
 
 interface Batch {
@@ -362,6 +367,79 @@ function PastSensorialPanel({ sample, onSave, onClose }: { sample:any; onSave:(d
           className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">💾 Save Sensorial</button>
       </div>
     </div>
+  )
+}
+
+// ─── PastMoistureRecheckPanel ─────────────────────────────────────────────────
+// Mirrors GranuleRecheckPanel (quality/granule) — recorded inline against the
+// sample that failed spec, so it stays attached to that specific sample and
+// batch (surfaces in the history/closed-batch view same as any other result).
+
+function PastMoistureRecheckPanel({ sample, specMoistureMax, onSave }: { sample: any; specMoistureMax: any; onSave: (id: string, f: any) => void }) {
+  const already = sample.recheck_done
+  const [open, setOpen]         = useState(false)
+  const [moisture, setMoisture] = useState(sample.recheck_moisture ?? '')
+  const [temp, setTemp]         = useState(sample.recheck_temp ?? '')
+  const [time, setTime]         = useState(sample.recheck_time ?? (() => { const now = new Date(); return `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}` })())
+  const [saving, setSaving]     = useState(false)
+
+  useEffect(() => {
+    if (open && already) { setMoisture(sample.recheck_moisture ?? ''); setTemp(sample.recheck_temp ?? ''); setTime(sample.recheck_time ?? '') }
+  }, [open])
+
+  const recheckPass = moisture !== '' && specMoistureMax != null ? parseFloat(moisture) <= parseFloat(specMoistureMax) : null
+  const canSave     = moisture !== '' && time !== ''
+
+  const handleSave = async () => {
+    if (!canSave) return
+    setSaving(true)
+    await onSave(sample.id, { recheck_done: true, recheck_moisture: moisture, recheck_temp: temp, recheck_time: time, recheck_pass: recheckPass })
+    setSaving(false); setOpen(false)
+  }
+
+  return (
+    <tr className="bg-warn/3">
+      <td colSpan={100} className="px-4 py-2 border-l-[3px]" style={{ borderColor: '#f59e0b' }}>
+        {!open ? (
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] font-bold text-warn">⚠ Moisture out of spec</span>
+            {already ? (
+              <>
+                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${sample.recheck_pass ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>
+                  🔁 Re-check: {sample.recheck_moisture}% @ {sample.recheck_time} · {sample.recheck_pass ? '✓ PASS' : '✗ FAIL — add new sample'}
+                </span>
+                {!sample.recheck_pass && <span className="text-[9px] text-text-muted italic">Re-check failed — please add a new sample</span>}
+                <button onClick={() => setOpen(true)} className="text-[10px] px-2 py-0.5 rounded border border-surface-rule bg-surface-card cursor-pointer">✏️ Edit</button>
+              </>
+            ) : (
+              <button onClick={() => setOpen(true)} className="text-[10px] px-2.5 py-0.5 rounded border font-bold cursor-pointer" style={{ borderColor: '#f59e0b', background: '#fef3c7', color: '#92400e' }}>+ Add Re-check</button>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] font-bold text-warn whitespace-nowrap">🔁 Re-check</span>
+            {([['Time', time, setTime, 'text', '09:30', 64], ['Moisture %', moisture, setMoisture, 'number', specMoistureMax ? `max ${specMoistureMax}%` : '%', 90], ['Temp °C', temp, setTemp, 'number', '°C', 90]] as const).map(([label, val, setter, type, ph, w]) => (
+              <div key={label} className="flex flex-col gap-1">
+                <label className="text-[9px] text-text-muted font-semibold">{label}</label>
+                <input type={type} step="any" value={val} placeholder={ph} onChange={e => (setter as any)(e.target.value)}
+                  className="px-2 py-1 border rounded-md text-[11px] outline-none"
+                  style={{ width: w, borderColor: label === 'Moisture %' && moisture !== '' && recheckPass === false ? '#fca5a5' : '#fcd34d', background: label === 'Moisture %' && recheckPass === false && moisture !== '' ? '#fef2f2' : label === 'Moisture %' && recheckPass === true ? '#f0fdf4' : '#fff' }} />
+              </div>
+            ))}
+            {moisture !== '' && recheckPass !== null && (
+              <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${recheckPass ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>{recheckPass ? '✓ PASS' : '✗ FAIL'}</span>
+            )}
+            <button onClick={() => { setOpen(false); if (already) { setMoisture(sample.recheck_moisture ?? ''); setTemp(sample.recheck_temp ?? ''); setTime(sample.recheck_time ?? '') } }}
+              className="text-[10px] px-2 py-1 rounded border border-surface-rule bg-surface-card cursor-pointer">Cancel</button>
+            <button onClick={handleSave} disabled={saving || !canSave}
+              className="text-[10px] px-3 py-1 rounded text-white font-bold"
+              style={{ background: canSave ? '#166534' : '#d1d5db', cursor: canSave ? 'pointer' : 'not-allowed' }}>
+              {saving ? 'Saving…' : already ? '✓ Update Re-check' : '✓ Save Re-check'}
+            </button>
+          </div>
+        )}
+      </td>
+    </tr>
   )
 }
 
@@ -1162,6 +1240,19 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     setCommentFor(null)
   }
 
+  // Moisture re-check — recorded against the specific sample that failed
+  // spec, same pattern as the granule line's per-sample recheck. Persists
+  // into the batch's data_json, so it stays attached wherever this sample
+  // is read from (active batch table, history/closed-batch view, exports).
+  function saveMoistureRecheck(sampleId: string, data: any) {
+    setBatches(p => {
+      const updated = p.map(b => b.id !== activeBatchId ? b : { ...b, samples: b.samples.map(s => s.id !== sampleId ? s : { ...s, ...data }) })
+      const batch = updated.find(b => b.id === activeBatchId)
+      if (batch) saveBatchToDB(batch)
+      return updated
+    })
+  }
+
   function deleteSample(sampleId: string) {
     if (!confirm('Delete this sample row?')) return
     setBatches(p => {
@@ -1516,6 +1607,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             {activeBatch.samples.map((s, i) => ({ s, i })).slice().reverse().map(({ s, i }) => {
                               const total = PAST_SIEVE_COLS.reduce((sum,c) => sum+(parseFloat(s[c.key as keyof BatchSample] as string)||0), 0)
                               const rowBg = i%2===0 ? '' : 'bg-surface/50'
+                              const moistSpec = getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs)
+                              const moistVio  = pastChk(s.moisture, moistSpec) === 'fail'
                               return (
                                 <>
                                   <tr key={s.id} id={`sample-${s.id}`}
@@ -1590,6 +1683,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     </td>
                                   </tr>
 
+                                  {/* Moisture re-check — shown inline once moisture is out of spec for this sample */}
+                                  {moistVio && (
+                                    <PastMoistureRecheckPanel key={`${s.id}-recheck`} sample={s} specMoistureMax={moistSpec?.max} onSave={saveMoistureRecheck} />
+                                  )}
+
                                   {/* Comment row */}
                                   {commentFor === s.id && (
                                     <tr key={`${s.id}-comment`} className="bg-purple-50/50">
@@ -1640,6 +1738,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                           <div key={s.id} className="flex gap-2 flex-wrap items-center mb-1">
                             <span className="font-mono font-bold text-[11px]">{s.time||'?'}</span>
                             {fails.map((f,i) => <span key={i} className="badge badge-err text-[10px]">{f}</span>)}
+                            {s.recheck_done && (
+                              <span className={`badge text-[10px] ${s.recheck_pass ? 'badge-ok' : 'badge-err'}`}>
+                                🔁 Re-check {s.recheck_moisture}% {s.recheck_pass ? '✓ PASS' : '✗ FAIL'}
+                              </span>
+                            )}
                           </div>
                         )
                       })}
@@ -1832,7 +1935,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                                 <td className="px-3 py-2 font-mono">{s.time||'—'}</td>
                                                 <td className="px-3 py-2 font-mono text-text-muted">{s.serial_bin||'—'}</td>
                                                 <td className="px-3 py-2 text-center">{s.hourly_temp||'—'}</td>
-                                                <td className="px-3 py-2 text-center font-mono font-bold" style={{ color:parseFloat(s.moisture)>8.5?'var(--color-err)':'var(--color-ok)' }}>{s.moisture?s.moisture+'%':'—'}</td>
+                                                <td className="px-3 py-2 text-center font-mono font-bold" style={{ color:parseFloat(s.moisture)>8.5?'var(--color-err)':'var(--color-ok)' }}>
+                                                  {s.moisture?s.moisture+'%':'—'}
+                                                  {s.recheck_done && <span className="text-[8px] text-text-muted ml-1" title={`Re-check ${s.recheck_time||''}`}>→{s.recheck_moisture}% {s.recheck_pass?'✓':'✗'}</span>}
+                                                </td>
                                                 <td className="px-3 py-2 text-center font-mono">{s.untapped_bd||'—'}</td>
                                                 {PAST_SIEVE_COLS.map(c => {
                                                   const val = s[c.key as keyof BatchSample] as string

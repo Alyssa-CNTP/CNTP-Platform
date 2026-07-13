@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-04 — Gustav (Pasteuriser: moisture re-check for out-of-spec samples)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- **Moisture re-check, mirroring the granule line's per-sample recheck:** when a pasteuriser sample's moisture is out of spec, an inline "🔁 Re-check" panel now appears under that sample (time, moisture %, temp), pass/fail computed against the batch's moisture spec. Persists to the sample's `recheck_done`/`recheck_moisture`/`recheck_temp`/`recheck_time`/`recheck_pass` fields on the batch's `data_json`, the same JSON blob everything else about that sample lives in — so it stays attached to that specific sample and batch wherever it's read from: the active batch table, the "Out-of-spec results" summary, and the closed/history batch detail view.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: darker out-of-spec chart shading; Granule: one tasting per batch + QC batch delete)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `app/(app)/quality/granule/page.tsx`
