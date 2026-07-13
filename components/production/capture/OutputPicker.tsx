@@ -41,7 +41,13 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
 }) {
   const [dbBatches, setDbBatches] = useState<string[]>([])
   useEffect(() => { recentBatches(sectionId).then(setDbBatches) }, [sectionId])
-  const batchOptions = Array.from(new Set([...batchHints, ...dbBatches].filter(Boolean)))
+  // When the caller supplies batch hints (Sieving passes the lots actually debagged
+  // this run), suggest ONLY those — don't widen it back out with recent DB batches,
+  // which is what let an output be tagged with a batch that was never fed in. Fall
+  // back to recent batches only when no hints are given.
+  const batchOptions = batchHints.length
+    ? Array.from(new Set(batchHints.filter(Boolean)))
+    : Array.from(new Set(dbBatches.filter(Boolean)))
   const [query, setQuery]     = useState('')
   const [all, setAll]         = useState<InventoryItem[]>([])
   const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; batchTracked: boolean } | null>(null)

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { resolveOnDutyTechnician } from '@/lib/maintenance/roster'
-import { currentShift, SHIFT_LABEL } from '@/lib/production/shifts'
+import { currentShift, SHIFT_LABEL, shiftValuesFor } from '@/lib/production/shifts'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import type { Shift } from '@/lib/supabase/database.types'
 import { HubHeader } from '@/components/supervisor/HubTabs'
@@ -56,7 +56,7 @@ export default function SupervisorOverview() {
     setLoading(true)
     const db = getDb()
     const [assigns, sess7, sheets7, bd, duty, submitted, ops] = await Promise.all([
-      db.schema('production').from('shift_assignments').select('section_id,operator_ids').eq('date', today).eq('shift', shift),
+      db.schema('production').from('shift_assignments').select('section_id,operator_ids').eq('date', today).in('shift', shiftValuesFor(shift)),
       db.schema('production').from('prod_sessions').select('id,section_id,date,shift,status,operator_names').gte('date', start7).lte('date', today),
       db.schema('production').from('prod_timesheets').select('date,worked_minutes').eq('confirmed', true).gte('date', start7).lte('date', today),
       db.schema('maintenance').from('job_cards').select('id').eq('workflow', 'breakdown').neq('status', 'complete'),

@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
+import { writeAudit } from '@/lib/audit/write'
 
 // ─── PATCH — update role, permissions, name, password, confirm email ──────────
 
@@ -22,7 +23,7 @@ export async function PATCH(
   const { data: targetRow } = await sessionClient
     .schema('shared' as any)
     .from('app_roles')
-    .select('department, role')
+    .select('department, role, full_name, section_id, permissions, is_active, employee_id')
     .eq('user_id', id)
     .maybeSingle()
 
@@ -44,8 +45,16 @@ export async function PATCH(
         section_id:  body.sectionId ?? null,
         permissions: body.permissions ?? {},
         is_active:   true,
+        employee_id: body.employee_id || body.employeeId || null,
       }, { onConflict: 'user_id' })
     if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'create',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      after: { department: body.department, role: body.role, full_name: body.full_name || body.fullName, employee_id: body.employee_id || body.employeeId || null },
+    })
+
     return NextResponse.json({ success: true })
   }
 
@@ -77,6 +86,13 @@ export async function PATCH(
       .eq('user_id', id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      before: { department: (targetRow as any)?.department, role: (targetRow as any)?.role, section_id: (targetRow as any)?.section_id },
+      after: updates,
+    })
   }
 
   // ── Update display name in app_roles ────────────────────────────────────────
@@ -91,6 +107,35 @@ export async function PATCH(
       .eq('user_id', id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      before: { full_name: (targetRow as any)?.full_name },
+      after: { full_name: body.full_name },
+    })
+  }
+
+  // ── Link / unlink the Staff Directory person this login belongs to ─────────
+  if (body.employee_id !== undefined || body.employeeId !== undefined) {
+    if (!caller.can('can_manage_users'))
+      return NextResponse.json({ error: 'Permission denied — cannot change the Staff Directory link' }, { status: 403 })
+
+    const employeeId = body.employee_id ?? body.employeeId ?? null
+    const { error } = await sessionClient
+      .schema('shared' as any)
+      .from('app_roles')
+      .update({ employee_id: employeeId })
+      .eq('user_id', id)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      before: { employee_id: (targetRow as any)?.employee_id ?? null },
+      after: { employee_id: employeeId },
+    })
   }
 
   // ── Update permission overrides ──────────────────────────────────────────────
@@ -105,6 +150,13 @@ export async function PATCH(
       .eq('user_id', id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      before: { permissions: (targetRow as any)?.permissions },
+      after: { permissions: body.permissions },
+    })
   }
 
   // ── Update display name in auth.users metadata ───────────────────────────────
@@ -116,6 +168,12 @@ export async function PATCH(
       user_metadata: { full_name: body.fullName, display_name: body.fullName },
     })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'auth', table: 'users', recordId: id,
+      after: { full_name: body.fullName },
+    })
   }
 
   // ── Reset password (admin sets directly) ────────────────────────────────────
@@ -127,6 +185,13 @@ export async function PATCH(
 
     const { error } = await admin.auth.admin.updateUserById(id, { password: body.password })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Never write the password itself to the audit log.
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'auth', table: 'users', recordId: id,
+      after: { password: '••••••••' },
+    })
   }
 
   // ── Send password reset email ────────────────────────────────────────────────
@@ -141,6 +206,12 @@ export async function PATCH(
       redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/reset-password`,
     })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'auth', table: 'users', recordId: id,
+      after: { sent_password_reset_email: true },
+    })
   }
 
   // ── Confirm email manually ───────────────────────────────────────────────────
@@ -150,6 +221,12 @@ export async function PATCH(
 
     const { error } = await admin.auth.admin.updateUserById(id, { email_confirm: true })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'auth', table: 'users', recordId: id,
+      after: { email_confirm: true },
+    })
   }
 
   return NextResponse.json({ success: true })
@@ -171,9 +248,22 @@ export async function DELETE(
   const sessionClient = await getSessionClient()
   const admin         = getAdminClient()
 
+  const { data: before } = await sessionClient
+    .schema('shared' as any)
+    .from('app_roles')
+    .select('department, role, full_name, section_id')
+    .eq('user_id', id)
+    .maybeSingle()
+
   await sessionClient.schema('shared' as any).from('app_roles').delete().eq('user_id', id)
   const { error } = await admin.auth.admin.deleteUser(id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  await writeAudit({
+    actorId: caller.userId, action: 'delete',
+    schema: 'shared', table: 'app_roles', recordId: id,
+    before,
+  })
 
   return NextResponse.json({ success: true })
 }

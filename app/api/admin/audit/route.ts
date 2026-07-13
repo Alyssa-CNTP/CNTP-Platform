@@ -1,6 +1,6 @@
 // app/api/admin/audit/route.ts
 // Returns audit log entries from axis.audit_log.
-// Restricted to Alyssa and Jan by UUID — no permission toggle can override this.
+// Accessible to IT department and authorised administrators (Alyssa, Jan).
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
@@ -10,8 +10,12 @@ const JAN_UUID    = 'f73cd225-63f7-4056-918e-f5112c9637e8'
 
 export async function GET(req: NextRequest) {
   const caller = await getCallerPermissions()
-  if (!caller.userId || (caller.userId !== ALYSSA_UUID && caller.userId !== JAN_UUID))
-    return NextResponse.json({ error: 'Access restricted to authorised administrators only' }, { status: 403 })
+  const isAuthorised =
+    caller.userId === ALYSSA_UUID ||
+    caller.userId === JAN_UUID    ||
+    caller.department === 'IT'
+  if (!caller.userId || !isAuthorised)
+    return NextResponse.json({ error: 'Access restricted to IT and authorised administrators' }, { status: 403 })
 
   const { searchParams } = new URL(req.url)
   const limit    = Math.min(parseInt(searchParams.get('limit')  ?? '200', 10), 500)
@@ -37,9 +41,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Enrich with display names from shared.app_roles
+  // Enrich with display names, department and role from shared.app_roles
   const actorIds = [...new Set((data ?? []).map((r: any) => r.actor_id).filter(Boolean))] as string[]
-  let nameMap: Record<string, string> = {}
+  type ActorMeta = { name: string; department: string | null; role: string | null }
+  let actorMap: Record<string, ActorMeta> = {}
 
   if (actorIds.length > 0) {
     try {
@@ -50,17 +55,24 @@ export async function GET(req: NextRequest) {
         .select('user_id, full_name, department, role')
         .in('user_id', actorIds)
       if (roles) {
-        nameMap = Object.fromEntries((roles as any[]).map((r: any) => [r.user_id, r.full_name]))
+        actorMap = Object.fromEntries(
+          (roles as any[]).map((r: any) => [r.user_id, { name: r.full_name, department: r.department, role: r.role }])
+        )
       }
     } catch {
       // name enrichment is best-effort
     }
   }
 
-  const enriched = (data ?? []).map((r: any) => ({
-    ...r,
-    actor_name: r.actor_id ? (nameMap[r.actor_id] ?? 'Unknown user') : 'System',
-  }))
+  const enriched = (data ?? []).map((r: any) => {
+    const meta = r.actor_id ? actorMap[r.actor_id] : null
+    return {
+      ...r,
+      actor_name:       meta?.name       ?? (r.actor_id ? 'Unknown user' : 'System'),
+      actor_department: meta?.department ?? (r.after_state?.department ?? null),
+      actor_role:       meta?.role       ?? null,
+    }
+  })
 
   return NextResponse.json(enriched)
 }

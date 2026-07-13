@@ -1,0 +1,52 @@
+name: Shift roster — rotate & remind
+
+# Automates the whole-site shift roster:
+#   • rotate — every Sunday night, create next week's period with shifts swapped
+#              (day↔night) and Shift A/B labels rotated.
+#   • remind — Monday & Wednesday mornings, email each section's responsible
+#              submitter(s) about sections not yet submitted for the period.
+#
+# Recipients are NOT hardcoded — they are whoever holds the
+# can_submit_roster_<section> permission (set on the Users & Roles page).
+#
+# Requires:
+#   secrets.CRON_SECRET      — must match the CRON_SECRET env var on the server
+#   vars.ROSTER_CRON_URL     — (optional) base URL to hit; defaults to staging
+
+on:
+  schedule:
+    - cron: '0 20 * * 0'  # Sun 22:00 SAST — rotate to next week
+    - cron: '0 04 * * 1'  # Mon 06:00 SAST — first reminder
+    - cron: '0 04 * * 3'  # Wed 06:00 SAST — final reminder (deadline day)
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to run'
+        required: true
+        default: remind
+        type: choice
+        options: [rotate, remind]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide task from schedule
+        id: task
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "task=${{ github.event.inputs.task }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 20 * * 0" ]; then
+            echo "task=rotate" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=remind" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ping roster cron endpoint
+        env:
+          BASE_URL: ${{ vars.ROSTER_CRON_URL || 'https://cntpplatform-staging.rooibostea.co.za' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BASE_URL}/api/production/roster/cron?task=${{ steps.task.outputs.task }}"

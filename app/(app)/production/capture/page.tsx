@@ -10,13 +10,15 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
+import { SHIFT_LABEL, shiftValuesFor } from '@/lib/production/shifts'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
 
+// Two shifts: Morning 07h00–16h00, Afternoon/Night 16h00–01h00.
 function currentShift(): Shift {
   const h = new Date().getHours()
-  return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night'
+  return h >= 7 && h < 16 ? 'morning' : 'afternoon'
 }
 
 const STATUS_META: Record<string, { label: string; cls: string; icon: any }> = {
@@ -46,8 +48,8 @@ export default function CaptureLandingPage() {
       const db = getDb()
       const [{ data: ops }, { data: assigns }, { data: sessions }] = await Promise.all([
         db.schema('production').from('operators').select('id,name,display_name,user_id').eq('active', true),
-        db.schema('production').from('shift_assignments').select('*').eq('date', date).eq('shift', shift),
-        db.schema('production').from('prod_sessions').select('section_id,status').eq('date', date).eq('shift', shift),
+        db.schema('production').from('shift_assignments').select('*').eq('date', date).in('shift', shiftValuesFor(shift)),
+        db.schema('production').from('prod_sessions').select('section_id,status').eq('date', date).in('shift', shiftValuesFor(shift)),
       ])
       const m: Record<string, string> = {}
       ;(ops as Operator[] ?? []).forEach(o => { m[o.id] = o.display_name || o.name })
@@ -85,8 +87,8 @@ export default function CaptureLandingPage() {
           <h1 className="font-semibold text-[22px] text-text leading-tight">
             {isFloorOperator ? `Hi ${firstName}` : 'Capture'}
           </h1>
-          <p className="text-[12px] text-text-muted mt-0.5 capitalize">
-            {format(new Date(date + 'T12:00:00'), 'EEEE d MMMM yyyy')} · {shift} shift
+          <p className="text-[12px] text-text-muted mt-0.5">
+            {format(new Date(date + 'T12:00:00'), 'EEEE d MMMM yyyy')} · {SHIFT_LABEL[shift]} shift
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

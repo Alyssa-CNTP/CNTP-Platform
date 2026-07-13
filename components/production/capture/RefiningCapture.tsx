@@ -494,8 +494,8 @@ export function RefiningCapture({
     // Register/consume the bag in bag_tags
     const row = updated.find(r => r.id === id)
     if (row?.serial) {
-      if (row.inputMode === 'manual' && row.notInSystem) {
-        // Register legacy bag
+      if (row.inputMode === 'manual') {
+        // Register all manually-entered bags in bag_tags for traceability
         getDb().schema('production').from('bag_tags').upsert({
           serial_number: row.serial, section_id: sectionId, session_id: null,
           product_type: row.productType, variant: variantWord || null,

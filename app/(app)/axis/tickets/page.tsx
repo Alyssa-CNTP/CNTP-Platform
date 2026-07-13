@@ -24,6 +24,8 @@ interface TicketRow {
   priority: string
   assigned_to: string | null
   assigned_name: string | null
+  resolved_by_name: string | null
+  resolved_at: string | null
   created_by: string
   created_by_name: string | null
   due_date: string | null
@@ -227,23 +229,45 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
   onClose: () => void
   onUpdate: () => void
 }) {
-  const { isIT, p } = useAuth()
-  const [status, setStatus] = useState(ticket.status)
-  const [saving, setSaving] = useState(false)
+  const { isIT, p, userId, displayName } = useAuth()
+  const [status,   setStatus]   = useState(ticket.status)
+  const [assignee, setAssignee] = useState({ name: ticket.assigned_name, id: ticket.assigned_to })
+  const [saving,   setSaving]   = useState(false)
+  const [err,      setErr]      = useState('')
 
-  async function updateStatus(s: string) {
-    setSaving(true)
-    await fetch(`/api/axis/tickets/${ticket.id}`, {
+  const canManage = isIT || p('can_assign_tickets')
+
+  async function patch(body: Record<string, unknown>) {
+    setSaving(true); setErr('')
+    const res = await fetch(`/api/axis/tickets/${ticket.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: s }),
+      body: JSON.stringify(body),
     })
-    setStatus(s)
+    const json = await res.json().catch(() => ({}))
     setSaving(false)
+    if (!res.ok) { setErr(json.error ?? 'Update failed'); return false }
     onUpdate()
+    return true
   }
 
-  const StatusIcon = STATUS_ICON[status] ?? Circle
+  async function updateStatus(s: string) {
+    const ok = await patch({ status: s })
+    if (ok) setStatus(s)
+  }
+
+  async function assignToMe() {
+    const ok = await patch({ assigned_to: userId, assigned_name: displayName })
+    if (ok) setAssignee({ id: userId ?? null, name: displayName ?? null })
+  }
+
+  async function unassign() {
+    const ok = await patch({ assigned_to: null, assigned_name: null })
+    if (ok) setAssignee({ id: null, name: null })
+  }
+
+  const isResolved = status === 'resolved' || status === 'closed'
+  const isMyTicket = assignee.id === userId
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/30 backdrop-blur-sm" onClick={onClose}>
@@ -268,40 +292,76 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
         </div>
 
         <div className="p-6 space-y-6">
+
           {/* Status */}
           <div>
             <p className="font-mono text-[10px] uppercase tracking-wider text-stone-400 mb-2">Status</p>
-            <div className="flex flex-wrap gap-2">
-              {(['open','in_progress','blocked','resolved','closed'] as const).map(s => (
+            {canManage ? (
+              <div className="flex flex-wrap gap-2">
+                {(['open','in_progress','blocked','resolved','closed'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => updateStatus(s)}
+                    disabled={saving || status === s}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-medium transition-all disabled:opacity-50 ${
+                      status === s
+                        ? STATUS_STYLE[s] + ' ring-1 ring-current'
+                        : 'bg-stone-50 text-stone-500 border-stone-200 hover:bg-stone-100 cursor-pointer'
+                    }`}
+                  >
+                    {s.replace('_', ' ')}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] px-3 py-1.5 rounded-lg border ${STATUS_STYLE[status] ?? ''}`}>
+                {status.replace('_', ' ')}
+              </span>
+            )}
+          </div>
+
+          {/* Assignment */}
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-wider text-stone-400 mb-2">Assigned to</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[13px] font-medium text-stone-700">
+                {assignee.name ?? <span className="text-stone-400 italic">Unassigned</span>}
+              </span>
+              {canManage && !isMyTicket && (
                 <button
-                  key={s}
-                  onClick={() => (isIT || p('can_assign_tickets')) && updateStatus(s)}
+                  onClick={assignToMe}
                   disabled={saving}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-medium transition-all ${
-                    status === s
-                      ? STATUS_STYLE[s] + ' ring-1 ring-current'
-                      : 'bg-stone-50 text-stone-500 border-stone-200 hover:bg-stone-100'
-                  } ${(!isIT && !p('can_assign_tickets')) ? 'cursor-default' : 'cursor-pointer'}`}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-stone-800 text-white text-[11px] font-semibold hover:bg-stone-700 disabled:opacity-50 transition-colors"
                 >
-                  {s.replace('_', ' ')}
+                  {saving ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
+                  Assign to me
                 </button>
-              ))}
+              )}
+              {canManage && isMyTicket && assignee.id && (
+                <button
+                  onClick={unassign}
+                  disabled={saving}
+                  className="text-[11px] text-stone-400 hover:text-red-500 disabled:opacity-50 transition-colors"
+                >
+                  Unassign
+                </button>
+              )}
             </div>
           </div>
 
           {/* Meta grid */}
           <div className="grid grid-cols-2 gap-4 text-[12px]">
             {[
-              { label: 'Category',    value: CATEGORY_LABEL[ticket.category] ?? ticket.category },
-              { label: 'Type',        value: ticket.ticket_type },
-              { label: 'Assigned to', value: ticket.assigned_name ?? 'Unassigned' },
-              { label: 'Created by',  value: ticket.created_by_name ?? '—' },
-              { label: 'Due date',    value: fmtDate(ticket.due_date) },
-              { label: 'Logged',      value: timeAgo(ticket.created_at) },
+              { label: 'Category',   value: CATEGORY_LABEL[ticket.category] ?? ticket.category },
+              { label: 'Type',       value: ticket.ticket_type },
+              { label: 'Created by', value: ticket.created_by_name ?? '—' },
+              { label: 'Due date',   value: fmtDate(ticket.due_date) },
+              { label: 'Logged',     value: timeAgo(ticket.created_at) },
+              ...(isResolved && ticket.resolved_by_name ? [{ label: 'Resolved by', value: ticket.resolved_by_name + (ticket.resolved_at ? ' · ' + fmtDate(ticket.resolved_at) : '') }] : []),
             ].map(({ label, value }) => (
               <div key={label}>
                 <p className="font-mono text-[10px] uppercase tracking-wider text-stone-400 mb-0.5">{label}</p>
-                <p className="text-stone-700 font-medium">{value}</p>
+                <p className={`font-medium ${label === 'Resolved by' ? 'text-emerald-700' : 'text-stone-700'}`}>{value}</p>
               </div>
             ))}
           </div>
@@ -319,6 +379,8 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
               <p className="text-[11px] text-sky-600">Auto-routed based on category</p>
             </div>
           )}
+
+          {err && <p className="text-[12px] text-red-600 font-medium">{err}</p>}
         </div>
       </div>
     </div>
@@ -400,6 +462,17 @@ export default function TicketsPage() {
     return m
   }, [tickets])
 
+  // Per-person resolved counts — computed from ticket list
+  const resolvedByPerson = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const t of tickets) {
+      if ((t.status === 'resolved' || t.status === 'closed') && t.resolved_by_name) {
+        m[t.resolved_by_name] = (m[t.resolved_by_name] ?? 0) + 1
+      }
+    }
+    return Object.entries(m).sort((a, b) => b[1] - a[1])
+  }, [tickets])
+
   if (al || loading) return (
     <div className="flex items-center justify-center min-h-[60vh]">
       <Loader2 size={18} className="animate-spin text-stone-400" />
@@ -455,6 +528,21 @@ export default function TicketsPage() {
           </div>
         ))}
       </div>
+
+      {/* ── Resolved by person ── */}
+      {resolvedByPerson.length > 0 && (
+        <div className="bg-white border border-stone-200 rounded-xl p-4">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-stone-400 mb-3">Resolved by</p>
+          <div className="flex flex-wrap gap-2">
+            {resolvedByPerson.map(([name, count]) => (
+              <div key={name} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                <span className="text-[12px] font-medium text-stone-700">{name}</span>
+                <span className="font-mono text-[11px] font-bold text-emerald-700">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Filters ── */}
       <div className="flex items-center gap-3 flex-wrap">

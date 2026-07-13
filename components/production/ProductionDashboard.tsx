@@ -20,6 +20,7 @@ import {
 import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { fetchGranuleQuality } from '@/lib/production/granule-quality'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
 import OperationalTrends from '@/components/management/OperationalTrends'
@@ -151,6 +152,11 @@ export default function ProductionDashboard() {
   const [todayRows, setTodayRows] = useState<any[]>([])
   const [breakdowns, setBreakdowns] = useState<any[]>([])
 
+  // Granule KPI foundations — scale-verification health + granule quality readings
+  const [granuleScale, setGranuleScale] = useState<{ date: string; label: string; dev: number; readings: number }[]>([])
+  const [granuleQuality, setGranuleQuality] = useState<{ date: string; label: string; moisture: number | null; bulkDensity: number | null }[]>([])
+  const [scaleAudit, setScaleAudit] = useState<{ date: string; label: string; shift: string; std: number | null; actual: number | null; dev: number | null; pass: boolean; at: string }[]>([])
+
   const load = useCallback(async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true)
     const db = getDb()
@@ -201,6 +207,60 @@ export default function ProductionDashboard() {
 
     setTodayRows(rows)
     setBreakdowns((bd as any[]) ?? [])
+
+    // ── Granule KPI foundations ──────────────────────────────────────────────
+    // Quality readings (moisture %, bulk density cc/100g) from the capture draft,
+    // and scale verifications from the Checks audit trail (check_events) — the
+    // pass/fail record and the scale-health deviation trend.
+    // Best-effort: a schema/parse hiccup must never take the dashboard down.
+    try {
+      const windowStart = format(new Date(Date.now() - windowDays * 86_400_000), 'yyyy-MM-dd')
+      const num = (v: any) => { const x = parseFloat(String(v).replace(',', '.')); return isNaN(x) ? null : x }
+      const avg = (a: number[]) => a.length ? round1(a.reduce((x, y) => x + y, 0) / a.length) : null
+      const lbl = (d: string) => format(new Date(d + 'T12:00:00'), 'd MMM')
+
+      // Quality readings come from the QC lab (qms.granule_*), linked by date —
+      // the same source the operators' graph is drawn from. Averaged per day.
+      const qpts = await fetchGranuleQuality({ fromDate: windowStart })
+      const moistByDate = new Map<string, number[]>()
+      const bdByDate = new Map<string, number[]>()
+      qpts.forEach(p => {
+        if (!p.date) return
+        if (p.moisture != null) { const a = moistByDate.get(p.date) ?? []; a.push(p.moisture); moistByDate.set(p.date, a) }
+        if (p.bulkDensity != null) { const a = bdByDate.get(p.date) ?? []; a.push(p.bulkDensity); bdByDate.set(p.date, a) }
+      })
+      setGranuleQuality(Array.from(new Set([...moistByDate.keys(), ...bdByDate.keys()])).sort().map(d => ({
+        date: d, label: lbl(d), moisture: avg(moistByDate.get(d) ?? []), bulkDensity: avg(bdByDate.get(d) ?? []),
+      })))
+
+      // Scale verifications from the Checks audit (check_records → check_events).
+      const { data: crs } = await db.schema('production').from('check_records')
+        .select('id,date,shift').eq('section_id', 'granule').gte('date', windowStart)
+      const crList = (crs as any[]) ?? []
+      const crMap = new Map(crList.map(r => [r.id, r]))
+      const scaleByDate = new Map<string, number[]>()
+      const audit: { date: string; label: string; shift: string; std: number | null; actual: number | null; dev: number | null; pass: boolean; at: string }[] = []
+      if (crList.length) {
+        const { data: evs } = await db.schema('production').from('check_events')
+          .select('record_id,value_text,value_num,status,recorded_at')
+          .eq('check_key', 'scale_verification').in('record_id', crList.map(r => r.id))
+        ;((evs as any[]) ?? []).forEach(e => {
+          const cr = crMap.get(e.record_id); if (!cr) return
+          const m = /std\s*([\d.]+)\s*\/\s*actual\s*([\d.]+)/i.exec(String(e.value_text ?? ''))
+          const std = m ? parseFloat(m[1]) : null
+          const actual = m ? parseFloat(m[2]) : (num(e.value_num))
+          const dev = (std != null && actual != null) ? round1(actual - std) : null
+          if (dev != null) { const a = scaleByDate.get(cr.date) ?? []; a.push(dev); scaleByDate.set(cr.date, a) }
+          audit.push({ date: cr.date, label: lbl(cr.date), shift: cr.shift, std, actual, dev, pass: e.status !== 'fail', at: e.recorded_at })
+        })
+      }
+      audit.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
+      setGranuleScale(Array.from(scaleByDate.keys()).sort().map(d => {
+        const a = scaleByDate.get(d)!; return { date: d, label: lbl(d), dev: avg(a) ?? 0, readings: a.length }
+      }))
+      setScaleAudit(audit)
+    } catch { /* granule KPIs are best-effort */ }
+
     setLoading(false); setRefreshing(false)
   }, [today, windowDays])
 
@@ -345,6 +405,11 @@ export default function ProductionDashboard() {
     yieldBySection,
     openBreakdowns: breakdowns.map(b => ({ card: b.card_no, area: b.area, machine: b.machine, status: b.status })),
   }), [todaySummary, dailyYield, yieldBySection, breakdowns])
+
+  // Scale-verification audit summary — the pass/fail record for granule.
+  const scalePass = scaleAudit.filter(a => a.pass).length
+  const scalePassRate = scaleAudit.length ? Math.round((scalePass / scaleAudit.length) * 100) : null
+  const granuleHasData = granuleQuality.length > 0 || granuleScale.length > 0 || scaleAudit.length > 0
 
   return (
     <div className="space-y-5">
@@ -690,6 +755,115 @@ export default function ProductionDashboard() {
             ) : null}
 
           </div>
+        )}
+      </div>
+
+      {/* Granule Line — quality & scale-health KPI foundations */}
+      <div className="card p-4">
+        <div className="flex items-center gap-1 mb-3">
+          <FlaskConical size={15} style={{ color: sectionMeta('granule').colorHex }} />
+          <h3 className="text-sm font-semibold text-text">Granule Line — quality &amp; scale health</h3>
+          <InfoTip text="Foundations for granule quality and scale predictive-maintenance KPIs. Quality readings come from the capture screen; scale verifications come from the Checks audit trail. Both grow richer as shifts are captured, and feed the per-production pass/fail audit below." />
+        </div>
+
+        {/* What each metric means — so the dashboard explains, not just reports */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5 text-[11px] leading-relaxed text-text-muted">
+          <div className="rounded-xl border p-3" style={{ borderColor: `${C.azure}30`, background: `${C.azure}08` }}>
+            <div className="font-semibold text-text mb-0.5">Granule quality — why it matters</div>
+            Granule uniformity drives consistent product density, flow and structural integrity, and depends on precise raw-material batching in the pellet mill. Moisture (%) and bulk density (cc/100g) are the two in-process indicators the QC lab measures per lot; linked here by lot number + date, trends flag drift before it becomes off-spec product.
+          </div>
+          <div className="rounded-xl border p-3" style={{ borderColor: `${C.warn}30`, background: `${C.warn}08` }}>
+            <div className="font-semibold text-text mb-0.5">Scale verification — not calibration</div>
+            Verification proves the scale reads accurately within tolerance (calibration adjusts it). Each shift: <strong>zero check</strong> (no tare) → <strong>test load</strong> (certified mass) → <strong>pass/fail</strong> on the deviation. Accurate weighing cuts product giveaway and overfill, and keeps us compliant with the Legal Metrology Act (NRCS / SANAS — e.g. Clover Scales, Scale Tronic, SWIS for on-site verification).
+          </div>
+        </div>
+
+        {!granuleHasData ? (
+          <div className="rounded-xl border border-surface-rule p-6 text-center text-[12px] text-text-muted">
+            No granule quality or scale-verification data captured yet for the selected window. Quality readings come from the Granule capture screen; scale verifications from the Checks tab.
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Chart
+                title="Granule quality"
+                subtitle={`Daily avg moisture % & bulk density · from QC · last ${windowDays} days`}
+                info="Daily average of the moisture (%) and bulk-density (cc/100g) readings measured by the QC lab (qms.granule_samples), linked to production by lot number and date. Moisture uses the left axis, bulk density the right. Same data as the operators' QC graph — one source of truth, and the basis for future AI/uniformity research."
+              >
+                <ComposedChart data={granuleQuality} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="m" tick={{ fontSize: 11 }} unit="%" />
+                  <YAxis yAxisId="b" orientation="right" tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Line yAxisId="m" type="monotone" dataKey="moisture" name="Moisture %" stroke={C.azure} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  <Line yAxisId="b" type="monotone" dataKey="bulkDensity" name="Bulk density (cc/100g)" stroke={C.accent} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                </ComposedChart>
+              </Chart>
+
+              <Chart
+                title="Scale verification health"
+                subtitle={`Daily avg deviation (actual − std) · last ${windowDays} days`}
+                info="Actual test-load reading minus the certified standard weight, averaged per day. Zero is perfect. A deviation trending away from zero is the early predictive-maintenance signal to recalibrate or service the scale."
+              >
+                <LineChart data={granuleScale} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E4E7EC" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} unit=" kg" />
+                  <Tooltip formatter={(v: any) => `${v} kg`} />
+                  <ReferenceLine y={0} stroke={C.ok} strokeDasharray="4 4" />
+                  <Line type="monotone" dataKey="dev" name="Deviation (kg)" stroke={C.warn} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                </LineChart>
+              </Chart>
+            </div>
+
+            {/* Scale verification audit — pass/fail per production */}
+            {scaleAudit.length > 0 && (
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-1">
+                    <h4 className="text-[13px] font-semibold text-text">Scale verification audit</h4>
+                    <InfoTip text="Every scale verification signed off on the granule Checks tab, most recent first. Pass = deviation within the allowable ± tolerance (supervisor-set in check_specs, default ±0.1 kg); a fail raises a maintenance job. This is the per-production audit trail for legal-metrology compliance." />
+                  </div>
+                  {scalePassRate != null && (
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg ${scalePassRate >= 95 ? 'bg-ok/10 text-ok' : scalePassRate >= 80 ? 'bg-warn/10 text-warn' : 'bg-err/10 text-err'}`}>
+                      {scalePass}/{scaleAudit.length} passed · {scalePassRate}%
+                    </span>
+                  )}
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-surface-rule">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="bg-surface-dim border-b border-surface-rule">
+                        {['Date', 'Shift', 'Standard', 'Actual', 'Deviation', 'Result'].map(h => (
+                          <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-surface-rule">
+                      {scaleAudit.slice(0, 12).map((r, i) => (
+                        <tr key={i} className={`hover:bg-surface-dim/40 ${!r.pass ? 'bg-err/5' : ''}`}>
+                          <td className="px-3 py-2 text-text-muted">{r.label}</td>
+                          <td className="px-3 py-2 capitalize text-text-muted">{r.shift || '—'}</td>
+                          <td className="px-3 py-2 font-mono text-text">{r.std != null ? `${r.std} kg` : '—'}</td>
+                          <td className="px-3 py-2 font-mono text-text">{r.actual != null ? `${r.actual} kg` : '—'}</td>
+                          <td className="px-3 py-2 font-mono" style={{ color: r.dev != null && Math.abs(r.dev) > 0.1 ? C.warn : C.ok }}>
+                            {r.dev != null ? `${r.dev > 0 ? '+' : ''}${r.dev} kg` : '—'}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${r.pass ? 'bg-ok/10 text-ok' : 'bg-err/10 text-err'}`}>
+                              {r.pass ? 'Verified' : 'Fail'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

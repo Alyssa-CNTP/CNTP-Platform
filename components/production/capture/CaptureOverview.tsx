@@ -10,11 +10,13 @@
 import React, { useState, useMemo } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
-import { sievingTotals, type SievingData } from '@/components/production/capture/SievingCapture'
+import { type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
+import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
@@ -47,6 +49,18 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         const serial = r.serial || `Input bag ${i + 1}`
         const row: DebagRow = { bagNo: serial, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
         map.set(serial, { lot: serial, rows: [row], totalKg: num(r.weight) })
+      })
+    } else if ('blends' in d) {
+      // GranuleData: group dust inputs by dust type — the plant reads dust totals first.
+      ;(d.blends ?? []).forEach((bl: any) => {
+        ;(bl.rows ?? []).forEach((r: any) => {
+          if (num(r.weight) === 0) return
+          const label = dustProductType(r.dustKey)
+          const row: DebagRow = { bagNo: r.serial || label, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
+          const g = map.get(label)
+          if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
+          else map.set(label, { lot: label, rows: [row], totalKg: num(r.weight) })
+        })
       })
     } else {
       // SievingData: debag + spillage
@@ -103,6 +117,16 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
           destination: p.variant, // no grade — show variant instead
         }))
       })
+    } else if ('blends' in d) {
+      // GranuleData: granule bags + dust-from-granule-line by-products
+      ;(d.outputs ?? []).forEach((b: any) => addBag(p, {
+        productType: b.item, weight: b.weight, serial: b.serial, code: b.code,
+        batch: b.lot, destination: p.grade || p.variant, logged_at: b.logged_at,
+      }))
+      ;(d.dustOutputs ?? []).forEach((r: any) => addBag(p, {
+        productType: r.dustType, weight: r.weight, serial: r.serial, code: r.code,
+        batch: p.lot, destination: p.variant, logged_at: r.logged_at,
+      }))
     } else {
       // SievingData: flat outputs array
       ;(d.outputs ?? []).forEach((b: any) => addBag(p, b))
@@ -125,10 +149,11 @@ const fmtTime = (iso?: string) =>
 
 export function CaptureOverview({
   productions, sectionName, sectionColor, date, shift, showSerials = false,
-  productionOrders, locked = false,
+  productionOrders, locked = false, balanceRows, balanceNote,
 }: {
   productions: Production[]; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
+  balanceRows?: BalanceRow[]; balanceNote?: string
 }) {
   const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
@@ -497,14 +522,19 @@ export function CaptureOverview({
               </div>
             )}
 
-            {/* Mass balance */}
-            <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
-              <span className="text-stone-500">Out {totalOut.toFixed(1)} − In {totalIncl.toFixed(1)} =</span>
-              <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
-                <span className={withinTol ? 'text-ok' : 'text-warn'}>{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg</span>
-                {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
-              </span>
-            </div>
+            {/* Mass balance — tabular (Morning / Afternoon / whole run) when the
+                page supplies per-shift rows; otherwise a single-line fallback. */}
+            {balanceRows && balanceRows.length > 0 ? (
+              <MassBalanceTable rows={balanceRows} tolerance={MASS_BALANCE_TOLERANCE_KG} note={balanceNote} />
+            ) : (
+              <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
+                <span className="text-stone-500">In {totalIncl.toFixed(1)} − Out {totalOut.toFixed(1)} =</span>
+                <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
+                  <span className={withinTol ? 'text-ok' : 'text-warn'}>{(-variance) > 0 ? '+' : ''}{(-variance).toFixed(1)} kg</span>
+                  {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>

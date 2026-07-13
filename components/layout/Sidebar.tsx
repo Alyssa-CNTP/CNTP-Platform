@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
-  FileSpreadsheet,
+  FileSpreadsheet, GraduationCap, Building2,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -41,14 +41,18 @@ const NAV: NavItem[] = [
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
+  { href: '/production/inventory',      label: 'Master Inventory',           icon: PackageOpen,     group: 'Production', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
+  { href: '/production/blends',         label: 'Blends',                     icon: Layers,          group: 'Production', departments: ['Production','Management'], permission: 'can_view_blends', orPermission: true },
   { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
   { href: '/production/floor-plan',     label: 'Floor Plan',                 icon: Map,             group: 'Production', departments: ['Production','Management'] },
 
   // ── Operations — cross-role, universal entries ──
-  { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations' },
-  { href: '/production/staff',          label: 'Staff & Skills',             icon: Users,           group: 'Operations' },
+  { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
+
+  // ── HR — single hub entry; Staff & Skills and Training live underneath as cards ──
+  { href: '/hr',                        label: 'HR',                         icon: Building2,       group: 'HR' },
 
   // ── Quality ──
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
@@ -114,9 +118,13 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
   const isFloorOperator = role === 'floor_operator'
   const FLOOR_NAV: NavItem[] = [
     { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
+    { href: '/training/my',        label: 'Training',     icon: GraduationCap,   group: 'Production' },
   ]
 
+  const isUnassigned = !role && !department
   const visibleNav = isFloorOperator ? FLOOR_NAV : NAV.filter(item => {
+    // Unassigned users (no role, no department) see only Submit Request + Settings
+    if (isUnassigned) return item.href === '/axis/request' || item.href === '/settings'
     if (item.href === '/settings') return true
     if (item.href === '/suggest') return true
     if (item.itOnly && !isIT && !isFullAdmin) return false

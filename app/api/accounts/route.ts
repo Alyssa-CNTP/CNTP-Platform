@@ -64,27 +64,43 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null)
   if (!body?.name) return NextResponse.json({ error: 'name required' }, { status: 400 })
 
-  const row = {
-    name:         body.name,
-    country:      body.country      ?? null,
-    region:       body.region       ?? null,
-    account_type: body.account_type ?? 'prospect',
-    stage:        body.stage        ?? 'lead',
-    sales_angle:  body.sales_angle  ?? null,
-    notes:        body.notes        ?? null,
-    signal_ids:   body.signal_ids   ?? [],
-    assigned_to:  body.assigned_to  ?? user.id,
-    tags:         body.tags         ?? [],
+  // Check if an account with this name already exists (avoid upsert which needs a unique constraint)
+  const { data: existing } = await salesDb
+    .from('accounts')
+    .select('id, name, stage')
+    .eq('name', body.name)
+    .maybeSingle()
+
+  if (existing) {
+    // Already a lead — treat as success
+    return NextResponse.json({ account: existing }, { status: 200 })
   }
+
+  const row: Record<string, unknown> = {
+    name:        body.name,
+    stage:       body.stage ?? 'lead',
+    notes:       body.notes ?? null,
+    assigned_to: user.id,
+  }
+  // Only include optional columns if they have values (avoids unknown-column errors)
+  if (body.country)      row.country      = body.country
+  if (body.region)       row.region       = body.region
+  if (body.sales_angle)  row.sales_angle  = body.sales_angle
+  if (body.signal_ids?.length) row.signal_ids = body.signal_ids
 
   const { data, error } = await salesDb
     .from('accounts')
-    .upsert(row, { onConflict: 'name', ignoreDuplicates: false })
+    .insert(row)
     .select('id, name, stage')
     .single()
 
   if (error) {
-    console.error('[accounts POST] upsert error:', error.message, error.details, error.hint, JSON.stringify(row))
+    console.error('[accounts POST] insert error:', error.message, error.details, error.hint)
+    // If it failed due to duplicate name (race condition), return success anyway
+    if (error.code === '23505') {
+      const { data: race } = await salesDb.from('accounts').select('id, name, stage').eq('name', body.name).maybeSingle()
+      if (race) return NextResponse.json({ account: race }, { status: 200 })
+    }
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 

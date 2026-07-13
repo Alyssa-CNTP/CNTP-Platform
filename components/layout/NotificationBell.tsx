@@ -26,6 +26,17 @@ interface MaintNote {
   created_at: string
 }
 
+interface AxisNote {
+  id:              number
+  type:            string
+  title:           string
+  body:            string | null
+  reference_id:    string | null
+  reference_table: string | null
+  read_at:         string | null
+  created_at:      string
+}
+
 export default function NotificationBell() {
   const db = getDb()
   const { userId, department, isManagement, isIT } = useAuth()
@@ -33,6 +44,7 @@ export default function NotificationBell() {
   const [anns,      setAnns]      = useState<Announcement[]>([])
   const [readIds,   setReadIds]   = useState<Set<string>>(new Set())
   const [notes,     setNotes]     = useState<MaintNote[]>([])
+  const [axisNotes, setAxisNotes] = useState<AxisNote[]>([])
   const [open,      setOpen]      = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -41,11 +53,19 @@ export default function NotificationBell() {
   // Mark personal notifications read when the panel opens.
   useEffect(() => {
     if (!open || !userId) return
-    const unreadIds = notes.filter(n => !n.read_at).map(n => n.id)
-    if (unreadIds.length === 0) return
     const now = new Date().toISOString()
-    setNotes(p => p.map(n => (n.read_at ? n : { ...n, read_at: now })))
-    db.schema('maintenance').from('notifications').update({ read_at: now }).in('id', unreadIds).then(() => {})
+
+    const unreadMaint = notes.filter(n => !n.read_at).map(n => n.id)
+    if (unreadMaint.length > 0) {
+      setNotes(p => p.map(n => (n.read_at ? n : { ...n, read_at: now })))
+      db.schema('maintenance').from('notifications').update({ read_at: now }).in('id', unreadMaint).then(() => {})
+    }
+
+    const unreadAxis = axisNotes.filter(n => !n.read_at).map(n => n.id)
+    if (unreadAxis.length > 0) {
+      setAxisNotes(p => p.map(n => (n.read_at ? n : { ...n, read_at: now })))
+      db.schema('axis').from('notifications').update({ read_at: now }).in('id', unreadAxis).then(() => {})
+    }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -57,7 +77,7 @@ export default function NotificationBell() {
   }, [])
 
   async function load() {
-    const [{ data: annData }, { data: readData }, { data: noteData }] = await Promise.all([
+    const [{ data: annData }, { data: readData }, { data: noteData }, { data: axisData }] = await Promise.all([
       db.from('management_announcements')
         .select('id,title,from_name,target_departments,created_at')
         .order('created_at', { ascending: false })
@@ -66,6 +86,11 @@ export default function NotificationBell() {
       db.schema('maintenance').from('notifications')
         .select('id,kind,title,body,url,urgent,read_at,created_at')
         .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      db.schema('axis').from('notifications')
+        .select('id,type,title,body,reference_id,reference_table,read_at,created_at')
+        .eq('recipient_id', userId)
         .order('created_at', { ascending: false })
         .limit(20),
     ])
@@ -77,11 +102,13 @@ export default function NotificationBell() {
     setAnns(visible)
     setReadIds(new Set((readData ?? []).map((r: any) => r.announcement_id)))
     setNotes((noteData ?? []) as MaintNote[])
+    setAxisNotes((axisData ?? []) as AxisNote[])
   }
 
   const unread = [
     ...anns.filter(a => !readIds.has(a.id)),
     ...notes.filter(n => !n.read_at),
+    ...axisNotes.filter(n => !n.read_at),
   ]
 
   return (
@@ -123,7 +150,7 @@ export default function NotificationBell() {
           borderRadius: 14,
           boxShadow: '0 12px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)',
           overflow: 'hidden',
-          zIndex: 100,
+          zIndex: 9999,
           display: 'flex', flexDirection: 'column',
         }}>
           {/* Header */}
@@ -147,6 +174,34 @@ export default function NotificationBell() {
 
           {/* List */}
           <div style={{ overflowY: 'auto', flex: 1 }}>
+            {/* AXIS project / comment notifications */}
+            {axisNotes.map(n => {
+              const href = n.reference_table === 'projects'
+                ? '/axis/projects'
+                : '/axis/consideration'
+              const item = (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '10px 16px', borderBottom: '1px solid #F3F4F6',
+                  background: n.read_at ? 'transparent' : 'rgba(26,58,14,0.025)',
+                }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: n.read_at ? '#E4E7EC' : '#1A3A0E', flexShrink: 0, marginTop: 6 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontFamily: 'var(--font-body)', fontWeight: n.read_at ? 400 : 600, fontSize: 12, color: '#1A2415', margin: 0 }}>{n.title}</p>
+                    {n.body && <p style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#637056', margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.body}</p>}
+                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+                      AXIS · {formatDistanceToNow(parseISO(n.created_at), { addSuffix: true })}
+                    </p>
+                  </div>
+                </div>
+              )
+              return (
+                <Link key={`ax${n.id}`} href={href} onClick={() => setOpen(false)} style={{ textDecoration: 'none', display: 'block' }}>
+                  {item}
+                </Link>
+              )
+            })}
+
             {/* Personal maintenance notifications */}
             {notes.map(n => {
               const item = (
@@ -170,7 +225,7 @@ export default function NotificationBell() {
                 : <div key={`n${n.id}`}>{item}</div>
             })}
 
-            {anns.length === 0 && notes.length === 0 ? (
+            {anns.length === 0 && notes.length === 0 && axisNotes.length === 0 ? (
               <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#9CA3AF' }}>
                 Nothing new
               </div>

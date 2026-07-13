@@ -6,9 +6,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
 import { newFloorEmail, deriveAuthPassword, nextOperatorCode, FLOOR_OPERATOR_PERMISSIONS } from '@/lib/production/operator-auth'
+import { writeAudit } from '@/lib/audit/write'
 
 function canManage(caller: { can: (k: any) => boolean }) {
   return caller.can('can_reset_operator_pin') || caller.can('can_manage_users')
+}
+
+// Audit snapshots must not carry the plaintext PIN into another table.
+function redactPin<T extends { pin?: unknown }>(row: T | null | undefined) {
+  if (!row) return row
+  return { ...row, pin: row.pin ? '••••' : row.pin }
+}
+
+// employee_id is written by this route ahead of its migration
+// (20260709_001_people_links.sql) being applied on a given environment. Undefined
+// column (Postgres 42703) means that migration hasn't run yet there — degrade to
+// writing without the link rather than breaking operator creation/editing.
+function isMissingColumnError(error: { code?: string } | null | undefined) {
+  return error?.code === '42703'
 }
 
 function validate(body: any): string | null {
@@ -27,6 +42,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const bad = validate(body)
     if (bad) return NextResponse.json({ error: bad }, { status: 400 })
+    // Every new PIN must be tied to a Staff Directory person, so the two
+    // lists never drift apart (this is enforced only for NEW operators —
+    // editing a legacy one that predates this rule isn't blocked on it).
+    if (!body?.employee_id)
+      return NextResponse.json({ error: 'employee_id is required — link this PIN to a Staff Directory person' }, { status: 400 })
 
     const admin   = getAdminClient()
     const session = await getSessionClient()
@@ -51,7 +71,7 @@ export async function POST(req: NextRequest) {
     const userId = created.user.id
 
     // 2. Operator record (production schema — admin bypasses RLS)
-    const { data: opRow, error: opErr } = await admin.schema('production').from('operators').insert({
+    const opInsert = {
       user_id:       userId,
       auth_email:    email,
       name:          body.name.trim(),
@@ -61,14 +81,29 @@ export async function POST(req: NextRequest) {
       section_ids:   body.section_ids,
       pin:           body.pin,
       active:        body.active !== false,
-    } as any).select('id').single()
+      employee_id:   body.employee_id ?? null,
+    }
+    let { data: opRow, error: opErr } = await admin.schema('production').from('operators')
+      .insert(opInsert as any).select('id,name,display_name,operator_code,role,section_ids,pin,active').single()
+    if (opErr && isMissingColumnError(opErr)) {
+      const { employee_id, ...withoutLink } = opInsert
+      ;({ data: opRow, error: opErr } = await admin.schema('production').from('operators')
+        .insert(withoutLink as any).select('id,name,display_name,operator_code,role,section_ids,pin,active').single())
+    }
     if (opErr) {
       await admin.auth.admin.deleteUser(userId).catch(() => {})
       return NextResponse.json({ error: opErr.message }, { status: 500 })
     }
 
+    // Keep the Staff Directory's reverse link (employees.operator_id) in sync
+    // so both directions agree on who this PIN belongs to.
+    if (body.employee_id) {
+      await admin.schema('production').from('employees')
+        .update({ operator_id: (opRow as any).id } as any).eq('id', body.employee_id)
+    }
+
     // 3. app_roles (session client — caller already verified)
-    const { error: roleErr } = await session.schema('shared' as any).from('app_roles').upsert({
+    const roleUpsert = {
       user_id:     userId,
       full_name:   display,
       department:  'Production',
@@ -76,8 +111,23 @@ export async function POST(req: NextRequest) {
       section_id:  body.section_ids[0] ?? null,
       permissions: FLOOR_OPERATOR_PERMISSIONS,
       is_active:   body.active !== false,
-    }, { onConflict: 'user_id' })
+      employee_id: body.employee_id ?? null,
+    }
+    let { error: roleErr } = await session.schema('shared' as any).from('app_roles')
+      .upsert(roleUpsert, { onConflict: 'user_id' })
+    if (roleErr && isMissingColumnError(roleErr)) {
+      const { employee_id, ...withoutLink } = roleUpsert
+      ;({ error: roleErr } = await session.schema('shared' as any).from('app_roles')
+        .upsert(withoutLink, { onConflict: 'user_id' }))
+    }
     if (roleErr) return NextResponse.json({ error: roleErr.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'create',
+      schema: 'production', table: 'operators',
+      recordId: (opRow as any).id,
+      after: redactPin(opRow as any),
+    })
 
     return NextResponse.json({ success: true, id: (opRow as any).id, userId })
   } catch (err: any) {
@@ -101,7 +151,8 @@ export async function PATCH(req: NextRequest) {
     const display = (body.display_name?.trim() || body.name.trim())
 
     const { data: existing } = await admin.schema('production').from('operators')
-      .select('user_id, auth_email, operator_code').eq('id', body.id).maybeSingle()
+      .select('user_id,auth_email,operator_code,name,display_name,role,section_ids,pin,active')
+      .eq('id', body.id).maybeSingle()
     if (!existing) return NextResponse.json({ error: 'Operator not found' }, { status: 404 })
 
     let userId    = (existing as any).user_id as string | null
@@ -132,7 +183,9 @@ export async function PATCH(req: NextRequest) {
       if (pwErr) return NextResponse.json({ error: pwErr.message }, { status: 500 })
     }
 
-    const { error: opErr } = await admin.schema('production').from('operators').update({
+    // Only touch the employee link when the caller explicitly sent one —
+    // don't clobber an existing link on edits that don't know about it.
+    const opUpdate: Record<string, any> = {
       user_id:       userId,
       auth_email:    authEmail,
       name:          body.name.trim(),
@@ -142,10 +195,26 @@ export async function PATCH(req: NextRequest) {
       section_ids:   body.section_ids,
       pin:           body.pin,
       active:        body.active !== false,
-    } as any).eq('id', body.id)
+    }
+    if (body.employee_id !== undefined) opUpdate.employee_id = body.employee_id
+
+    let { data: updated, error: opErr } = await admin.schema('production').from('operators')
+      .update(opUpdate as any).eq('id', body.id)
+      .select('id,name,display_name,operator_code,role,section_ids,pin,active').single()
+    if (opErr && isMissingColumnError(opErr)) {
+      const { employee_id, ...withoutLink } = opUpdate
+      ;({ data: updated, error: opErr } = await admin.schema('production').from('operators')
+        .update(withoutLink as any).eq('id', body.id)
+        .select('id,name,display_name,operator_code,role,section_ids,pin,active').single())
+    }
     if (opErr) return NextResponse.json({ error: opErr.message }, { status: 500 })
 
-    const { error: roleErr } = await session.schema('shared' as any).from('app_roles').upsert({
+    if (body.employee_id) {
+      await admin.schema('production').from('employees')
+        .update({ operator_id: body.id } as any).eq('id', body.employee_id)
+    }
+
+    const roleUpdate: Record<string, any> = {
       user_id:     userId,
       full_name:   display,
       department:  'Production',
@@ -153,8 +222,23 @@ export async function PATCH(req: NextRequest) {
       section_id:  body.section_ids[0] ?? null,
       permissions: FLOOR_OPERATOR_PERMISSIONS,
       is_active:   body.active !== false,
-    }, { onConflict: 'user_id' })
+    }
+    if (body.employee_id !== undefined) roleUpdate.employee_id = body.employee_id
+
+    let { error: roleErr } = await session.schema('shared' as any).from('app_roles')
+      .upsert(roleUpdate, { onConflict: 'user_id' })
+    if (roleErr && isMissingColumnError(roleErr)) {
+      const { employee_id, ...withoutLink } = roleUpdate
+      ;({ error: roleErr } = await session.schema('shared' as any).from('app_roles')
+        .upsert(withoutLink, { onConflict: 'user_id' }))
+    }
     if (roleErr) return NextResponse.json({ error: roleErr.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'production', table: 'operators', recordId: body.id,
+      before: redactPin(existing as any), after: redactPin(updated as any),
+    })
 
     return NextResponse.json({ success: true, userId })
   } catch (err: any) {

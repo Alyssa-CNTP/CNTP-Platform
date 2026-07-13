@@ -44,13 +44,46 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (key in body) update[key] = body[key]
   }
 
-  const { error } = await (getAdminClient() as any)
-    .schema('axis')
-    .from('tickets')
-    .update(update)
-    .eq('id', id)
+  const admin = getAdminClient()
+  const axis  = (admin as any).schema('axis')
 
+  // Fetch the current ticket to know previous state
+  const { data: current } = await axis.from('tickets').select('title,status,assigned_to,assigned_name').eq('id', id).single()
+
+  // Capture resolver when marking resolved
+  if (body.status === 'resolved' && current?.status !== 'resolved') {
+    const { data: resolverRow } = await (admin as any)
+      .schema('shared').from('app_roles').select('full_name').eq('user_id', caller.userId).single()
+    update.resolved_by      = caller.userId
+    update.resolved_by_name = resolverRow?.full_name ?? null
+    update.resolved_at      = new Date().toISOString()
+  }
+  // Clear resolver fields when re-opening a resolved/closed ticket
+  if ((body.status === 'open' || body.status === 'in_progress') &&
+      (current?.status === 'resolved' || current?.status === 'closed')) {
+    update.resolved_by      = null
+    update.resolved_by_name = null
+    update.resolved_at      = null
+  }
+
+  const { error } = await axis.from('tickets').update(update).eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Notify new assignee when assigned_to changes
+  if (body.assigned_to && body.assigned_to !== current?.assigned_to) {
+    const { data: callerRow } = await (admin as any)
+      .schema('shared').from('app_roles').select('full_name').eq('user_id', caller.userId).single()
+    const assignerName = callerRow?.full_name ?? 'IT'
+    await axis.from('notifications').insert({
+      recipient_id:    body.assigned_to,
+      type:            'ticket_assigned',
+      title:           `Ticket assigned to you`,
+      body:            `${assignerName} assigned "${current?.title ?? ''}" to you.`,
+      reference_id:    id,
+      reference_table: 'tickets',
+    }).then(({ error: ne }: any) => { if (ne) console.error('[tickets PATCH] notify assign:', ne) })
+  }
+
   return NextResponse.json({ ok: true })
 }
 

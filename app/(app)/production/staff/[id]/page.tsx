@@ -7,7 +7,7 @@ import { format, parseISO, differenceInYears } from 'date-fns'
 import {
   ArrowLeft, Loader2, User, Phone, Plane, Calendar, Award,
   ClipboardList, ChevronDown, ChevronUp, History, AlertTriangle,
-  Check, X, Edit2,
+  Check, X, Edit2, KeyRound, IdCard, GraduationCap,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -15,6 +15,7 @@ import { StaffTabs } from '@/components/production/StaffTabs'
 import { SKILL_TAGS, tagLabel, categoryMeta } from '@/lib/production/roster-config'
 import { SOP_AREAS, sopAreaMeta, statusMeta, COMPETENCY_STATUSES } from '@/lib/production/competency-config'
 import type { CompetencyStatus } from '@/lib/production/competency-config'
+import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
 
 const db = () => getDb().schema('production')
 
@@ -40,13 +41,26 @@ interface HistoryRow {
   from_score: number | null; to_score: number | null; changed_by_name: string | null
   note: string | null; created_at: string; sop_id: string
 }
+interface LinkedOperator {
+  id: string; operator_code: string | null; role: string; section_ids: string[]; active: boolean
+}
+interface LinkedLogin {
+  has_login?: boolean
+  user_id?: string; email?: string | null; department?: string | null; role?: string | null
+  is_active: boolean
+}
+interface Identities {
+  operator: LinkedOperator | null
+  login: LinkedLogin | null
+  linksAvailable: boolean
+}
 
 const fmtDate = (d: string | null) => d ? format(parseISO(d + 'T12:00:00'), 'd MMM yyyy') : '—'
 
 export default function StaffProfilePage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const { p } = useAuth()
+  const { p, isIT } = useAuth()
 
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [sops, setSops] = useState<Sop[]>([])
@@ -57,8 +71,20 @@ export default function StaffProfilePage() {
   const [saving, setSaving] = useState(false)
   const [expandedAreas, setExpandedAreas] = useState<Set<string>>(new Set(SOP_AREAS.map(a => a.key)))
   const [showHistory, setShowHistory] = useState(false)
+  const [identities, setIdentities] = useState<Identities | null>(null)
+  const [assigningPin, setAssigningPin] = useState(false)
+  const [requestingLogin, setRequestingLogin] = useState(false)
+  const [requestSent, setRequestSent] = useState<string | null>(null)
+  const [identityError, setIdentityError] = useState<string | null>(null)
+  const [trainingCourses, setTrainingCourses] = useState<any[]>([])
 
   const canEdit = p('can_manage_competencies')
+  const canAssignPin = p('can_reset_operator_pin')
+
+  async function loadIdentities() {
+    const res = await fetch(`/api/staff/${id}/identities`)
+    if (res.ok) setIdentities(await res.json())
+  }
 
   useEffect(() => {
     async function load() {
@@ -75,8 +101,13 @@ export default function StaffProfilePage() {
       setHistory((histRes.data ?? []) as HistoryRow[])
       setLoading(false)
     }
-    if (id) load()
+    if (id) { load(); loadIdentities() }
   }, [id, router])
+
+  useEffect(() => {
+    if (!id) return
+    fetch(`/api/training/courses?employeeId=${id}`).then(r => r.json()).then(d => setTrainingCourses(d.courses ?? [])).catch(() => {})
+  }, [id])
 
   const compBySop = useMemo(() => {
     const m = new Map<string, Competency>()
@@ -110,6 +141,19 @@ export default function StaffProfilePage() {
     if (employee?.start_date) return differenceInYears(new Date(), parseISO(employee.start_date))
     return employee?.years_of_service ?? null
   }, [employee])
+
+  async function requestLogin() {
+    setRequestingLogin(true); setIdentityError(null)
+    try {
+      const res = await fetch(`/api/staff/${id}/request-login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Could not send the request')
+      setRequestSent(data?.ticket_number || 'sent')
+    } catch (e: any) {
+      setIdentityError(e?.message || 'Could not send the request')
+    }
+    setRequestingLogin(false)
+  }
 
   async function saveCompetency(sopId: string, patch: Partial<Competency>) {
     setSaving(true)
@@ -207,6 +251,101 @@ export default function StaffProfilePage() {
           </div>
         </div>
       </div>
+
+      {/* Identity hub — PIN operator (Capture) + login account (Users & Roles) linked to this person */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* PIN operator */}
+        <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
+          <p className="font-mono text-[10px] text-text-muted uppercase tracking-wide flex items-center gap-1.5">
+            <IdCard size={11} /> PIN operator (Capture)
+          </p>
+          {identities?.operator ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[12px] text-text">
+                <span className="font-mono font-semibold">{identities.operator.operator_code || '—'}</span>
+                <span className="text-text-muted"> · {identities.operator.section_ids.length} section{identities.operator.section_ids.length === 1 ? '' : 's'}</span>
+                {!identities.operator.active && <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-500">Inactive</span>}
+              </div>
+              {canAssignPin && (
+                <Link href="/production/operators" className="text-[11px] text-brand font-medium hover:underline shrink-0">Manage →</Link>
+              )}
+            </div>
+          ) : canAssignPin ? (
+            <button onClick={() => setAssigningPin(true)}
+              className="text-[12px] text-brand font-medium hover:underline">
+              + Assign PIN &amp; sections
+            </button>
+          ) : (
+            <p className="text-[12px] text-text-muted">No PIN assigned.</p>
+          )}
+        </div>
+
+        {/* Login account */}
+        <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
+          <p className="font-mono text-[10px] text-text-muted uppercase tracking-wide flex items-center gap-1.5">
+            <KeyRound size={11} /> Login account (Users &amp; Roles)
+          </p>
+          {identities?.login ? (
+            <div className="text-[12px] text-text">
+              {isIT && identities.login.email ? (
+                <>
+                  <span>{identities.login.email}</span>
+                  <span className="text-text-muted"> · {identities.login.role?.replace(/_/g, ' ') ?? '—'}</span>
+                </>
+              ) : (
+                <span className="text-text-muted">Has a login account</span>
+              )}
+              {!identities.login.is_active && <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-500">Inactive</span>}
+              {isIT && (
+                <Link href="/users" className="ml-2 text-[11px] text-brand font-medium hover:underline">Manage →</Link>
+              )}
+            </div>
+          ) : isIT ? (
+            <p className="text-[12px] text-text-muted">
+              No login yet.{' '}
+              <Link href={`/users?newFor=${employee.id}&name=${encodeURIComponent(employee.display_name || employee.name)}${employee.email ? `&email=${encodeURIComponent(employee.email)}` : ''}`}
+                className="text-brand font-medium hover:underline">Create one →</Link>
+            </p>
+          ) : requestSent ? (
+            <p className="flex items-center gap-1.5 text-[12px] text-ok">
+              <Check size={13} /> Request sent to IT{requestSent !== 'sent' ? ` — ticket ${requestSent}` : ''}.
+            </p>
+          ) : (
+            <button onClick={requestLogin} disabled={requestingLogin}
+              className="text-[12px] text-brand font-medium hover:underline disabled:opacity-40 disabled:no-underline">
+              {requestingLogin ? 'Sending…' : '+ Request login account'}
+            </button>
+          )}
+          {identityError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {identityError}</p>}
+        </div>
+      </div>
+
+      {/* Training portfolio — courses assigned/completed, feeding the competency matrix below */}
+      {trainingCourses.length > 0 && (
+        <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display font-semibold text-[15px] text-text flex items-center gap-2">
+              <GraduationCap size={15} /> Training portfolio
+            </h2>
+            <Link href="/training/manage/assignments" className="text-[11px] text-brand font-medium hover:underline">Assign training →</Link>
+          </div>
+          <div className="space-y-1.5">
+            {trainingCourses.filter(c => c.assignment || c.latest_attempt).map(c => (
+              <Link key={c.id} href={`/training/course/${c.slug}?as=${id}`}
+                className="flex items-center justify-between gap-2 text-[12px] px-3 py-2 rounded-xl hover:bg-surface transition-colors">
+                <span className="text-text">{c.title}</span>
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                  c.latest_attempt?.passed ? 'bg-ok/15 text-ok'
+                  : c.latest_attempt?.needs_review ? 'bg-warn/15 text-warn'
+                  : c.assignment ? 'bg-azure/15 text-azure' : 'bg-stone-100 text-stone-400'
+                }`}>
+                  {c.latest_attempt?.passed ? 'Completed' : c.latest_attempt?.needs_review ? 'Pending review' : c.assignment ? 'Assigned' : 'Available'}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Competency matrix by area */}
       <div className="space-y-3">
@@ -335,6 +474,96 @@ export default function StaffProfilePage() {
           onSave={patch => saveCompetency(editingComp.sopId, patch)}
         />
       )}
+
+      {/* Assign PIN + sections — creates a linked operator via /api/production/operators */}
+      {assigningPin && employee && (
+        <AssignPinModal
+          employeeId={employee.id}
+          defaultName={employee.display_name || employee.name}
+          onClose={() => setAssigningPin(false)}
+          onDone={() => { setAssigningPin(false); loadIdentities() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function AssignPinModal({ employeeId, defaultName, onClose, onDone }: {
+  employeeId: string; defaultName: string
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [pin, setPin] = useState('')
+  const [sectionIds, setSectionIds] = useState<string[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function toggleSection(sid: string) {
+    setSectionIds(s => s.includes(sid) ? s.filter(x => x !== sid) : [...s, sid])
+  }
+
+  async function save() {
+    if (!/^\d{4}$/.test(pin)) { setError('PIN must be exactly 4 digits'); return }
+    if (sectionIds.length === 0) { setError('Assign at least one section'); return }
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch('/api/production/operators', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: defaultName, role: 'floor_operator', section_ids: sectionIds, pin, employee_id: employeeId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Could not assign the PIN')
+      onDone()
+    } catch (e: any) {
+      setError(e?.message || 'Could not assign the PIN')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[380px] p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-display font-bold text-[15px] text-text">Assign PIN &amp; sections</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={15} /></button>
+        </div>
+        <p className="text-[12px] text-text-muted">{defaultName} will be able to sign in on the Capture floor app with this PIN. An operator code is assigned automatically.</p>
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">4-digit PIN</label>
+          <input value={pin} inputMode="numeric" maxLength={4}
+            onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[18px] font-mono tracking-[0.4em] text-center outline-none focus:border-brand"
+            placeholder="••••" />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Allowed sections</label>
+          <div className="flex flex-wrap gap-2">
+            {SECTION_ORDER.map(sid => {
+              const m = sectionMeta(sid)
+              const on = sectionIds.includes(sid)
+              return (
+                <button key={sid} type="button" onClick={() => toggleSection(sid)}
+                  className={`px-3 py-2 rounded-xl border text-[12px] font-medium transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200'}`}>
+                  {m.name}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {error && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} /> {error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} disabled={saving} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50 disabled:opacity-40">Cancel</button>
+          <button onClick={save} disabled={saving}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Assign
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

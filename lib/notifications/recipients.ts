@@ -5,6 +5,7 @@
 
 import { getSessionClient, getAdminClient } from '@/lib/auth/server-helpers'
 import type { Recipient } from './index'
+import { resolvePermission, rosterPerm, type RosterSectionKey, type Permissions } from '@/lib/auth/permissions'
 
 export async function resolveRecipients(userIds: string[]): Promise<Recipient[]> {
   const ids = Array.from(new Set(userIds.filter(Boolean)))
@@ -49,4 +50,26 @@ export async function getQualityUserIds(): Promise<string[]> {
   const { data } = await session.schema('shared' as any).from('app_roles')
     .select('user_id, is_active').eq('department', 'Quality')
   return (data ?? []).filter((r: any) => r.is_active !== false).map((r: any) => r.user_id).filter(Boolean)
+}
+
+/**
+ * User ids who may SUBMIT the given roster section — i.e. hold
+ * can_submit_roster_<section>, resolved from role defaults + per-user overrides.
+ * This is the "not hardcoded" recipient list for the Wednesday reminder: it is
+ * derived entirely from the permission toggles set on the Users & Roles page.
+ *
+ * Reads via the public.roster_submitter_candidates() SECURITY DEFINER function
+ * so it works both for authenticated callers AND the unattended cron (which has
+ * no session and cannot reach the `shared` schema with service_role).
+ */
+export async function getRosterSubmitterIds(section: RosterSectionKey): Promise<string[]> {
+  const admin = getAdminClient()
+  const { data, error } = await (admin as any).rpc('roster_submitter_candidates')
+  if (error) { console.error('[recipients] roster_submitter_candidates rpc failed:', error.message); return [] }
+  const key = rosterPerm('submit', section)
+  return (data ?? [])
+    .filter((r: any) => r.is_active !== false)
+    .filter((r: any) => resolvePermission((r.role ?? null) as string | null, (r.permissions ?? {}) as Permissions, key))
+    .map((r: any) => r.user_id)
+    .filter(Boolean)
 }

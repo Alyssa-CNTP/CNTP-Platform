@@ -55,6 +55,8 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
+  { prefix: '/production/inventory', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
+  { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
   // Maintenance — full module is Maintenance + Management. Production may only
@@ -85,6 +87,14 @@ const ROUTE_GUARDS: Array<{
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },
   { prefix: '/tags',       departments: ['Production'] },
+
+  // Training — the learner entry (/training) is always-open (see below);
+  // these are the HR/training-officer authoring & oversight sub-routes.
+  { prefix: '/training/manage/assignments', permission: 'can_assign_training' },
+  { prefix: '/training/manage/review',      permission: 'can_manage_competencies' },
+  { prefix: '/training/manage',             permission: 'can_author_training' },
+  { prefix: '/training/signoff',            permission: 'can_manage_competencies' },
+  { prefix: '/training/competency',         permission: 'can_view_all_competency' },
 ]
 
 // ─── Route metadata ────────────────────────────────────────────────────────────
@@ -110,6 +120,14 @@ const ROUTE_META: Record<string, {
   '/production/staff/allocation': { title: 'Staff Allocation',   variant: 'default', chips: [{ label: 'Phase 2', color: 'purple' }] },
   '/production/operators':   { title: 'Operators',              variant: 'default' },
   '/info':                   { title: 'Section Information',    variant: 'default' },
+  '/hr':                     { title: 'HR',                      variant: 'default' },
+  '/training':               { title: 'Training',                variant: 'default' },
+  '/training/my':            { title: 'My Training',             variant: 'default' },
+  '/training/manage':        { title: 'Manage Courses',          variant: 'default' },
+  '/training/manage/assignments': { title: 'Training Assignments', variant: 'default' },
+  '/training/manage/review': { title: 'Review Queue',            variant: 'default' },
+  '/training/signoff':       { title: 'Practical Sign-off',       variant: 'default' },
+  '/training/competency':    { title: 'Competency Dashboard',     variant: 'default' },
   '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
   '/users':                  { title: 'Users & Roles',          variant: 'default' },
   '/settings':               { title: 'Account Settings',       variant: 'default' },
@@ -189,38 +207,56 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
 
   // ── Inactivity auto sign-out ───────────────────────────────────────────────
-  const timeoutRef   = useRef<ReturnType<typeof setTimeout>  | null>(null)
-  const warningRef   = useRef<ReturnType<typeof setTimeout>  | null>(null)
-  const intervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Wall-clock based: we track the last-activity timestamp and re-evaluate on a
+  // tick AND whenever the tab regains focus/visibility. Comparing timestamps
+  // (rather than trusting a single long setTimeout to fire) means a device that
+  // slept or a tab the browser throttled in the background is still signed out
+  // correctly the moment it wakes — the old setTimeout approach silently missed
+  // those cases and left users logged in past the hour.
+  const lastActivityRef = useRef<number>(Date.now())
+  const intervalRef     = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const clearAll = useCallback(() => {
-    if (timeoutRef.current)  clearTimeout(timeoutRef.current)
-    if (warningRef.current)  clearTimeout(warningRef.current)
-    if (intervalRef.current) clearInterval(intervalRef.current)
-  }, [])
-
-  const resetTimer = useCallback(() => {
-    clearAll()
+  // "Stay signed in" / any interaction: bump the clock and clear the warning.
+  const stayActive = useCallback(() => {
+    lastActivityRef.current = Date.now()
     setShowWarning(false)
-    // Warning banner 5 mins before sign-out
-    warningRef.current = setTimeout(() => {
-      setShowWarning(true)
-      setCountdown(WARNING_MS / 1000)
-      intervalRef.current = setInterval(() =>
-        setCountdown(c => (c <= 1 ? (clearInterval(intervalRef.current!), 0) : c - 1)), 1000)
-    }, INACTIVITY_MS - WARNING_MS)
-    // Sign out after full inactivity period
-    timeoutRef.current = setTimeout(() => { clearAll(); signOut() }, INACTIVITY_MS)
-  }, [clearAll, signOut])
+  }, [])
 
   useEffect(() => {
     if (!user) return
+    lastActivityRef.current = Date.now()
+    setShowWarning(false)
+
+    const evaluate = () => {
+      const idle = Date.now() - lastActivityRef.current
+      if (idle >= INACTIVITY_MS) { setShowWarning(false); signOut(); return }
+      if (idle >= INACTIVITY_MS - WARNING_MS) {
+        setShowWarning(true)
+        setCountdown(Math.max(1, Math.ceil((INACTIVITY_MS - idle) / 1000)))
+      } else {
+        setShowWarning(false)
+      }
+    }
+
     const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'] as const
-    const handle = () => resetTimer()
-    events.forEach(e => window.addEventListener(e, handle, { passive: true }))
-    resetTimer()
-    return () => { clearAll(); events.forEach(e => window.removeEventListener(e, handle)) }
-  }, [user, resetTimer, clearAll])
+    const onActivity = () => { lastActivityRef.current = Date.now() }
+    events.forEach(e => window.addEventListener(e, onActivity, { passive: true }))
+    // Re-evaluate immediately on wake — this is what catches a device that slept
+    // past the timeout while the interval was throttled/paused.
+    const onWake = () => evaluate()
+    document.addEventListener('visibilitychange', onWake)
+    window.addEventListener('focus', onWake)
+
+    intervalRef.current = setInterval(evaluate, 1000)
+    evaluate()
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      events.forEach(e => window.removeEventListener(e, onActivity))
+      document.removeEventListener('visibilitychange', onWake)
+      window.removeEventListener('focus', onWake)
+    }
+  }, [user, signOut])
 
   // Session check — redirect to login if unauthenticated
   useEffect(() => {
@@ -234,7 +270,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Floor operators are sandboxed to their capture area + custom dashboard.
     // They never see the general dashboard, settings, or any other module.
     if (role === 'floor_operator') {
-      if (!pathname.startsWith('/production/capture')) router.replace('/production/capture')
+      if (!pathname.startsWith('/production/capture') && !pathname.startsWith('/training')) router.replace('/production/capture')
+      return
+    }
+
+    // Unassigned users (no role, no department) — only home, settings, and submit request
+    const isUnassigned = !role && !department
+    if (isUnassigned) {
+      if (
+        pathname !== '/home' &&
+        pathname !== '/settings' &&
+        pathname !== '/axis/request' &&
+        !pathname.startsWith('/axis/request/')
+      ) { router.replace('/home'); return }
       return
     }
 
@@ -247,6 +295,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       // Shift Rosters + Staff Directory are universal (Operations, every role)
       pathname.startsWith('/production/roster') ||
       pathname.startsWith('/production/staff')  ||
+      // HR hub — a navigation hub; cards inside self-gate, so the page itself is open
+      pathname === '/hr' ||
+      // Training — the hub, the learner entry and course player are universal;
+      // the /training/manage, /manage/*, /signoff and /competency sub-routes are
+      // NOT included here and stay gated by ROUTE_GUARDS below.
+      pathname === '/training' || pathname === '/training/my' || pathname.startsWith('/training/course/') ||
       pathname === '/axis/request' ||
       pathname.startsWith('/axis/request/')
     ) return
@@ -306,9 +360,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <LanguageProvider>
-      <div className="flex h-screen overflow-hidden bg-surface">
+      <div className="flex h-screen overflow-hidden bg-surface app-shell">
         <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden app-shell-col">
           <Topbar
             title={meta.title}
             onMobileMenu={() => setMobileOpen(true)}
@@ -317,7 +371,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             acumaticaSync={routeKey === '/sales' ? 'ok' : undefined}
             rightSlot={<NotificationBell />}
           />
-          <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <main className="flex-1 overflow-y-auto overflow-x-hidden app-shell-main">
             {children}
           </main>
         </div>
@@ -335,7 +389,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         }}>
           <span>⚠️ Signing out in <strong>{fmtCountdown(countdown)}</strong> due to inactivity</span>
           <button
-            onClick={resetTimer}
+            onClick={stayActive}
             style={{
               background: '#fff', color: '#1A3A0E', border: 'none',
               borderRadius: 8, padding: '6px 18px', fontSize: 13,

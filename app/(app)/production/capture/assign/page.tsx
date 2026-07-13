@@ -13,6 +13,7 @@ import {
 } from '@/lib/production/capture-config'
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
+import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 type Shift = 'morning' | 'afternoon' | 'night'
@@ -26,8 +27,16 @@ interface SectionDraft {
 
 const emptyDraft = (): SectionDraft => ({ operatorIds: [], lotNumber: '', variant: '', prodOrders: [] })
 
-// Capture's 3 shifts collapse onto the roster's 2 (day 07–16 / night 16–01).
-const ROSTER_SHIFT: Record<Shift, 'day' | 'night'> = { morning: 'day', afternoon: 'day', night: 'night' }
+// Capture's shift maps onto the roster's two bands (day 07–16 / night 16–01).
+// The Afternoon/Night capture shift (16h00–01h00) draws from the roster's night
+// band. 'night' is a legacy alias of 'afternoon'.
+const ROSTER_SHIFT: Record<Shift, 'day' | 'night'> = { morning: 'day', afternoon: 'night', night: 'night' }
+// User-facing shift labels (the 16h00–01h00 shift is the "Afternoon / Night" shift).
+const SHIFT_BTN: Record<Shift, string> = {
+  morning:   'Morning · 07h00–16h00',
+  afternoon: 'Afternoon / Night · 16h00–01h00',
+  night:     'Night',
+}
 // Which roster role(s) feed each capture section, for autofill.
 const SECTION_ROLES: Record<string, string[]> = {
   sieving:     ['sieving_tower'],
@@ -48,9 +57,10 @@ function AssignScreen() {
   const [date, setDate]   = useState(sp.get('date') ?? format(new Date(), 'yyyy-MM-dd'))
   const [shift, setShift] = useState<Shift>(() => {
     const q = sp.get('shift')
-    if (q === 'morning' || q === 'afternoon' || q === 'night') return q
+    if (q === 'morning' || q === 'afternoon') return q
+    if (q === 'night') return 'afternoon'   // legacy deep-links → afternoon/night shift
     const h = new Date().getHours()
-    return h >= 7 && h < 16 ? 'morning' : h >= 16 && h < 23 ? 'afternoon' : 'night'
+    return h >= 7 && h < 16 ? 'morning' : 'afternoon'
   })
 
   const [operators, setOperators] = useState<Operator[]>([])
@@ -230,7 +240,7 @@ function AssignScreen() {
     setSavingSection(null)
   }
 
-  const shifts: Shift[] = ['morning', 'afternoon', 'night']
+  const shifts: Shift[] = ['morning', 'afternoon']
 
   return (
     <div className="px-4 py-5 max-w-[900px] space-y-5">
@@ -259,9 +269,9 @@ function AssignScreen() {
           {shifts.map(s => (
             <button
               key={s} onClick={() => setShift(s)}
-              className={`px-4 py-2 rounded-lg border font-medium text-[13px] capitalize transition-colors ${shift === s ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}
+              className={`px-4 py-2 rounded-lg border font-medium text-[13px] transition-colors ${shift === s ? 'bg-brand text-white border-brand' : 'bg-white text-stone-600 border-stone-200 hover:border-brand/40'}`}
             >
-              {s}
+              {SHIFT_BTN[s]}
             </button>
           ))}
         </div>
@@ -350,9 +360,14 @@ function AssignScreen() {
                         </div>
                       )}
                       <div className="space-y-1.5 sm:col-span-2">
-                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Production orders</label>
+                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
+                          {sectionId === 'blender' ? 'Blend code' : 'Production orders'}
+                        </label>
                         {!draft.variant ? (
-                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see production-order items.</p>
+                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see {sectionId === 'blender' ? 'blends' : 'production-order items'}.</p>
+                        ) : sectionId === 'blender' ? (
+                          <BlendCodePicker variant={draft.variant} selected={draft.prodOrders}
+                            onSelect={bomId => setField(sectionId, 'prodOrders', [bomId])} />
                         ) : (() => {
                           const items = productionOrderItems(inventory, sectionId, draft.variant)
                           if (items.length === 0) return <p className="text-[12px] text-stone-400 px-1">No production-order items configured for this section yet.</p>
@@ -372,7 +387,9 @@ function AssignScreen() {
                             </div>
                           )
                         })()}
-                        <p className="text-[10px] text-stone-400 px-1">Orders are created against the phantom / final items above. Real Acumatica PO numbers slot in here once that sync is connected.</p>
+                        {sectionId !== 'blender' && (
+                          <p className="text-[10px] text-stone-400 px-1">Orders are created against the phantom / final items above. Real Acumatica PO numbers slot in here once that sync is connected.</p>
+                        )}
                       </div>
                     </div>
                   )}

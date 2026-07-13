@@ -16,9 +16,15 @@ interface FormState {
   section_ids: string[]
   pin: string
   active: boolean
+  employeeId: string | null
+  newPersonName: string
 }
 
-const emptyForm = (): FormState => ({ name: '', section_ids: [], pin: '', active: true })
+interface EmployeeOption {
+  id: string; name: string; display_name: string | null; operator_id: string | null
+}
+
+const emptyForm = (): FormState => ({ name: '', section_ids: [], pin: '', active: true, employeeId: null, newPersonName: '' })
 
 export default function OperatorsPage() {
   const router = useRouter()
@@ -26,6 +32,7 @@ export default function OperatorsPage() {
   const canManage = isSupervisor || isIT || role === 'admin'
 
   const [operators, setOperators] = useState<Operator[]>([])
+  const [employees, setEmployees] = useState<EmployeeOption[]>([])
   const [loading, setLoading]     = useState(true)
   const [editing, setEditing]     = useState<FormState | null>(null)
   const [saving, setSaving]       = useState(false)
@@ -33,19 +40,26 @@ export default function OperatorsPage() {
   const [query,       setQuery]      = useState('')
   const [activeOnly,  setActiveOnly] = useState(true)
   const [revealedPin, setRevealedPin] = useState<string | null>(null)
+  const [creatingPerson, setCreatingPerson] = useState(false)
 
   async function load() {
-    const { data } = await getDb().schema('production').from('operators')
-      .select('*').order('name')
-    setOperators((data as Operator[]) ?? [])
+    const [opsRes, empRes] = await Promise.all([
+      getDb().schema('production').from('operators').select('*').order('name'),
+      getDb().schema('production').from('employees').select('id,name,display_name,operator_id').order('name'),
+    ])
+    setOperators((opsRes.data as Operator[]) ?? [])
+    setEmployees((empRes.data as EmployeeOption[]) ?? [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
 
-  function startAdd()  { setError(null); setEditing(emptyForm()) }
+  function startAdd()  { setError(null); setCreatingPerson(false); setEditing(emptyForm()) }
   function startEdit(op: Operator) {
-    setError(null)
-    setEditing({ id: op.id, name: op.name, section_ids: op.section_ids ?? [], pin: op.pin ?? '', active: op.active })
+    setError(null); setCreatingPerson(false)
+    setEditing({
+      id: op.id, name: op.name, section_ids: op.section_ids ?? [], pin: op.pin ?? '', active: op.active,
+      employeeId: (op as any).employee_id ?? null, newPersonName: '',
+    })
   }
 
   function toggleSection(id: string) {
@@ -60,8 +74,25 @@ export default function OperatorsPage() {
     if (!editing.name.trim())       { setError('Name is required'); return }
     if (!/^\d{4}$/.test(editing.pin)) { setError('PIN must be exactly 4 digits'); return }
     if (editing.section_ids.length === 0) { setError('Assign at least one section'); return }
+    // New PINs must be tied to a Staff Directory person — either pick an
+    // existing one or create it inline. Existing operators can be edited
+    // without one (legacy records the migration didn't find a match for).
+    if (!editing.id && !editing.employeeId && !editing.newPersonName.trim()) {
+      setError('Select or create the Staff Directory person this PIN belongs to'); return
+    }
     setSaving(true); setError(null)
     try {
+      let employeeId = editing.employeeId
+      if (!employeeId && editing.newPersonName.trim()) {
+        const empRes = await fetch('/api/staff', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: editing.newPersonName.trim(), department: 'production' }),
+        })
+        const empJson = await empRes.json()
+        if (!empRes.ok) throw new Error(empJson.error ?? 'Could not create the staff record')
+        employeeId = empJson.id
+      }
+
       const payload = {
         id:          editing.id,
         name:        editing.name.trim(),
@@ -69,6 +100,7 @@ export default function OperatorsPage() {
         section_ids: editing.section_ids,
         pin:         editing.pin,
         active:      editing.active,
+        employee_id: employeeId,
       }
       const res = await fetch('/api/production/operators', {
         method:  editing.id ? 'PATCH' : 'POST',
@@ -220,6 +252,47 @@ export default function OperatorsPage() {
                 Display name and operator code are assigned automatically. Supervisors are added in{' '}
                 <a href="/users" className="text-brand hover:underline">Users &amp; Roles</a> (Production → Production Supervisor).
               </p>
+
+              <Field label={editing.id ? 'Linked Staff Directory person' : 'Staff Directory person *'}>
+                {!creatingPerson ? (
+                  <>
+                    <select
+                      value={editing.employeeId ?? ''}
+                      onChange={e => setEditing({ ...editing, employeeId: e.target.value || null })}
+                      className={INP}
+                    >
+                      <option value="">
+                        {editing.id ? '— not linked —' : 'Select a person…'}
+                      </option>
+                      {/* Include the currently-linked person even though they're
+                          "linked" — otherwise editing this operator would show
+                          them as missing from their own selection. */}
+                      {employees
+                        .filter(emp => !emp.operator_id || emp.id === editing.employeeId)
+                        .map(emp => (
+                          <option key={emp.id} value={emp.id}>{emp.display_name || emp.name}</option>
+                        ))}
+                    </select>
+                    <button type="button" onClick={() => setCreatingPerson(true)}
+                      className="mt-1.5 text-[11px] text-brand font-medium hover:underline">
+                      + Create a new person
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <input value={editing.newPersonName}
+                      onChange={e => setEditing({ ...editing, newPersonName: e.target.value })}
+                      className={INP} placeholder="New person's full name" />
+                    <button type="button" onClick={() => { setCreatingPerson(false); setEditing({ ...editing, newPersonName: '' }) }}
+                      className="mt-1.5 text-[11px] text-text-muted font-medium hover:underline">
+                      ← Pick an existing person instead
+                    </button>
+                  </>
+                )}
+                <p className="text-[10px] text-text-muted mt-1">
+                  Every PIN belongs to one person in the Staff Directory — this keeps the Shift Roster and Capture in sync.
+                </p>
+              </Field>
 
               <Field label="4-digit PIN *">
                 <input

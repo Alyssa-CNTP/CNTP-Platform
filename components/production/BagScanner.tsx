@@ -68,16 +68,78 @@ export default function BagScanner({
   const [result,     setResult]     = useState<ScanResult | null>(null)
   const [errorMsg,   setErrorMsg]   = useState('')
   const [cameraSupp, setCameraSupp] = useState(false)
+  // true once the camera preview is live but the browser has no BarcodeDetector,
+  // so the operator reads the serial off the tag and types it in.
+  const [manualScan, setManualScan] = useState(false)
   const inputRef  = useRef<HTMLInputElement>(null)
   const videoRef  = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const db = getDb()
 
   useEffect(() => {
-    const has = typeof window !== 'undefined' &&
-      ('BarcodeDetector' in window || !!(typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia))
+    // The camera option needs a live video stream — BarcodeDetector only adds
+    // auto-decode on top. Show the option whenever getUserMedia exists.
+    const has = typeof navigator !== 'undefined' && !!navigator?.mediaDevices?.getUserMedia
     setCameraSupp(has)
   }, [])
+
+  // Acquire + attach the camera stream in an effect so the <video> element is
+  // guaranteed mounted first (fixes the "permission granted but no camera" race),
+  // and decode Code128 + QR (CNTP labels are Code128, not QR).
+  useEffect(() => {
+    if (state !== 'camera') return
+    let cancelled = false
+    let raf = 0
+
+    ;(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
+        })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        streamRef.current = stream
+        const v = videoRef.current
+        if (v) { v.srcObject = stream; try { await v.play() } catch {} }
+
+        const BD = (typeof window !== 'undefined' ? (window as any).BarcodeDetector : undefined)
+        if (!BD) { setManualScan(true); return }   // camera stays open for manual read
+
+        let formats = ['qr_code', 'code_128']
+        try {
+          const supported: string[] = await BD.getSupportedFormats()
+          const wanted = ['qr_code', 'code_128', 'ean_13', 'ean_8', 'code_39', 'codabar', 'itf']
+          const usable = supported.filter(f => wanted.includes(f))
+          if (usable.length) formats = usable
+        } catch { /* fall back to defaults */ }
+
+        const detector = new BD({ formats })
+        setManualScan(false)
+        const loop = async () => {
+          if (cancelled || !videoRef.current) return
+          try {
+            const codes = await detector.detect(videoRef.current)
+            if (codes.length && codes[0].rawValue) {
+              cancelled = true
+              stopCamera()
+              await lookupSerial(codes[0].rawValue)
+              return
+            }
+          } catch { /* transient decode error — keep trying */ }
+          raf = requestAnimationFrame(loop)
+        }
+        raf = requestAnimationFrame(loop)
+      } catch (err: any) {
+        if (cancelled) return
+        setState('error')
+        setErrorMsg(err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
+          ? 'Camera permission was denied. Allow camera access in your browser, or use the USB scanner / OCR instead.'
+          : 'Could not open the camera on this device. Use the USB scanner or OCR (paper tag) instead.')
+      }
+    })()
+
+    return () => { cancelled = true; if (raf) cancelAnimationFrame(raf); stopCamera() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state])
 
   useEffect(() => {
     if (state === 'input' && mode === 'qr') {
@@ -179,31 +241,12 @@ export default function BagScanner({
     close()
   }
 
-  async function startCamera() {
+  // Opening the camera is just a state change — the effect above acquires the
+  // stream once the <video> is mounted, so we never race the DOM.
+  function startCamera() {
+    setManualScan(false)
+    setErrorMsg('')
     setState('camera')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } } })
-      streamRef.current = stream
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play() }
-      if ('BarcodeDetector' in window) {
-        const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] })
-        let active = true
-        async function detect() {
-          if (!active || !videoRef.current) return
-          try {
-            const codes = await detector.detect(videoRef.current)
-            if (codes.length) { active = false; stopCamera(); await lookupSerial(codes[0].rawValue); return }
-          } catch {}
-          requestAnimationFrame(detect)
-        }
-        requestAnimationFrame(detect)
-      } else {
-        stopCamera(); setMode('qr'); setState('input')
-      }
-    } catch {
-      setState('error')
-      setErrorMsg('Camera access denied. Use USB scanner or OCR instead.')
-    }
   }
 
   function confirmResult() {
@@ -270,12 +313,30 @@ export default function BagScanner({
           {state === 'camera' && (
             <div className="space-y-3">
               <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
-                <video ref={videoRef} className="w-full h-full object-cover" muted playsInline/>
+                <video ref={videoRef} className="w-full h-full object-cover" muted playsInline autoPlay/>
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-44 h-44 border-2 border-white rounded-xl opacity-70"/>
+                  <div className="w-44 h-24 border-2 border-white rounded-lg opacity-70"/>
                 </div>
-                <p className="absolute bottom-2 left-0 right-0 text-center text-white text-[10px] opacity-60">Point at QR code</p>
+                <p className="absolute bottom-2 left-0 right-0 text-center text-white text-[10px] opacity-60">
+                  {manualScan ? 'Read the serial off the tag' : 'Point at the barcode or QR code'}
+                </p>
               </div>
+              {manualScan && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 space-y-2">
+                  <p className="text-[11px] text-amber-700 font-medium">Auto-scan isn't supported in this browser</p>
+                  <p className="text-[10px] text-amber-500">Read the serial off the bag tag and type it below, or use the USB scanner.</p>
+                  <div className="flex gap-2">
+                    <input value={inputVal}
+                      onChange={e => setInputVal(e.target.value.toUpperCase())}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); stopCamera(); lookupSerial(inputVal) } }}
+                      placeholder="Type serial…"
+                      className="flex-1 px-3 py-2 rounded-lg border border-amber-200 font-mono text-[13px] outline-none focus:border-amber-400"
+                      autoComplete="off" spellCheck={false} autoCapitalize="characters"/>
+                    <button onClick={() => { stopCamera(); lookupSerial(inputVal) }} disabled={!inputVal.trim()}
+                      className="px-3 rounded-lg bg-amber-500 text-white text-[12px] font-semibold disabled:opacity-40">Look up</button>
+                  </div>
+                </div>
+              )}
               <button onClick={() => { stopCamera(); setMode('qr'); setState('input') }}
                 className="w-full py-2 rounded-xl border border-stone-200 text-[12px] text-stone-500 hover:bg-stone-50">
                 <Keyboard size={12} className="inline mr-1"/>Switch to manual entry

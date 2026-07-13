@@ -1,20 +1,23 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { addDays, format, parseISO } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
-  RefreshCw, Send, CheckCircle2, ArrowRight, Lock,
+  RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Download, Printer,
+  Info, Eye, Edit3, ShieldCheck,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { WorkforceTabs } from '@/components/production/WorkforceTabs'
 import {
   ROSTER_SHIFTS, ROSTER_CATEGORIES, ROSTER_ROLE_SEED, SKILL_TAGS,
-  tagLabel,
+  tagLabel, categoryMeta,
   type RosterRole, type RosterShift,
 } from '@/lib/production/roster-config'
+import { rosterPerm, ROSTER_SECTION_LABEL, type RosterSectionKey } from '@/lib/auth/permissions'
+import { exportRosterPeriod } from '@/lib/utils/exportExcel'
 
 interface Period {
   id: string; name: string; start_date: string; end_date: string
@@ -29,6 +32,7 @@ interface Employee {
   id: string; name: string; display_name: string | null
   department: string; job_title: string | null; skills: string[]; operator_id: string | null
 }
+interface SectionStatus { section: string; status: string; submitted_by: string | null; submitted_at: string | null }
 
 const db = () => getDb().schema('production')
 const fmtRange = (p: Period) =>
@@ -51,17 +55,28 @@ function daysUntilWednesday(): number {
 }
 
 export default function RosterPage() {
-  const { user } = useAuth()
+  const { user, p, isFullAdmin } = useAuth()
+  // ── Roster permissions (view is global; edit/submit/delete are per section) ──
+  // Category keys in ROSTER_CATEGORIES match the RosterSectionKey enum exactly.
+  const canView   = isFullAdmin || p('can_view_roster')
+  const canEdit   = (s: string) => isFullAdmin || p(rosterPerm('edit',   s as RosterSectionKey))
+  const canSubmit = (s: string) => isFullAdmin || p(rosterPerm('submit', s as RosterSectionKey))
+  const canDelete = (s: string) => isFullAdmin || p(rosterPerm('delete', s as RosterSectionKey))
+  const canEditAny   = isFullAdmin || ROSTER_CATEGORIES.some(c => p(rosterPerm('edit',   c.key as RosterSectionKey)))
+  const canDeleteAny = isFullAdmin || ROSTER_CATEGORIES.some(c => p(rosterPerm('delete', c.key as RosterSectionKey)))
   const [roles, setRoles]       = useState<RosterRole[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
   const [periods, setPeriods]   = useState<Period[]>([])
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [entries, setEntries]   = useState<Entry[]>([])
+  const [sectionStatus, setSectionStatus] = useState<Record<string, SectionStatus>>({})
+  const [submittingSection, setSubmittingSection] = useState<string | null>(null)
   const [leaveEmpIds, setLeaveEmpIds] = useState<Set<string>>(new Set())
   const [loading, setLoading]   = useState(true)
   const [dbReady, setDbReady]   = useState(true)
   const [showNew,      setShowNew]      = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
+  const [showHelp,     setShowHelp]     = useState(false)
   const [generating,   setGenerating]   = useState(false)
   const [publishing,   setPublishing]   = useState(false)
   // which cell editor is open: `add:${roleKey}:${shift}` for an add, entry id for edit
@@ -119,6 +134,15 @@ export default function RosterPage() {
       .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
       .eq('period_id', periodId).order('sort_order')
       .then(({ data }: any) => setEntries((data as Entry[]) ?? []))
+    // Per-section submission status (graceful if the table isn't migrated yet)
+    db().from('roster_section_status')
+      .select('section,status,submitted_by,submitted_at')
+      .eq('period_id', periodId)
+      .then(({ data }: any) => {
+        const map: Record<string, SectionStatus> = {}
+        ;((data as SectionStatus[]) ?? []).forEach(r => { map[r.section] = r })
+        setSectionStatus(map)
+      }, () => setSectionStatus({}))
   }, [periodId])
 
   // Leave flags for the selected period
@@ -227,10 +251,38 @@ export default function RosterPage() {
       }
       setEntries(es => [...es.filter(e => !catRoleKeys.includes(e.role_key)), ...fresh])
       setDirtyCategories(s => { const n = new Set(s); n.delete(categoryKey); return n })
+      // A save means the section changed — it is no longer "submitted".
+      // Best-effort: don't let a missing status table break the save.
+      try {
+        await db().from('roster_section_status')
+          .upsert({ period_id: periodId, section: categoryKey, status: 'draft', submitted_by: null, submitted_at: null } as any,
+                   { onConflict: 'period_id,section' })
+        setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'draft', submitted_by: null, submitted_at: null } }))
+      } catch { /* table may not be migrated yet */ }
     } catch (err) {
       console.error('saveDepartment failed', err)
     } finally {
       setSavingCategory(null)
+    }
+  }
+
+  // Submit (sign off) a section for the period. Persists any pending edits first,
+  // then records the submission so the Wednesday reminder cron stops emailing it.
+  async function submitSection(categoryKey: string) {
+    if (!periodId) return
+    if (dirtyCategories.has(categoryKey)) await saveDepartment(categoryKey)
+    setSubmittingSection(categoryKey)
+    try {
+      const submitted_at = new Date().toISOString()
+      const { error } = await db().from('roster_section_status')
+        .upsert({ period_id: periodId, section: categoryKey, status: 'submitted', submitted_by: user?.id ?? null, submitted_at } as any,
+                 { onConflict: 'period_id,section' })
+      if (error) throw error
+      setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'submitted', submitted_by: user?.id ?? null, submitted_at } }))
+    } catch (err) {
+      console.error('submitSection failed', err)
+    } finally {
+      setSubmittingSection(null)
     }
   }
 
@@ -281,6 +333,11 @@ export default function RosterPage() {
       setPeriods(ps => [np as Period, ...ps])
       setPeriodId(np.id)
       setEntries((newEntries as Entry[]) ?? [])
+      setSectionStatus({})  // fresh period — every section starts as draft
+
+      // Email each section's responsible submitter that next week is ready to
+      // review/submit. Fire-and-forget; recipients derive from the submit perm.
+      fetch('/api/production/roster/cron?task=remind', { method: 'POST' }).catch(() => {})
     } finally {
       setGenerating(false)
       setShowGenerate(false)
@@ -342,15 +399,64 @@ export default function RosterPage() {
     setPeriodId(rest[0]?.id ?? null)
   }
 
+  // ── Export the current period to a branded, colour-coded .xlsx ─────────────
+  function exportXlsx() {
+    if (!period) return
+    exportRosterPeriod(period, entries, roles, roleCategory, ROSTER_CATEGORIES, fmtRange(period))
+  }
+
   // Wednesday deadline
   const daysLeft  = daysUntilWednesday()
   const todayWed  = daysLeft === 0
 
+  // ── Confirmation progress ──────────────────────────────────────────────────
+  // Every department shown in the grid must be submitted before the period is
+  // considered confirmed. These drive the outstanding tracker + auto-publish.
+  const requiredSections  = useMemo(() => rolesByCategory.map(g => g.cat), [rolesByCategory])
+  const outstandingSections = requiredSections.filter(c => sectionStatus[c.key]?.status !== 'submitted')
+  const submittedCount    = requiredSections.length - outstandingSections.length
+  const allSubmitted      = requiredSections.length > 0 && outstandingSections.length === 0
+
+  // Auto-publish once every department has confirmed. This is a system action
+  // triggered by the data condition (the last submit, or the first load that
+  // observes a fully-confirmed period), so it fires regardless of who completes
+  // the set. The ref stops it re-firing for the same period.
+  const autoPublishedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!period || isPublished || !allSubmitted) return
+    if (autoPublishedRef.current === period.id) return
+    autoPublishedRef.current = period.id
+    publishPeriod()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, isPublished, allSubmitted])
+
+  // View gate — the roster is permission-gated; without view access, stop here.
+  if (!loading && !canView) {
+    return (
+      <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
+        <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
+        <div className="flex items-start gap-2.5 px-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl text-[13px] text-stone-600">
+          <Lock size={16} className="shrink-0 mt-0.5 text-stone-400" />
+          <span>You don&apos;t have permission to view the shift roster. Ask an administrator to grant you <strong>View the whole roster</strong> under Users &amp; Roles → Shift Roster.</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5 print-full-width">
+      <div className="no-print flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
+          <div className="flex items-center gap-1.5">
+            <h1 className="font-display font-bold text-[22px] text-text">Shift Rosters</h1>
+            <button
+              onClick={() => setShowHelp(true)}
+              title="How this page works"
+              className="p-1 rounded-full text-stone-300 hover:text-brand hover:bg-brand/8 transition-colors"
+            >
+              <Info size={16} />
+            </button>
+          </div>
           <p className="text-[12px] text-stone-400 mt-0.5">The whole-site shift layout — every role and shift across all departments.</p>
         </div>
         {/* Wednesday deadline badge */}
@@ -365,17 +471,17 @@ export default function RosterPage() {
         </div>
       </div>
 
-      <WorkforceTabs />
+      <div className="no-print"><WorkforceTabs /></div>
 
       {!dbReady && (
-        <div className="flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
+        <div className="no-print flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
           <AlertTriangle size={15} className="shrink-0 mt-0.5" />
           <span>Roster tables aren&apos;t set up yet. Run the roster migrations on the database, then reload.</span>
         </div>
       )}
 
       {/* Period bar */}
-      <div className="flex flex-wrap items-center gap-3 bg-surface-card border border-surface-rule rounded-2xl p-4">
+      <div className="no-print flex flex-wrap items-center gap-3 bg-surface-card border border-surface-rule rounded-2xl p-4">
         <CalendarRange size={16} className="text-text-muted shrink-0" />
         {periods.length > 0 ? (
           <div className="relative">
@@ -404,9 +510,34 @@ export default function RosterPage() {
           </span>
         )}
 
-        <div className="flex items-center gap-2 flex-wrap ml-auto">
-          {/* Generate next week */}
-          {period && !isPublished && (
+        <div className="flex items-center gap-2 flex-wrap ml-auto no-print">
+          {/* Export .xlsx — anyone who can view. Turns green once published so the
+              confirmed roster is clearly ready to print/share. */}
+          {period && (
+            <button
+              onClick={exportXlsx}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-medium transition-colors ${
+                isPublished
+                  ? 'bg-ok text-white hover:opacity-90'
+                  : 'border border-stone-200 bg-white text-stone-600 hover:border-brand hover:text-brand'}`}
+            >
+              <Download size={13} /> Export
+            </button>
+          )}
+          {/* Print — anyone who can view */}
+          {period && (
+            <button
+              onClick={() => window.print()}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-medium transition-colors ${
+                isPublished
+                  ? 'bg-ok text-white hover:opacity-90'
+                  : 'border border-stone-200 bg-white text-stone-600 hover:border-brand hover:text-brand'}`}
+            >
+              <Printer size={13} /> Print
+            </button>
+          )}
+          {/* Generate next week — needs edit rights somewhere */}
+          {period && !isPublished && canEditAny && (
             <button
               onClick={() => setShowGenerate(true)} disabled={!dbReady || generating}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40 transition-colors"
@@ -414,15 +545,17 @@ export default function RosterPage() {
               <RefreshCw size={13} /> Generate next week
             </button>
           )}
-          {/* New period */}
-          <button
-            onClick={() => setShowNew(true)} disabled={!dbReady}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
-          >
-            <Plus size={14} /> New period
-          </button>
-          {/* Publish */}
-          {period && !isPublished && (
+          {/* New period — needs edit rights somewhere */}
+          {canEditAny && (
+            <button
+              onClick={() => setShowNew(true)} disabled={!dbReady}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
+            >
+              <Plus size={14} /> New period
+            </button>
+          )}
+          {/* Publish — needs edit rights somewhere */}
+          {period && !isPublished && canEditAny && (
             <button
               onClick={publishPeriod} disabled={publishing || !dbReady}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-ok text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-40 transition-colors"
@@ -431,8 +564,8 @@ export default function RosterPage() {
               Publish
             </button>
           )}
-          {/* Delete */}
-          {period && (
+          {/* Delete — needs delete rights somewhere */}
+          {period && canDeleteAny && (
             <button
               onClick={() => { if (confirm(`Delete roster period "${period.name}"? This removes all its entries.`)) deletePeriod(period.id) }}
               className="flex items-center gap-1.5 text-[12px] text-stone-400 hover:text-err transition-colors px-1"
@@ -445,9 +578,57 @@ export default function RosterPage() {
 
       {/* Published notice */}
       {isPublished && period?.published_at && (
-        <div className="flex items-center gap-2.5 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">
+        <div className="no-print flex items-center gap-2.5 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">
           <Lock size={14} className="shrink-0" />
-          <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — maintenance duty roster has been synced. Changes are still possible but will require re-publishing.</span>
+          <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — maintenance duty roster has been synced. Printing/export is ready (green buttons above). Changes are still possible but will require re-publishing.</span>
+        </div>
+      )}
+
+      {/* Confirmation tracker — who's still outstanding. Emphasised on Wednesday
+          (the change deadline). Once every department confirms, the period
+          auto-publishes and this is replaced by the published notice above. */}
+      {period && !isPublished && requiredSections.length > 0 && (
+        <div className={`no-print rounded-2xl border p-4 space-y-3 ${
+          todayWed ? 'bg-err/5 border-err/30' : 'bg-surface-card border-surface-rule'}`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            {allSubmitted
+              ? <Loader2 size={15} className="text-ok animate-spin shrink-0" />
+              : todayWed
+                ? <AlertTriangle size={15} className="text-err shrink-0" />
+                : <Send size={15} className="text-text-muted shrink-0" />}
+            <span className="font-display font-semibold text-[13px] text-text">
+              {allSubmitted
+                ? 'All departments confirmed — publishing…'
+                : `Roster confirmations · ${submittedCount}/${requiredSections.length}`}
+            </span>
+            {todayWed && !allSubmitted && (
+              <span className="text-[11px] font-semibold text-err">Deadline today (Wed)</span>
+            )}
+          </div>
+
+          {!allSubmitted && (
+            <>
+              <p className="text-[12px] text-text-muted">
+                Waiting on {outstandingSections.length} department{outstandingSections.length === 1 ? '' : 's'} to confirm.
+                The roster publishes automatically once everyone has submitted.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {requiredSections.map(c => {
+                  const done = sectionStatus[c.key]?.status === 'submitted'
+                  const at   = sectionStatus[c.key]?.submitted_at
+                  return (
+                    <span key={c.key}
+                      title={done && at ? `Confirmed ${format(parseISO(at), 'd MMM HH:mm')}` : 'Not yet confirmed'}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                        done ? 'bg-ok/10 text-ok border-ok/30' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                      {done ? <CheckCircle2 size={11} /> : <Pencil size={11} />}
+                      {ROSTER_SECTION_LABEL[c.key as RosterSectionKey] ?? c.label}
+                    </span>
+                  )
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -456,7 +637,7 @@ export default function RosterPage() {
       ) : !period ? (
         <EmptyState canCreate={dbReady} onCreate={() => setShowNew(true)} />
       ) : (
-        <>
+        <div className="no-print space-y-5">
           <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} leaveEmpIds={leaveEmpIds} />
           <RosterGrid
             period={period}
@@ -472,12 +653,17 @@ export default function RosterPage() {
             dirtyCategories={dirtyCategories}
             savingCategory={savingCategory}
             onSaveDept={saveDepartment}
+            canEdit={canEdit} canSubmit={canSubmit}
+            sectionStatus={sectionStatus}
+            submittingSection={submittingSection}
+            onSubmitSection={submitSection}
+            currentUserId={user?.id ?? null}
           />
-        </>
+        </div>
       )}
 
       {/* Legend */}
-      <div className="bg-surface-card border border-surface-rule rounded-2xl p-4">
+      <div className="no-print bg-surface-card border border-surface-rule rounded-2xl p-4">
         <p className="font-mono text-[10px] text-text-muted uppercase tracking-wide mb-2.5">Skill / certification tags</p>
         <div className="flex flex-wrap gap-x-4 gap-y-1.5">
           {SKILL_TAGS.map(t => (
@@ -493,6 +679,12 @@ export default function RosterPage() {
         </p>
       </div>
 
+      {/* Print-only layout — the on-screen interactive grid is hidden via
+          .no-print above; this plain, noticeboard-friendly table is shown
+          only inside @media print (see globals.css). */}
+      {period && <PrintRoster period={period} rolesByCategory={rolesByCategory} cellEntries={cellEntries} />}
+
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
       {showNew && <NewPeriodModal onClose={() => setShowNew(false)} onCreate={createPeriod} prevPeriod={period} />}
       {showGenerate && period && (
         <GenerateModal
@@ -504,6 +696,170 @@ export default function RosterPage() {
           onGenerate={generateNextPeriod}
         />
       )}
+    </div>
+  )
+}
+
+// ── Print-only layout: a plain, full-width table per section, sized for a
+// noticeboard rather than a screenshot of the interactive grid. Hidden on
+// screen (.print-only), shown only inside @media print — see globals.css.
+function PrintRoster({ period, rolesByCategory, cellEntries }: {
+  period: Period
+  rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
+  cellEntries: (roleKey: string, shift: RosterShift) => Entry[]
+}) {
+  // Some older periods store the raw time range as the label (e.g. "07h00
+  // till 16h00") instead of a shift letter ("Shift A") — only append the
+  // fixed time suffix when the label doesn't already read like one, so the
+  // header doesn't repeat itself ("07h00 till 16h00 · 07h00–16h00").
+  const looksLikeTime = (label: string) => /till|\d{1,2}h\d{2}/i.test(label)
+  const dayLabel = period.day_label || 'Day Shift'
+  const nightLabel = period.night_label || 'Night Shift'
+  const dayHeader = looksLikeTime(dayLabel) ? dayLabel : `${dayLabel} · 07h00–16h00`
+  const nightHeader = looksLikeTime(nightLabel) ? nightLabel : `${nightLabel} · 16h00–01h00`
+  // Auto-generated names are just a short form of the date range (e.g. "6–10
+  // Jul" for "6 Jul – 10 Jul 2026") — showing both is redundant. Only append
+  // the name when it's a genuine custom label (no digits in it).
+  const hasCustomName = !/\d/.test(period.name)
+  const fmtPeople = (list: Entry[]) => list.length
+    ? list.map(e => e.person_name + (e.tags.length ? ` (${e.tags.join(' ')})` : '')).join(', ')
+    : '—'
+  const th: CSSProperties = { textAlign: 'left', padding: '3px 6px', borderBottom: '1.5px solid #333', fontSize: 8.5, textTransform: 'uppercase', letterSpacing: 0.3, color: '#555' }
+  const td: CSSProperties = { padding: '3px 6px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 9.5, lineHeight: 1.3 }
+
+  return (
+    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '10px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '2px solid #1A3A0E', paddingBottom: 6, marginBottom: 10 }}>
+        <div>
+          <h1 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
+          <p style={{ fontSize: 11, margin: '2px 0 0', color: '#555' }}>
+            {fmtRange(period)}{hasCustomName ? ` · ${period.name}` : ''}
+          </p>
+        </div>
+        <p style={{ fontSize: 9, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
+      </div>
+
+      {/* One full-width table per department, stacked top to bottom. CSS
+          multi-column (column-count) looked good but Chromium's print engine
+          balances column height to a single page and silently drops any
+          content that doesn't fit — it does not flow the rest onto page 2.
+          Plain block stacking has no such ceiling: the browser's normal print
+          pagination reliably continues onto as many landscape pages as the
+          roster needs. Each department is break-inside:avoid so its table
+          only splits across a page if it genuinely can't fit on one. */}
+      <div>
+        {rolesByCategory.map(({ cat, items }) => (
+          <div key={cat.key} style={{ marginBottom: 10, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+            <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '2px 8px', marginBottom: 3 }}>
+              <span style={{ fontWeight: 700, fontSize: 10.5, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.3 }}>{cat.label}</span>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, width: '22%' }}>Role</th>
+                  <th style={th}>{dayHeader}</th>
+                  <th style={th}>{nightHeader}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(role => (
+                  <tr key={role.key}>
+                    <td style={{ ...td, fontWeight: 600 }}>{role.name}</td>
+                    <td style={td}>{fmtPeople(cellEntries(role.key, 'day'))}</td>
+                    <td style={td}>{fmtPeople(cellEntries(role.key, 'night'))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid #ccc', fontSize: 8.5, color: '#555' }}>
+        <strong style={{ color: '#111' }}>Skill / certification tags: </strong>
+        {SKILL_TAGS.map(t => `${t.code} = ${t.label}`).join('   ·   ')}
+      </div>
+    </div>
+  )
+}
+
+// ── Help modal: how the roster page works (view/edit/submit/delete, rotation,
+// deadline, publish). Opened from the info icon next to the page title.
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[560px] max-h-[85vh] overflow-y-auto p-5 space-y-5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-display font-bold text-[17px] text-text">How the Shift Roster works</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={16} /></button>
+        </div>
+
+        {/* Four permissions */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Four separate permissions per section</p>
+          <div className="grid grid-cols-2 gap-2.5">
+            {[
+              { icon: Eye, label: 'View', desc: 'See all sections, read-only' },
+              { icon: Edit3, label: 'Edit', desc: 'Add, move or remove people' },
+              { icon: Send, label: 'Submit', desc: 'Sign the section off' },
+              { icon: ShieldCheck, label: 'Delete', desc: 'Remove entries or periods' },
+            ].map(({ icon: Icon, label, desc }) => (
+              <div key={label} className="flex items-start gap-2 rounded-xl border border-stone-200 bg-stone-50 p-2.5">
+                <Icon size={14} className="text-brand shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-[12px] font-semibold text-text">{label}</div>
+                  <div className="text-[11px] text-stone-500">{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-stone-400 mt-2">Granted per section (Production, Store, Quality, Cleaning, Maintenance, H&amp;S) under Users &amp; Roles → Shift Roster. A lock icon on a section means you can view it but not edit it.</p>
+        </div>
+
+        {/* Editing */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Adding &amp; moving people</p>
+          <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
+            <li>Click <strong className="text-text">Add</strong> under a Day/Night cell, search for the person, tick any skill tags, then <strong className="text-text">Save</strong>.</li>
+            <li>Hover a person&apos;s chip and click the pencil to edit them, or drag the chip to a different role/shift.</li>
+            <li>Changes are local until you click <strong className="text-text">Save [Section]</strong> — the status chip flips to Draft while you edit.</li>
+          </ul>
+        </div>
+
+        {/* Submit / deadline / rotation */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Submitting, the deadline &amp; rotation</p>
+          <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
+            <li>Click <strong className="text-text">Submit [Section]</strong> once it&apos;s final — this is what the Wednesday deadline badge is tracking.</li>
+            <li>The <strong className="text-text">confirmations tracker</strong> shows which departments are still outstanding. It&apos;s highlighted red on Wednesday (the change deadline).</li>
+            <li>Every <strong className="text-text">Sunday night</strong>, next week&apos;s roster is generated automatically with day/night shifts swapped, and every section resets to Draft.</li>
+            <li><strong className="text-text">Monday &amp; Wednesday mornings</strong>, anyone who holds the Submit permission for a section that&apos;s still Draft gets a reminder email.</li>
+          </ul>
+        </div>
+
+        {/* Publish */}
+        <div className="flex items-start gap-2.5 px-3.5 py-3 bg-ok/5 border border-ok/20 rounded-xl">
+          <CheckCircle2 size={14} className="text-ok shrink-0 mt-0.5" />
+          <p className="text-[12px] text-text-muted"><strong className="text-text">The roster publishes automatically once every department has confirmed.</strong> You can still publish early with the green <strong>Publish</strong> button (needs edit rights). Publishing syncs the Maintenance section to the maintenance duty roster and turns the <strong>Export</strong> / <strong>Print</strong> buttons green so the confirmed roster is ready to share. The roster stays visible across the app whether or not it&apos;s been published.</p>
+        </div>
+
+        {/* Export / print */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Export &amp; print</p>
+          <ul className="text-[12px] text-text-muted space-y-1.5 list-disc pl-4">
+            <li><strong className="text-text">Export</strong> downloads a branded, colour-coded <code className="text-[11px] bg-stone-100 px-1 rounded">.xlsx</code> matching what&apos;s on screen.</li>
+            <li><strong className="text-text">Print</strong> produces a plain, full-width table — one section per block — sized for a noticeboard rather than a screenshot of the app.</li>
+          </ul>
+        </div>
+
+        {/* Where this fits */}
+        <div>
+          <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest mb-2">Where this fits</p>
+          <p className="text-[12px] text-text-muted">Every person here comes from <strong className="text-text">Staff Directory</strong> — the roster doesn&apos;t hold its own people list. Add or edit someone in Staff Directory first, then roster them here. This page and the <strong className="text-text">HR</strong> hub are one click apart via the breadcrumb above.</p>
+        </div>
+
+        <button onClick={onClose} className="w-full py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium hover:bg-brand-mid transition-colors">Got it</button>
+      </div>
     </div>
   )
 }
@@ -594,6 +950,7 @@ function RosterGrid({
   period, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing,
   onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove,
   dirtyCategories, savingCategory, onSaveDept,
+  canEdit, canSubmit, sectionStatus, submittingSection, onSubmitSection, currentUserId,
 }: {
   period: Period
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
@@ -613,6 +970,12 @@ function RosterGrid({
   dirtyCategories: Set<string>
   savingCategory: string | null
   onSaveDept: (cat: string) => void
+  canEdit: (section: string) => boolean
+  canSubmit: (section: string) => boolean
+  sectionStatus: Record<string, SectionStatus>
+  submittingSection: string | null
+  onSubmitSection: (section: string) => void
+  currentUserId: string | null
 }) {
   const shiftLabel = (s: RosterShift) => s === 'day' ? period.day_label : period.night_label
   return (
@@ -645,7 +1008,12 @@ function RosterGrid({
               onMove={onMove}
               isDirty={dirtyCategories.has(cat.key)}
               isSaving={savingCategory === cat.key}
-              onSave={() => onSaveDept(cat.key)} />
+              onSave={() => onSaveDept(cat.key)}
+              canEdit={canEdit(cat.key)} canSubmit={canSubmit(cat.key)}
+              status={sectionStatus[cat.key]}
+              isSubmitting={submittingSection === cat.key}
+              onSubmit={() => onSubmitSection(cat.key)}
+              currentUserId={currentUserId} />
           ))}
         </tbody>
       </table>
@@ -653,24 +1021,53 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave }: any) {
+function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave, canEdit, canSubmit, status, isSubmitting, onSubmit, currentUserId }: any) {
+  const isSubmitted = status?.status === 'submitted'
+  const submittedByYou = isSubmitted && status?.submitted_by && status.submitted_by === currentUserId
   return (
     <>
       <tr>
         <td colSpan={3} className="px-3 py-1.5 border-y border-surface-rule"
           style={{ background: cat.colorHex + '14', borderLeft: `3px solid ${cat.colorHex}` }}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide font-semibold" style={{ color: cat.colorHex }}>
               <span className="w-2 h-2 rounded-full" style={{ background: cat.colorHex }} /> {cat.label}
             </span>
-            {isDirty && (
-              <button onClick={onSave} disabled={isSaving}
-                className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-ok text-white text-[10px] font-semibold disabled:opacity-60 hover:opacity-90 transition-opacity">
-                {isSaving
-                  ? <><Loader2 size={11} className="animate-spin" /> Saving…</>
-                  : <><Check size={11} /> Save {cat.label}</>}
-              </button>
+            {/* Read-only lock for sections the user cannot edit */}
+            {!canEdit && (
+              <span title="You can view this section but not edit it" className="inline-flex items-center gap-1 text-[9px] text-stone-400">
+                <Lock size={10} /> view only
+              </span>
             )}
+            {/* Submission status chip */}
+            {isSubmitted ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-ok/10 text-ok">
+                <CheckCircle2 size={11} /> Submitted{submittedByYou ? ' by you' : ''}
+                {status?.submitted_at ? ` · ${format(parseISO(status.submitted_at), 'd MMM HH:mm')}` : ''}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">
+                <Pencil size={10} /> Draft
+              </span>
+            )}
+            <div className="ml-auto inline-flex items-center gap-2">
+              {isDirty && canEdit && (
+                <button onClick={onSave} disabled={isSaving}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-ok/40 text-ok text-[10px] font-semibold disabled:opacity-60 hover:bg-ok/5 transition-colors">
+                  {isSaving
+                    ? <><Loader2 size={11} className="animate-spin" /> Saving…</>
+                    : <><Check size={11} /> Save {cat.label}</>}
+                </button>
+              )}
+              {canSubmit && !isSubmitted && (
+                <button onClick={onSubmit} disabled={isSubmitting}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-ok text-white text-[10px] font-semibold disabled:opacity-60 hover:opacity-90 transition-opacity">
+                  {isSubmitting
+                    ? <><Loader2 size={11} className="animate-spin" /> Submitting…</>
+                    : <><Send size={11} /> Submit {cat.label}</>}
+                </button>
+              )}
+            </div>
           </div>
         </td>
       </tr>
@@ -687,7 +1084,7 @@ function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editin
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
               dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
               dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
-              onMove={onMove} />
+              onMove={onMove} canEdit={canEdit} />
           ))}
         </tr>
       ))}
@@ -695,7 +1092,7 @@ function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editin
   )
 }
 
-function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove }: {
+function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, canEdit }: {
   roleKey: string; shift: RosterShift; employees: Employee[]; leaveEmpIds: Set<string>; entries: Entry[]
   editing: string | null; setEditing: (v: string | null) => void
   onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
@@ -704,76 +1101,81 @@ function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, 
   dragEntryId: string | null; setDragEntryId: (id: string | null) => void
   dragOverCell: string | null; setDragOverCell: (key: string | null) => void
   onMove: (id: string, roleKey: string, shift: RosterShift) => void
+  canEdit: boolean
 }) {
   const addKey  = `add:${roleKey}:${shift}`
   const cellKey = `${roleKey}:${shift}`
-  const isDropTarget = dragEntryId !== null && dragOverCell === cellKey
+  const isDropTarget = canEdit && dragEntryId !== null && dragOverCell === cellKey
   const takenIds = entries.map(e => e.employee_id).filter(Boolean) as string[]
 
   return (
     <td
       className={`px-3 py-2 align-top transition-colors ${isDropTarget ? 'bg-brand/8 ring-1 ring-inset ring-brand/30' : ''}`}
-      onDragOver={e => { if (dragEntryId) { e.preventDefault(); setDragOverCell(cellKey) } }}
-      onDragLeave={() => setDragOverCell(null)}
-      onDrop={e => {
+      onDragOver={canEdit ? (e => { if (dragEntryId) { e.preventDefault(); setDragOverCell(cellKey) } }) : undefined}
+      onDragLeave={canEdit ? (() => setDragOverCell(null)) : undefined}
+      onDrop={canEdit ? (e => {
         e.preventDefault()
         const id = e.dataTransfer.getData('entryId')
         if (id) onMove(id, roleKey, shift)
         setDragOverCell(null); setDragEntryId(null)
-      }}
+      }) : undefined}
     >
       <div className="flex flex-col gap-1.5">
-        {entries.map(e => editing === e.id ? (
+        {entries.map(e => canEdit && editing === e.id ? (
           <PersonEditor key={e.id} employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds.filter(id => id !== e.employee_id)}
             initialEmployeeId={e.employee_id} initialName={e.person_name} initialTags={e.tags}
             onSave={(empId, n, t) => onUpdate(e.id, empId, n, t)} onCancel={() => setEditing(null)}
             onDelete={() => onDelete(e.id)} />
         ) : (
           <PersonChip key={e.id} entry={e} away={!!e.employee_id && leaveEmpIds.has(e.employee_id)}
+            canEdit={canEdit}
             onEdit={() => setEditing(e.id)}
             onDragStart={id => { setDragEntryId(id) }}
             onDragEnd={() => { setDragEntryId(null); setDragOverCell(null) }} />
         ))}
 
-        {editing === addKey ? (
+        {canEdit && (editing === addKey ? (
           <PersonEditor employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds}
             onSave={(empId, n, t) => onAdd(roleKey, shift, empId, n, t)} onCancel={() => setEditing(null)} />
         ) : (
           <button onClick={() => setEditing(addKey)}
-            className="self-start inline-flex items-center gap-1 text-[11px] text-stone-300 hover:text-brand transition-colors py-0.5">
-            <Plus size={12} /> Add
+            className="self-start inline-flex items-center gap-1 text-[12px] text-stone-400 hover:text-brand transition-colors py-1 no-print">
+            <Plus size={13} /> Add
           </button>
-        )}
+        ))}
       </div>
     </td>
   )
 }
 
-function PersonChip({ entry, away, onEdit, onDragStart, onDragEnd }: {
-  entry: Entry; away?: boolean; onEdit: () => void
+function PersonChip({ entry, away, canEdit = true, onEdit, onDragStart, onDragEnd }: {
+  entry: Entry; away?: boolean; canEdit?: boolean; onEdit: () => void
   onDragStart?: (id: string) => void; onDragEnd?: () => void
 }) {
   return (
     <div
-      draggable
-      onDragStart={e => { e.dataTransfer.setData('entryId', entry.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(entry.id) }}
-      onDragEnd={() => onDragEnd?.()}
-      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-2.5 py-1.5 rounded-lg border cursor-grab active:cursor-grabbing transition-colors
+      draggable={canEdit}
+      onDragStart={canEdit ? (e => { e.dataTransfer.setData('entryId', entry.id); e.dataTransfer.effectAllowed = 'move'; onDragStart?.(entry.id) }) : undefined}
+      onDragEnd={canEdit ? (() => onDragEnd?.()) : undefined}
+      className={`group inline-flex items-center gap-1.5 self-start max-w-full px-3 py-2 rounded-lg border transition-colors
+        ${canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}
         ${away ? 'bg-amber-50 border-amber-200 hover:border-amber-300' : 'bg-stone-50 border-stone-200 hover:border-brand/40 hover:bg-white'}`}
-      title={away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
+      title={!canEdit ? 'View only' : away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
     >
       {away && <span title="On leave" className="text-amber-600 shrink-0">✈</span>}
-      <span className={`text-[12px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
+      <span className={`text-[13px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
       {entry.tags.map(code => (
         <span key={code} title={tagLabel(code)}
-          className="font-mono font-semibold text-[8px] px-1 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
+          className="font-mono font-semibold text-[9px] px-1.5 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
       ))}
-      <button
-        onClick={e => { e.stopPropagation(); onEdit() }}
-        className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 shrink-0"
-      >
-        <Pencil size={10} className="text-stone-300" />
-      </button>
+      {canEdit && (
+        <button
+          onClick={e => { e.stopPropagation(); onEdit() }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 shrink-0 no-print"
+        >
+          <Pencil size={11} className="text-stone-300" />
+        </button>
+      )}
     </div>
   )
 }
@@ -802,59 +1204,92 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
     if (tags.length === 0 && e.skills?.length) setTags(e.skills)
   }
 
+  // Click anywhere outside this card dismisses it, same as onCancel — the
+  // search dropdown was otherwise staying open until Escape or Save/Cancel.
+  // Registered on the CAPTURE phase (not bubble): picking a match flips
+  // `open` to false, which unmounts the search/dropdown DOM synchronously
+  // as part of the same click — by the bubble phase, the clicked button is
+  // already detached, so contains(ev.target) would wrongly read "outside"
+  // and cancel the very selection just made. Capture runs before that
+  // mutation, while the DOM is still in its pre-click state.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function handle(ev: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(ev.target as Node)) onCancel()
+    }
+    document.addEventListener('mousedown', handle, true)
+    return () => document.removeEventListener('mousedown', handle, true)
+  }, [onCancel])
+
   return (
-    <div className="rounded-xl border border-brand/40 bg-white p-2.5 shadow-sm space-y-2 w-[240px] max-w-full">
+    <div ref={rootRef} className="rounded-xl border border-brand/40 bg-white p-3.5 shadow-lg space-y-3 w-[320px] max-w-full">
       {name && !open ? (
         <button type="button" onClick={() => setOpen(true)}
-          className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border border-stone-200 bg-stone-50 text-left">
-          <span className="text-[12px] font-medium text-text truncate">{name}</span>
-          <Pencil size={11} className="text-stone-300 shrink-0" />
+          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-stone-200 bg-stone-50 text-left">
+          <span className="text-[14px] font-medium text-text truncate">{name}</span>
+          <Pencil size={13} className="text-stone-300 shrink-0" />
         </button>
       ) : (
         <div className="relative">
-          <div className="flex items-center gap-1.5 px-2.5 rounded-lg border border-stone-200 bg-white focus-within:border-brand">
-            <Search size={13} className="text-stone-400" />
+          <div className="flex items-center gap-2 px-3 rounded-lg border border-stone-200 bg-white focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10 transition-shadow">
+            <Search size={15} className="text-stone-400" />
             <input
               autoFocus value={query} onChange={e => setQuery(e.target.value)}
               onKeyDown={e => { if (e.key === 'Escape') onCancel() }}
               placeholder="Search staff…"
-              className="flex-1 py-1.5 text-[12px] text-text outline-none bg-transparent"
+              className="flex-1 py-2.5 text-[14px] text-text outline-none bg-transparent"
             />
           </div>
-          {matches.length > 0 && (
-            <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-52 overflow-y-auto divide-y divide-stone-100">
-              {matches.map(e => (
-                <button key={e.id} type="button" onMouseDown={ev => { ev.preventDefault(); pick(e) }}
-                  className="w-full flex items-center gap-2 px-2.5 py-2 text-left text-[12px] text-text hover:bg-brand/5">
-                  <Plus size={12} className="text-stone-400 shrink-0" />
-                  <span className="flex-1 truncate">{empLabel(e)}</span>
-                  {leaveEmpIds?.has(e.id) && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full bg-amber-100 text-amber-700">leave</span>}
-                  <span className="text-[10px] text-text-muted capitalize">{e.department}</span>
-                </button>
-              ))}
+          {(matches.length > 0 || query.trim() !== '') && (
+            <div className="absolute z-20 left-0 right-0 mt-1.5 bg-white border border-stone-200 rounded-xl shadow-xl overflow-hidden">
+              {matches.length > 0 ? (
+                <div className="max-h-72 overflow-y-auto divide-y divide-stone-100">
+                  {matches.map(e => {
+                    const meta = categoryMeta(e.department)
+                    return (
+                      <button key={e.id} type="button" onMouseDown={ev => { ev.preventDefault(); pick(e) }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-brand/5">
+                        <span className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0"
+                          style={{ background: meta.colorHex }}>
+                          {empLabel(e).charAt(0).toUpperCase()}
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[13px] font-medium text-text truncate">{empLabel(e)}</span>
+                          <span className="block text-[11px] mt-0.5" style={{ color: meta.colorHex }}>{meta.label}</span>
+                        </span>
+                        {leaveEmpIds?.has(e.id) && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">leave</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="px-3 py-4 text-[12px] text-text-muted text-center">No staff match &ldquo;{query.trim()}&rdquo;</p>
+              )}
             </div>
           )}
         </div>
       )}
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap gap-1.5">
         {SKILL_TAGS.map(t => {
           const on = tags.includes(t.code)
           return (
             <button key={t.code} type="button" onClick={() => toggle(t.code)} title={t.label}
-              className={`font-mono font-semibold text-[9px] px-1.5 py-1 rounded border transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-500 border-stone-200 hover:border-brand/40'}`}>
+              className={`font-mono font-semibold text-[11px] px-2 py-1.5 rounded-lg border transition-colors ${on ? 'bg-brand text-white border-brand' : 'bg-white text-stone-500 border-stone-200 hover:border-brand/40'}`}>
               {t.code}
             </button>
           )
         })}
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2">
         <button onClick={() => name.trim() && onSave(employeeId, name, tags)} disabled={!name.trim()}
-          className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg bg-brand text-white text-[11px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
-          <Check size={12} /> Save
+          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
+          <Check size={14} /> Save
         </button>
-        <button onClick={onCancel} className="p-1.5 rounded-lg border border-stone-200 text-stone-400 hover:text-text"><X size={13} /></button>
+        <button onClick={onCancel} className="p-2.5 rounded-lg border border-stone-200 text-stone-400 hover:text-text"><X size={15} /></button>
         {onDelete && (
-          <button onClick={onDelete} className="p-1.5 rounded-lg border border-stone-200 text-stone-400 hover:text-err hover:border-err/40"><Trash2 size={13} /></button>
+          <button onClick={onDelete} className="p-2.5 rounded-lg border border-stone-200 text-stone-400 hover:text-err hover:border-err/40"><Trash2 size={15} /></button>
         )}
       </div>
     </div>

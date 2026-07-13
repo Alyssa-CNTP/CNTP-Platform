@@ -1,11 +1,13 @@
 /**
  * Cleaning task definitions per section, with frequency.
  *
- * The capture UI is exception-based: tasks default to done; the operator only
- * flags what wasn't completed. Daily tasks show every shift; weekly/monthly
- * tasks carry a frequency tag (only-when-due scheduling builds on cleaning_records
- * history later). Operator identity + timestamps come from the login, so there
- * are no per-task name fields.
+ * The capture UI requires explicit confirmation: every due task starts
+ * unchecked and the operator must tick each one as done, or flag it not-done
+ * with a reason, before they can sign off (compliance — nothing is assumed
+ * done). Daily tasks show every shift; weekly/monthly tasks carry a frequency
+ * tag (only-when-due scheduling builds on cleaning_records history later).
+ * Operator identity + timestamps come from the login, so there are no per-task
+ * name fields.
  */
 export type Frequency = 'daily' | 'weekly' | 'monthly'
 

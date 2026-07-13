@@ -5,6 +5,444 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-13 — Alyssa (HR: link login accounts to Staff Directory profiles + "where does this fit" info buttons)
+
+Follow-up to yesterday's HR/Training restructuring, after the question "can't the system match names and emails... so it works as one coherent system." Investigated first — the PIN/Capture side already required an `employee_id` link on every new operator (enforced since PR #362), but the **login side never did**: `shared.app_roles.employee_id` has existed as a column since 20260709_001_people_links.sql, but nothing in the Users & Roles create/edit flow ever read or wrote it. A person could get a Microsoft-SSO login and a Staff Directory profile that never once pointed at each other.
+
+**What changed (no new migration — `employee_id` already existed):**
+- `app/api/admin/users/route.ts` (GET/POST) and `.../[id]/route.ts` (PATCH) now read/write `app_roles.employee_id`, matching the pattern the operators/PIN API already used.
+- `app/(app)/users/page.tsx` — new `EmployeeLinkField` in the New User / Edit / Assign-role modal: search Staff Directory by name, with an exact-email match surfaced as a one-click suggestion (never auto-linked — an admin still confirms). The user list now shows each login's linked person, or a suggested match for unlinked ones.
+- Brand-new SSO sign-ins with no role yet (`no_role` "orphans") get the same exact-email suggestion, sourced from `production.employees.email`, and the "New user signed in" admin notification email (`app/api/auth/notify-new-user/route.ts`) now names the likely match.
+- Staff Directory → "Create one →" (`app/(app)/production/staff/[id]/page.tsx`) now deep-links to `/users?newFor=<id>&name=…&email=…`, which pre-opens the New User modal already linked to that person — zero re-searching, zero chance of linking the wrong one.
+- New `components/hr/PageInfo.tsx` (`PageInfoButton`) — a small (ⓘ) button added to the top of `/hr`, `/users`, `/production/staff`, and `/training`, explaining what each page actually is, who it's for, and where the related pieces of the system live (e.g. Users & Roles explicitly says it's IT-only for *access*, not where a person's profile is created). Added a matching blurb to the Shift Roster's existing help modal rather than a second icon.
+
+**Still true from yesterday:** the `hr` schema migration + seed have not been run yet — see the earlier entry. This session confirmed there is no way to run that migration from a Claude Code session without a direct Postgres connection string or a Supabase personal-access token (only the PostgREST API URL + anon/service-role keys are in `.env.local`, which don't grant raw SQL execution) — it still needs the SQL Editor.
+
+---
+
+## 2026-07-13 — Alyssa (HR: new HR section hub + Training module redesign — Staff & Skills moved underneath, cross-linked with Rosters/Users & Roles/Audit Trail)
+
+Follow-up to yesterday's Training Phase 1 build, after feedback that the `/training` page had gotten cluttered — a flat row of "Manage courses / Assignments / Review queue / Sign-off / Competency dashboard" buttons crammed above the learner's own course list. Restructures the information architecture instead of just tidying that one page: **HR** is now its own top-level nav section, hosting **Staff & Skills** (moved out of "Operations") and **Training** as modules, each reached via a proper card-grid hub rather than sidebar sprawl or button rows.
+
+**Files:** `app/(app)/hr/page.tsx` (new — the HR hub); `components/hr/HubCard.tsx` (new — shared card tile, used by both hubs); `app/(app)/training/page.tsx` (rewritten — now a card hub: My Training / Manage / Assignments / Review / Sign-off / Competency); `app/(app)/training/my/page.tsx` (new — the actual learner course list + kiosk PIN switch, moved out of the old `/training`); `app/(app)/training/course/[slug]/page.tsx` (back-links updated to `/training/my`); `components/layout/Sidebar.tsx` (removed the 5-item "Training" nav group and "Staff & Skills" from "Operations"; both now live under one new "HR" nav entry → `/hr`; floor operators' sandboxed nav now points straight to `/training/my`); `app/(app)/layout.tsx` (route-guard/always-open updates for `/hr` and `/training/my`); `components/production/StaffTabs.tsx` and `components/production/WorkforceTabs.tsx` (added an "← HR" breadcrumb plus cross-reference links between Staff Directory, Shift Roster and Training — each is now one click from the other two); `app/(app)/users/page.tsx` (added an "← HR" breadcrumb).
+
+- Nothing moved at the data layer — this is nav/IA only. Competency writes still land in `production.employee_competencies` on a live Supabase read with no caching, so Staff & Skills, Training and the Competency Dashboard already reflect each other immediately; "real-time" here means no stale cache, not a new sync mechanism.
+- No dedicated Audit Trail page exists yet — it's currently a tab inside Users & Roles (IT-only), gated separately from the `can_view_audit_log` permission key that already exists but isn't enforced there. The HR hub's "Audit Trail" card links to that tab for now rather than a new page; flagging this as a gap worth a dedicated page later if wanted.
+
+## 2026-07-13 — Alyssa (Production: Master Inventory + Blends (BOM) pages, and Blender capture)
+
+Builds the Blender production-capture section on the same proven blueprint as Sieving/Refining/Granule (`[section]/page.tsx` + `*Capture.tsx`), plus two new pieces of editable master data it depends on that didn't exist as browsable pages before: **Master Inventory** (`production.inventory_items`, previously only reachable via a bulk-upload admin tool) and **Blends** (BOM recipes, previously living only in a spreadsheet). Blends validates its component item codes against Master Inventory (a live search picker, not free text) and Blender capture reads the Blends table directly — no publish/sync step, so a ratio correction on the Blends page is live in capture immediately.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260713_001_blender_bom.sql` then `supabase/seeds/blender_bom_seed.sql` in the **staging** Supabase SQL editor.
+2. Verify the new nav entries (Master Inventory, Blends) and route guards work once logged in — this session couldn't complete Microsoft SSO / PIN auth from its sandboxed browser, so the new pages are confirmed to build and route (no 404/500, no console errors) but not click-tested end to end. Please walk through: adding/editing an inventory item, adding a blend with components picked from Master Inventory, then picking that blend on the Assign screen and confirming Blender capture releases only its ingredients.
+
+**Files:**
+- New: `supabase/migrations/20260713_001_blender_bom.sql` (`production.bom_components` table + `bag_tags.tag_method` column), `supabase/seeds/blender_bom_seed.sql` (137 rows / 43 blend BOMs extracted from the Acumatica BOM export), `lib/production/bom.ts` (BOM read helpers + ingredient-column matching), `app/(app)/production/inventory/page.tsx` (Master Inventory grid), `app/(app)/production/blends/page.tsx` (Blends header/detail grid), `components/production/capture/BlenderCapture.tsx`, `components/production/capture/BlendCodePicker.tsx`
+- Additive only: `app/(app)/production/capture/[section]/page.tsx` (new `blender` branches in the section dispatch, `gradeless`, `emptyProduction`, `buildDebag`/`buildBag`/`prodTotals` — no existing Sieving/Refining/Granule branch touched), `app/(app)/production/capture/assign/page.tsx` (blend-code picker replaces the generic production-order-items list only for `sectionId === 'blender'`), `lib/production/capture-config.ts` (flipped `blender` into `sectionMeta().built`), `lib/auth/permissions.ts` + `lib/auth/permission-registry.ts` (new `can_view/edit/delete_inventory` + `can_view/edit/delete_blends` keys), `components/layout/Sidebar.tsx` + `app/(app)/layout.tsx` (new nav entries + route guards)
+- Untouched: `SievingCapture.tsx`, `RefiningCapture.tsx`, `GranuleCapture.tsx`, `BagScanner.tsx`, the older unwired `BlenderForms.tsx` (superseded, left in place)
+
+- Blender capture reuses the same scan/system-pick/manual 3-mode input pattern already proven on Refining, validated through the shared `validateBagScan()` (existence, already-consumed, variant-family, product-type allow-list, finished-product block) — the allow-list per ingredient column (A–F) comes live from the chosen blend's BOM, so only that blend's real materials can be scanned in. Output bags get a per-bag "Print label" / "Write on tag" choice (both always available, independent of the site-wide `LABEL_PRINTING_ENABLED` flag) for testing the new handheld scanner + printer.
+- Deliberately did **not** touch `BagScanner.tsx`'s camera-scan path (a reported "camera won't open" bug) — that component belongs to the older, unwired capture stack; the new Blender build uses the hardware-scanner text-input approach already working on Sieving/Refining/Granule, so it doesn't depend on the camera at all.
+- `bom_components.output_item_id` / `component_item_id` are intentionally *not* hard foreign keys into `inventory_items` — the source spreadsheet predates a full inventory reconcile, so a hard FK would make the seed fail outright on a stale code. The "must exist in Master Inventory" rule is enforced at the UI layer (the Blends page's item picker only offers real items) and stale/unresolved links are surfaced as a dashboard count instead of a hard block.
+
+## 2026-07-12 — Alyssa (Training: staff portfolios — video lessons + digital assessments → auto-updates the competency matrix)
+
+Phase 1 of the long-parked "staff training profiles" initiative (raised 2026-07-09), driven by the need to get every operator trained on the new tablet-capture process (#361/#362) — efficiently, but still with the work-instruction + tested-competency audit trail FSSC requires. Digitizes the paper Refining 1 / Sieving Tower / Pasteuriser assessments into in-app courses: embedded YouTube work-instruction videos → a digital, mostly auto-graded assessment → a pass writes straight into the existing `production.employee_competencies` + `competency_history`, so the Skills Matrix reflects training automatically instead of a training officer marking paper by hand.
+
+**New DB schema:** `hr` (separate from `production`, which keeps owning competency *state*) — `training_courses`, `training_lessons`, `training_questions` + `training_question_options`, `course_sops` (course → one or many SOP competencies), `training_assignments`, `training_attempts` (the audit record), `lesson_progress`. Adds `production.sops.requires_practical_signoff` — theory-only SOPs auto-advance to `competent` on a pass; hands-on machine SOPs advance to `assessed` and wait for a supervisor's practical sign-off.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260710_001_hr_training.sql` then `supabase/seeds/training_seed.sql` in the **staging** Supabase SQL editor.
+2. Add `hr` to **Exposed schemas** (Supabase dashboard → API settings) on staging (and production, once promoted) — PostgREST can't reach a schema that isn't exposed.
+
+**Files:** `supabase/migrations/20260710_001_hr_training.sql`, `supabase/seeds/training_seed.sql` (new); `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts` (new `can_author_training`/`can_assign_training`/`can_view_all_competency` keys + a new **HR** department with `training_officer`/`hr_manager` roles); `lib/training/*` (new — grading engine, shared question-kind config, PIN-identity helper); `app/api/training/**` (new — courses, assignments, attempts, manual-review); `app/(app)/training/**` (new — learner "My Training" + course player, and HR pages: manage courses/lessons/questions, assignments, review queue, practical sign-off, cross-department competency dashboard); `components/training/*` (new); `components/layout/Sidebar.tsx` + `app/(app)/layout.tsx` (new top-level Training nav group + route guards); `app/(app)/production/staff/[id]/page.tsx` (new Training portfolio panel); `app/api/staff/competencies/route.ts` (fixed a pre-existing bug — the route returned `{ok, id}` but the profile page's optimistic UI update expected `{competency, historyRow}`, so edits never reflected until a reload).
+
+- Grading is server-side only — `is_correct`/`match_key` never reach the learner's browser. Six question kinds (single/multi-choice, true/false, numeric-with-tolerance, matching, short-text) cover everything in the three paper memos; the ~4 "marker's-discretion" questions route to a training-officer review queue with a provisional score instead of blocking.
+- Floor operators are PIN-only (no login) and sandboxed to `/production/capture` by the layout guard — added a `/training` exception so they can reach their own training, plus a PIN-attested "take training as someone else" kiosk flow for shared tablets (mirrors the existing Capture shift-changeover PIN pattern).
+- Digitized all three memos' questions faithfully, including their standard weights, temperatures, and procedures; four repeated "who is responsible" questions (the memo's hand-marked correct answer didn't survive as text/formatting in the .docx) were confirmed directly with the training owner rather than guessed, given the FSSC/audit stakes of getting a competency test wrong.
+
+## 2026-07-09 — Alyssa (Shift Roster: rename "Rosehip" role to "Value Added Product")
+
+**Files:** `lib/production/roster-config.ts`
+
+- Renamed the `rosehip` role's display label from "Rosehip" to "Value Added Product" in the fallback role catalogue. The live label is actually seeded in `production.roster_roles.name` (DB row, `key='rosehip'` unchanged — nothing else references the name), so the visible rename requires running `UPDATE production.roster_roles SET name = 'Value Added Product' WHERE key = 'rosehip';` on staging and production.
+
+## 2026-07-09 — Alyssa (Roster: fix staff-picker cancelling itself on selection — regression from same-day click-outside fix)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+- The click-outside dismissal added earlier today (`PersonEditor`) had a race: picking a match calls `setOpen(false)`, which synchronously unmounts the search/dropdown DOM as part of the same click. By the time the bubble-phase `mousedown` listener ran, the clicked button was already detached, so `rootRef.current.contains(ev.target)` read `false` and the handler wrongly fired `onCancel()` — cancelling the selection the instant it was made. Net effect: staff could not be added to the Shift Roster at all.
+- Fix: register the outside-click listener on the **capture** phase instead of bubble, so the containment check runs before React mutates the DOM in response to the click. Verified with an isolated DOM reproduction of the exact race (bubble-phase wrongly cancels; capture-phase does not) since the live app isn't reachable without auth from this environment.
+
+## 2026-07-09 — Alyssa (Roster: staff-picker dropdown click-outside + redesign)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+- The "+ Add" staff-search popup on the Shift Roster grid (`PersonEditor`) had no click-outside dismissal — it only closed on Escape or Save/Cancel, so it stayed open and overlapping the rows below it. Added the same click-outside pattern already used elsewhere in the app (`NotificationBell.tsx`): a ref + `mousedown` listener that calls `onCancel()` when the click lands outside the card.
+- Redesigned the match list: colored department avatar (initial letter, reusing `categoryMeta`) + department label in matching color, replacing the plain text row; added a "No staff match…" empty state when a search finds nothing (previously showed nothing at all); rounder corners and a heavier shadow to read as a proper popover.
+
+## 2026-07-09 — Alyssa (Staff Directory: show PIN + login status per person)
+
+Follow-up to the people-identity-links work (#362), once the migration was run on staging. The Staff Directory profile already showed a person's linked PIN operator and login account, but the list view didn't — you had to open each profile to check. **No database migration required.**
+
+**Files:** `app/api/staff/identities/route.ts` (new), `app/(app)/production/staff/page.tsx`
+
+- New bulk endpoint `GET /api/staff/identities` returns every linked PIN operator + login account in one call (avoids an N+1 fetch per row). Login email/role is only included for IT / `can_manage_users`; everyone else gets a has-login flag only, same visibility rule as the per-employee endpoint.
+- Each row in the Staff Directory list now shows a PIN badge (operator code) and a login badge (email for IT, "Login" otherwise) when present, dimmed if inactive.
+
+## 2026-07-09 — Alyssa (People Identity Links: Staff Directory as the single front door + full audit trail)
+
+Follow-up to the same day's Staff Directory work. CNTP had three "add a person" surfaces (Staff Directory, Operators/PIN, Users & Roles) that barely linked, so it was unclear where to add/remove someone and nothing was audited. This makes the **Staff Directory the single front door** for a person; PIN operators and login accounts become identity layers attached to that person; and every add/remove/relink is now audited.
+
+**⚠ Requires `supabase/migrations/20260709_001_people_links.sql` to be run in the Supabase SQL Editor (staging first) to fully activate the operator↔employee↔login linking. The code degrades gracefully (writes without the link) if run before the migration, so this is safe to deploy first — but linking/offboard features are inert until the migration runs.**
+
+**Files:** `supabase/migrations/20260709_001_people_links.sql` (new), `lib/audit/write.ts` usage added to `app/api/staff/route.ts`, `app/api/staff/[id]/route.ts`, `app/api/production/operators/route.ts`, `app/api/production/operators/[id]/route.ts`, `app/api/admin/users/route.ts`, `app/api/admin/users/[id]/route.ts`; `app/api/staff/[id]/identities/route.ts` (new), `app/api/staff/[id]/offboard/route.ts` (new), `lib/production/it-ticket.ts` (new), `lib/production/employee-payload.ts` (unchanged, reused), `app/(app)/production/staff/[id]/page.tsx`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/operators/page.tsx`, `app/(app)/users/page.tsx`, `lib/supabase/database.types.ts`
+
+- **Data model.** New migration adds `production.operators.employee_id` and `shared.app_roles.employee_id`, backfilled from the existing `employees.operator_id` reverse link. Every PIN and every login now traces back to one Staff Directory person.
+- **Full audit trail.** Every add/edit/remove across Staff Directory, PIN operators, and Users & Roles now writes to `axis.audit_log` via the existing `writeAudit()` helper (previously only the production-orders route used it). PINs and passwords are never written to the audit log — snapshots redact them. The Users & Roles → Audit tab gained a "People & Access" quick filter and a Record (schema.table) column so these events are easy to find.
+- **Employee profile is now the identity hub.** `/production/staff/[id]` shows the linked PIN operator (with an "Assign PIN & sections" action for supervisors) and linked login account (IT sees a link to Users & Roles; others see "Request login account", reusing the flow shipped earlier today).
+- **Coordinated offboard.** Removing someone from the Staff Directory now calls `POST /api/staff/[id]/offboard` instead of a hard delete: marks the employee inactive, deactivates their linked PIN and login (blocks sign-in immediately), and raises an Axis ticket asking IT to delete the auth account. Fully reversible via a new "Reactivate" action — nothing is hard-deleted, so roster/capture history is preserved.
+- **Closes the operator↔employee drift.** Creating a new PIN operator (via the Operators page) now requires linking to an existing Staff Directory person or creating one inline — so the two lists can no longer silently diverge. Editing a legacy (pre-migration) operator is not blocked on this.
+- All new/changed DB writes tolerate the migration not having run yet (`42703` undefined-column) by falling back to writing without the link, so deploy order relative to running the migration is not a footgun.
+
+## 2026-07-09 — Alyssa (Staff Directory: server-enforced add/remove + login-account requests)
+
+Lets authorised people add and remove the staff who populate the Shift Roster, with the "function to do so" now actually enforced. **No database migration required.**
+
+**Files:** `app/api/staff/route.ts` (new), `app/api/staff/[id]/route.ts` (new), `app/api/staff/[id]/request-login/route.ts` (new), `lib/production/employee-payload.ts` (new), `app/(app)/production/staff/page.tsx`
+
+- **Add / edit / remove staff is now server-enforced.** `production.employees` has open RLS (`authenticated USING (true)`), and the Staff Directory wrote to it straight from the browser — so the `can_edit_staff_profiles` / `can_delete_staff` checks were cosmetic and *any* logged-in user could add or delete staff. Create/update/delete now go through new API routes that verify the caller's permission with `getCallerPermissions()` before touching the table. The two existing permissions are unchanged (grant them per-person in Users & Roles).
+- **Fixed a latent gate bug.** The page checked `p?.can_edit_staff_profiles` — a property read on the `p` **function**, always `undefined` — so the Add/Edit/Delete controls were hidden for everyone. Now calls `p('can_edit_staff_profiles')` / `p('can_delete_staff')` correctly.
+- **Request a login account (staff → auth-user bridge).** Creating sign-in accounts stays IT-only (at Users & Roles). On a staff person's editor, IT sees a link to Users & Roles; everyone else with staff-edit rights gets a "Request login account" action that opens an **Axis ticket** (category `app`, auto-routed to IT) describing who needs an account.
+- Add/edit modal now shows a spinner while saving and surfaces server errors instead of failing silently; delete surfaces a page-level error if the server rejects it.
+
+## 2026-07-09 — Alyssa (Ops batch: cleaning compliance, afternoon shift, session, hourly VSD, roster auto-publish)
+
+Five changes shipped together. **No database migrations required.**
+
+### Cleaning checklist — explicit ticking (compliance)
+**Files:** `components/production/capture/CleaningPanel.tsx`, `lib/production/cleaning-config.ts`
+- The capture cleaning panel was exception-based: every task rendered pre-ticked and sign-off auto-confirmed all areas, so an operator could sign off without touching anything (non-compliant). Inverted to explicit confirmation — each due task starts **unchecked** and must be ticked done, or flagged not-done with a reason, before the PIN sign is enabled.
+- Per-task done proof is written to `cleaning_logs` (`area_confirmed` rows now carry `task_key`; `task_exception` unchanged) — no schema change.
+
+### Afternoon shift — operators can sign in (16h00–01h00)
+**Files:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/calendar/page.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/live/SessionModal.tsx`
+- CNTP runs two shifts: Morning (07h00–16h00) and Afternoon/Night (16h00–01h00). The capture flow stores the 16h00–01h00 shift as `afternoon`, but the supervisor calendar wrote it as `night` — a value nothing on the capture side read. Result: operators signing in during 16h00–23h00 saw "No sections assigned", and the 16h00 hand-over found no incoming operators.
+- Standardised the 16h00–01h00 shift on `afternoon` (displayed "Afternoon / Night"); `night` kept as a legacy alias, read via `shiftValuesFor()`. Clocks now resolve 16h00+ to `afternoon` (no more 23h00 split). Calendar Night column rosters `afternoon` and auto-fills from the roster's night band. Read paths accept both values for backward-compat.
+
+### Session — reliable idle logout + sign out on shift submit
+**Files:** `app/(app)/layout.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+- The 1-hour logout was a single `setTimeout` that browsers throttle in background tabs and drop when a device sleeps, leaving users logged in past the hour. Reworked to a wall-clock model (last-activity timestamp, re-evaluated on a 1s tick and on `visibilitychange`/`focus`) so a slept/throttled tab signs out the moment it wakes. Idle window unchanged (60m, 5m warning).
+- A **floor operator** is now signed out when they submit their shift, so the incoming shift signs in fresh. Supervisors/IT capturing on a shared tablet are not signed out.
+
+### Hourly VSD infeed prompt
+**Files:** `components/production/capture/HourlyVsdPrompt.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
+- Operators were never actively prompted to log the hourly infeed-VSD reading, and the passive nudge disappeared once checks were signed. Added a page-level modal that auto-pops whenever an hourly reading is due while the line is running and the session is open — **including after checks sign-off**. Readings append to `production.check_events` (flagged if outside the supervisor-set range); "Remind me shortly" snoozes 10 min. Only sections with an hourly numeric check (Sieving) surface it. Dashboard VSD KPIs already consume these events.
+
+### Roster — Wednesday workflow: outstanding tracker, auto-publish, green export
+**Files:** `app/(app)/production/roster/page.tsx`
+- Added a confirmations tracker (X/N departments confirmed + which are outstanding), emphasised red on the Wednesday deadline. Once every department shown in the grid has submitted, the period **auto-publishes** (and syncs the maintenance duty roster); manual early-publish still available. **Export/Print buttons turn green** once published to signal the confirmed roster is ready to share.
+
+---
+
+## 2026-07-08 — Alyssa (Production Orders: record numbering + permissioned edit / soft-delete with audit trail)
+
+**Files changed:** `supabase/migrations/20260708_001_prod_record_mgmt.sql` (new), `lib/audit/write.ts` (new), `app/api/production/orders/[id]/route.ts` (new), `app/(app)/production/orders/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+**⚠ Requires the migration to be run in the Supabase SQL editor (staging then prod) before the edit/delete actions work — see `20260708_001_prod_record_mgmt.sql`.**
+
+- **PO / record numbering.** `prod_sessions` gains a `record_no` auto-assigned by a DB trigger — `<SECTIONCODE>-<DDMMYY>-<NN>` (e.g. `ST-080726-01`), backfilled for existing rows. Shown on every Production Orders card, alongside the Acumatica production order(s) where set.
+- **Edit / reopen / soft-delete / restore from the UI, permission-gated.** A per-card actions menu appears only for users with `can_edit_session` / `can_delete_session` (granted in Users & Roles):
+  - **Edit details** — inline panel to change operators, variant, lot, and production order(s).
+  - **Reopen for edits** — unlocks a submitted/approved record back to draft.
+  - **Archive** (soft-delete) — sets `deleted_at`/`deleted_by`; hidden from the list, kept for audit, restorable via the new **Archived** toggle.
+- **Audit trail.** All actions go through `PATCH /api/production/orders/[id]`, which verifies the caller's permission server-side and writes a before/after entry to `axis.audit_log` via the new `writeAudit()` helper. `edited_at`/`edited_by` are stamped on edits.
+- **Line-data editing** (weights/batches) routes through the existing capture screen: cards now link with `?session=<id>`, and the capture page loads that specific record so corrections keep serials, bag_tags, scan_events, mass balance and the run rollup consistent.
+- New `prod_sessions` columns: `deleted_at`, `deleted_by`, `edited_at`, `edited_by`, `record_no` (all additive/nullable). Reads are best-effort so the page still works before the migration is applied.
+
+---
+
+## 2026-07-08 — Alyssa (Capture: stop duplicate empty "No data" production sessions)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`
+
+- **Root cause:** `startNewProduction()` ("Start new batch record", shown on a submitted session) **eagerly inserted** a `prod_sessions` row the instant it was clicked. When a second user opened an already-submitted shift and clicked it without capturing anything, an empty `status='draft'` session with one blank production was left behind — the duplicate "In progress · No data" order (confirmed on prod: the empty morning Sieving row was created 7h after the real one, by a different user).
+- **Fix — sessions are now created only when there's real capture:**
+  - `startNewProduction()` is **lazy** — it resets local state (clears `sessionId`/refs, fresh production, `status='new'`) instead of inserting; the row is created on the first weighed entry.
+  - `flushSave()` never creates a session unless `hasCaptureData()` is true, and **skips submitted/approved** sessions entirely (a second viewer of a signed-off shift can no longer spawn a row). Explicit **Save draft** is guarded the same way.
+  - `ensureSession()` only **reuses a `draft`** most-recent session; if the latest is submitted/approved it opens a new row, so a genuine next-batch capture doesn't write back into a signed-off session.
+  - The load now syncs `sessionRef` to the loaded session so autosave always targets it rather than creating a duplicate.
+  - New `hasCaptureData()` helper covers all section types (sieving/refining/granule).
+- **Production Orders list** hides stray empty drafts (a `draft`/`new` session with no debagging, bagging or mass balance) so any pre-existing empties don't clutter the view. Submitted/approved always show.
+
+---
+
+## 2026-07-08 — Alyssa (Sieving: output batch suggestions restricted to what was debagged)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/OutputPicker.tsx`
+
+- **Output batch numbers now suggest only the lots actually debagged this run.** Operators were still mis-picking batch numbers on outputs because the Bagging picker widened its suggestions with recent DB batches + the assignment lot + previous output batches. Now the Sieving output picker's batch suggestions (and the default batch) come **only from the lot numbers captured on the Debagging tab** this session — so a batch that was never fed in can't be suggested on an output. `OutputPicker` uses the supplied `batchHints` exclusively when present and only falls back to recent DB batches when a caller passes none.
+
+---
+
+## 2026-07-07 — Alyssa (Sieving: bucket elevator by time of day — start-of-day IN on Debagging, end-of-day OUT on Bagging)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+- **Bucket elevator now sits on the tab that matches its direction.** Previously the single "Bucket elevator" field lived on the Debagging (in) tab on both shifts and only flipped its badge to "output" on the afternoon — so the **end-of-day** figure was captured under "what goes into the machine," an easy-to-miss mental-model mismatch. Now:
+  - **Morning · Debagging (in):** "Bucket elevator — start of day" (from yesterday · consumed this morning) — counts as **input**.
+  - **Afternoon · Bagging (out):** "Bucket elevator — end of day" (left in the tower for tomorrow) — counts as **output**, shown just above "Total bagged out".
+  - **Machine spillage** is split into its own card and stays on the Debagging tab on both shifts (always an input loss).
+- The mass-balance maths is unchanged (`sievingTotals(data, shift)` still reads `spillage[0]` as the elevator, `spillage[1]` as machine spillage); this is purely where/how the two fields are presented. `goToTab` no longer auto-locks the elevator when moving to Bagging on the afternoon shift (the operator fills it there). Card colour follows direction — blue for in, amber for out.
+
+---
+
+## 2026-07-07 — Alyssa (Granule quality graph now sourced from QC lab, linked by lot + date)
+
+**Files changed:** `lib/production/granule-quality.ts` (new), `components/production/capture/GranuleCapture.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **One source of truth for granule quality.** The QC lab already captures moisture / bulk density per sample on the Granule QC page (`qms.granule_runs` → `qms.granule_samples`). Instead of re-capturing those readings in production, the graph now **reads from QC, linked by lot number + date**. New shared helper `fetchGranuleQuality({ lot, fromDate })` joins `granule_runs` (matched on `batch_number` via the same `normBatch` rule QC uses) → `granule_samples`, returning the moisture/bulk-density time series.
+- **Granule capture**: removed the manual quality-readings entry (and the `quality` field on `GranuleData`); the Quality section now shows a **read-only graph pulled from QC for the current lot**, with a clear empty-state ("No QC readings yet for lot X…") until QC captures them. No more double capture.
+- **Production Dashboard**: the granule quality chart now sources from QC (`fetchGranuleQuality`, by date window) rather than the capture draft, so the dashboard, the capture screen, and the QC page all draw the same numbers. Wording updated to say the readings come from the QC lab, linked by lot + date.
+
+---
+
+## 2026-07-07 — Alyssa (Granule: live quality graph in capture; scale verification → Checks; dashboard explains + audits pass/fail)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `lib/production/checks-config.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Live quality graph in capture.** The granule Quality readings section now renders a live dual-axis chart (moisture % + bulk density cc/100g vs time) built straight from the rows the operator enters — no separate drawing step. This is the data behind the operators' hand-drawn graph and the basis for AI/uniformity research.
+- **Scale verification moved to the Checks page.** Removed the scale std/actual capture from the granule capture header (and the `scaleStd`/`scaleActual` fields + the `prod_sessions` scale write). Added a granule Checks config — **Scale zero check → Scale verification (test load) → pre-start** — so it runs through the existing Checks engine, which already does pass/fail (deviation vs ±tolerance, default ±0.1 kg), maintenance-raise on fail, and audit-trail sign-off (`check_events`).
+- **Dashboard now explains, not just reports.** The Granule card gained two "what each entails" panels — granule quality (uniformity → density/flow/structural integrity, precise batching) and scale verification (verification ≠ calibration; zero check → test load → pass/fail; NRCS/SANAS + Legal Metrology Act, on-site providers). The scale-health chart now reads from the Checks audit (`check_records` → `check_events`, `scale_verification`), and a new **Scale verification audit** table lists each verification (date · shift · standard · actual · deviation · Verified/Fail) with a pass-rate badge — the per-production compliance audit.
+
+---
+
+## 2026-07-07 — Alyssa (Granule: hide grade selector; granule quality + scale-health KPIs on the dashboard)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/ProductionDashboard.tsx`
+
+- **Grade selector hidden for Granule.** The run logic was already gradeless for granule, but the batch set-up card still rendered the Grade dropdown (and grade help) because they were gated on `!startsWith('refining')`. Switched those to the `gradeless` flag, so Granule (like Refining) shows only the Variant selector — traceability comes from the per-bag system serials.
+- **Granule KPI foundations added to the Production Dashboard** (`ProductionDashboard.tsx`): a new "Granule Line — quality & scale health" card with two daily-trend charts over the selected window — **granule quality** (avg moisture % + bulk density cc/100g, dual-axis — the digital version of the operators' hand-drawn graph) and **scale-verification health** (avg deviation = actual − standard test weight, with a zero reference line; drift away from zero is the early predictive-maintenance signal). Data is read directly: scale from `prod_sessions.scale_std_kg/scale_actual_kg`, quality readings from the session `draft_data`. Best-effort so a parse/schema hiccup can't take the dashboard down; shows an empty-state until data is captured.
+
+---
+
+## 2026-07-07 — Alyssa (Granule: scale verification + quality readings; run continuity fix + item-switch fork)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Scale verification captured** on the Granule Line (std weight / actual weight) — required for audit, and now persisted to the dedicated `prod_sessions.scale_std_kg` / `scale_actual_kg` columns (not just draft JSON) so it can be tracked as a metric. The UI shows the live **deviation** (green / amber / red bands) as an early KPI signal toward scale-health / predictive-maintenance dashboards.
+- **Quality readings** capture on the Granule Line — moisture (%) and bulk density (cc/100g) with time, the data behind the operators' hand-drawn graph, stored for later charting + KPIs.
+- **Run continuity fixed + made item-aware.** `needsGrade` was still `true` for granule, which (after granule went variant-only) broke its cross-shift run detection — the continue-run prompt never showed and the run wouldn't open on the variant path. Granule is now correctly gradeless for the run logic, so a run **continues across shifts** (07h00→01h00, operators change, mass balance keeps rolling up) as long as variant + item stay the same. Added an **item discriminator**: the granule product item (SG / SF / Export) is stored in the run's `grade` slot, so switching SG → SF/Export **forks a new run** — exactly as the floor treats it. (`runGrade()` helper threaded through `findOpenRun` / `openRun` and the detection/persist call sites.)
+
+---
+
+## 2026-07-07 — Alyssa (Granule Line rework from floor feedback; unified mass-balance table; Sieving bucket-elevator direction)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/MassBalanceTable.tsx` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/label-print.ts`
+
+- **Unified mass balance** — new shared `MassBalanceTable` renders one balance for the whole production run as a table (Morning / Afternoon rows + whole-run total; variance vs ±15 kg). It's shown in **one place, the Overview** (via `balanceRows`/`balanceNote` from the capture page). Sieving now treats the **bucket elevator directionally**: consumed on the morning shift (input), left for the next day on the afternoon shift (output), so the run balance closes honestly (`sievingTotals(data, shift)`; `prodTotals`/`sessionTotals` take a shift arg).
+- **Granule Line reworked from floor feedback** (`GranuleCapture.tsx`):
+  - **Blends colour-coded** (per-blend colour + numbered chip) and **dust types colour-coded** throughout; a blend must be marked **complete before the next is added** (completed blends collapse to a coloured chip summary). Water is entered per blend and excluded from Total Mixed (A).
+  - **Product item chosen once per session** (SG / SF / Export Granules), which drives the by-product dust type (SG→SG Dust, SF→SF Dust) and locks after capture starts.
+  - **Per-lot serials `DD-MM-YY-NNN`** — the sequence continues across days/shifts for the same lot (looked up from `bag_tags` by lot), e.g. RSGG-04526 → `07-07-26-001…006` today, `08-07-26-007` tomorrow.
+  - Bagging table gains **Bag Weight (target)** + **Total Weight (actual)**, auto time, and an **auto-generated bagging summary** grouped by lot. An **amber warning** prompts recording the SG/SF dust output before finishing (it's consumed in the next production — the bucket-elevator analogue).
+  - **Grade removed** (granule is variant-only, like Refining). The Mass Balance sub-tab was **removed from the section page** — only end-of-shift readings (D / E / meter Y-Z) remain there; the calculated balance shows in the Overview with a `G = C* + carry-over/waste` and **% yield** note.
+- `CaptureOverview` groups granule debagging by dust type and renders the shared `MassBalanceTable`; the capture-page balance is suppressed for granule so its balance lives in exactly one place.
+
+---
+
+## 2026-07-07 — Alyssa (Granule Line capture built; camera scanner fixed; bag label redesigned)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `lib/production/capture-config.ts`, `components/production/BagScanner.tsx`, `lib/production/label-print.ts`
+
+- **Granule Line is now a live capture section** (`/production/capture/granule`), built on the Sieving/Refining template but with the granule line's own blend-based layout, faithful to the paper forms PR-FM-026/7 (Plant Shift Mass Balance Report) and PR-FM-005.1 (Granule Bagging Station Report). New `GranuleCapture.tsx` with three sub-tabs:
+  - **Pellet Mill Feed (inputs):** dusts fed in, grouped into blends (1–5). Each dust input uses the same three modes as Refining — **scan / type serial**, **pick from system** (in-stock `bag_tags`), or **manual entry** — so every path from the paper-to-system transition is captured. Per-blend water is recorded but (confirmed from the paper) excluded from Total Mixed (A). Dust column totals (Brown/CP, White, Indent, Leaf, ALT, SG, Dust Extraction, Other) + Total Mixed (A) are shown as the primary overview figure.
+  - **Bagging (outputs):** one row per granule bag (item, auto time, target vs actual weight, auto-generated serial), a Dust-from-granule-line by-product table, and a Waste table. Output serials register in `bag_tags` + log a `bagging_out` scan event, exactly like Refining.
+  - **Mass Balance:** the PR-FM-026/7 report — A (auto), C\* from the bagging summary (auto), carry-overs D (dust not re-fed) and E (coarse not fed), waste F, Total Produced G = C\*+D+E+F, Balance = H−G (flagged beyond ±15 kg), % yield = G/H, and running hours = meter stop (Z) − start (Y).
+  - Wired into the orchestrator `[section]/page.tsx`: `buildDebag`/`buildBag`/`prodTotals`/`persist` now branch for granule (inputs → `prod_debagging`, outputs → `prod_bagging`, A vs G → `prod_mass_balance`), so cross-shift production-run continuity and the unified run mass balance work the same as the other sections. Flipped `built: true` for granule in `capture-config.ts`. `CaptureOverview` now groups granule debagging by dust type (the totals the plant reads first).
+- **Camera bag scanner fixed** (`BagScanner.tsx`). Three bugs: (1) the detector only looked for `qr_code`, but CNTP's printed labels are **Code128 1D barcodes**, so it could never decode a real label — now requests every format the browser supports (`code_128`, `qr_code`, EAN, etc.); (2) when `BarcodeDetector` was unavailable (iOS Safari, some Android browsers) the code called `stopCamera()` immediately, so the camera "opened then closed" — the reported symptom; it now keeps the preview open with a read-and-type fallback; (3) a mount race where the stream could attach before the `<video>` existed — acquisition moved into an effect that runs after the element mounts, with `await video.play()` and clearer permission-vs-unsupported error messages.
+- **Bag label redesigned** (`label-print.ts`). The old single cramped badge is replaced by two clearly-labelled fields — **Type** (RA Conventional / Conventional / Organic / RA Organic) and **Grade** (Export A / Export Blend B / Domestic C) — above a larger Code128 barcode + serial. The barcode still encodes only the serial (all metadata stays in `bag_tags`, so a data change never invalidates a printed tag). Printing stays gated behind `LABEL_PRINTING_ENABLED` (write-on-bag remains the default on the floor); this readies the template for when the printer is enabled.
+
+---
+
+## 2026-07-07 — Alyssa (Roster print: fix real root cause — app shell clips print output to one page)
+
+**Files changed:** `app/(app)/layout.tsx`, `app/globals.css`
+
+- **Departments (Maintenance, Health & Safety) were still missing from the printout after the 3-column-layout fix.** Root cause was one level up from the roster page: `app/(app)/layout.tsx` wraps every page in a fixed-height shell (`h-screen overflow-hidden`) with an internally-scrolling `<main overflow-y-auto>`. That clipping applies during print too — only the one screen's worth of scrolled content ever reaches the print surface, so the printout was always exactly 1 page regardless of how the roster's own markup was laid out. Confirmed with a real headless-Chromium print-to-PDF test reproducing the shell: without this fix the roster is silently truncated at 1 page; with it, the same content correctly spans 2 pages with every department present.
+- Added `.app-shell` / `.app-shell-col` / `.app-shell-main` marker classes to the three shell containers (outer flex wrapper, inner column wrapper, `<main>`) and reset them (plus `html`/`body`) to `height: auto; overflow: visible` inside `@media print`, so print always uses natural, unclipped document flow. This is a shared-layout fix — it applies to print output for every page under `(app)`, not just the roster.
+
+---
+
+## 2026-07-07 — Alyssa (Roster print: fix departments being cut off, drop 3-column layout)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **Print was still losing departments even across two pages.** The 3-column CSS multi-column layout (`column-count: 3`) added on 2026-07-06 relies on the print engine balancing column height to fit one page — any roster content beyond that calculated height is silently dropped rather than flowed onto a second page, which is exactly what was happening with the current 6-department, ~24-role roster. Replaced the multi-column block with plain full-width block stacking (one table per department, straight down the page). Normal block flow has no such height ceiling: the browser's print pagination reliably continues onto as many landscape pages as the content needs, so nothing gets lost regardless of roster size.
+- Each department block keeps `break-inside: avoid` (plus `page-break-inside: avoid` for older engines) so a table only splits across a page break if it genuinely doesn't fit on one — same protection as before, just without the column-balancing that was causing the clipping.
+- Widened the Day/Night columns (Role column narrowed from 30% to 22%) now that each table runs the full page width instead of a third of it.
+
+---
+
+## 2026-07-06 — Alyssa (Roster print: landscape, single-page, 3-column layout)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **Printout was cutting off after one portrait page.** The per-section tables stacked in a single tall column, so a 6-department, ~25-role roster ran past one page and the rest was silently lost. Forced `@page { size: landscape; margin: 10mm; }` in the print media query (~40% more usable width), and laid the section blocks out in a 3-column CSS multi-column flow (`column-count: 3`, sequential fill) instead of one long column.
+- **Sections still never split mid-table** — each department's block keeps `break-inside: avoid`, so a table can move to the next column but never breaks partway through a role's row.
+- **Trimmed print typography** (headers, row padding, section labels) to fit the full roster on one landscape page at the denser 3-column layout, while keeping it readable at arm's length for a noticeboard.
+
+---
+
+## 2026-07-06 — Alyssa (Roster print fix: app chrome still bleeding through, duplicated header text)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+- **The app's Topbar (breadcrumb, notification bell, date) was still printing.** The previous print fix hid the sidebar and the roster page's own on-screen content, but the shared `Topbar` component is rendered by the app-wide layout (`app/(app)/layout.tsx`), outside the roster page — `.no-print` never touched it. Added `header { display: none !important; }` to the print media query (Topbar is the only `<header>` in the app), matching the existing `aside` rule for the sidebar.
+- **Duplicated shift-time text fixed.** Some older periods store the raw time range as the shift label (e.g. `day_label = "07h00 till 16h00"`) instead of a shift letter ("Shift A") — the print header was unconditionally appending "· 07h00–16h00" regardless, producing "07h00 till 16h00 · 07h00–16h00". Now only appends the fixed time suffix when the stored label doesn't already look like one.
+- **Duplicated date-range text fixed.** The print subtitle showed the formatted range and the period's auto-generated name side by side (e.g. "6 Jul – 10 Jul 2026 · 6–10 Jul") — near-identical, just missing the year. The name is now only shown when it's a genuine custom label (contains no digits), not an auto-generated short date.
+
+---
+
+## 2026-07-06 — Alyssa (Roster: printable noticeboard layout, help guide, bigger add-person UI, phantom scrollbar fix)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/globals.css`, `components/production/WorkforceTabs.tsx`
+
+- **Print now produces a real printout, not a screenshot.** The Print button used to print the interactive on-screen grid (sticky columns, tiny UI chips, centred narrow layout). Added a dedicated `PrintRoster` view — a plain, full-width table per section with the section's colour as a left-border/header tint, large readable text, and a skill-tag legend at the foot — shown only inside `@media print` (new `.print-only` / `.print-full-width` CSS). The interactive grid, buttons, and period bar are hidden from the printout via `.no-print`.
+- **Help guide added.** New info icon next to the "Shift Rosters" title opens a modal explaining the four per-section permissions (View/Edit/Submit/Delete), how to add/move people, how the Wednesday deadline and Sunday auto-rotation work, and — importantly — that **Publish is manual, not automatic**. Someone with edit rights must click Publish; nothing publishes itself on the deadline.
+- **Bigger add/edit-person popover.** The search-and-tag popover used when adding someone to a role/shift was cramped (240px wide, 9–12px text). Widened to 320px with larger text, padding, and touch targets throughout (search input, staff dropdown, skill-tag buttons, Save/Cancel/Delete) for practical use on the shop floor. Person chips and the "Add" button in each cell were bumped slightly too for consistency.
+- **Phantom scrollbar fixed.** The `WorkforceTabs` sub-nav wrapped its single "Shift Roster" tab in an `overflow-x-auto` container (needed for future multi-tab cases, but wrong for the current one-tab reality) combined with a `-mb-px` trick — this produced a spurious thin horizontal scrollbar with nothing to scroll to. Removed the unneeded `overflow-x-auto`.
+
+---
+
+## 2026-07-06 — Alyssa (Roster export: friendlier filename)
+
+**Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/production/roster/page.tsx`
+
+- **Download filename changed** from `Roster_<period-name>.xlsx` to `Shift Roster (<date range>).xlsx`, e.g. `Shift Roster (6 Jul – 12 Jul 2026).xlsx` — matches the date range shown on-screen instead of the internal period name/id.
+
+---
+
+## 2026-07-06 — Alyssa (Roster export: upgraded from plain CSV to branded, colour-coded .xlsx)
+
+**Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/production/roster/page.tsx`
+
+- **Roster export now matches the Quality workcenter standard.** The roster's Export button previously produced a plain, unstyled CSV — nothing like the branded ExcelJS workbooks used by Pasteuriser/Granule/Sieving exports (title block + logo, bold coloured header row, frozen header, autofilter, auto-sized columns). Replaced with a real `.xlsx` export using the same shared engine (`buildStyledWorkbook`).
+- **Colour-coded by section.** Each row is tinted with a light wash of its section's colour (Production/Store/Quality/Cleaning/Maintenance/H&S — the same colours used in the on-screen grid), with the Section column bolded, so the exported file visually matches what's on screen.
+- **Engine extended, not duplicated.** Added optional `rowFill` (arbitrary ARGB row tint, for category-coded exports) and `boldCols` to the shared `StyledSheet` type in `exportExcel.ts` alongside the existing pass/fail tone system — new `exportRosterPeriod()` reuses `buildStyledWorkbook()` rather than a bespoke roster-only implementation.
+
+---
+
+## 2026-07-06 — Alyssa (Roster CSV export: wide layout for readability)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+- **CSV export layout improved.** Changed from a tall format (one person per row) to a wide format (one role per row with Day and Night shifts side-by-side, deduped tags). Matches the grid's visual structure and is much easier to read/print in Excel. Example: `Bagging / Vacuum | Exavior; Siyavuya; Chuma | (empty) | Mawande; Sisonke; Luvo | FL` (instead of 7 separate rows).
+
+---
+
+## 2026-07-06 — Alyssa (AXIS: ticket assignment, resolved-by tracking, notification bell z-index fix)
+
+**Files changed:** `supabase/migrations/20260703_003_axis_tickets_resolved_by.sql`, `app/api/axis/tickets/[id]/route.ts`, `app/(app)/axis/tickets/page.tsx`, `components/layout/NotificationBell.tsx`
+
+- **Notification bell z-index fixed.** Dropdown was being hidden behind page content on tablets. z-index raised to 9999.
+- **"Assign to me" button added.** Ticket detail panel now has an Assign to me button. IT and users with `can_assign_tickets` can pick up unassigned tickets or reassign from someone else. "Unassign" button appears when the ticket is already yours.
+- **Ticket assignment notifies assignee.** When a ticket's `assigned_to` changes, the new assignee receives an AXIS notification that appears in their bell.
+- **Status buttons fixed.** Previously the buttons had a silent `&&` guard — non-permitted clicks did nothing with no feedback. Buttons are now properly `disabled` for users without permission, and errors are shown inline if a PATCH fails.
+- **Resolved-by tracking.** New `resolved_by_name` and `resolved_at` columns on `axis.tickets`. When IT marks a ticket resolved, their name + timestamp is captured. Re-opening a ticket clears these fields. Resolved-by is shown in the detail panel meta grid.
+- **Per-person resolved count strip.** Below the KPI cards, a row now shows how many tickets each person has resolved. Computed client-side from the ticket list.
+
+---
+
+## 2026-07-06 — Alyssa (Resilience: run_id load no longer blocks capture)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+- **Capture load no longer depends on the run migration being present.** The core session load selected `run_id`; on a database where the run migration hadn't fully applied (e.g. `ALTER … ADD COLUMN run_id` didn't stick due to lock contention), that select 400'd and took capture down entirely — refining (and all sections) appeared not to save. `run_id` is now dropped from the core select and fetched in a separate best-effort query, and the run linking/rollup in `persist()` is wrapped so a run schema/write hiccup can never affect the already-committed capture save.
+
+---
+
+## 2026-07-06 — Alyssa (Shift Roster: per-section permissions, auto-rotation, submission tracking, reminders & export)
+
+**Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/production/roster/page.tsx`, `lib/notifications/recipients.ts`, `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`, `supabase/migrations/20260706_003_roster_section_status.sql`, `.github/workflows/roster-rotate.yml`, `app/globals.css`
+
+- **Two new departments.** `Store` and `Health & Safety` added to the org `Department` list (with metadata + default roles `store_supervisor` / `hs_officer`), so users can be assigned to them across the app.
+- **Four-way roster permissions, per section.** New permission keys: one global `can_view_roster` plus `can_{edit,submit,delete}_roster_<section>` for each of the 6 roster sections (production, store, qc, cleaning, maintenance, hs). Rendered as a new **Shift Roster** group in the Users & Roles permission panel + matrix — nothing hardcoded, all set per user/role. Viewing, submitting, editing and deleting are now genuinely separate capabilities.
+- **Roster page is now permission-gated.** The sidebar link and page require `can_view_roster`. In the grid, Add / edit / drag / delete and the **Save** button appear only for sections you can edit (others show a *view only* lock); a new **Submit [section]** button (needs the submit permission) signs a section off. Each section shows a Draft / ✓ Submitted status chip. Top-bar New period / Generate / Publish / Delete are gated on having edit/delete rights somewhere.
+- **Section submission tracking.** New `production.roster_section_status` table records per-section draft/submitted state (+ who/when). Saving a section reverts it to draft; submitting stamps it.
+- **Automatic weekly rotation.** New `lib/production/roster-rotate.ts` holds the shared rotate logic (day↔night swap, Shift A/B labels follow the people; cadence is the one constant `ROSTER_PERIOD_DAYS`). A new `/api/production/roster/cron` endpoint runs `?task=rotate` (idempotently creates next week's rotated period) and `?task=remind`. Driven by `.github/workflows/roster-rotate.yml` (rotate Sun night; remind Mon + Wed mornings). Auth: `Bearer CRON_SECRET`, or a signed-in editor (so the manual **Generate next week** button also fires the reminder).
+- **Reminder emails — not hardcoded.** `remind` emails whoever holds `can_submit_roster_<section>` for each section not yet submitted, resolved live from role defaults + per-user overrides via the new `getRosterSubmitterIds()` helper (reads `shared.app_roles` through a `SECURITY DEFINER` `public.roster_submitter_candidates()` function, since the service-role cron can't reach the `shared` schema directly). Uses the existing `notify()` in-app + email pipeline.
+- **Export + print.** New CSV **Export** (section, role, shift, person, tags) and a colour-preserving **Print** view (`@media print` rules hide app chrome / interactive-only controls).
+- **Migration to run (staging first):** `supabase/migrations/20260706_003_roster_section_status.sql`. **Ops:** add the `roster-rotate.yml` schedule; `CRON_SECRET` already exists on the server.
+
+---
+
+## 2026-07-06 — Alyssa (Duplicate-session fix + 16h00 shift-changeover PIN)
+
+**Files changed:** `supabase/migrations/20260706_002_shift_takeovers.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Duplicate empty sessions fixed.** Opening a capture section no longer eagerly inserts a draft `prod_sessions` row — that open-time insert raced with the first autosave (the select-first check ran before the insert committed), producing duplicate "No data" sessions in production. Sessions are now created lazily on first real capture, and `ensureSession()` coalesces concurrent callers onto a single in-flight insert (with a synchronously-updated `sessionRef`) so it can never double-insert. localStorage still backs up any typing before the row exists.
+- **16h00 shift-changeover PIN gate (audit).** When 16h00 passes and a morning session is still being captured (not signed off), capture is blocked behind a modal until the incoming operator enters their PIN. The PIN is validated against the section’s afternoon-rostered operators (fallback: any active operator, flagged), and each hand-over is recorded in the new `production.shift_takeovers` table (who, when, rostered-or-not) — an audit trail of who captured after the changeover. Subsequent capture and sign-off are attributed to the operator who took over.
+
+---
+
+## 2026-07-06 — Alyssa (Cross-shift production runs, full-day mass balance, numeric keypad)
+
+**Files changed:** `supabase/migrations/20260706_001_production_runs.sql`, `lib/supabase/database.types.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/NumericKeypad.tsx`, `components/production/capture/ChecksPanel.tsx`
+
+- **Production runs (cross-shift continuity).** New `production.production_runs` table models one production order (PO + variant + grade) that can span several shifts of a production day (07h00–01h00). Each shift still writes its own `prod_sessions` + `prod_mass_balance` row; `prod_sessions.run_id` links them and the run row holds the durable full-day rollup. A partial unique index enforces one *open* run per (section, day, PO, variant, grade).
+- **Continue-run prompt at shift hand-over.** When the incoming operator picks variant (+ grade for non-refining) and an open run from an earlier shift matches PO + variant + grade, the Capture tab prompts *“Continue the production run from the previous shift?”* with **Continue run** / **Start new run**. Continue links the session so the mass balance carries over; Start new closes the previous run and opens a fresh one. Opening a genuinely new product opens a run silently.
+- **Full-day mass balance carried over.** `persist()` recomputes the run rollup by summing every linked session's mass balance and writes `total_input_kg` / `total_output_kg` / generated `balance_kg` onto the run. The Overview now widens to all sessions sharing the run (morning + afternoon + night), not just morning↔afternoon.
+- **One unified mass balance for everyone.** The Capture card, Checks panel and Sign-off now all show a single run-level mass balance (in / out / variance) combined across every shift and batch on the run — not a per-shift or per-batch slice — so operators on every shift read the same figure. When the run spans shifts, a sub-line notes what the current shift added.
+- **End-of-run control.** Supervisor approval gains an optional “End of production run” checkbox that closes the run so the next shift isn't prompted to continue.
+- **Custom on-screen numeric keypad.** New `NumericKeypad` component (digits, decimal, backspace, clear, and a dash key) replaces the native `type="number"` input in the machine-checks `ValueCapture`. Tablets' native decimal pad has no minus key, so negative readings (e.g. indent screen angle, `allowNegative`) can now be entered reliably; the minus key shows only where negatives are allowed.
+
+---
+
+## 2026-07-03 — Alyssa (AXIS: comments fix, notifications bell, consideration board resolution tracking)
+
+**Files changed:** `supabase/migrations/20260703_001_axis_comments_parent_id.sql`, `supabase/migrations/20260703_002_axis_notifications_resolution.sql`, `app/api/axis/github-pr/route.ts`, `app/api/axis/requests/[id]/approve/route.ts`, `components/layout/NotificationBell.tsx`, `app/(app)/axis/consideration/page.tsx`
+
+- **AXIS comments fixed.** `axis.comments` was missing `parent_id`, `deleted_at`, `edited_at`, and `mentions` columns — PostgREST was rejecting every comment fetch on the consideration board. Migration adds all four columns idempotently.
+- **Notification bell now shows AXIS alerts.** Previously the bell only showed `maintenance.notifications` and management announcements. Now also fetches `axis.notifications` (project approved/rejected, comment mentions). AXIS notifications link directly to the consideration board or projects list. Both sources are marked read when the panel opens.
+- **axis.notifications: read_at column + RLS added.** The table existed but had no `read_at` column, making unread state impossible. Migration adds `read_at` and row-level security so users only see their own notifications.
+- **Consideration board: resolution tracking.** Approved/rejected requests now display who reviewed them (by name), a resolution note, and a live GitHub PR card showing branch, merge status, PR title and body preview.
+- **Approval form: resolution fields added.** IT can now add a resolution note and paste a GitHub PR URL when approving. The PR card previews live (title, branch, merged status) before the approval is submitted. These are optional — existing approvals are unaffected.
+- **New `/api/axis/github-pr` route.** Server-side GitHub API proxy that fetches PR details from a URL. Keeps the `GITHUB_API_TOKEN` env var server-side. Requires `GITHUB_API_TOKEN` in `.env.local` for authenticated requests (unauthenticated hits GitHub's 60 req/hr limit).
+
+---
+
+## 2026-07-04 — Alyssa (Settings, Audit log, Platform Health)
+
+**Files changed:** `app/layout.tsx`, `app/(app)/settings/page.tsx`, `app/(app)/users/page.tsx`, `app/api/admin/audit/route.ts`, `app/(app)/management/platform/page.tsx`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`
+
+- **Theme flash bug fixed.** Added a blocking `<script>` in the root layout that reads `cntp_theme` from localStorage and sets `data-theme` before first paint. Previously the settings page was the only place `applyTheme()` ran — navigating to it would apply the stored dark theme and make the whole app stay dark-green until a reload.
+- **Settings: removed Security and About tabs.** Password change and app info sections removed from user settings. Password resets are still available to admins via Users & Access.
+- **Audit log: IT department access.** Audit log tab in Users & Access is now visible to all IT users (not just Alyssa and Jan by UUID). The API also enriches each entry with `actor_department` and `actor_role`.
+- **Audit log UI rebuilt.** New table layout with columns: Person, Department, Event, Role, Time. Added summary strip (total events, sign-ins, sign-outs, active users). Added department filter dropdown and A–Z sort toggle. Increased fetch limit to 500 events. People dropdown is sorted alphabetically.
+- **Platform Health: auto-refresh.** Page now auto-refreshes every 60 seconds. Manual Refresh button added to header with spinner. Last-updated timestamp shown alongside subtitle.
+- **Unassigned users redirect (from staging).** Users with no role/department are redirected to `/home` and see only Submit Request + Settings in the sidebar.
+
+---
+
+## 2026-07-03 — Alyssa (Refining capture fixes, server recovery, Github icon build fix)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/live-types.ts`, `app/(app)/axis/consideration/page.tsx`, `supabase/migrations/20260704_004_refining_section_constraints.sql`, `supabase/migrations/20260704_005_prod_sessions_section_direct.sql`
+
+- **`notInSystem` false-positive fixed.** Manual entry rows were showing "Not found in system" warning incorrectly. The warning now only appears for non-manual rows where `notInSystem === true`, and clearing the serial field properly resets the flag via a single merged `patch()` call (fixes React stale-closure bug).
+- **Serial input losing keystrokes fixed.** Two sequential `patch()` calls with the same stale `value` prop caused the second to overwrite the first. Fixed by merging serial and notInSystem updates into a single patch inside `updateInput`.
+- **400 on `prod_sessions` INSERT fixed.** Production DB `section_id` CHECK constraint didn't include `'refining1'`/`'refining2'`. Added migrations to widen the constraint (NOT VALID so existing rows aren't re-checked). `ensureSession()` now does a SELECT-first before INSERT so duplicate session creates are avoided.
+- **`prod_debagging`/`prod_bagging` empty fixed.** FK violation: manually-entered serials weren't in `bag_tags` so `bag_serial_no` references failed. Manual rows now use `bag_serial_no: null` with serial stored in `notes`; `secureInput` always upserts manual bags into `bag_tags`.
+- **`grade`/`logged_at` columns removed from build payloads.** These columns don't exist in `prod_debagging`/`prod_bagging` — removing them from `buildDebag` and `buildBag` resolved silent insert failures.
+- **Mass balance split fixed.** All refining output was previously written to `total_output_b_kg`. Fixed to correctly split B/C/D totals across their respective columns in `prod_mass_balance`.
+- **Variant and bag date removed from input rows.** Variant is now inherited from session-level selection; bag date auto-populates from system date. Both fields removed from the per-row UI.
+- **Coarse Leaf added as refining 2 input type.** Added to `live-types.ts` inputTypes and a required batch number field appears when Coarse Leaf is selected (`needsLot` flag).
+- **`Github` lucide icon replaced.** `Github` is not exported from lucide-react in this version. Replaced with `GitBranch` across `axis/consideration/page.tsx` — resolves the production build failure.
+- **Server recovery after disk full.** VPS hit 97.2% disk usage causing `npm run build` to fail and `cntp-production` to error (396 restarts). Freed space by cleaning npm cache, flushing pm2 logs, removing stale `.next-old` dirs, and running `apt clean`. Production and staging both restored to online.
+
+---
+
 ## 2026-07-04 — Gustav (Pasteuriser: moisture re-check for out-of-spec samples)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
