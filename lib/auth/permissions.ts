@@ -65,6 +65,13 @@ export type PermissionKey =
   | 'can_delete_session'
   | 'can_edit_bag_tag'
   | 'can_delete_bag_tag'
+  // Production — Master Inventory & Blends (BOM)
+  | 'can_view_inventory'
+  | 'can_edit_inventory'
+  | 'can_delete_inventory'
+  | 'can_view_blends'
+  | 'can_edit_blends'
+  | 'can_delete_blends'
   // Sales & Marketing
   | 'can_access_sales'
   | 'can_access_marketing'
@@ -132,6 +139,8 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
   'can_edit_session','can_delete_session','can_edit_bag_tag','can_delete_bag_tag',
+  'can_view_inventory','can_edit_inventory','can_delete_inventory',
+  'can_view_blends','can_edit_blends','can_delete_blends',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
@@ -303,6 +312,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_approve_session: true, can_export_csv: true,
     can_edit_session: true, can_delete_session: true,
     can_edit_bag_tag: true, can_delete_bag_tag: true,
+    // Master Inventory & Blends (BOM) — supervisors keep these current
+    can_view_inventory: true, can_edit_inventory: true,
+    can_view_blends: true, can_edit_blends: true,
     // Staff & Competency
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
@@ -435,6 +447,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_ops_dashboard: true,
     can_view_all_sections:  true,
     can_view_live_history:  true,
+    can_view_inventory: true, can_view_blends: true,
     // Maintenance (view module — no job-card actions)
     can_access_maintenance: true,
     // Management & Reporting
@@ -564,6 +577,18 @@ export const PERMISSION_GROUPS: {
       { key: 'can_delete_session',      label: 'Delete production session records' },
       { key: 'can_edit_bag_tag',        label: 'Edit bag tag records' },
       { key: 'can_delete_bag_tag',      label: 'Delete bag tag records' },
+    ],
+  },
+  {
+    group: 'Production — Master Inventory & Blends',
+    department: 'Production',
+    permissions: [
+      { key: 'can_view_inventory',   label: 'View Master Inventory' },
+      { key: 'can_edit_inventory',   label: 'Add & edit inventory items' },
+      { key: 'can_delete_inventory', label: 'Deactivate inventory items' },
+      { key: 'can_view_blends',      label: 'View Blends (BOM) page' },
+      { key: 'can_edit_blends',      label: 'Add & edit blends and their components' },
+      { key: 'can_delete_blends',    label: 'Delete blends and components' },
     ],
   },
   {

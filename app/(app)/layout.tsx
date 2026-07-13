@@ -55,6 +55,8 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
+  { prefix: '/production/inventory', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
+  { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
   // Maintenance — full module is Maintenance + Management. Production may only
