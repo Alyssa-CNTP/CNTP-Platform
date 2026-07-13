@@ -14,7 +14,10 @@ import {
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
+import { WORK_CENTRE_FOR_SECTION } from '@/components/production/capture/BlenderCapture'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
+
+const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
 
 type Shift = 'morning' | 'afternoon' | 'night'
 
@@ -361,12 +364,12 @@ function AssignScreen() {
                       )}
                       <div className="space-y-1.5 sm:col-span-2">
                         <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
-                          {sectionId === 'blender' ? 'Blend code' : 'Production orders'}
+                          {isBlenderSection(sectionId) ? 'Blend code (default for this shift)' : 'Production orders'}
                         </label>
                         {!draft.variant ? (
-                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see {sectionId === 'blender' ? 'blends' : 'production-order items'}.</p>
-                        ) : sectionId === 'blender' ? (
-                          <BlendCodePicker variant={draft.variant} selected={draft.prodOrders}
+                          <p className="text-[12px] text-stone-400 px-1">Pick a variant first to see {isBlenderSection(sectionId) ? 'blends' : 'production-order items'}.</p>
+                        ) : isBlenderSection(sectionId) ? (
+                          <BlendCodePicker variant={draft.variant} workCentre={WORK_CENTRE_FOR_SECTION[sectionId]} selected={draft.prodOrders}
                             onSelect={bomId => setField(sectionId, 'prodOrders', [bomId])} />
                         ) : (() => {
                           const items = productionOrderItems(inventory, sectionId, draft.variant)
@@ -387,7 +390,9 @@ function AssignScreen() {
                             </div>
                           )
                         })()}
-                        {sectionId !== 'blender' && (
+                        {isBlenderSection(sectionId) ? (
+                          <p className="text-[10px] text-stone-400 px-1">The operator can pick or switch the blend directly in Capture too — this is just a convenient default for the first batch of the shift.</p>
+                        ) : (
                           <p className="text-[10px] text-stone-400 px-1">Orders are created against the phantom / final items above. Real Acumatica PO numbers slot in here once that sync is connected.</p>
                         )}
                       </div>

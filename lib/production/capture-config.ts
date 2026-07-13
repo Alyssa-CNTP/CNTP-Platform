@@ -15,20 +15,21 @@ export type CaptureMode = 'manual' | 'scan'
 
 // Which section currently runs in which mode. Sieving is the proven slice.
 export const SECTION_MODE: Record<string, CaptureMode> = {
-  sieving:     'manual',
-  refining1:   'manual',
-  refining2:   'manual',
-  granule:     'manual',
-  blender:     'manual',
-  pasteuriser: 'manual',
+  sieving:      'manual',
+  refining1:    'manual',
+  refining2:    'manual',
+  granule:      'manual',
+  blender:      'manual',
+  smallblender: 'manual',
+  pasteuriser:  'manual',
 }
 
 // Sections that need a lot/batch number set at assignment time.
-export const NEEDS_LOT = new Set(['blender', 'granule', 'pasteuriser'])
+export const NEEDS_LOT = new Set(['blender', 'smallblender', 'granule', 'pasteuriser'])
 // Sections that need a variant set at assignment time.
-export const NEEDS_VARIANT = new Set(['sieving', 'refining1', 'refining2', 'granule', 'blender', 'pasteuriser'])
+export const NEEDS_VARIANT = new Set(['sieving', 'refining1', 'refining2', 'granule', 'blender', 'smallblender', 'pasteuriser'])
 
-export const SECTION_ORDER = ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'pasteuriser'] as const
+export const SECTION_ORDER = ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'smallblender', 'pasteuriser'] as const
 
 export interface SectionMeta {
   id: string
@@ -47,7 +48,7 @@ export function sectionMeta(id: string): SectionMeta {
     code:        cfg?.code ?? '??',
     colorHex:    cfg?.colorHex ?? '#1A3A0E',
     outputTypes: cfg?.outputTypes ?? [],
-    built:       ['sieving', 'refining1', 'refining2', 'granule', 'blender'].includes(id),
+    built:       ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'smallblender'].includes(id),
   }
 }
 
@@ -104,6 +105,7 @@ export const SECTION_OUTPUT_GROUPS: Record<string, string[]> = {
   refining2:   ['Dust', 'Sticks'],
   granule:     ['Granules', 'Dust'],
   blender:     [],
+  smallblender: [],
   pasteuriser: [],
 }
 
@@ -125,5 +127,6 @@ export const PRODUCTION_ORDER_PREFIXES: Record<string, string[]> = {
   refining2:   ['20BGCHS-C-', '20BGCHS-F-', '15IGDW', '15IGDPOWDR'],
   granule:     ['20BGGSG-001', '20BGGF-001', '20BGGE-001'],
   blender:     [],
+  smallblender: [],
   pasteuriser: [],
 }

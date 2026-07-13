@@ -52,8 +52,9 @@ export const MACHINE_CHECKS: Record<string, MachineCheckDef[]> = {
     { key: 'scale_verification', phase: 'startup', label: 'Scale verification (test load)', kind: 'scale', unit: 'kg', equipment: 'Scale — Granule', failRaisesMaintenance: true, help: 'Place the certified test mass — actual must fall within tolerance of the standard' },
     { key: 'prestart_done',      phase: 'startup', label: 'Machine pre-start checks conducted', kind: 'confirm' },
   ],
-  blender:     [],
-  pasteuriser: [],
+  blender:      [],
+  smallblender: [],
+  pasteuriser:  [],
 }
 
 export const PHASE_LABEL: Record<CheckPhase, string> = {
