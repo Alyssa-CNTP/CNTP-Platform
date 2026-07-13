@@ -59,9 +59,11 @@ function variantFromSuffix(itemId: string): DbVariant | null {
 /**
  * All distinct blend BOMs, optionally filtered to one variant (matched against
  * the output item's row in Master Inventory when it exists, else derived from
- * the item code's suffix). Used by the Assign screen's blend-code picker.
+ * the item code's suffix) and/or one work centre (05-BLENDER BIG vs SMALL, so
+ * each section's picker only ever offers its own blends). Used by the Assign
+ * screen's blend-code picker and by BlenderCapture's in-capture switcher.
  */
-export async function listBlenderBoms(variantWord?: string | null): Promise<BlenderBomSummary[]> {
+export async function listBlenderBoms(variantWord?: string | null, workCentre?: string | null): Promise<BlenderBomSummary[]> {
   const db = getDb()
   const { data: rows } = await db.schema('production').from('bom_components')
     .select('bom_id, output_item_id, output_description, work_centre')
@@ -81,7 +83,7 @@ export async function listBlenderBoms(variantWord?: string | null): Promise<Blen
     : { data: [] as any[] }
   const itemMap = new Map((items as any[] ?? []).map(it => [it.inventory_id, it.variant as DbVariant]))
 
-  const summaries: BlenderBomSummary[] = Array.from(byBom.entries()).map(([bomId, v]) => {
+  let summaries: BlenderBomSummary[] = Array.from(byBom.entries()).map(([bomId, v]) => {
     const foundVariant = itemMap.get(v.outputItemId)
     return {
       bomId, outputItemId: v.outputItemId, outputDescription: v.outputDescription, workCentre: v.workCentre,
@@ -91,6 +93,7 @@ export async function listBlenderBoms(variantWord?: string | null): Promise<Blen
     }
   })
 
+  if (workCentre) summaries = summaries.filter(s => s.workCentre === workCentre)
   if (!variantWord) return summaries
   return summaries.filter(s => s.variant === variantWord)
 }
@@ -124,32 +127,42 @@ export async function getBlendComponents(bomId: string): Promise<BlendComponent[
   }))
 }
 
-/** Ingredient columns present in a BOM, grouped, for the capture screen. */
-export interface BlendColumnGroup {
-  column: string
-  label: string
-  targetPct: number   // sum of qtyRequired for this column, as a fraction
-  allowedTypes: string[]   // component descriptions, for validateBagScan's allowedTypes
-  hasLot: boolean          // Fine Leaf / Coarse Leaf columns track a lot number, per the paper form
+/**
+ * One capture section per real, distinct material in the BOM — NOT per coarse
+ * A-F column. Two rows that share a column letter (e.g. "Blocks: Cut" and "Cut
+ * Heavy Stick", both historically mapped to column D) are different Acumatica
+ * items with different weights and must never be summed together or lose their
+ * own name; grouping by `componentItemId` keeps them separate no matter what
+ * column they were tagged with. The column letter survives only as a cosmetic
+ * badge/sort key, not as the thing rows are summed by.
+ */
+export interface BlendIngredientGroup {
+  key: string              // componentItemId — the real material this section tracks
+  componentItemId: string
+  label: string            // the component's own description, e.g. "Cut Heavy Stick" — never a generic bucket name
+  column: string           // cosmetic badge/sort only
+  targetPct: number        // fraction of the blend this material should be, per the BOM
+  hasLot: boolean          // Fine Leaf / Coarse Leaf track a lot number, per the paper form
 }
 
-export function groupComponentsByColumn(components: BlendComponent[]): BlendColumnGroup[] {
-  const byCol = new Map<string, BlendComponent[]>()
+export function groupComponentsByItem(components: BlendComponent[]): BlendIngredientGroup[] {
+  const byItem = new Map<string, BlendComponent[]>()
   for (const c of components) {
-    const list = byCol.get(c.column) ?? []
+    const list = byItem.get(c.componentItemId) ?? []
     list.push(c)
-    byCol.set(c.column, list)
+    byItem.set(c.componentItemId, list)
   }
-  const LABELS: Record<string, string> = {
-    A: 'Fine Leaf', B: 'Coarse Leaf', C: 'Blocks Clean', D: 'Blocks / Cut Heavy Stick', E: 'Granules', F: 'Other',
-  }
-  return Array.from(byCol.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([column, comps]) => ({
-      column,
-      label: LABELS[column] ?? column,
-      targetPct: comps.reduce((s, c) => s + c.qtyRequired, 0),
-      allowedTypes: Array.from(new Set(comps.map(c => c.componentDescription).filter(Boolean) as string[])),
-      hasLot: column === 'A' || column === 'B',
-    }))
+  return Array.from(byItem.entries())
+    .map(([itemId, comps]) => {
+      const desc = (comps.find(c => c.componentDescription)?.componentDescription) || itemId
+      return {
+        key: itemId,
+        componentItemId: itemId,
+        label: desc,
+        column: comps[0].column,
+        targetPct: comps.reduce((s, c) => s + c.qtyRequired, 0),
+        hasLot: /fine leaf|coarse leaf/i.test(desc),
+      }
+    })
+    .sort((a, b) => a.column.localeCompare(b.column) || a.label.localeCompare(b.label))
 }

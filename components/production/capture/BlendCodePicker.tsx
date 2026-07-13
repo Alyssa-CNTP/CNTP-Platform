@@ -9,8 +9,9 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, AlertTriangle } from 'lucide-react'
 import { listBlenderBoms, type BlenderBomSummary } from '@/lib/production/bom'
 
-export function BlendCodePicker({ variant, selected, onSelect }: {
+export function BlendCodePicker({ variant, workCentre, selected, onSelect }: {
   variant: string
+  workCentre?: string | null
   selected: string[]
   onSelect: (bomId: string) => void
 }) {
@@ -19,8 +20,8 @@ export function BlendCodePicker({ variant, selected, onSelect }: {
 
   useEffect(() => {
     setLoading(true)
-    listBlenderBoms(variant || null).then(rows => { setBoms(rows); setLoading(false) })
-  }, [variant])
+    listBlenderBoms(variant || null, workCentre || null).then(rows => { setBoms(rows); setLoading(false) })
+  }, [variant, workCentre])
 
   if (loading) return <p className="text-[12px] text-stone-400 px-1">Loading blends…</p>
   if (boms.length === 0) {

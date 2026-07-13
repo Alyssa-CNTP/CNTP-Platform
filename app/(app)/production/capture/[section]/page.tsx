@@ -55,6 +55,11 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
   { id: 'signoff',    label: 'Sign-off', icon: PenLine },
 ]
 
+// Big Blender and Small Blender share one capture component (BlenderCapture) —
+// they just run different work centres' blends (lib/production/bom.ts's
+// WORK_CENTRE_FOR_SECTION keys off this same pair).
+const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
+
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
@@ -64,7 +69,7 @@ const emptyProduction = (sectionId: string, variant?: string | null, lot?: strin
   ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
      data: sectionId.startsWith('refining') ? emptyRefiningData()
        : sectionId === 'granule' ? emptyGranuleData()
-       : sectionId === 'blender' ? emptyBlenderData()
+       : isBlenderSection(sectionId) ? emptyBlenderData()
        : emptySievingData() })
 
 // True only when a production actually has weighed capture (any section type).
@@ -100,7 +105,7 @@ function CaptureScreen() {
   // Granule are variant-only — traceability there comes from the system serials.
   // Blender's Export/Export Blend/Domestic field lives per input row (matching the
   // paper form), not as one whole-production Grade like Sieving — so it's gradeless too.
-  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || sectionId === 'blender'
+  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || isBlenderSection(sectionId)
   const shift     = sp.get('shift') ?? 'morning'
   const sessionParam = sp.get('session')   // edit a specific record opened from Production Orders
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
@@ -665,16 +670,14 @@ function CaptureScreen() {
             })
           })
         })
-      } else if (sectionId === 'blender') {
+      } else if (isBlenderSection(sectionId)) {
         const bd = prod.data as BlenderData
         ;(bd.inputs ?? []).forEach(r => {
           if (n(r.weight) === 0) return
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            // Ingredient column (A-F) has no dedicated column on this table — carried
-            // in notes for traceability, same pattern Granule uses for its blend no.
-            notes: [`col:${r.column}`, r.destination || null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            notes: [`blend ${bd.bomId ?? ''}`.trim(), r.destination || null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
             lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
             kg_nett: n(r.weight), is_spillage: false,
@@ -743,9 +746,9 @@ function CaptureScreen() {
             kg: n(r.weight),
           })
         })
-      } else if (sectionId === 'blender') {
+      } else if (isBlenderSection(sectionId)) {
         const bd = prod.data as BlenderData
-        const bomId = (assignment?.production_orders ?? [])[0] ?? null
+        const bomId = bd.bomId
         ;(bd.outputs ?? []).forEach(b => {
           if (n(b.weight) === 0) return
           rows.push({
@@ -783,7 +786,7 @@ function CaptureScreen() {
       // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
       return { totalIn: g.totalA, totalOut: g.G }
     }
-    if (sectionId === 'blender') {
+    if (isBlenderSection(sectionId)) {
       const b = blenderTotals(p.data as BlenderData)
       return { totalIn: b.totalIn, totalOut: b.totalOut }
     }
@@ -1316,7 +1319,7 @@ function CaptureScreen() {
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
                       />
-                    : sectionId === 'blender'
+                    : isBlenderSection(sectionId)
                     ? <BlenderCapture
                         key={active.id}
                         sectionId={sectionId}
