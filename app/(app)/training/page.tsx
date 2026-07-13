@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { ArrowLeft, GraduationCap, Users2, ClipboardCheck, BarChart3, UserCheck2, BookOpenCheck } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { HubCard, LockedCard } from '@/components/hr/HubCard'
+import { PageInfoButton } from '@/components/hr/PageInfo'
 
 export default function TrainingHubPage() {
   const { p } = useAuth()
@@ -20,9 +21,19 @@ export default function TrainingHubPage() {
       </Link>
 
       <div>
-        <h1 className="font-display font-bold text-[20px] text-text flex items-center gap-2">
-          <GraduationCap size={20} className="text-brand" /> Training
-        </h1>
+        <div className="flex items-center gap-1.5">
+          <h1 className="font-display font-bold text-[20px] text-text flex items-center gap-2">
+            <GraduationCap size={20} className="text-brand" /> Training
+          </h1>
+          <PageInfoButton title="How Training connects to everything else">
+            <p>Every course is tied to one or more <strong className="text-text">SOPs</strong> in the catalogue. Passing the assessment writes straight into that person's <strong className="text-text">Skills Matrix</strong> entry — no separate step, no re-entry.</p>
+            <ul className="list-disc pl-4 space-y-1">
+              <li>Theory-only courses mark the SOP <strong className="text-text">Competent</strong> immediately.</li>
+              <li>Hands-on machine SOPs mark it <strong className="text-text">Assessed</strong>, then wait for a supervisor's <strong className="text-text">Practical Sign-off</strong>.</li>
+              <li>Everyone's own courses live under <strong className="text-text">My Training</strong> — reachable by PIN too, for floor operators without a login.</li>
+            </ul>
+          </PageInfoButton>
+        </div>
         <p className="text-[12px] text-text-muted mt-1">Video lessons and digital assessments — every course auto-updates the Skills Matrix on a pass.</p>
       </div>
 

@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-13 — Alyssa (HR: link login accounts to Staff Directory profiles + "where does this fit" info buttons)
+
+Follow-up to yesterday's HR/Training restructuring, after the question "can't the system match names and emails... so it works as one coherent system." Investigated first — the PIN/Capture side already required an `employee_id` link on every new operator (enforced since PR #362), but the **login side never did**: `shared.app_roles.employee_id` has existed as a column since 20260709_001_people_links.sql, but nothing in the Users & Roles create/edit flow ever read or wrote it. A person could get a Microsoft-SSO login and a Staff Directory profile that never once pointed at each other.
+
+**What changed (no new migration — `employee_id` already existed):**
+- `app/api/admin/users/route.ts` (GET/POST) and `.../[id]/route.ts` (PATCH) now read/write `app_roles.employee_id`, matching the pattern the operators/PIN API already used.
+- `app/(app)/users/page.tsx` — new `EmployeeLinkField` in the New User / Edit / Assign-role modal: search Staff Directory by name, with an exact-email match surfaced as a one-click suggestion (never auto-linked — an admin still confirms). The user list now shows each login's linked person, or a suggested match for unlinked ones.
+- Brand-new SSO sign-ins with no role yet (`no_role` "orphans") get the same exact-email suggestion, sourced from `production.employees.email`, and the "New user signed in" admin notification email (`app/api/auth/notify-new-user/route.ts`) now names the likely match.
+- Staff Directory → "Create one →" (`app/(app)/production/staff/[id]/page.tsx`) now deep-links to `/users?newFor=<id>&name=…&email=…`, which pre-opens the New User modal already linked to that person — zero re-searching, zero chance of linking the wrong one.
+- New `components/hr/PageInfo.tsx` (`PageInfoButton`) — a small (ⓘ) button added to the top of `/hr`, `/users`, `/production/staff`, and `/training`, explaining what each page actually is, who it's for, and where the related pieces of the system live (e.g. Users & Roles explicitly says it's IT-only for *access*, not where a person's profile is created). Added a matching blurb to the Shift Roster's existing help modal rather than a second icon.
+
+**Still true from yesterday:** the `hr` schema migration + seed have not been run yet — see the earlier entry. This session confirmed there is no way to run that migration from a Claude Code session without a direct Postgres connection string or a Supabase personal-access token (only the PostgREST API URL + anon/service-role keys are in `.env.local`, which don't grant raw SQL execution) — it still needs the SQL Editor.
+
+---
+
 ## 2026-07-13 — Alyssa (HR: new HR section hub + Training module redesign — Staff & Skills moved underneath, cross-linked with Rosters/Users & Roles/Audit Trail)
 
 Follow-up to yesterday's Training Phase 1 build, after feedback that the `/training` page had gotten cluttered — a flat row of "Manage courses / Assignments / Review queue / Sign-off / Competency dashboard" buttons crammed above the learner's own course list. Restructures the information architecture instead of just tidying that one page: **HR** is now its own top-level nav section, hosting **Staff & Skills** (moved out of "Operations") and **Training** as modules, each reached via a proper card-grid hub rather than sidebar sprawl or button rows.

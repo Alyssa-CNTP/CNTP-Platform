@@ -10,6 +10,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { StaffTabs } from '@/components/production/StaffTabs'
+import { PageInfoButton } from '@/components/hr/PageInfo'
 import { ROSTER_CATEGORIES, SKILL_TAGS, categoryMeta, tagLabel } from '@/lib/production/roster-config'
 
 interface Employee {
@@ -252,7 +253,18 @@ export default function StaffDirectoryPage() {
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-display font-bold text-[22px] text-text">Staff Directory</h1>
+          <div className="flex items-center gap-1.5">
+            <h1 className="font-display font-bold text-[22px] text-text">Staff Directory</h1>
+            <PageInfoButton title="The one profile every identity links to">
+              <p>This is the <strong className="text-text">canonical person record</strong> — one row per human on site. Everything else attaches to it:</p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li>Open a person's profile to see their <strong className="text-text">Identity hub</strong> — PIN (Capture sign-in) and login account (Microsoft sign-in), each linked here.</li>
+                <li><strong className="text-text">Training</strong> courses and the <strong className="text-text">Skills Matrix</strong> both key off this record.</li>
+                <li>The <strong className="text-text">Shift Roster</strong> schedules these same people into sections and shifts.</li>
+                <li>Login accounts are created in <strong className="text-text">Users &amp; Roles</strong> (IT-only) — from a profile with no login, "Create one →" takes IT straight there, already linked to this person.</li>
+              </ul>
+            </PageInfoButton>
+          </div>
           <p className="text-[12px] text-stone-400 mt-0.5">One shared list of everyone on site — operators, cleaning, QC, store, maintenance, H&S. Editable here; the Shift Roster and Capture both draw from it.</p>
         </div>
         {canEdit && (

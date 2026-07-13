@@ -302,7 +302,9 @@ export default function StaffProfilePage() {
             </div>
           ) : isIT ? (
             <p className="text-[12px] text-text-muted">
-              No login yet. <Link href="/users" className="text-brand font-medium hover:underline">Create one →</Link>
+              No login yet.{' '}
+              <Link href={`/users?newFor=${employee.id}&name=${encodeURIComponent(employee.display_name || employee.name)}${employee.email ? `&email=${encodeURIComponent(employee.email)}` : ''}`}
+                className="text-brand font-medium hover:underline">Create one →</Link>
             </p>
           ) : requestSent ? (
             <p className="flex items-center gap-1.5 text-[12px] text-ok">

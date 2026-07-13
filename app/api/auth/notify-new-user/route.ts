@@ -25,6 +25,16 @@ export async function POST(req: NextRequest) {
   const recipients = (process.env.NOTIFICATION_EMAILS ?? '').split(',').map(e => e.trim()).filter(Boolean)
   if (recipients.length === 0) return NextResponse.json({ ok: true, skipped: true })
 
+  // Best-guess Staff Directory match (exact email) — a suggestion for whoever
+  // assigns the role, not an auto-link. production is exposed to service_role.
+  let suggestedMatch: string | null = null
+  try {
+    const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+    const { data } = await admin.schema('production' as any).from('employees')
+      .select('name,display_name').ilike('email', email.trim()).eq('active', true).maybeSingle()
+    if (data) suggestedMatch = (data as any).display_name || (data as any).name
+  } catch { /* best-effort — the email still sends without a suggestion */ }
+
   const smtpUser = process.env.SMTP_USER
   const smtpPass = process.env.SMTP_PASS
 
@@ -57,6 +67,7 @@ export async function POST(req: NextRequest) {
       <p style="margin: 0 0 24px; font-size: 14px; color: #6B7280; line-height: 1.6;">
         They don't have a department or role assigned yet. Please log in and assign their access level
         so they can use the platform.
+        ${suggestedMatch ? `<br/><br/><strong>Looks like a match:</strong> ${suggestedMatch} in the Staff Directory — Users &amp; Roles will suggest linking their profile when you assign the role.` : ''}
       </p>
       <a href="${appUrl}/users"
         style="display: inline-block; padding: 12px 24px; background: #16A34A; color: #fff; font-size: 14px; font-weight: 600; border-radius: 8px; text-decoration: none;">
