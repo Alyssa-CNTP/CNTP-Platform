@@ -25,6 +25,11 @@ export interface NotifyInput {
   url?:       string            // deep link, e.g. /maintenance/job-cards/123
   urgent?:    boolean
   channels?:  NotificationChannel[]   // default ['inApp']
+  // Roster-reminder linkage: lets a DB trigger auto-dismiss the in-app
+  // notification once this (period, section) is submitted. See
+  // production.dismiss_roster_reminders() in the roster migrations.
+  rosterPeriodId?: string | null
+  rosterSection?:  string | null
 }
 
 // Per-user channel opt-outs from shared.user_preferences.notifications.
@@ -73,6 +78,8 @@ export async function notify(input: NotifyInput): Promise<{ inApp: number; email
         card_id: input.cardId ?? null,
         url:     input.url ?? null,
         urgent:  !!input.urgent,
+        roster_period_id: input.rosterPeriodId ?? null,
+        roster_section:   input.rosterSection ?? null,
       }))
       const { error } = await admin.schema('maintenance' as any).from('notifications').insert(rows)
       if (error) console.error('[notifications] in-app insert failed:', error.message)
