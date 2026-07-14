@@ -58,38 +58,38 @@ async function doRemind(prod: any) {
   const pending = ROSTER_SECTION_KEYS.filter(s => !submitted.has(s)) as RosterSectionKey[]
   if (pending.length === 0) return { reminded: 0, reason: 'all sections submitted' }
 
-  // Aggregate: user → the pending sections they are responsible for.
-  const byUser = new Map<string, Set<RosterSectionKey>>()
-  for (const section of pending) {
-    const ids = await getRosterSubmitterIds(section)
-    for (const id of ids) {
-      if (!byUser.has(id)) byUser.set(id, new Set())
-      byUser.get(id)!.add(section)
-    }
-  }
-  if (byUser.size === 0) return { reminded: 0, reason: 'no submitters hold pending sections' }
-
   // Resolve emails/names from auth.users (service-role admin API).
   const admin = getAdminClient()
   const { data: list } = await admin.auth.admin.listUsers({ perPage: 1000 })
   const authMap = new Map((list?.users ?? []).map(u => [u.id, u]))
 
+  // One notification per (user, section) — not aggregated — so each reminder
+  // maps to exactly one section and can be auto-dismissed the moment that
+  // section is submitted (see production.dismiss_roster_reminders trigger).
   let reminded = 0
-  for (const [userId, sections] of byUser) {
-    const au = authMap.get(userId)
-    const email = au?.email ?? null
-    if (!email) continue
-    const names = [...sections].map(s => ROSTER_SECTION_LABEL[s]).join(', ')
-    await notify({
-      recipients: [{ userId, email, name: (au?.user_metadata as any)?.full_name ?? null }],
-      kind:  'roster_reminder',
-      title: `Shift roster — submit ${names} for "${period.name}"`,
-      body:  `The roster for ${period.name} is awaiting your submission for: ${names}. Please review and submit before Wednesday.`,
-      url:   '/production/roster',
-      channels: ['inApp', 'email'],
-    })
-    reminded++
+  const remindedUsers = new Set<string>()
+  for (const section of pending) {
+    const ids = await getRosterSubmitterIds(section)
+    const label = ROSTER_SECTION_LABEL[section]
+    for (const userId of ids) {
+      const au = authMap.get(userId)
+      const email = au?.email ?? null
+      if (!email) continue
+      await notify({
+        recipients: [{ userId, email, name: (au?.user_metadata as any)?.full_name ?? null }],
+        kind:  'roster_reminder',
+        title: `Shift roster — submit ${label} for "${period.name}"`,
+        body:  `The roster for ${period.name} is awaiting your submission for: ${label}. Please review and submit before Wednesday.`,
+        url:   '/production/roster',
+        channels: ['inApp', 'email'],
+        rosterPeriodId: period.id,
+        rosterSection:  section,
+      })
+      reminded++
+      remindedUsers.add(userId)
+    }
   }
+  if (remindedUsers.size === 0) return { reminded: 0, reason: 'no submitters hold pending sections' }
   return { reminded, period: period.name, pending }
 }
 

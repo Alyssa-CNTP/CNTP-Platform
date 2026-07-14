@@ -5,6 +5,32 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-14 — Gustav (Granule: add delete tasting)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+- **Added a delete button for tasting records.** Sample edit/delete already existed (✏️/🗑 on each sample row) and tastings could already be edited inline, but there was no way to delete a tasting — added a 🗑 button next to the existing ✏️ Edit on each inline tasting row, guarded by a confirm prompt, wired through `handleDeleteTasting`.
+
+---
+
+## 2026-07-14 — Gustav (Granule: cap tasting at one per sample, not one per batch)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+- **Fixed:** the previous "one tasting per batch" cap was too strict — it blocked adding a tasting to *any* sample once *one* sample in the batch had a tasting, hiding the "Add Tasting" button entirely for new samples. Changed to cap at one tasting per **sample**: each sample can have its own tasting, but once a sample has one, only editing it is allowed (guarded in both the UI and `handleAddTasting`). The batch-level "at least one tasting before allocating" rule on the Allocate button is unchanged.
+
+---
+
+## 2026-07-14 — Alyssa (Shift roster: fix cron 401, auto-dismiss reminders on submit)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/cron/route.ts`, `components/layout/NotificationBell.tsx`, `lib/notifications/index.ts`, `supabase/migrations/20260714_002_roster_reminder_dismiss.sql`
+
+- **`roster-rotate.yml` was 401'ing on every run.** Root cause: the GitHub Actions repo secret `CRON_SECRET` had never actually been created (the 2026-07-06 ops note only confirmed the server-side env var existed, not the GH Actions secret) — the workflow sent an empty/mismatched Bearer token, `handle()` in `app/api/production/roster/cron/route.ts` correctly rejected it, and cron auth fell through to session-based auth which has none. Confirmed by SSHing into staging and hitting the live endpoint with the VPS's own `CRON_SECRET` value (`400` for a deliberately-bad `?task=` beats a `401`, so auth itself was fine). Fixed by encrypting that same value with the repo's Actions public key and creating the `CRON_SECRET` repo secret via the GitHub API — no code change.
+- **Reminder notifications now auto-dismiss when a section is submitted.** Previously `doRemind()` aggregated every pending section a user was responsible for into one untagged notification, so it had no link back to what it was about and lingered in the bell/email forever, even after the section was signed off. Split into one notification per `(user, section)` pair, tagged with new `roster_period_id` / `roster_section` columns on `maintenance.notifications`. A new trigger, `production.dismiss_roster_reminders()` (fires on `production.roster_section_status` submit), deletes every matching notification the moment that section is submitted — for every recipient who got one, not just the person submitting. The roster page also dispatches the existing `notifications:refresh`-style window event after a successful submit so the bell (mounted in the layout, not this page) drops the entry immediately instead of waiting for the next page load.
+- **Migration to run (staging first):** `supabase/migrations/20260714_002_roster_reminder_dismiss.sql`.
+
+---
+
 ## 2026-07-14 — Alyssa (Production: blend run continuity, sharper Master Inventory search, supervisor code sign-off)
 
 Follow-up to today's earlier Small Blender / per-material session, closing three gaps found once blend selection moved to the batch record instead of the shift assignment:
