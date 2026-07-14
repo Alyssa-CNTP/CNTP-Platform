@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-14 — Gustav (Granule: add delete tasting)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+- **Added a delete button for tasting records.** Sample edit/delete already existed (✏️/🗑 on each sample row) and tastings could already be edited inline, but there was no way to delete a tasting — added a 🗑 button next to the existing ✏️ Edit on each inline tasting row, guarded by a confirm prompt, wired through `handleDeleteTasting`.
+
+---
+
 ## 2026-07-14 — Gustav (Granule: cap tasting at one per sample, not one per batch)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`
