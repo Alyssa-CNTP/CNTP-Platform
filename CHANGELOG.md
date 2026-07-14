@@ -467,6 +467,34 @@ Five changes shipped together. **No database migrations required.**
 
 ---
 
+## 2026-07-04 — Gustav (Pasteuriser: moisture re-check for out-of-spec samples)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- **Moisture re-check, mirroring the granule line's per-sample recheck:** when a pasteuriser sample's moisture is out of spec, an inline "🔁 Re-check" panel now appears under that sample (time, moisture %, temp), pass/fail computed against the batch's moisture spec. Persists to the sample's `recheck_done`/`recheck_moisture`/`recheck_temp`/`recheck_time`/`recheck_pass` fields on the batch's `data_json`, the same JSON blob everything else about that sample lives in — so it stays attached to that specific sample and batch wherever it's read from: the active batch table, the "Out-of-spec results" summary, and the closed/history batch detail view.
+
+---
+
+## 2026-07-04 — Gustav (Sieving: darker out-of-spec chart shading; Granule: one tasting per batch + QC batch delete)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `app/(app)/quality/granule/page.tsx`
+
+- **Sieving Mesh Trend charts:** out-of-spec zones (above/below the spec band) now shade a dark red, in addition to the existing red out-of-spec dots, so it's unmistakable at a glance. Y-axis domain is computed per mesh (data + spec band, padded) instead of a fixed 0–100%, so tight-spec meshes like Dust (0–1%) stay readable.
+- **Granule Line — one tasting per batch:** the "Add Tasting" button now only shows if the batch has zero tasting records; once one exists, it's replaced with a note to edit the existing tasting instead. Guarded both in the UI and in `handleAddTasting` itself.
+- **Granule Line — QC can now delete a batch, with extreme caution:** the delete button is no longer admin-only. Clicking it opens a confirmation modal that requires typing the exact batch number before "Delete Permanently" is enabled. Also fixed: deleting a run now explicitly deletes its `granule_samples`/`granule_tastings` rows first, since there's no FK/cascade between them — previously this would have left orphaned rows behind.
+
+---
+
+## 2026-07-04 — Gustav (Sieving: split Mesh Trend chart into per-mesh charts with spec bands)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **Mesh Trend view is now one small chart per mesh size** (>6, >12/>10, >18, >40, Dust, and Fine Leaf where applicable), instead of every mesh overlaid on a single combined chart — applies to all four products (Fine Leaf, Coarse Leaf, Indent Sticks, Rooibos Blocks).
+- **Each mesh chart shows a clear spec band**: a shaded green region between the spec min/max plus solid dark boundary reference lines labelled with the actual min/max %, so it's unmistakable whether the trend is running inside spec.
+- **Out-of-spec points are flagged red** — any bucket average outside the spec band renders as a larger red dot, and the chart header shows a 🚩 out-of-spec count for that mesh.
+
+---
+
 ## 2026-07-04 — Gustav (Sieving: add P4 to PA Level dropdown)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
