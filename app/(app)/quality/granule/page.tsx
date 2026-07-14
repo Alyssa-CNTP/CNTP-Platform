@@ -1589,13 +1589,13 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                         {(run.tastings || []).filter((t: any) => t.sample_id === s.id).slice().reverse().map((t: any, ti: number) => (
                           <GranuleInlineTastingRow key={t.id} tasting={t} colCount={colCount} rowBg={ti % 2 === 0 ? '#fdf8f5' : '#faf5f0'} onSave={onEditTasting} />
                         ))}
-                        {/* Add tasting — capped at exactly one tasting per batch; once recorded, only editing the existing tasting (above) is allowed */}
+                        {/* Add tasting — capped at exactly one tasting per sample; once recorded, only editing the existing tasting (above) is allowed */}
                         <tr style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
                           <td colSpan={colCount} className="px-4 py-1.5 pl-7">
-                            {noTastings ? (
+                            {!(run.tastings || []).some((t: any) => t.sample_id === s.id) ? (
                               <button onClick={() => onAddTasting(run, s.id)} className="text-[10px] px-2.5 py-1 rounded-lg font-semibold cursor-pointer" style={{ border: '1px solid #d97706', background: '#fef3c7', color: '#92400e' }}>🍵 Add Tasting</button>
                             ) : (
-                              <span className="text-[10px] text-text-muted italic">🍵 One tasting already recorded for this batch — edit it above instead of adding another.</span>
+                              <span className="text-[10px] text-text-muted italic">🍵 Tasting already recorded for this sample — edit it above instead of adding another.</span>
                             )}
                           </td>
                         </tr>
@@ -2146,7 +2146,9 @@ export default function GranulePage() {
 
   async function handleAddTasting(form: any) {
     const run = runs.find(r => r.id === form.run_id)
-    if (run && (run.tastings || []).length > 0) { alert('This batch already has a tasting record — edit the existing one instead of adding another.'); setTastingTarget(null); return }
+    if (run && (run.tastings || []).some((t: any) => t.sample_id === form.sample_id)) {
+      alert('This sample already has a tasting record — edit the existing one instead of adding another.'); setTastingTarget(null); return
+    }
     const { data, error } = await db.schema('qms').from('granule_tastings').insert({
       run_id: form.run_id, sample_id: form.sample_id || null, assessed_by: form.assessed_by || '',
       tasting_time: form.tasting_time || '', granule_aroma: form.granule_aroma || null,

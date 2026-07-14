@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-14 — Gustav (Granule: cap tasting at one per sample, not one per batch)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+- **Fixed:** the previous "one tasting per batch" cap was too strict — it blocked adding a tasting to *any* sample once *one* sample in the batch had a tasting, hiding the "Add Tasting" button entirely for new samples. Changed to cap at one tasting per **sample**: each sample can have its own tasting, but once a sample has one, only editing it is allowed (guarded in both the UI and `handleAddTasting`). The batch-level "at least one tasting before allocating" rule on the Allocate button is unchanged.
+
+---
+
 ## 2026-07-14 — Alyssa (Shift roster: fix cron 401, auto-dismiss reminders on submit)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/cron/route.ts`, `components/layout/NotificationBell.tsx`, `lib/notifications/index.ts`, `supabase/migrations/20260714_002_roster_reminder_dismiss.sql`
