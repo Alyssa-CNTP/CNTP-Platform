@@ -7,7 +7,7 @@ import { format, parseISO, differenceInYears } from 'date-fns'
 import {
   ArrowLeft, Loader2, User, Phone, Plane, Calendar, Award,
   ClipboardList, ChevronDown, ChevronUp, History, AlertTriangle,
-  Check, X, Edit2, KeyRound, IdCard,
+  Check, X, Edit2, KeyRound, IdCard, GraduationCap,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -76,6 +76,7 @@ export default function StaffProfilePage() {
   const [requestingLogin, setRequestingLogin] = useState(false)
   const [requestSent, setRequestSent] = useState<string | null>(null)
   const [identityError, setIdentityError] = useState<string | null>(null)
+  const [trainingCourses, setTrainingCourses] = useState<any[]>([])
 
   const canEdit = p('can_manage_competencies')
   const canAssignPin = p('can_reset_operator_pin')
@@ -102,6 +103,11 @@ export default function StaffProfilePage() {
     }
     if (id) { load(); loadIdentities() }
   }, [id, router])
+
+  useEffect(() => {
+    if (!id) return
+    fetch(`/api/training/courses?employeeId=${id}`).then(r => r.json()).then(d => setTrainingCourses(d.courses ?? [])).catch(() => {})
+  }, [id])
 
   const compBySop = useMemo(() => {
     const m = new Map<string, Competency>()
@@ -296,7 +302,9 @@ export default function StaffProfilePage() {
             </div>
           ) : isIT ? (
             <p className="text-[12px] text-text-muted">
-              No login yet. <Link href="/users" className="text-brand font-medium hover:underline">Create one →</Link>
+              No login yet.{' '}
+              <Link href={`/users?newFor=${employee.id}&name=${encodeURIComponent(employee.display_name || employee.name)}${employee.email ? `&email=${encodeURIComponent(employee.email)}` : ''}`}
+                className="text-brand font-medium hover:underline">Create one →</Link>
             </p>
           ) : requestSent ? (
             <p className="flex items-center gap-1.5 text-[12px] text-ok">
@@ -311,6 +319,33 @@ export default function StaffProfilePage() {
           {identityError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {identityError}</p>}
         </div>
       </div>
+
+      {/* Training portfolio — courses assigned/completed, feeding the competency matrix below */}
+      {trainingCourses.length > 0 && (
+        <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display font-semibold text-[15px] text-text flex items-center gap-2">
+              <GraduationCap size={15} /> Training portfolio
+            </h2>
+            <Link href="/training/manage/assignments" className="text-[11px] text-brand font-medium hover:underline">Assign training →</Link>
+          </div>
+          <div className="space-y-1.5">
+            {trainingCourses.filter(c => c.assignment || c.latest_attempt).map(c => (
+              <Link key={c.id} href={`/training/course/${c.slug}?as=${id}`}
+                className="flex items-center justify-between gap-2 text-[12px] px-3 py-2 rounded-xl hover:bg-surface transition-colors">
+                <span className="text-text">{c.title}</span>
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                  c.latest_attempt?.passed ? 'bg-ok/15 text-ok'
+                  : c.latest_attempt?.needs_review ? 'bg-warn/15 text-warn'
+                  : c.assignment ? 'bg-azure/15 text-azure' : 'bg-stone-100 text-stone-400'
+                }`}>
+                  {c.latest_attempt?.passed ? 'Completed' : c.latest_attempt?.needs_review ? 'Pending review' : c.assignment ? 'Assigned' : 'Available'}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Competency matrix by area */}
       <div className="space-y-3">

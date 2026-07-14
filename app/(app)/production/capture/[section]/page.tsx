@@ -25,6 +25,10 @@ import {
   GranuleCapture, emptyGranuleData, granuleTotals, dustProductType,
   type GranuleData,
 } from '@/components/production/capture/GranuleCapture'
+import {
+  BlenderCapture, emptyBlenderData, blenderTotals, blenderCapturedCodes,
+  type BlenderData, type CapturedCode,
+} from '@/components/production/capture/BlenderCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -51,8 +55,13 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
   { id: 'signoff',    label: 'Sign-off', icon: PenLine },
 ]
 
+// Big Blender and Small Blender share one capture component (BlenderCapture) —
+// they just run different work centres' blends (lib/production/bom.ts's
+// WORK_CENTRE_FOR_SECTION keys off this same pair).
+const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
+
 // A shift can contain several productions, each its own variant/destination/lot.
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
@@ -60,6 +69,7 @@ const emptyProduction = (sectionId: string, variant?: string | null, lot?: strin
   ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
      data: sectionId.startsWith('refining') ? emptyRefiningData()
        : sectionId === 'granule' ? emptyGranuleData()
+       : isBlenderSection(sectionId) ? emptyBlenderData()
        : emptySievingData() })
 
 // True only when a production actually has weighed capture (any section type).
@@ -78,6 +88,8 @@ function hasCaptureData(prods: Production[]): boolean {
     }
     if (Array.isArray(d.blends) && d.blends.some((bl: any) => Array.isArray(bl.rows) && bl.rows.some((r: any) => num(r.weight) > 0))) return true // granule in
     if (Array.isArray(d.dustOutputs) && d.dustOutputs.some((r: any) => num(r.weight) > 0)) return true // granule dust out
+    // Blender's { inputs, outputs } shape is already covered by the refining `d.inputs`
+    // check and the sieving/granule `d.outputs` check above — no extra branch needed.
     return false
   })
 }
@@ -91,7 +103,9 @@ function CaptureScreen() {
   const sectionId = (params.section as string) ?? ''
   // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
   // Granule are variant-only — traceability there comes from the system serials.
-  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule'
+  // Blender's Export/Export Blend/Domestic field lives per input row (matching the
+  // paper form), not as one whole-production Grade like Sieving — so it's gradeless too.
+  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || isBlenderSection(sectionId)
   const shift     = sp.get('shift') ?? 'morning'
   const sessionParam = sp.get('session')   // edit a specific record opened from Production Orders
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
@@ -448,17 +462,26 @@ function CaptureScreen() {
   // and Granule are variant-only, so no grade pick is required.
   const needsGrade = !gradeless
   const isGranule = sectionId === 'granule'
+  const isBlenderRun = isBlenderSection(sectionId)
   // The run discriminator stored in the run's `grade` column: the chosen grade on
-  // grade-driven sections, or — for Granule — the product item (SG / SF / Export).
-  // A run therefore continues across shifts while variant + item stay the same and
-  // forks when the operator switches SG → SF/Export, exactly as the paper works.
-  const runGrade = (p?: Production) => isGranule ? ((p?.data as GranuleData)?.item || '') : (p?.grade || '')
+  // grade-driven sections, the product item (SG / SF / Export) for Granule, or the
+  // blend code for Blender/Small Blender (BlenderData.bomId — owned by the
+  // production, not the shift assignment). A run therefore continues across
+  // shifts/batches while variant + item/blend stay the same, and forks the moment
+  // the operator switches product/blend — exactly as the paper works, and exactly
+  // what lets an operator pick a *different* blend mid-shift and get a genuinely
+  // separate, separately-tracked production run instead of silently merging into
+  // whatever run happened to be open.
+  const runGrade = (p?: Production) =>
+    isGranule ? ((p?.data as GranuleData)?.item || '')
+    : isBlenderRun ? ((p?.data as BlenderData)?.bomId || '')
+    : (p?.grade || '')
   // The PO anchor: the assignment's planned production orders, joined so it
   // compares identically across shifts (supervisor sets the same POs each shift).
   const poKey = (assignment?.production_orders ?? []).join(',') || null
 
   async function findOpenRun(po: string | null, variant: string, grade: string) {
-    const gradeKey = (needsGrade || isGranule) ? (grade || null) : null
+    const gradeKey = (needsGrade || isGranule || isBlenderRun) ? (grade || null) : null
     const { data } = await getDb().schema('production').from('production_runs')
       .select('*').eq('section_id', sectionId).eq('production_day', dateParam)
       .eq('status', 'open').order('opened_at', { ascending: false })
@@ -472,7 +495,7 @@ function CaptureScreen() {
     const { data: row } = await getDb().schema('production').from('production_runs').insert({
       section_id: sectionId, production_day: dateParam,
       production_order: po, variant: (variant || null) as any,
-      grade: (needsGrade || isGranule) ? (grade || null) : null,
+      grade: (needsGrade || isGranule || isBlenderRun) ? (grade || null) : null,
       lot_number: assignment?.lot_number ?? null,
       status: 'open', created_by: user?.id ?? null,
     } as any).select('id').maybeSingle()
@@ -500,22 +523,23 @@ function CaptureScreen() {
       await getDb().schema('production').from('production_runs')
         .update({ status: 'closed', closed_at: new Date().toISOString() } as any).eq('id', cr.id)
     }
-    if (p?.variant && (!needsGrade || p.grade)) {
+    if (p?.variant && (!needsGrade || p.grade) && (!isBlenderRun || runGrade(p))) {
       const rid = await openRun(poKey, p.variant, runGrade(p))
       if (rid) await linkSessionToRun(rid)
     }
   }
 
-  // Detection only: once variant (+ grade for non-refining) are chosen, look for
-  // an open run from an earlier shift matching PO + variant + grade and, if found,
-  // raise the continue prompt. Re-runs on selection changes so a grade correction
-  // updates/clears the prompt. The run itself is opened lazily on first capture
-  // (persist), using the settled grade — so a last-second change never mislabels it.
+  // Detection only: once variant (+ grade for non-refining, + blend code for
+  // Blender) are chosen, look for an open run from an earlier shift/batch matching
+  // PO + variant + grade and, if found, raise the continue prompt. Re-runs on
+  // selection changes so a grade/blend correction updates/clears the prompt. The
+  // run itself is opened lazily on first capture (persist), using the settled
+  // grade — so a last-second change never mislabels it.
   useEffect(() => {
     if (loading || status === 'approved' || runId || runIdRef.current) return
     const p = productions[activeIdx]
     const variant = p?.variant ?? '', grade = runGrade(p)
-    if (!variant || (needsGrade && !grade)) { if (continueRun) setContinueRun(null); return }
+    if (!variant || (needsGrade && !grade) || (isBlenderRun && !grade)) { if (continueRun) setContinueRun(null); return }
     let cancelled = false
     ;(async () => {
       try {
@@ -656,6 +680,19 @@ function CaptureScreen() {
             })
           })
         })
+      } else if (isBlenderSection(sectionId)) {
+        const bd = prod.data as BlenderData
+        ;(bd.inputs ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++,
+            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+            notes: [`blend ${bd.bomId ?? ''}`.trim(), r.destination || null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            lot_number: r.lot || prod.lot || null,
+            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            kg_nett: n(r.weight), is_spillage: false,
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.spillage.forEach(r => {
@@ -719,6 +756,18 @@ function CaptureScreen() {
             kg: n(r.weight),
           })
         })
+      } else if (isBlenderSection(sectionId)) {
+        const bd = prod.data as BlenderData
+        const bomId = bd.bomId
+        ;(bd.outputs ?? []).forEach(b => {
+          if (n(b.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: b.serial, lot_number: prod.lot || null,
+            product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
+            kg: n(b.weight), bagging_time: b.time || null,
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.outputs.forEach(b => {
@@ -746,6 +795,10 @@ function CaptureScreen() {
       const g = granuleTotals(p.data as GranuleData)
       // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
       return { totalIn: g.totalA, totalOut: g.G }
+    }
+    if (isBlenderSection(sectionId)) {
+      const b = blenderTotals(p.data as BlenderData)
+      return { totalIn: b.totalIn, totalOut: b.totalOut }
     }
     return sievingTotals(p.data as SievingData, sh)
   }
@@ -811,7 +864,10 @@ function CaptureScreen() {
         const variant = p0?.variant ?? ''
         const grade   = runGrade(p0)
         const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
-        if (hasData && variant && (gradeless ? true : !!grade)) {
+        // Blender is gradeless for the UI's per-batch Grade dropdown, but its run
+        // discriminator (the blend code, via runGrade) is just as real as Sieving's
+        // grade — a run must not open before a blend is actually chosen.
+        if (hasData && variant && (gradeless && !isBlenderRun ? true : !!grade)) {
           const found = await findOpenRun(poKey, variant, grade)
           const newRid = found?.id ?? await openRun(poKey, variant, grade)
           if (newRid) {
@@ -1193,7 +1249,7 @@ function CaptureScreen() {
                     {continueRun.production_order ? <> on <span className="font-mono">PO {continueRun.production_order}</span></> : ' on this order'}
                     {' — '}
                     <strong>{VARIANT_OPTIONS.find(v => v.value === continueRun.variant)?.label ?? continueRun.variant}</strong>
-                    {continueRun.grade ? <> · {DESTINATION_OPTIONS.find(o => o.value === continueRun.grade)?.label ?? continueRun.grade}</> : null}.
+                    {continueRun.grade ? <> · {isBlenderRun ? <>blend <span className="font-mono">{continueRun.grade}</span></> : (DESTINATION_OPTIONS.find(o => o.value === continueRun.grade)?.label ?? continueRun.grade)}</> : null}.
                     {' '}Continue so the mass balance carries over into a full-day total.
                   </p>
                   <div className="grid grid-cols-2 gap-2">
@@ -1272,6 +1328,18 @@ function CaptureScreen() {
                         variantWord={active.variant}
                         locked={locked}
                         value={active.data as RefiningData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
+                    : isBlenderSection(sectionId)
+                    ? <BlenderCapture
+                        key={active.id}
+                        sectionId={sectionId}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        locked={locked}
+                        value={active.data as BlenderData}
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
@@ -1365,6 +1433,15 @@ function CaptureScreen() {
               comments={comments} onComments={setComments}
               hasRun={!!runId} endOfRun={endOfRun} onEndOfRun={setEndOfRun}
               onSign={storeSignature} onSubmit={handleSubmit} onApprove={handleApprove} submitting={submitting}
+              // Every distinct item code this session actually captured — Blender's
+              // ingredient/product-type fields are searched from Master Inventory
+              // rather than picked off a fixed list, so a typo or a wrong pick is a
+              // real possibility. Non-empty only for Blender/Small Blender.
+              capturedCodes={isBlenderRun
+                ? Array.from(new Map(
+                    productions.flatMap(p => blenderCapturedCodes(p.data as BlenderData).map(c => [c.code || c.label, c] as const))
+                  ).values())
+                : []}
             />
           )}
 
@@ -1386,7 +1463,7 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting }: {
+function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
   variance: number; withinTol: boolean; totalIn: number; totalOut: number
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
@@ -1394,12 +1471,15 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
   hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
   onSign: (role: 'operator' | 'supervisor', name: string, sig: string) => Promise<void>
   onSubmit: () => void; onApprove: () => void; submitting: boolean
+  capturedCodes: CapturedCode[]
 }) {
   const [opName, setOpName]   = useState(operatorName)
   const [supName, setSupName] = useState('')
   const [opSig, setOpSig]     = useState(false)
   const [supSig, setSupSig]   = useState(false)
   const [tsConfirmed, setTsConfirmed] = useState(false)
+  const [codesConfirmed, setCodesConfirmed] = useState(false)
+  const needsCodeConfirm = capturedCodes.length > 0
 
   return (
     <div className="space-y-5">
@@ -1466,6 +1546,32 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
         </div>
       )}
 
+      {/* Item codes captured this session — Blender's product-type fields are
+          searched from Master Inventory rather than picked off a fixed list,
+          so the supervisor reviews every distinct code before it's treated as
+          ground truth in the database. Empty (and thus invisible) elsewhere. */}
+      {needsCodeConfirm && (status === 'submitted' || status === 'new' || status === 'draft') && (
+        <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2.5">
+          <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Item codes captured this session</span>
+          <div className="space-y-1.5">
+            {capturedCodes.map(c => (
+              <div key={c.code || c.label} className={`flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-[12px] ${c.resolved ? 'border-stone-100 bg-stone-50' : 'border-amber-200 bg-amber-50'}`}>
+                <span className="text-text truncate">{c.label}</span>
+                {c.resolved
+                  ? <span className="font-mono text-[11px] text-text-muted shrink-0">{c.code}</span>
+                  : <span className="flex items-center gap-1 text-[11px] text-amber-700 font-medium shrink-0"><AlertTriangle size={12} /> code not resolved</span>}
+              </div>
+            ))}
+          </div>
+          {status === 'submitted' && canApprove && (
+            <label className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 cursor-pointer">
+              <input type="checkbox" checked={codesConfirmed} onChange={e => setCodesConfirmed(e.target.checked)} className="mt-0.5 accent-brand" />
+              <span className="text-[12px] text-text-muted"><strong className="text-text">I've checked these item codes are correct.</strong> Once approved, they're treated as the true record.</span>
+            </label>
+          )}
+        </div>
+      )}
+
       {/* Submitted — supervisor approval (signature + lock) */}
       {status === 'submitted' && canApprove && (
         <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
@@ -1482,7 +1588,10 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
           )}
           <SignaturePad label="Supervisor signature" signed={supSig} disabled={!supName.trim()}
             onSign={async sig => { await onSign('supervisor', supName.trim(), sig); setSupSig(true) }} />
-          {supSig && (
+          {supSig && needsCodeConfirm && !codesConfirmed && (
+            <p className="text-[12px] text-warn flex items-center gap-1.5 px-1"><AlertTriangle size={13} /> Confirm the item codes above before approving.</p>
+          )}
+          {supSig && (!needsCodeConfirm || codesConfirmed) && (
             <button onClick={onApprove} disabled={submitting}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-ok text-white font-semibold text-[15px] disabled:opacity-40">
               {submitting ? <Loader2 size={18} className="animate-spin" /> : <Lock size={18} />} Approve &amp; lock

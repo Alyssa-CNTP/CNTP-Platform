@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
   const { data: upserted, error: upsertErr } = await db
     .from('employee_competencies')
     .upsert(upsertPayload, { onConflict: 'employee_id,sop_id' })
-    .select('id,status,score')
+    .select('id,sop_id,status,raw_code,score,training_completed,date_completed,assessed_at,next_review,notes')
     .single()
 
   if (upsertErr)
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   const action = existing ? 'status_change' : 'created'
 
   // Append to competency_history
-  const { error: histErr } = await db.from('competency_history').insert({
+  const { data: historyRow, error: histErr } = await db.from('competency_history').insert({
     competency_id:   upserted.id,
     employee_id,
     sop_id,
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     changed_by:      caller.userId,
     changed_by_name: authUser?.email ?? authUser?.user_metadata?.full_name ?? caller.role ?? 'Unknown',
     note:            notes ?? null,
-  })
+  }).select().single()
 
   if (histErr)
     console.error('[api/staff/competencies] history insert failed:', histErr)
@@ -94,5 +94,5 @@ export async function POST(req: NextRequest) {
     console.error('[api/staff/competencies] audit_log insert failed:', e)
   }
 
-  return NextResponse.json({ ok: true, id: upserted.id })
+  return NextResponse.json({ ok: true, id: upserted.id, competency: upserted, historyRow: historyRow ?? null })
 }

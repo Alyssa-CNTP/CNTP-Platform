@@ -5,6 +5,87 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-14 — Alyssa (Production: blend run continuity, sharper Master Inventory search, supervisor code sign-off)
+
+Follow-up to today's earlier Small Blender / per-material session, closing three gaps found once blend selection moved to the batch record instead of the shift assignment:
+
+1. **"Same blend → continue the record, different blend → new tracked run" now actually works.** `runGrade()` in `[section]/page.tsx` didn't know about `BlenderData.bomId` at all — Blender's run-continuity key (`poKey` + `variant` + `grade`) had no blend-code component, so two different blends captured in the same shift/variant were silently treated as the *same* open run, and the "Continue the production run?" prompt could never distinguish them. `runGrade` now returns the active production's `bomId` for Blender/Small Blender (mirroring how Granule already discriminates by product item); the `findOpenRun`/`openRun`/lazy-run-open gates that used to check `needsGrade || isGranule` now also check `isBlenderRun`, and the continue-detection effect no longer offers a stale prompt before a blend is even chosen. The "production order" being tracked is the blend code itself, the same model Sieving/Refining/Granule already use — no new numbering scheme needed, just the existing `production_runs` mechanism actually wired up for Blender.
+2. **Master Inventory search now narrows correctly as you type.** `filterInventory` matched one contiguous phrase against `inventory_id + description`; a query like "cut heavy" would work but word-order or an extra space could silently drop real matches in this ~630-item list. It now splits the query into words and requires every word present (any order, either field) — each additional letter/word typed narrows the result set rather than requiring one exact phrase, cutting down on picking the wrong item by mistake.
+3. **Supervisor confirms item codes at sign-off before approving.** Blender's ingredient/product-type fields are searched from Master Inventory rather than picked off a closed list, so a wrong search result is a real (if now less likely) possibility. `BlenderInputBag` now carries a resolved `productCode` (from the scan's `bag_tags.acumatica_id`, a system-pick, or an `ItemPicker` selection); `blenderCapturedCodes()` collects every distinct code/description a session actually captured, unresolved ones flagged. The Sign-off tab now lists them and gates "Approve & lock" on a supervisor checkbox confirming they're correct — scoped to Blender/Small Blender only (empty list elsewhere, so the block doesn't render for other sections).
+
+**Also answered:** confirmed — no, capture-form persistence is not a Blender-specific concern; audited `persist()`/`ensureSession()`/the four autosave triggers (2.5s debounce, 20s backstop, visibility/pagehide flush, explicit Save) in `[section]/page.tsx` and none of them branch on `sectionId` — every section saves identically. Also found (not fixed, flagging for awareness): `CaptureOverview.tsx`'s `showSerials` prop is dead code — serials are shown unconditionally to anyone who expands a row in the Overview tab, regardless of the `isIT` gate `page.tsx` passes in.
+
+**Files:** `app/(app)/production/capture/[section]/page.tsx` (run-continuity fixes, sign-off code-confirmation block), `components/production/capture/BlenderCapture.tsx` (`productCode` field, `blenderCapturedCodes`), `lib/production/inventory.ts` (`filterInventory` multi-word matching).
+
+## 2026-07-14 — Alyssa (Production: Small Blender + Blender refinements — real per-material ingredient sections, Master Inventory search, in-capture blend switching)
+
+Follow-up to yesterday's Blender/Master Inventory/Blends session, from floor feedback:
+1. **Small Blender** now captures too — reuses `BlenderCapture` as-is (it was already generic over "whichever BOM is chosen"), scoped to the `05-BLENDER SMALL` work centre so its picker never offers a Big Blender recipe or vice versa.
+2. **Ingredient sections are now per real material, not per coarse A-F column.** The old column scheme (inherited from `lib/production/live-types.ts`'s `BLENDER_INPUT_COLUMNS`) lumped "Blocks: Cut" and "Cut Heavy Stick" into one shared column — different Acumatica items, wrongly merged into one weight. `lib/production/bom.ts`'s `groupComponentsByItem` now groups by `component_item_id`, so every distinct material always gets its own section, its own weight, its own name — never merged, regardless of what column letter it happened to be tagged with.
+3. **"Other" now shows the real material name and searches Master Inventory**, instead of a generic "Other" label locked to one BOM-declared type. A blend like SG-NAT26's flexible slot is sometimes Cut Heavy Stick, sometimes Corn Cutter Fine Leaf — `ScanRow`'s product-type field is now a live Master Inventory search (`ItemPicker`, extracted as a shared component so the Blends page and Blender capture use the same one) instead of a closed dropdown, and the strict `allowedTypes` scan gate was dropped for Blender specifically (existence/already-consumed/variant-family/finished-product checks still apply — those are real mistakes, not substitutions).
+4. **Blend code is now picked in Capture, not locked to the Assign screen.** A shift can run several different blends in a day; requiring the supervisor to re-edit Assign every time was going to become a real bottleneck. `BlenderData` now owns its own `bomId` (prefilled from the Assign screen's pick as a convenience default, but freely switchable per batch record in Capture, locked once any weight is captured — start a new batch record, an affordance that already existed, to run a different blend). Assign's picker is now explicitly labelled as just the shift's starting default.
+
+**⚠️ Manual step required before Small Blender works:** run `supabase/migrations/20260714_001_smallblender_section.sql` in the staging Supabase SQL editor — `prod_sessions` and `shift_assignments` both had a `section_id` CHECK constraint that predates Small Blender and needs widening.
+
+**Files:** `lib/production/bom.ts` (`groupComponentsByItem` replaces `groupComponentsByColumn`; `listBlenderBoms` takes an optional `workCentre` filter), `components/production/capture/ItemPicker.tsx` (new, shared), `components/production/capture/BlenderCapture.tsx` (per-item sections, in-capture blend picker, `WORK_CENTRE_FOR_SECTION` export), `components/production/capture/BlendCodePicker.tsx` (`workCentre` param), `app/(app)/production/blends/page.tsx` (now imports the shared `ItemPicker`), `app/(app)/production/capture/[section]/page.tsx` + `assign/page.tsx` (new `isBlenderSection()` helper covers both `blender`/`smallblender` everywhere the old code checked `sectionId === 'blender'` alone), `lib/production/capture-config.ts` + `lib/production/checks-config.ts` (add `smallblender`), `supabase/migrations/20260714_001_smallblender_section.sql` (new).
+
+## 2026-07-13 — Alyssa (HR: link login accounts to Staff Directory profiles + "where does this fit" info buttons)
+
+Follow-up to yesterday's HR/Training restructuring, after the question "can't the system match names and emails... so it works as one coherent system." Investigated first — the PIN/Capture side already required an `employee_id` link on every new operator (enforced since PR #362), but the **login side never did**: `shared.app_roles.employee_id` has existed as a column since 20260709_001_people_links.sql, but nothing in the Users & Roles create/edit flow ever read or wrote it. A person could get a Microsoft-SSO login and a Staff Directory profile that never once pointed at each other.
+
+**What changed (no new migration — `employee_id` already existed):**
+- `app/api/admin/users/route.ts` (GET/POST) and `.../[id]/route.ts` (PATCH) now read/write `app_roles.employee_id`, matching the pattern the operators/PIN API already used.
+- `app/(app)/users/page.tsx` — new `EmployeeLinkField` in the New User / Edit / Assign-role modal: search Staff Directory by name, with an exact-email match surfaced as a one-click suggestion (never auto-linked — an admin still confirms). The user list now shows each login's linked person, or a suggested match for unlinked ones.
+- Brand-new SSO sign-ins with no role yet (`no_role` "orphans") get the same exact-email suggestion, sourced from `production.employees.email`, and the "New user signed in" admin notification email (`app/api/auth/notify-new-user/route.ts`) now names the likely match.
+- Staff Directory → "Create one →" (`app/(app)/production/staff/[id]/page.tsx`) now deep-links to `/users?newFor=<id>&name=…&email=…`, which pre-opens the New User modal already linked to that person — zero re-searching, zero chance of linking the wrong one.
+- New `components/hr/PageInfo.tsx` (`PageInfoButton`) — a small (ⓘ) button added to the top of `/hr`, `/users`, `/production/staff`, and `/training`, explaining what each page actually is, who it's for, and where the related pieces of the system live (e.g. Users & Roles explicitly says it's IT-only for *access*, not where a person's profile is created). Added a matching blurb to the Shift Roster's existing help modal rather than a second icon.
+
+**Still true from yesterday:** the `hr` schema migration + seed have not been run yet — see the earlier entry. This session confirmed there is no way to run that migration from a Claude Code session without a direct Postgres connection string or a Supabase personal-access token (only the PostgREST API URL + anon/service-role keys are in `.env.local`, which don't grant raw SQL execution) — it still needs the SQL Editor.
+
+---
+
+## 2026-07-13 — Alyssa (HR: new HR section hub + Training module redesign — Staff & Skills moved underneath, cross-linked with Rosters/Users & Roles/Audit Trail)
+
+Follow-up to yesterday's Training Phase 1 build, after feedback that the `/training` page had gotten cluttered — a flat row of "Manage courses / Assignments / Review queue / Sign-off / Competency dashboard" buttons crammed above the learner's own course list. Restructures the information architecture instead of just tidying that one page: **HR** is now its own top-level nav section, hosting **Staff & Skills** (moved out of "Operations") and **Training** as modules, each reached via a proper card-grid hub rather than sidebar sprawl or button rows.
+
+**Files:** `app/(app)/hr/page.tsx` (new — the HR hub); `components/hr/HubCard.tsx` (new — shared card tile, used by both hubs); `app/(app)/training/page.tsx` (rewritten — now a card hub: My Training / Manage / Assignments / Review / Sign-off / Competency); `app/(app)/training/my/page.tsx` (new — the actual learner course list + kiosk PIN switch, moved out of the old `/training`); `app/(app)/training/course/[slug]/page.tsx` (back-links updated to `/training/my`); `components/layout/Sidebar.tsx` (removed the 5-item "Training" nav group and "Staff & Skills" from "Operations"; both now live under one new "HR" nav entry → `/hr`; floor operators' sandboxed nav now points straight to `/training/my`); `app/(app)/layout.tsx` (route-guard/always-open updates for `/hr` and `/training/my`); `components/production/StaffTabs.tsx` and `components/production/WorkforceTabs.tsx` (added an "← HR" breadcrumb plus cross-reference links between Staff Directory, Shift Roster and Training — each is now one click from the other two); `app/(app)/users/page.tsx` (added an "← HR" breadcrumb).
+
+- Nothing moved at the data layer — this is nav/IA only. Competency writes still land in `production.employee_competencies` on a live Supabase read with no caching, so Staff & Skills, Training and the Competency Dashboard already reflect each other immediately; "real-time" here means no stale cache, not a new sync mechanism.
+- No dedicated Audit Trail page exists yet — it's currently a tab inside Users & Roles (IT-only), gated separately from the `can_view_audit_log` permission key that already exists but isn't enforced there. The HR hub's "Audit Trail" card links to that tab for now rather than a new page; flagging this as a gap worth a dedicated page later if wanted.
+
+## 2026-07-13 — Alyssa (Production: Master Inventory + Blends (BOM) pages, and Blender capture)
+
+Builds the Blender production-capture section on the same proven blueprint as Sieving/Refining/Granule (`[section]/page.tsx` + `*Capture.tsx`), plus two new pieces of editable master data it depends on that didn't exist as browsable pages before: **Master Inventory** (`production.inventory_items`, previously only reachable via a bulk-upload admin tool) and **Blends** (BOM recipes, previously living only in a spreadsheet). Blends validates its component item codes against Master Inventory (a live search picker, not free text) and Blender capture reads the Blends table directly — no publish/sync step, so a ratio correction on the Blends page is live in capture immediately.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260713_001_blender_bom.sql` then `supabase/seeds/blender_bom_seed.sql` in the **staging** Supabase SQL editor.
+2. Verify the new nav entries (Master Inventory, Blends) and route guards work once logged in — this session couldn't complete Microsoft SSO / PIN auth from its sandboxed browser, so the new pages are confirmed to build and route (no 404/500, no console errors) but not click-tested end to end. Please walk through: adding/editing an inventory item, adding a blend with components picked from Master Inventory, then picking that blend on the Assign screen and confirming Blender capture releases only its ingredients.
+
+**Files:**
+- New: `supabase/migrations/20260713_001_blender_bom.sql` (`production.bom_components` table + `bag_tags.tag_method` column), `supabase/seeds/blender_bom_seed.sql` (137 rows / 43 blend BOMs extracted from the Acumatica BOM export), `lib/production/bom.ts` (BOM read helpers + ingredient-column matching), `app/(app)/production/inventory/page.tsx` (Master Inventory grid), `app/(app)/production/blends/page.tsx` (Blends header/detail grid), `components/production/capture/BlenderCapture.tsx`, `components/production/capture/BlendCodePicker.tsx`
+- Additive only: `app/(app)/production/capture/[section]/page.tsx` (new `blender` branches in the section dispatch, `gradeless`, `emptyProduction`, `buildDebag`/`buildBag`/`prodTotals` — no existing Sieving/Refining/Granule branch touched), `app/(app)/production/capture/assign/page.tsx` (blend-code picker replaces the generic production-order-items list only for `sectionId === 'blender'`), `lib/production/capture-config.ts` (flipped `blender` into `sectionMeta().built`), `lib/auth/permissions.ts` + `lib/auth/permission-registry.ts` (new `can_view/edit/delete_inventory` + `can_view/edit/delete_blends` keys), `components/layout/Sidebar.tsx` + `app/(app)/layout.tsx` (new nav entries + route guards)
+- Untouched: `SievingCapture.tsx`, `RefiningCapture.tsx`, `GranuleCapture.tsx`, `BagScanner.tsx`, the older unwired `BlenderForms.tsx` (superseded, left in place)
+
+- Blender capture reuses the same scan/system-pick/manual 3-mode input pattern already proven on Refining, validated through the shared `validateBagScan()` (existence, already-consumed, variant-family, product-type allow-list, finished-product block) — the allow-list per ingredient column (A–F) comes live from the chosen blend's BOM, so only that blend's real materials can be scanned in. Output bags get a per-bag "Print label" / "Write on tag" choice (both always available, independent of the site-wide `LABEL_PRINTING_ENABLED` flag) for testing the new handheld scanner + printer.
+- Deliberately did **not** touch `BagScanner.tsx`'s camera-scan path (a reported "camera won't open" bug) — that component belongs to the older, unwired capture stack; the new Blender build uses the hardware-scanner text-input approach already working on Sieving/Refining/Granule, so it doesn't depend on the camera at all.
+- `bom_components.output_item_id` / `component_item_id` are intentionally *not* hard foreign keys into `inventory_items` — the source spreadsheet predates a full inventory reconcile, so a hard FK would make the seed fail outright on a stale code. The "must exist in Master Inventory" rule is enforced at the UI layer (the Blends page's item picker only offers real items) and stale/unresolved links are surfaced as a dashboard count instead of a hard block.
+
+## 2026-07-12 — Alyssa (Training: staff portfolios — video lessons + digital assessments → auto-updates the competency matrix)
+
+Phase 1 of the long-parked "staff training profiles" initiative (raised 2026-07-09), driven by the need to get every operator trained on the new tablet-capture process (#361/#362) — efficiently, but still with the work-instruction + tested-competency audit trail FSSC requires. Digitizes the paper Refining 1 / Sieving Tower / Pasteuriser assessments into in-app courses: embedded YouTube work-instruction videos → a digital, mostly auto-graded assessment → a pass writes straight into the existing `production.employee_competencies` + `competency_history`, so the Skills Matrix reflects training automatically instead of a training officer marking paper by hand.
+
+**New DB schema:** `hr` (separate from `production`, which keeps owning competency *state*) — `training_courses`, `training_lessons`, `training_questions` + `training_question_options`, `course_sops` (course → one or many SOP competencies), `training_assignments`, `training_attempts` (the audit record), `lesson_progress`. Adds `production.sops.requires_practical_signoff` — theory-only SOPs auto-advance to `competent` on a pass; hands-on machine SOPs advance to `assessed` and wait for a supervisor's practical sign-off.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260710_001_hr_training.sql` then `supabase/seeds/training_seed.sql` in the **staging** Supabase SQL editor.
+2. Add `hr` to **Exposed schemas** (Supabase dashboard → API settings) on staging (and production, once promoted) — PostgREST can't reach a schema that isn't exposed.
+
+**Files:** `supabase/migrations/20260710_001_hr_training.sql`, `supabase/seeds/training_seed.sql` (new); `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts` (new `can_author_training`/`can_assign_training`/`can_view_all_competency` keys + a new **HR** department with `training_officer`/`hr_manager` roles); `lib/training/*` (new — grading engine, shared question-kind config, PIN-identity helper); `app/api/training/**` (new — courses, assignments, attempts, manual-review); `app/(app)/training/**` (new — learner "My Training" + course player, and HR pages: manage courses/lessons/questions, assignments, review queue, practical sign-off, cross-department competency dashboard); `components/training/*` (new); `components/layout/Sidebar.tsx` + `app/(app)/layout.tsx` (new top-level Training nav group + route guards); `app/(app)/production/staff/[id]/page.tsx` (new Training portfolio panel); `app/api/staff/competencies/route.ts` (fixed a pre-existing bug — the route returned `{ok, id}` but the profile page's optimistic UI update expected `{competency, historyRow}`, so edits never reflected until a reload).
+
+- Grading is server-side only — `is_correct`/`match_key` never reach the learner's browser. Six question kinds (single/multi-choice, true/false, numeric-with-tolerance, matching, short-text) cover everything in the three paper memos; the ~4 "marker's-discretion" questions route to a training-officer review queue with a provisional score instead of blocking.
+- Floor operators are PIN-only (no login) and sandboxed to `/production/capture` by the layout guard — added a `/training` exception so they can reach their own training, plus a PIN-attested "take training as someone else" kiosk flow for shared tablets (mirrors the existing Capture shift-changeover PIN pattern).
+- Digitized all three memos' questions faithfully, including their standard weights, temperatures, and procedures; four repeated "who is responsible" questions (the memo's hand-marked correct answer didn't survive as text/formatting in the .docx) were confirmed directly with the training owner rather than guessed, given the FSSC/audit stakes of getting a competency test wrong.
+
 ## 2026-07-09 — Alyssa (Shift Roster: rename "Rosehip" role to "Value Added Product")
 
 **Files:** `lib/production/roster-config.ts`
@@ -383,6 +464,34 @@ Five changes shipped together. **No database migrations required.**
 - **Coarse Leaf added as refining 2 input type.** Added to `live-types.ts` inputTypes and a required batch number field appears when Coarse Leaf is selected (`needsLot` flag).
 - **`Github` lucide icon replaced.** `Github` is not exported from lucide-react in this version. Replaced with `GitBranch` across `axis/consideration/page.tsx` — resolves the production build failure.
 - **Server recovery after disk full.** VPS hit 97.2% disk usage causing `npm run build` to fail and `cntp-production` to error (396 restarts). Freed space by cleaning npm cache, flushing pm2 logs, removing stale `.next-old` dirs, and running `apt clean`. Production and staging both restored to online.
+
+---
+
+## 2026-07-04 — Gustav (Pasteuriser: moisture re-check for out-of-spec samples)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- **Moisture re-check, mirroring the granule line's per-sample recheck:** when a pasteuriser sample's moisture is out of spec, an inline "🔁 Re-check" panel now appears under that sample (time, moisture %, temp), pass/fail computed against the batch's moisture spec. Persists to the sample's `recheck_done`/`recheck_moisture`/`recheck_temp`/`recheck_time`/`recheck_pass` fields on the batch's `data_json`, the same JSON blob everything else about that sample lives in — so it stays attached to that specific sample and batch wherever it's read from: the active batch table, the "Out-of-spec results" summary, and the closed/history batch detail view.
+
+---
+
+## 2026-07-04 — Gustav (Sieving: darker out-of-spec chart shading; Granule: one tasting per batch + QC batch delete)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `app/(app)/quality/granule/page.tsx`
+
+- **Sieving Mesh Trend charts:** out-of-spec zones (above/below the spec band) now shade a dark red, in addition to the existing red out-of-spec dots, so it's unmistakable at a glance. Y-axis domain is computed per mesh (data + spec band, padded) instead of a fixed 0–100%, so tight-spec meshes like Dust (0–1%) stay readable.
+- **Granule Line — one tasting per batch:** the "Add Tasting" button now only shows if the batch has zero tasting records; once one exists, it's replaced with a note to edit the existing tasting instead. Guarded both in the UI and in `handleAddTasting` itself.
+- **Granule Line — QC can now delete a batch, with extreme caution:** the delete button is no longer admin-only. Clicking it opens a confirmation modal that requires typing the exact batch number before "Delete Permanently" is enabled. Also fixed: deleting a run now explicitly deletes its `granule_samples`/`granule_tastings` rows first, since there's no FK/cascade between them — previously this would have left orphaned rows behind.
+
+---
+
+## 2026-07-04 — Gustav (Sieving: split Mesh Trend chart into per-mesh charts with spec bands)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **Mesh Trend view is now one small chart per mesh size** (>6, >12/>10, >18, >40, Dust, and Fine Leaf where applicable), instead of every mesh overlaid on a single combined chart — applies to all four products (Fine Leaf, Coarse Leaf, Indent Sticks, Rooibos Blocks).
+- **Each mesh chart shows a clear spec band**: a shaded green region between the spec min/max plus solid dark boundary reference lines labelled with the actual min/max %, so it's unmistakable whether the trend is running inside spec.
+- **Out-of-spec points are flagged red** — any bucket average outside the spec band renders as a larger red dot, and the chart header shows a 🚩 out-of-spec count for that mesh.
 
 ---
 

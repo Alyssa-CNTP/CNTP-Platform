@@ -94,6 +94,10 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_bag_tag', label: 'Edit bag tag records' },
           { key: 'can_delete_bag_tag', label: 'Delete bag tag records' },
         ] },
+      { key: 'production.inventory', label: 'Master Inventory',
+        read: 'can_view_inventory', write: 'can_edit_inventory', delete: 'can_delete_inventory' },
+      { key: 'production.blends', label: 'Blends (BOM)',
+        read: 'can_view_blends', write: 'can_edit_blends', delete: 'can_delete_blends' },
     ],
   },
   {
@@ -158,6 +162,18 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
         ] },
       { key: 'staff.sops', label: 'SOP / Work-Instruction catalogue',
         read: 'can_view_staff', write: 'can_manage_sop_catalog' },
+    ],
+  },
+  {
+    // Cross-department — HR owns authoring org-wide; Production/Quality can author their own courses.
+    module: 'Training',
+    resources: [
+      { key: 'training.content', label: 'Courses, lessons & assessments',
+        read: 'dept', write: 'can_author_training' },
+      { key: 'training.assignments', label: 'Course assignments',
+        read: 'dept', write: 'can_assign_training' },
+      { key: 'training.competency', label: 'Cross-department competency dashboard',
+        read: 'can_view_all_competency' },
     ],
   },
   {

@@ -21,7 +21,7 @@ export async function GET() {
     const { data: roleRows, error: rolesErr } = await sessionClient
       .schema('shared' as any)
       .from('app_roles')
-      .select('id, user_id, full_name, department, role, section_id, permissions, is_active, created_at')
+      .select('id, user_id, full_name, department, role, section_id, permissions, is_active, created_at, employee_id')
       .order('created_at', { ascending: true })
 
     if (rolesErr) {
@@ -40,8 +40,17 @@ export async function GET() {
 
     const authMap = new Map(authUsers.map(u => [u.id, u]))
 
+    // Resolve linked Staff Directory names in one batch (admin client — production is exposed to service_role)
+    const employeeIds = [...new Set((roleRows ?? []).map((r: any) => r.employee_id).filter(Boolean))]
+    let employeeById = new Map<string, { name: string; display_name: string | null }>()
+    if (employeeIds.length) {
+      const { data: employees } = await admin.schema('production' as any).from('employees').select('id,name,display_name').in('id', employeeIds)
+      employeeById = new Map((employees ?? []).map((e: any) => [e.id, e]))
+    }
+
     const result = (roleRows ?? []).map((r: any) => {
       const au = authMap.get(r.user_id)
+      const employee = r.employee_id ? employeeById.get(r.employee_id) : null
       return {
         id:              r.user_id,
         display_name:    r.full_name || au?.user_metadata?.full_name || au?.email?.split('@')[0] || '—',
@@ -54,13 +63,31 @@ export async function GET() {
         is_active:       r.is_active ?? true,
         created_at:      r.created_at,
         last_sign_in:    au?.last_sign_in_at ?? null,
+        employee_id:     r.employee_id ?? null,
+        employee_name:   employee ? (employee.display_name || employee.name) : null,
       }
     })
 
     const roleUserIds = new Set((roleRows ?? []).map((r: any) => r.user_id))
-    const orphans = authUsers
-      .filter(au => !roleUserIds.has(au.id))
-      .map(au => ({
+    const orphanAuthUsers = authUsers.filter(au => !roleUserIds.has(au.id))
+
+    // Best-guess Staff Directory match for brand-new SSO sign-ins with no role
+    // yet — matched by exact email (case-insensitive). A suggestion only;
+    // linking still requires the admin to confirm it in the New User modal.
+    let suggestionByAuthEmail = new Map<string, { id: string; name: string }>()
+    if (orphanAuthUsers.length) {
+      const { data: emailedEmployees } = await admin.schema('production' as any)
+        .from('employees').select('id,name,display_name,email').not('email', 'is', null)
+      suggestionByAuthEmail = new Map(
+        (emailedEmployees ?? [])
+          .filter((e: any) => e.email)
+          .map((e: any) => [String(e.email).trim().toLowerCase(), { id: e.id, name: e.display_name || e.name }])
+      )
+    }
+
+    const orphans = orphanAuthUsers.map(au => {
+      const suggestion = au.email ? suggestionByAuthEmail.get(au.email.trim().toLowerCase()) : null
+      return {
         id:              au.id,
         display_name:    au.user_metadata?.full_name || au.email?.split('@')[0] || '—',
         email:           au.email ?? '—',
@@ -73,7 +100,11 @@ export async function GET() {
         created_at:      au.created_at,
         last_sign_in:    au.last_sign_in_at ?? null,
         no_role:         true,
-      }))
+        employee_id:     null,
+        employee_name:   null,
+        suggested_employee: suggestion ?? null,
+      }
+    })
 
     return NextResponse.json([...result, ...orphans])
   } catch (err: any) {
@@ -91,7 +122,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
 
     const body = await req.json()
-    const { email, full_name, department, role, section_id, send_invite } = body
+    const { email, full_name, department, role, section_id, send_invite, employee_id } = body
 
     if (!email?.trim())      return NextResponse.json({ error: 'Email is required' },      { status: 400 })
     if (!full_name?.trim())  return NextResponse.json({ error: 'Full name is required' },  { status: 400 })
@@ -146,6 +177,7 @@ export async function POST(req: NextRequest) {
         section_id:  section_id?.trim() || null,
         permissions: body.permissions ?? {},
         is_active:   true,
+        employee_id: employee_id || null,
       }, { onConflict: 'user_id' })
 
     if (roleErr) {
@@ -156,7 +188,7 @@ export async function POST(req: NextRequest) {
     await writeAudit({
       actorId: caller.userId, action: 'create',
       schema: 'shared', table: 'app_roles', recordId: userId,
-      after: { email: email.trim().toLowerCase(), full_name: full_name.trim(), department, role, section_id },
+      after: { email: email.trim().toLowerCase(), full_name: full_name.trim(), department, role, section_id, employee_id: employee_id || null },
     })
 
     return NextResponse.json({ success: true, userId })

@@ -55,6 +55,8 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
+  { prefix: '/production/inventory', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
+  { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
   // Maintenance — full module is Maintenance + Management. Production may only
@@ -85,6 +87,14 @@ const ROUTE_GUARDS: Array<{
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },
   { prefix: '/tags',       departments: ['Production'] },
+
+  // Training — the learner entry (/training) is always-open (see below);
+  // these are the HR/training-officer authoring & oversight sub-routes.
+  { prefix: '/training/manage/assignments', permission: 'can_assign_training' },
+  { prefix: '/training/manage/review',      permission: 'can_manage_competencies' },
+  { prefix: '/training/manage',             permission: 'can_author_training' },
+  { prefix: '/training/signoff',            permission: 'can_manage_competencies' },
+  { prefix: '/training/competency',         permission: 'can_view_all_competency' },
 ]
 
 // ─── Route metadata ────────────────────────────────────────────────────────────
@@ -110,6 +120,14 @@ const ROUTE_META: Record<string, {
   '/production/staff/allocation': { title: 'Staff Allocation',   variant: 'default', chips: [{ label: 'Phase 2', color: 'purple' }] },
   '/production/operators':   { title: 'Operators',              variant: 'default' },
   '/info':                   { title: 'Section Information',    variant: 'default' },
+  '/hr':                     { title: 'HR',                      variant: 'default' },
+  '/training':               { title: 'Training',                variant: 'default' },
+  '/training/my':            { title: 'My Training',             variant: 'default' },
+  '/training/manage':        { title: 'Manage Courses',          variant: 'default' },
+  '/training/manage/assignments': { title: 'Training Assignments', variant: 'default' },
+  '/training/manage/review': { title: 'Review Queue',            variant: 'default' },
+  '/training/signoff':       { title: 'Practical Sign-off',       variant: 'default' },
+  '/training/competency':    { title: 'Competency Dashboard',     variant: 'default' },
   '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
   '/users':                  { title: 'Users & Roles',          variant: 'default' },
   '/settings':               { title: 'Account Settings',       variant: 'default' },
@@ -252,7 +270,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Floor operators are sandboxed to their capture area + custom dashboard.
     // They never see the general dashboard, settings, or any other module.
     if (role === 'floor_operator') {
-      if (!pathname.startsWith('/production/capture')) router.replace('/production/capture')
+      if (!pathname.startsWith('/production/capture') && !pathname.startsWith('/training')) router.replace('/production/capture')
       return
     }
 
@@ -277,6 +295,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       // Shift Rosters + Staff Directory are universal (Operations, every role)
       pathname.startsWith('/production/roster') ||
       pathname.startsWith('/production/staff')  ||
+      // HR hub — a navigation hub; cards inside self-gate, so the page itself is open
+      pathname === '/hr' ||
+      // Training — the hub, the learner entry and course player are universal;
+      // the /training/manage, /manage/*, /signoff and /competency sub-routes are
+      // NOT included here and stay gated by ROUTE_GUARDS below.
+      pathname === '/training' || pathname === '/training/my' || pathname.startsWith('/training/course/') ||
       pathname === '/axis/request' ||
       pathname.startsWith('/axis/request/')
     ) return

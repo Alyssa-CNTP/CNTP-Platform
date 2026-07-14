@@ -81,13 +81,20 @@ export async function loadAllInventory(): Promise<InventoryItem[]> {
   return _cache
 }
 
-/** Client-side filter — refines as the operator types. */
+/**
+ * Client-side filter — refines as the operator types. Master Inventory is ~630
+ * items, easy to mis-hit on a single contiguous phrase (word order, extra
+ * spaces), so the query is split into words and an item must contain every
+ * word (in either the code or description, any order) — each extra letter/word
+ * typed narrows the result set further rather than requiring one exact phrase.
+ */
 export function filterInventory(all: InventoryItem[], query: string, variantWord?: string): InventoryItem[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
-  const matched = all.filter(it =>
-    it.inventory_id.toLowerCase().includes(q) ||
-    (it.description ?? '').toLowerCase().includes(q))
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return []
+  const matched = all.filter(it => {
+    const haystack = `${it.inventory_id} ${it.description ?? ''}`.toLowerCase()
+    return words.every(w => haystack.includes(w))
+  })
   // Same-variant items first.
   matched.sort((a, b) => (b.variant === variantWord ? 1 : 0) - (a.variant === variantWord ? 1 : 0))
   return matched.slice(0, 30)

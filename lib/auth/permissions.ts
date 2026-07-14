@@ -65,6 +65,13 @@ export type PermissionKey =
   | 'can_delete_session'
   | 'can_edit_bag_tag'
   | 'can_delete_bag_tag'
+  // Production — Master Inventory & Blends (BOM)
+  | 'can_view_inventory'
+  | 'can_edit_inventory'
+  | 'can_delete_inventory'
+  | 'can_view_blends'
+  | 'can_edit_blends'
+  | 'can_delete_blends'
   // Sales & Marketing
   | 'can_access_sales'
   | 'can_access_marketing'
@@ -103,6 +110,10 @@ export type PermissionKey =
   | 'can_manage_sop_catalog'   // add / edit / retire SOPs in the catalogue
   | 'can_allocate_staff'       // Phase 2 — allocate staff & override competency warnings
   | 'can_delete_staff'         // Delete staff records
+  // Training — courses, lessons, assessments (feeds employee_competencies)
+  | 'can_author_training'      // create/edit courses, lessons, assessments, SOP mapping
+  | 'can_assign_training'      // assign courses to staff, set due dates
+  | 'can_view_all_competency'  // cross-department competency dashboard (HR view)
   // Shift Roster — one global view + submit/edit/delete per roster section.
   // Section keys match ROSTER_CATEGORIES in lib/production/roster-config.ts.
   | 'can_view_roster'          // view ALL roster sections (read-only baseline)
@@ -128,6 +139,8 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
   'can_edit_session','can_delete_session','can_edit_bag_tag','can_delete_bag_tag',
+  'can_view_inventory','can_edit_inventory','can_delete_inventory',
+  'can_view_blends','can_edit_blends','can_delete_blends',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
@@ -138,6 +151,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_view_staff','can_edit_staff_profiles','can_manage_competencies',
   'can_manage_sop_catalog','can_allocate_staff','can_delete_staff',
+  'can_author_training','can_assign_training','can_view_all_competency',
   'can_view_roster',
   'can_edit_roster_production','can_submit_roster_production','can_delete_roster_production',
   'can_edit_roster_store','can_submit_roster_store','can_delete_roster_store',
@@ -174,9 +188,10 @@ export type Department =
   | 'Marketing'
   | 'Store'
   | 'Health & Safety'
+  | 'HR'
 
 export const ALL_DEPARTMENTS: Department[] = [
-  'IT', 'Quality', 'Production', 'Maintenance', 'Management', 'Sales', 'Marketing', 'Store', 'Health & Safety',
+  'IT', 'Quality', 'Production', 'Maintenance', 'Management', 'Sales', 'Marketing', 'Store', 'Health & Safety', 'HR',
 ]
 
 export const DEPARTMENT_META: Record<Department, { label: string; desc: string; color: string }> = {
@@ -189,6 +204,7 @@ export const DEPARTMENT_META: Record<Department, { label: string; desc: string; 
   Marketing:         { label: 'Marketing',       desc: 'Marketing module', color: 'bg-pink-50 text-pink-700 border-pink-200' },
   Store:             { label: 'Store',           desc: 'Warehouse, forklift, stock movement & dispatch', color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
   'Health & Safety': { label: 'Health & Safety', desc: 'H&S reps, incident response, fire & first aid', color: 'bg-red-50 text-red-700 border-red-200' },
+  HR:                { label: 'HR',              desc: 'Training, competency & staff development across every department', color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' },
 }
 
 // ─── Roles per department ─────────────────────────────────────────────────────
@@ -246,6 +262,11 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'hs_default',       label: 'H&S (Default)',      desc: 'All permissions off — toggle on what they need' },
     { role: 'hs_officer',       label: 'H&S Officer',        desc: 'Owns the H&S + Cleaning roster sections — edits & submits them' },
   ],
+  HR: [
+    { role: 'hr_default',       label: 'HR (Default)',       desc: 'All permissions off — toggle on what they need' },
+    { role: 'training_officer', label: 'Training Officer',   desc: 'Authors courses & assessments, assigns training, reviews manual-graded attempts' },
+    { role: 'hr_manager',       label: 'HR Manager',         desc: 'Training Officer + edits staff profiles + org-wide competency dashboard' },
+  ],
 }
 
 // ─── Role permission defaults ─────────────────────────────────────────────────
@@ -291,10 +312,15 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_approve_session: true, can_export_csv: true,
     can_edit_session: true, can_delete_session: true,
     can_edit_bag_tag: true, can_delete_bag_tag: true,
+    // Master Inventory & Blends (BOM) — supervisors keep these current
+    can_view_inventory: true, can_edit_inventory: true,
+    can_view_blends: true, can_edit_blends: true,
     // Staff & Competency
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
     can_delete_staff: true,
+    // Training — can author/assign courses for their own floor sections
+    can_author_training: true, can_assign_training: true,
     // Shift roster — owns Production + Maintenance sections
     can_view_roster: true,
     can_edit_roster_production: true, can_submit_roster_production: true, can_delete_roster_production: true,
@@ -312,6 +338,16 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_roster: true,
     can_edit_roster_hs: true, can_submit_roster_hs: true, can_delete_roster_hs: true,
     can_edit_roster_cleaning: true, can_submit_roster_cleaning: true,
+  },
+
+  // ── HR — authors & assigns training, owns the org-wide competency view ─────
+  training_officer: {
+    can_view_staff: true, can_manage_competencies: true,
+    can_author_training: true, can_assign_training: true, can_view_all_competency: true,
+  },
+  hr_manager: {
+    can_view_staff: true, can_edit_staff_profiles: true, can_manage_competencies: true,
+    can_author_training: true, can_assign_training: true, can_view_all_competency: true,
   },
 
   warehouse_supervisor: {
@@ -396,6 +432,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_manage_sop_catalog: true,
     can_delete_staff: true,
+    // Training (FSSC owner — also authors/assigns courses + sees org-wide competency)
+    can_author_training: true, can_assign_training: true, can_view_all_competency: true,
   },
 
   // ── Management — read-only across platform ─────────────────────────────────
@@ -409,6 +447,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_ops_dashboard: true,
     can_view_all_sections:  true,
     can_view_live_history:  true,
+    can_view_inventory: true, can_view_blends: true,
     // Maintenance (view module — no job-card actions)
     can_access_maintenance: true,
     // Management & Reporting
@@ -417,6 +456,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_export_reports:  true,
     // Staff directory (read-only)
     can_view_staff: true,
+    // Training — cross-department competency view (read-only)
+    can_view_all_competency: true,
     // Shift roster (read-only, all sections)
     can_view_roster: true,
   },
@@ -539,6 +580,18 @@ export const PERMISSION_GROUPS: {
     ],
   },
   {
+    group: 'Production — Master Inventory & Blends',
+    department: 'Production',
+    permissions: [
+      { key: 'can_view_inventory',   label: 'View Master Inventory' },
+      { key: 'can_edit_inventory',   label: 'Add & edit inventory items' },
+      { key: 'can_delete_inventory', label: 'Deactivate inventory items' },
+      { key: 'can_view_blends',      label: 'View Blends (BOM) page' },
+      { key: 'can_edit_blends',      label: 'Add & edit blends and their components' },
+      { key: 'can_delete_blends',    label: 'Delete blends and components' },
+    ],
+  },
+  {
     group: 'Sales',
     department: 'Sales',
     permissions: [
@@ -617,6 +670,15 @@ export const PERMISSION_GROUPS: {
       { key: 'can_manage_sop_catalog',  label: 'Add, edit & retire SOPs in the catalogue' },
       { key: 'can_allocate_staff',      label: 'Allocate staff to floor sections & override competency warnings (Phase 2)' },
       { key: 'can_delete_staff',        label: 'Delete staff records' },
+    ],
+  },
+  {
+    group: 'Training',
+    // No single department — HR owns authoring org-wide; Production/Quality can author their own courses
+    permissions: [
+      { key: 'can_author_training',     label: 'Author courses, lessons & assessments' },
+      { key: 'can_assign_training',     label: 'Assign courses to staff & set due dates' },
+      { key: 'can_view_all_competency', label: 'View the cross-department competency dashboard (HR)' },
     ],
   },
   {
