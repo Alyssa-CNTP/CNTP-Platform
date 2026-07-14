@@ -50,6 +50,15 @@ export default function NotificationBell() {
 
   useEffect(() => { if (userId) load() }, [userId])
 
+  // Other parts of the app (e.g. submitting a roster section) dispatch this
+  // to nudge the bell to refetch without waiting for the next page load.
+  useEffect(() => {
+    if (!userId) return
+    const handler = () => load()
+    window.addEventListener('notifications:refresh', handler)
+    return () => window.removeEventListener('notifications:refresh', handler)
+  }, [userId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Mark personal notifications read when the panel opens.
   useEffect(() => {
     if (!open || !userId) return
