@@ -32,6 +32,7 @@ export interface BlenderInputBag {
   itemKey: string              // the BOM ingredient slot this bag was scanned into (component_item_id)
   serial: string
   productType: string          // the ACTUAL material logged — may differ from the slot's declared item (search Master Inventory to confirm/override; materials substitute in practice)
+  productCode: string          // the resolved Acumatica inventory_id for productType, when known (from a scan's bag_tags row or an ItemPicker pick) — surfaced at supervisor sign-off so a searched/typed code gets a second pair of eyes before it's treated as ground truth
   variant: string
   weight: string
   lot: string                  // only tracked for slots flagged hasLot (Fine/Coarse Leaf)
@@ -74,6 +75,25 @@ export function blenderTotals(d: BlenderData) {
   return { totalIn, totalOut, balance, byItem }
 }
 
+export interface CapturedCode { label: string; code: string; resolved: boolean }
+
+/**
+ * Every distinct item code this production actually captured — surfaced at
+ * supervisor sign-off so a searched/typed code (rather than a fixed dropdown
+ * pick) gets a second pair of eyes before the session is approved and the
+ * code is treated as ground truth in the database.
+ */
+export function blenderCapturedCodes(d: BlenderData): CapturedCode[] {
+  const seen = new Map<string, CapturedCode>()
+  for (const r of d.inputs ?? []) {
+    if (!r.productType.trim()) continue
+    const key = r.productCode || r.productType
+    if (!seen.has(key)) seen.set(key, { label: r.productType, code: r.productCode, resolved: !!r.productCode })
+  }
+  if (d.bomId) seen.set(`out:${d.bomId}`, { label: `Blend output — ${d.bomId}`, code: d.bomId, resolved: true })
+  return Array.from(seen.values())
+}
+
 // ── Shared style constants ────────────────────────────────────────────────────
 
 const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
@@ -100,6 +120,7 @@ interface SystemBag {
   weight_kg: number | null
   lot_number: string | null
   created_at: string | null
+  acumatica_id: string | null
 }
 
 function useSystemBagsForType(productType: string): SystemBag[] {
@@ -107,7 +128,7 @@ function useSystemBagsForType(productType: string): SystemBag[] {
   useEffect(() => {
     if (!productType) { setBags([]); return }
     getDb().schema('production').from('bag_tags')
-      .select('serial_number, product_type, variant, weight_kg, lot_number, created_at')
+      .select('serial_number, product_type, variant, weight_kg, lot_number, created_at, acumatica_id')
       .eq('product_type', productType)
       .eq('status', 'in_stock')
       .order('created_at', { ascending: false })
@@ -195,6 +216,7 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
     setLooking(false)
     if (result.status === 'ok' && result.tag) {
       onUpdate('productType', result.tag.product_type)
+      onUpdate('productCode', result.tag.acumatica_id || '')
       onUpdate('weight', result.tag.weight_kg != null ? String(result.tag.weight_kg) : '')
       onUpdate('variant', result.tag.variant || variantWord || '')
       if (group.hasLot && result.tag.lot_number && result.tag.lot_number !== 'NOT TRACKED') onUpdate('lot', result.tag.lot_number)
@@ -249,7 +271,7 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
         <div className="space-y-1 col-span-2">
           <label className={LBL}>Product type <span className="text-stone-300 font-normal">— search Master Inventory if it's not {group.label}</span></label>
           <ItemPicker items={items} placeholder={row.productType || `Search item… (expected: ${group.label})`}
-            onPick={it => onUpdate('productType', it.description || it.inventory_id)}
+            onPick={it => { onUpdate('productType', it.description || it.inventory_id); onUpdate('productCode', it.inventory_id) }}
             className={INP} />
         </div>
         <div className="space-y-1">
@@ -395,7 +417,7 @@ export function BlenderCapture({
   function addManualRow(itemKey: string, mode: BlenderInputBag['inputMode'], declaredLabel: string) {
     const locked_ = lockCompleted(value.inputs)
     patch({ inputs: [...locked_, {
-      id: crypto.randomUUID(), itemKey, serial: '', productType: mode === 'manual' ? declaredLabel : '', variant: variantWord || '',
+      id: crypto.randomUUID(), itemKey, serial: '', productType: mode === 'manual' ? declaredLabel : '', productCode: '', variant: variantWord || '',
       weight: '', lot: assignment?.lot_number ?? '', destination: 'Export',
       inputMode: mode, secured: false,
     }] })
@@ -432,7 +454,7 @@ export function BlenderCapture({
     const locked_ = lockCompleted(value.inputs)
     const row: BlenderInputBag = {
       id: crypto.randomUUID(), itemKey, serial: bag.serial_number,
-      productType: bag.product_type, variant: bag.variant || variantWord || '',
+      productType: bag.product_type, productCode: bag.acumatica_id || '', variant: bag.variant || variantWord || '',
       weight: bag.weight_kg ? String(bag.weight_kg) : '', lot: bag.lot_number || '',
       destination: 'Export', inputMode: 'system', secured: true, logged_at: t,
     }
