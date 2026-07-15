@@ -44,7 +44,9 @@ export default function LoginPage() {
         {IS_STAGING && (
           <div className="login-staging-banner">
             <span className="login-staging-dot" />
-            STAGING ENVIRONMENT — not for real production data
+            <span className="login-staging-text">
+              STAGING<span className="login-staging-text-full"> ENVIRONMENT — not for real production data</span>
+            </span>
           </div>
         )}
 
@@ -188,6 +190,7 @@ export default function LoginPage() {
           justify-content: center;
           gap: 8px;
           height: 34px;
+          padding: 0 10px;
           background: #FFEDD5;
           border-bottom: 1px solid #FDBA74;
           color: #9A3412;
@@ -203,12 +206,23 @@ export default function LoginPage() {
           background: #F97316;
           flex-shrink: 0;
         }
+        /* Never let the banner wrap/overflow its fixed height — that's what
+           was spilling into the logo on narrow phones. Truncate with ellipsis
+           as a safety net, and hide the long tail below 480px so it reads as
+           just "STAGING" on small screens instead of getting cut off. */
+        .login-staging-text {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 100%;
+        }
+        .login-staging-text-full { display: none; }
+        @media (min-width: 480px) {
+          .login-staging-text-full { display: inline; }
+        }
         /* Reserve room for the fixed banner so it never covers the logo/content */
         .login-outer[data-env="staging"] .login-form-panel { padding-top: calc(32px + 34px); }
         .login-outer[data-env="staging"] .login-photo-panel { margin-top: 34px; }
-          flex: 1;
-          min-height: 0;
-        }
 
         /* ── Form panel ── */
         .login-form-panel {
