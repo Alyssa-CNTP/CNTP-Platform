@@ -8,8 +8,14 @@ import { Tag } from 'lucide-react'
  * upper-cased as typed to match how they're written (e.g. S-135, G-0353).
  * Optional previously-used values show as tappable chips so a batch can be
  * reused without retyping.
+ *
+ * When `restrictToOptions` is set, free typing is disabled entirely — the
+ * operator must tap one of `options`. This is used for output batch numbers,
+ * which must match a lot that was actually debagged this session; typed entry
+ * is how a `.` instead of `-`, a lowercase letter, or a dropped digit slipped
+ * a batch that was never fed in into the record.
  */
-export function BatchKeypadField({ value, onChange, label, options = [], placeholder, disabled, className }: {
+export function BatchKeypadField({ value, onChange, label, options = [], placeholder, disabled, className, restrictToOptions }: {
   value: string
   onChange: (v: string) => void
   label?: string
@@ -17,8 +23,37 @@ export function BatchKeypadField({ value, onChange, label, options = [], placeho
   placeholder?: string
   disabled?: boolean
   className?: string
+  restrictToOptions?: boolean
 }) {
-  const matches = options.filter(o => o && o !== value).slice(0, 6)
+  const uniqueOptions = Array.from(new Set(options.filter(Boolean)))
+
+  if (restrictToOptions) {
+    if (uniqueOptions.length === 0) {
+      return (
+        <p className="text-[12px] text-text-muted italic px-1 py-2">
+          No batches debagged yet this session — capture a debagging row first.
+        </p>
+      )
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={label}>
+        {uniqueOptions.map(o => {
+          const active = o === value
+          return (
+            <button key={o} type="button" role="radio" aria-checked={active} disabled={disabled}
+              onClick={() => onChange(o)}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[13px] font-mono transition-colors disabled:opacity-40 ${
+                active ? 'bg-brand text-white border-brand' : 'bg-brand/8 border-brand/20 text-brand hover:bg-brand/15'
+              }`}>
+              <Tag size={11} /> {o}
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const matches = uniqueOptions.filter(o => o !== value).slice(0, 6)
 
   return (
     <div className="space-y-1.5">
