@@ -42,12 +42,12 @@ export default function LoginPage() {
       <div className="login-outer" data-env={IS_STAGING ? 'staging' : 'production'}>
 
         {IS_STAGING && (
-          <div className="login-staging-banner">
-            <span>⚠ STAGING — testing environment, not for real production data</span>
+          <div className="login-staging-badge">
+            <span className="login-staging-dot" />
+            Staging
           </div>
         )}
 
-      <div className="login-content-row">
         {/* ── Form panel ─────────────────────────────────────────── */}
         <div className="login-form-panel">
           <div className="login-form-inner">
@@ -159,13 +159,13 @@ export default function LoginPage() {
           <div className="login-photo-tag">Rooibos · Blackheath, Western Cape</div>
         </div>
       </div>
-      </div>
 
       <style>{`
         * { box-sizing: border-box; }
 
         /* ── Base ── */
         .login-outer {
+          position: relative;
           min-height: 100vh;
           min-height: 100dvh;
           display: flex;
@@ -174,34 +174,34 @@ export default function LoginPage() {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
         }
 
-        /* ── Staging ── */
-        .login-outer[data-env="staging"] {
-          background: linear-gradient(150deg, #FFF7ED 0%, #FEF3E2 50%, #FDF4F0 100%);
-        }
-        .login-outer[data-env="staging"] .login-form-inner {
-          box-shadow: 0 4px 24px rgba(194,65,12,0.10), 0 1px 4px rgba(0,0,0,0.06), 0 0 0 1px rgba(194,65,12,0.12);
-        }
-        .login-outer[data-env="staging"] .btn-work-account:hover:not(:disabled) {
-          border-color: #C2410C;
-          box-shadow: 0 2px 8px rgba(194,65,12,0.15);
-        }
-        .login-staging-banner {
-          position: sticky;
-          top: 0;
+        /* ── Staging — small, quiet corner badge only, no page-wide recolor ── */
+        .login-staging-badge {
+          position: fixed;
+          top: 14px;
+          right: 14px;
           z-index: 20;
-          width: 100%;
-          padding: 8px 16px;
-          text-align: center;
-          background: #C2410C;
-          color: #fff;
-          font-size: 12px;
-          font-weight: 600;
-          letter-spacing: 0.02em;
-        }
-
-        .login-content-row {
           display: flex;
-          flex-direction: column;
+          align-items: center;
+          gap: 6px;
+          padding: 5px 12px;
+          border-radius: 20px;
+          background: rgba(255,255,255,0.9);
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+          border: 1px solid #FDBA74;
+          color: #9A3412;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.03em;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .login-staging-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #F97316;
+          flex-shrink: 0;
+        }
           flex: 1;
           min-height: 0;
         }
@@ -421,15 +421,10 @@ export default function LoginPage() {
         ───────────────────────────────────────────────────────── */
         @media (min-width: 1024px) {
           .login-outer {
+            flex-direction: row;
             background: #fff;
             min-height: 100dvh;
             height: 100dvh;
-            overflow: hidden;
-          }
-          .login-content-row {
-            flex-direction: row;
-            flex: 1;
-            min-height: 0;
             overflow: hidden;
           }
           .login-form-panel {
