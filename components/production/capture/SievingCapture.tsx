@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Printer, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
+import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { variantToShort } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
@@ -19,6 +19,7 @@ export interface DebagRow {
 export interface OutBag {
   id: string; serial: string; productType: string; code: string | null; description?: string
   weight: string; batch: string; destination: string; printed: boolean
+  tagMethod?: 'printed' | 'handwritten' | null   // per-bag choice, same pattern as Blender
   secured?: boolean; logged_at?: string
 }
 export interface SievingData {
@@ -184,15 +185,16 @@ export function SievingCapture({
       } as any)
     } catch { /* session save retries */ }
 
-    // An output bag is complete the moment it's added (picked + printed), so it
-    // logs and secures itself right away — no separate "secure" tap needed.
+    // An output bag is complete the moment it's added (picked + weighed), so it
+    // logs and secures itself right away — no separate "secure" tap needed. The
+    // tag itself (print vs write-on-bag) is a per-bag choice made just below,
+    // same as Blender — not an automatic/global decision.
     patch({ outputs: [...value.outputs, {
       id: bag.id, serial, productType: p.productType, code: p.code, description: p.description,
-      weight: p.weight, batch: bag.lot_number, destination: grade, printed: true,
+      weight: p.weight, batch: bag.lot_number, destination: grade, printed: false, tagMethod: null,
       secured: true, logged_at: now,
     }] })
     setPicking(false)
-    if (LABEL_PRINTING_ENABLED) printLabel(bag)
   }
 
   function reprint(b: OutBag) {
@@ -202,6 +204,15 @@ export function SievingCapture({
       section_id: 'sieving', section_name: 'Sieving Tower', created_at: new Date().toISOString(),
       printed: true, acumaticaId: b.code ?? undefined,
     })
+  }
+
+  function setOutputTagMethod(id: string, method: 'printed' | 'handwritten') {
+    patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, tagMethod: method, printed: method === 'printed' } : b) })
+    const b = value.outputs.find(x => x.id === id)
+    if (!b) return
+    getDb().schema('production').from('bag_tags').update({ tag_method: method } as any)
+      .eq('serial_number', b.serial).then(() => {})
+    if (method === 'printed') reprint(b)
   }
 
   const { totalIn, totalOut } = sievingTotals(value, shift)
@@ -396,13 +407,30 @@ export function SievingCapture({
                   {b.secured && <Lock size={14} className="shrink-0" style={{ color: BAG_ORANGE }} />}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
-                    {LABEL_PRINTING_ENABLED
-                      ? <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
-                      : <div className="mt-1 inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
-                          {b.serial}<span className="text-[10px] font-sans font-normal text-stone-400 uppercase tracking-wide">write on bag</span>
-                        </div>}
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
+                        {b.serial}{b.code ? <span className="text-[10px] font-sans font-normal text-stone-400"> · {b.code}</span> : null}
+                      </span>
+                      {b.tagMethod && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                          {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
+                        </span>
+                      )}
+                    </div>
+                    {!b.tagMethod && !locked && (
+                      <div className="flex gap-1.5 mt-1.5">
+                        <button onClick={() => setOutputTagMethod(b.id, 'printed')}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                          <Printer size={12} /> Print label
+                        </button>
+                        <button onClick={() => setOutputTagMethod(b.id, 'handwritten')}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                          <PenLine size={12} /> Write on tag
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  {LABEL_PRINTING_ENABLED && (
+                  {b.tagMethod === 'printed' && (
                     <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
                   )}
                   {!locked && (b.secured

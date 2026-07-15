@@ -5,6 +5,52 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Production: schema audit + Sieving Tower per-bag print/write choice + FT-CON run fix)
+
+Ran a full audit of the `production` schema (grown across ~15 migrations, hard to see
+the current state of any table from one file) at the request of understanding what's in
+`prod_debagging`/`prod_bagging`/`capture_activity` before wiring in traceability.
+Reconstructed every table's true current columns from migration history and
+cross-checked against real staging data. Findings (not all acted on yet — see below):
+- `capture_activity` is a plain flat table (`session_id, operator_id, section_id,
+  occurred_at`) — **not** JSON, despite appearing that way at a glance. The JSONB blobs
+  are `prod_sessions.draft_data` and `prod_timesheets.{breaks,derived_data}`.
+- **Fixed:** `production_runs.variant` was missing `'FT-CON'` in its CHECK constraint —
+  it was created two weeks after the migration that widened every sibling table for
+  FT-CON, and was never included. Any FT-CON session's day-level run rollup was
+  silently failing to be created (the run-linking code wraps this in a try/catch on
+  purpose so a run-schema hiccup never blocks the actual capture save — but it meant
+  the rollup just silently never happened). `20260715_002_production_runs_ft_con.sql`
+  brings it in line with `prod_sessions`/`bag_tags`/`prod_debagging`/`prod_bagging`/
+  `shift_assignments`, which already all allow it.
+- **Flagged, not yet acted on:** `bag_tags.destination` is read in 4+ places but only
+  ever written by a dead legacy route (`/production/live/capture`, unreachable —
+  operators are hard-redirected away from it) — every bag made through the *current*
+  capture flow leaves it permanently NULL. That whole legacy cluster (`BagScanner.tsx`,
+  `SievingTowerForm.tsx`, `PasteuriserForm.tsx`, `GranuleLineForm.tsx`,
+  `RefiningForms.tsx`, the live-capture route) references `bag_tags` columns that don't
+  exist in the schema at all — predates the 2026-06-11 schema rewrite, candidate for
+  deletion. Also ~8 columns across several tables that are declared but never written
+  by any live page (`prod_sessions.{scale_std_kg,scale_actual_kg}`, `bag_tags.location`,
+  `shift_assignments.notes`, `bom_components.{warehouse,uom}`,
+  `prod_mass_balance.{water_kg,dust_extraction_kg,floor_waste_kg}`). Left in place
+  pending a decision on each — dropping a column is a one-way door, wanted confirmation
+  first.
+
+**Sieving Tower now has the same per-bag "Print label" / "Write on tag" choice Blender
+already has**, instead of the site-wide `LABEL_PRINTING_ENABLED` flag (which stays
+`false` and now goes unused by Sieving — every other section using it is unaffected).
+Lets Sieving Tower test the real printer today without turning printing on everywhere
+that flag touches. Reprint is still available once a bag's tagged as printed.
+
+**⚠️ Manual steps:** run `supabase/migrations/20260715_002_production_runs_ft_con.sql`
+on staging (this session's `20260715_001_production_ref.sql` should already be in from
+earlier today).
+
+**Files:** `components/production/capture/SievingCapture.tsx` (per-bag tag-method
+choice, mirrors `BlenderCapture.tsx`'s pattern), `supabase/migrations/
+20260715_002_production_runs_ft_con.sql` (new).
+
 ## 2026-07-15 — Alyssa (Blender: purple/orange debag-bag colors, grade enforcement, traceability groundwork)
 
 Floor feedback on the Blender screen, from real screenshots and a Pasteuriser job card
