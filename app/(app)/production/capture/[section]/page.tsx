@@ -687,7 +687,9 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            notes: [`blend ${bd.bomId ?? ''}`.trim(), r.destination || null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            production_ref: bd.bomId || null,
+            local_or_export: r.destination || null,
+            notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
             kg_nett: n(r.weight), is_spillage: false,
@@ -764,6 +766,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: prod.lot || null,
+            production_ref: bomId || null,
             product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
             kg: n(b.weight), bagging_time: b.time || null,
           })

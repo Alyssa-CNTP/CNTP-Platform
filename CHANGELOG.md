@@ -5,6 +5,96 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Production: schema audit + Sieving Tower per-bag print/write choice + FT-CON run fix)
+
+Ran a full audit of the `production` schema (grown across ~15 migrations, hard to see
+the current state of any table from one file) at the request of understanding what's in
+`prod_debagging`/`prod_bagging`/`capture_activity` before wiring in traceability.
+Reconstructed every table's true current columns from migration history and
+cross-checked against real staging data. Findings (not all acted on yet — see below):
+- `capture_activity` is a plain flat table (`session_id, operator_id, section_id,
+  occurred_at`) — **not** JSON, despite appearing that way at a glance. The JSONB blobs
+  are `prod_sessions.draft_data` and `prod_timesheets.{breaks,derived_data}`.
+- **Fixed:** `production_runs.variant` was missing `'FT-CON'` in its CHECK constraint —
+  it was created two weeks after the migration that widened every sibling table for
+  FT-CON, and was never included. Any FT-CON session's day-level run rollup was
+  silently failing to be created (the run-linking code wraps this in a try/catch on
+  purpose so a run-schema hiccup never blocks the actual capture save — but it meant
+  the rollup just silently never happened). `20260715_002_production_runs_ft_con.sql`
+  brings it in line with `prod_sessions`/`bag_tags`/`prod_debagging`/`prod_bagging`/
+  `shift_assignments`, which already all allow it.
+- **Flagged, not yet acted on:** `bag_tags.destination` is read in 4+ places but only
+  ever written by a dead legacy route (`/production/live/capture`, unreachable —
+  operators are hard-redirected away from it) — every bag made through the *current*
+  capture flow leaves it permanently NULL. That whole legacy cluster (`BagScanner.tsx`,
+  `SievingTowerForm.tsx`, `PasteuriserForm.tsx`, `GranuleLineForm.tsx`,
+  `RefiningForms.tsx`, the live-capture route) references `bag_tags` columns that don't
+  exist in the schema at all — predates the 2026-06-11 schema rewrite, candidate for
+  deletion. Also ~8 columns across several tables that are declared but never written
+  by any live page (`prod_sessions.{scale_std_kg,scale_actual_kg}`, `bag_tags.location`,
+  `shift_assignments.notes`, `bom_components.{warehouse,uom}`,
+  `prod_mass_balance.{water_kg,dust_extraction_kg,floor_waste_kg}`). Left in place
+  pending a decision on each — dropping a column is a one-way door, wanted confirmation
+  first.
+
+**Sieving Tower now has the same per-bag "Print label" / "Write on tag" choice Blender
+already has**, instead of the site-wide `LABEL_PRINTING_ENABLED` flag (which stays
+`false` and now goes unused by Sieving — every other section using it is unaffected).
+Lets Sieving Tower test the real printer today without turning printing on everywhere
+that flag touches. Reprint is still available once a bag's tagged as printed.
+
+**⚠️ Manual steps:** run `supabase/migrations/20260715_002_production_runs_ft_con.sql`
+on staging (this session's `20260715_001_production_ref.sql` should already be in from
+earlier today).
+
+**Files:** `components/production/capture/SievingCapture.tsx` (per-bag tag-method
+choice, mirrors `BlenderCapture.tsx`'s pattern), `supabase/migrations/
+20260715_002_production_runs_ft_con.sql` (new).
+
+## 2026-07-15 — Alyssa (Blender: purple/orange debag-bag colors, grade enforcement, traceability groundwork)
+
+Floor feedback on the Blender screen, from real screenshots and a Pasteuriser job card
+(the paper form that shows blend ratios/grades are genuinely fixed by the material's own
+identity, not a free per-row choice):
+
+1. **Debagging/Bagging tabs were both shades of purple** — barely distinguishable. Now
+   purple (in) / orange (out), matching Sieving Tower's established in/out color pairing.
+2. **Removed the manual "Local/Export" dropdown.** Grade (Export / Export Blend /
+   Domestic) is already baked into which specific Master Inventory item a bag is — the
+   BOM lists "Sieved Fine Leaf: Export Blend - Conventional" as a distinct component from
+   "...Export..." or "...Domestic...". A separate dropdown defaulting to "Export" was
+   redundant at best, actively wrong at worst (every Blender debag row has been writing
+   `local_or_export = 'Export'` regardless of what was actually scanned — that field is a
+   real, pre-existing column also used by Sieving, just never populated correctly here).
+   `destination` is now derived from the picked/scanned item's own description.
+3. **Grade consistency is now enforced.** A bag graded "Export Blend" at Sieving Tower
+   must not be consumable under a "Domestic" slot at Blender — that's a hard rule, unlike
+   the flexible "Other" ingredient slot (Cut Heavy Stick vs Corn Cutter, which stays a
+   free search — those are legitimate substitutes, not a data error). Scanning or
+   searching in a bag whose grade doesn't match the slot's declared grade is now
+   rejected with a clear message; slots with no grade concept (Blocks, Sticks, Granules)
+   are unaffected.
+4. **Traceability groundwork** (not a trace feature yet — real scan data needs to be
+   flowing consistently first): which blend a debagging/bagging row belongs to was only
+   ever recorded as free text inside `notes` (e.g. "blend 25CH60C40WBC") — unreliable to
+   query. Added a real `production_ref` column to `prod_debagging`/`prod_bagging` so a
+   future "trace this bag back to its Sieving Tower batch" feature has something solid
+   to query against once bag-tag scanning is consistently used on the floor instead of
+   the current dual paper/system run.
+
+**⚠️ Manual step required:** run `supabase/migrations/20260715_001_production_ref.sql`
+in the staging Supabase SQL editor (adds `production_ref` to both tables).
+
+**Files:** `components/production/capture/BlenderCapture.tsx` (colors, grade
+derivation/enforcement, `parseGrade`), `app/(app)/production/capture/[section]/page.tsx`
+(`production_ref` + `local_or_export` now actually written for Blender's debag/bag rows),
+`supabase/migrations/20260715_001_production_ref.sql` (new).
+
+- Explicitly deferred (discussed, not building yet): a real bag-lineage trace UI, and
+  moving blend selection toward "confirm the Pasteuriser job card you're executing"
+  instead of a free search — both are real follow-ups once today's data-quality fixes
+  are live and scanning is consistent, not day-one work.
+
 ## 2026-07-15 — Alyssa (Sieving: restrict output batch to lots debagged this session)
 
 Floor feedback: batch/lot numbers were free-typed on both Sieving Tower and Granule Line, and typos (a `.` instead of a `-`, lowercase instead of caps, a dropped digit) were slipping bad batch numbers into records — an output could end up tagged with a batch that was never actually debagged that session.

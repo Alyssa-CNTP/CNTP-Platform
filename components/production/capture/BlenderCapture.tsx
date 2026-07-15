@@ -17,7 +17,20 @@ import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.typ
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export const BLENDER_DESTINATIONS = ['Export', 'Export Blend', 'Domestic/Local']
+// Grade (Export / Export Blend / Domestic) is baked into which specific Master
+// Inventory item a bag is — the BOM already lists "Sieved Fine Leaf: Export
+// Blend - Conventional" as a distinct component from "...Export..." or
+// "...Domestic...". Deriving it from the description (rather than a manual
+// per-row dropdown) is both less redundant data entry and the enforcement
+// mechanism below: a bag graded "Export Blend" at Sieving Tower must not be
+// consumable under a "Domestic" slot at Blender.
+function parseGrade(description: string | null | undefined): string | null {
+  const d = (description ?? '').toLowerCase()
+  if (d.includes('export blend')) return 'Export Blend'
+  if (d.includes('export')) return 'Export'
+  if (d.includes('domestic') || d.includes('local')) return 'Domestic/Local'
+  return null   // no grade concept for this material (e.g. Blocks, Sticks, Granules)
+}
 
 // Work centre each capture section's blends live under — keeps each section's
 // blend picker scoped to only its own blends (Big Blender never offers a Small
@@ -36,7 +49,7 @@ export interface BlenderInputBag {
   variant: string
   weight: string
   lot: string                  // only tracked for slots flagged hasLot (Fine/Coarse Leaf)
-  destination: string          // Export / Export Blend / Domestic-Local — per the paper form's per-row field
+  destination: string          // Export / Export Blend / Domestic-Local — auto-derived from productType (parseGrade), not manually chosen
   inputMode: 'scan' | 'system' | 'manual'
   secured: boolean
   logged_at?: string
@@ -99,7 +112,7 @@ export function blenderCapturedCodes(d: BlenderData): CapturedCode[] {
 const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 const DEBAG_COLOR = '#7c3aed'
-const BAG_COLOR   = '#a855f7'
+const BAG_COLOR   = '#d97706'
 
 const nowISO = () => new Date().toISOString()
 const fmtTime = (iso?: string) =>
@@ -204,6 +217,8 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
   const [scanMsg, setScanMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const expectedGrade = parseGrade(group.label)
+
   const triggerLookup = useCallback(async () => {
     if (!row.serial.trim()) return
     setLooking(true)
@@ -211,10 +226,17 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
     // "Other" slot might be Cut Heavy Stick one run, Corn Cutter Fine Leaf the
     // next); the operator confirms the real product type via the search field
     // below. Existence / already-consumed / variant-family / finished-product
-    // checks still apply — those are real mistakes, not substitutions.
+    // checks still apply — those are real mistakes, not substitutions. Grade
+    // (Export / Export Blend / Domestic), however, is enforced below — a bag
+    // graded at Sieving Tower cannot be re-graded on the way into a blend.
     const result = await validateBagScan(row.serial, { sessionVariant: variantWord })
     setLooking(false)
     if (result.status === 'ok' && result.tag) {
+      const scannedGrade = parseGrade(result.tag.product_type)
+      if (expectedGrade && scannedGrade && scannedGrade !== expectedGrade) {
+        setScanMsg({ kind: 'error', text: `⛔ Grade mismatch — this bag is "${scannedGrade}" but ${group.label} requires "${expectedGrade}". Scan the correct bag.` })
+        return
+      }
       onUpdate('productType', result.tag.product_type)
       onUpdate('productCode', result.tag.acumatica_id || '')
       onUpdate('weight', result.tag.weight_kg != null ? String(result.tag.weight_kg) : '')
@@ -228,7 +250,7 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
     } else {
       setScanMsg({ kind: 'error', text: result.message })
     }
-  }, [row.serial, variantWord, group, onUpdate])
+  }, [row.serial, variantWord, group, expectedGrade, onUpdate])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') { e.preventDefault(); triggerLookup() }
@@ -271,19 +293,25 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
         <div className="space-y-1 col-span-2">
           <label className={LBL}>Product type <span className="text-stone-300 font-normal">— search Master Inventory if it's not {group.label}</span></label>
           <ItemPicker items={items} placeholder={row.productType || `Search item… (expected: ${group.label})`}
-            onPick={it => { onUpdate('productType', it.description || it.inventory_id); onUpdate('productCode', it.inventory_id) }}
+            onPick={it => {
+              const pickedGrade = parseGrade(it.description)
+              if (expectedGrade && pickedGrade && pickedGrade !== expectedGrade) {
+                setScanMsg({ kind: 'error', text: `⛔ Grade mismatch — "${it.description}" is ${pickedGrade} but ${group.label} requires ${expectedGrade}.` })
+                return
+              }
+              onUpdate('productType', it.description || it.inventory_id)
+              onUpdate('productCode', it.inventory_id)
+              setScanMsg(null)
+            }}
             className={INP} />
+          {row.destination && (
+            <p className="text-[10px] text-stone-400 px-1">Grade: <span className="font-medium text-stone-500">{row.destination}</span></p>
+          )}
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1 col-span-2">
           <label className={LBL}>Weight (kg)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={row.weight} disabled={locked}
             onChange={e => onUpdate('weight', e.target.value)} className={INP} />
-        </div>
-        <div className="space-y-1">
-          <label className={LBL}>Local / Export</label>
-          <select value={row.destination} disabled={locked} onChange={e => onUpdate('destination', e.target.value)} className={INP}>
-            {BLENDER_DESTINATIONS.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
         </div>
         {group.hasLot && (
           <div className="space-y-1 col-span-2">
@@ -416,15 +444,21 @@ export function BlenderCapture({
 
   function addManualRow(itemKey: string, mode: BlenderInputBag['inputMode'], declaredLabel: string) {
     const locked_ = lockCompleted(value.inputs)
+    const productType = mode === 'manual' ? declaredLabel : ''
     patch({ inputs: [...locked_, {
-      id: crypto.randomUUID(), itemKey, serial: '', productType: mode === 'manual' ? declaredLabel : '', productCode: '', variant: variantWord || '',
-      weight: '', lot: assignment?.lot_number ?? '', destination: 'Export',
+      id: crypto.randomUUID(), itemKey, serial: '', productType, productCode: '', variant: variantWord || '',
+      weight: '', lot: assignment?.lot_number ?? '', destination: parseGrade(productType) ?? '',
       inputMode: mode, secured: false,
     }] })
   }
 
   function updateInput(id: string, k: keyof BlenderInputBag, v: string) {
-    patch({ inputs: value.inputs.map(r => r.id === id ? { ...r, [k]: v, ...(k === 'serial' ? { notInSystem: '' } : {}) } : r) })
+    patch({ inputs: value.inputs.map(r => r.id === id ? {
+      ...r, [k]: v,
+      ...(k === 'serial' ? { notInSystem: '' } : {}),
+      // Grade is derived from the item, never typed separately.
+      ...(k === 'productType' ? { destination: parseGrade(v) ?? '' } : {}),
+    } : r) })
   }
 
   function secureInput(id: string) {
@@ -456,7 +490,7 @@ export function BlenderCapture({
       id: crypto.randomUUID(), itemKey, serial: bag.serial_number,
       productType: bag.product_type, productCode: bag.acumatica_id || '', variant: bag.variant || variantWord || '',
       weight: bag.weight_kg ? String(bag.weight_kg) : '', lot: bag.lot_number || '',
-      destination: 'Export', inputMode: 'system', secured: true, logged_at: t,
+      destination: parseGrade(bag.product_type) ?? '', inputMode: 'system', secured: true, logged_at: t,
     }
     patch({ inputs: [...locked_, row] })
     markBagConsumed(bag.serial_number, sectionId, null, bag.weight_kg ?? undefined, operatorId ?? null)
