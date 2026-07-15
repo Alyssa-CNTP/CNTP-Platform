@@ -69,12 +69,17 @@ export interface BlenderOutputBag {
 
 export interface BlenderData {
   bomId: string | null    // the blend code this production is running — owned by the production, not the shift assignment, so a shift can run several blends without a supervisor re-editing Assign each time
+  // Which numbered run of this blend code these output bags belong to — the "1" in
+  // SFC-KUN25-C/1-01. Resolved once (from existing bag_tags for this blend) the
+  // first time an output bag is created, then reused for every bag in this
+  // production so a page reload/rejoin can't renumber mid-batch.
+  outputRunNo: number | null
   inputs: BlenderInputBag[]
   outputs: BlenderOutputBag[]
 }
 
 export function emptyBlenderData(): BlenderData {
-  return { bomId: null, inputs: [], outputs: [] }
+  return { bomId: null, outputRunNo: null, inputs: [], outputs: [] }
 }
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
@@ -409,11 +414,46 @@ export function BlenderCapture({
   const [extraGroups, setExtraGroups] = useState<BlendIngredientGroup[]>([])
   const [addingOther, setAddingOther] = useState(false)
   const [items, setItems] = useState<InventoryItem[]>([])
+  // Bag sequence + run number for this blend's output serials — seeded once
+  // from bag_tags (see genBlendSerial), then read from the ref rather than
+  // `value` for the rest of this function call: `patch()` only takes effect
+  // on the next render, so re-reading `value.outputRunNo` immediately after
+  // calling it would still see the stale (null) value.
+  const bagSeqRef = useRef<number | null>(null)
+  const runNoRef = useRef<number | null>(null)
   const variantShort = variantToShort(variantWord as any) as ShortVariant
   const workCentre = WORK_CENTRE_FOR_SECTION[sectionId] ?? '05-BLENDER BIG'
 
   const patch = (p: Partial<BlenderData>) => onChange({ ...value, ...p })
   const bomId = value.bomId
+
+  // The real serial convention for a blend's output bags — confirmed from actual
+  // operator reports: {blendCode}/{runNo}-{bagNo}, e.g. SFC-KUN25-C/1-01. runNo
+  // distinguishes separate runs of the same blend (resolved once per production,
+  // from whatever's already in bag_tags for this code); bagNo is sequential
+  // within that run. Falls back to the generic section serial if somehow called
+  // before a blend is chosen (shouldn't happen — the bagging tab is gated on it).
+  async function genBlendSerial(): Promise<string> {
+    if (!bomId) return genSerial()
+    if (bagSeqRef.current === null || runNoRef.current === null) {
+      const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const { data } = await getDb().schema('production').from('bag_tags')
+        .select('serial_number').ilike('serial_number', `${bomId}/%`)
+      const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
+      let runNo = value.outputRunNo
+      if (!runNo) {
+        const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)
+        const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
+        runNo = (runs.length ? Math.max(...runs) : 0) + 1
+        patch({ outputRunNo: runNo })
+      }
+      runNoRef.current = runNo
+      const bagPattern = new RegExp(`^${escaped}\\/${runNo}-(\\d+)$`)
+      bagSeqRef.current = serials.reduce((max, s) => { const m = s.match(bagPattern); return m ? Math.max(max, parseInt(m[1], 10)) : max }, 0)
+    }
+    bagSeqRef.current += 1
+    return `${bomId}/${runNoRef.current}-${String(bagSeqRef.current).padStart(2, '0')}`
+  }
 
   // Prefill from the shift assignment once, purely as a convenience default —
   // the blend picker below is what actually owns this production's blend, so a
@@ -523,7 +563,7 @@ export function BlenderCapture({
 
   async function addOutputBag(weight: string) {
     if (n(weight) <= 0) return
-    const serial = genSerial()
+    const serial = await genBlendSerial()
     const now = nowISO()
     try {
       await getDb().schema('production').from('bag_tags').upsert({

@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Blender: output bag serials now use the real blend-code format)
+
+Output bags were using the generic per-section serial (`BL-DDMMYY-NNN`) like every
+other section — but Blender's actual paper convention, confirmed from real operator
+reports, embeds the blend code itself: `{blendCode}/{runNo}-{bagNo}`, e.g.
+`SFC-KUN25-C/1-01`, `SFC-KUN25-C/1-02`. `runNo` distinguishes separate runs of the same
+blend (e.g. if it's made again on a different day); `bagNo` is sequential within that
+run. Both are resolved from whatever's already in `bag_tags` for that blend code the
+first time an output bag is added to a production, then held in a ref and incremented
+locally so every "Add bag" tap after the first doesn't re-query. `runNo` is also
+persisted onto the batch record (`BlenderData.outputRunNo`) so a page reload mid-batch
+can't renumber it. Generic `genSerial()` (still used everywhere else) is kept as a
+fallback for the edge case of adding an output bag with no blend chosen, which
+shouldn't be reachable — the Bagging tab is gated on a blend being picked first.
+
+**Files:** `components/production/capture/BlenderCapture.tsx` only.
+
 ## 2026-07-15 — Alyssa (Blender: product type is a fixed label per section, not an overridable field)
 
 Follow-up to the manual-entry pass earlier today — the new "Change" link on product
