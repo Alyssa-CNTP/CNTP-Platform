@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Sieving: restrict output batch to lots debagged this session)
+
+Floor feedback: batch/lot numbers were free-typed on both Sieving Tower and Granule Line, and typos (a `.` instead of a `-`, lowercase instead of caps, a dropped digit) were slipping bad batch numbers into records — an output could end up tagged with a batch that was never actually debagged that session.
+
+- **Sieving Tower output batch is now tap-only, not typed.** `BatchKeypadField` gained a `restrictToOptions` mode: when set, it renders the allowed batch numbers as tappable chips only — no text input, so a typo literally can't happen. `OutputPicker` now passes this mode whenever `batchHints` (the lots actually debagged this session, already computed in `SievingCapture.tsx`) is non-empty, and also hard-validates in `confirm()` that the selected batch is one of those hints before allowing the bag to be added. If no batches have been debagged yet this session, the field shows a message prompting the operator to capture a debagging row first instead of silently blocking.
+- **Granule Line not touched.** It has no separate typed output-batch field today (output bags always carry the fixed session lot), so there's nothing equivalent to restrict yet — needs its own design pass on what "output batch" even means there before a fix can be scoped.
+
+**Files:** `components/production/capture/BatchKeypadField.tsx`, `components/production/capture/OutputPicker.tsx`.
+
 ## 2026-07-15 — Alyssa (Auth: HR gated behind permission, staging login banner, Logistics added to Users & Roles)
 
 Three requests: (1) staging login should look visually distinct from prod, (2) prod sessions weren't signing out after an hour of inactivity, (3) HR pages and Logistics needed proper gating in Users & Roles.
