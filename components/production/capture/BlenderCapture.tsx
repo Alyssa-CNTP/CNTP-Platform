@@ -12,6 +12,7 @@ import { loadAllInventory } from '@/lib/production/inventory'
 import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
+import { isValidLot } from '@/components/production/capture/SievingCapture'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
@@ -263,7 +264,11 @@ function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove
     if (e.key === 'Enter') { e.preventDefault(); triggerLookup() }
   }
 
-  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!group.hasLot || !!row.lot.trim())
+  // Fine/Coarse Leaf batch numbers are always a Sieving Tower lot (see the
+  // BatchKeypadField suggestions below, pulled straight from Sieving's own
+  // output records) — so the same format rule applies: letter prefix + dash +
+  // digits, 7-8 characters. Catches a dropped digit before it locks in.
+  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!group.hasLot || isValidLot(row.lot))
 
   return (
     <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: DEBAG_COLOR + '40' }}>
@@ -319,7 +324,10 @@ function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove
             <label className={LBL + ' text-amber-600'}>Batch number <span className="text-red-500">*</span></label>
             <BatchKeypadField value={row.lot} disabled={locked} placeholder="e.g. GS-0271" options={availableLots}
               onChange={v => onUpdate('lot', v)}
-              className={INP + (!row.lot.trim() ? ' border-amber-400 focus:ring-amber-300' : '')} />
+              className={INP + (!isValidLot(row.lot) ? ' border-amber-400 focus:ring-amber-300' : '')} />
+            {row.lot.trim() && !isValidLot(row.lot) && (
+              <p className="text-[11px] text-err">Expected a letter prefix + dash + digits, 7–8 characters (e.g. GS-0299).</p>
+            )}
           </div>
         )}
       </div>
@@ -332,7 +340,7 @@ function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove
           </button>
           {!complete && (
             <p className="text-[11px] text-stone-400 text-center">
-              {[!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight', group.hasLot && !row.lot.trim() && 'batch number'].filter(Boolean).join(', ')} still needed.
+              {[!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight', group.hasLot && !isValidLot(row.lot) && (row.lot.trim() ? 'a valid batch format' : 'batch number')].filter(Boolean).join(', ')} still needed.
             </p>
           )}
         </>
@@ -490,7 +498,7 @@ export function BlenderCapture({
   // ── Input bag helpers ──────────────────────────────────────────────────────
 
   const inputComplete = (r: BlenderInputBag) =>
-    !!r.serial.trim() && !!r.productType && n(r.weight) > 0 && (!allGroups.find(g => g.key === r.itemKey)?.hasLot || !!r.lot.trim())
+    !!r.serial.trim() && !!r.productType && n(r.weight) > 0 && (!allGroups.find(g => g.key === r.itemKey)?.hasLot || isValidLot(r.lot))
 
   const lockCompleted = (rows: BlenderInputBag[]): BlenderInputBag[] => {
     const t = nowISO()
