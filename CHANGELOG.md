@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Auth: HR gated behind permission, staging login banner, Logistics added to Users & Roles)
+
+Three requests: (1) staging login should look visually distinct from prod, (2) prod sessions weren't signing out after an hour of inactivity, (3) HR pages and Logistics needed proper gating in Users & Roles.
+
+1. **Staging login banner + accent.** No env/hostname signal existed anywhere in the app to tell staging from prod at runtime — both were purely a deployment-topology difference (different Supabase project, branch, port). Added `NEXT_PUBLIC_APP_ENV` (set on each VPS's `.env.local`: `staging` on the staging box, `production` on the prod box — both untracked, so this only lives in `.env.example`/`.env.local` locally and on the servers). `app/login/page.tsx` now shows an amber "STAGING — testing environment" banner and amber accent color when that var is `staging`. Takes effect on next build (staging: automatic on next deploy; prod: next manual deploy, whenever that happens).
+2. **Prod 1-hour sign-out — root cause found, not yet shipped.** The idle-logout bug (staying signed in indefinitely) was already fixed on `staging` in commit `5a84ecf` (`fix(session): wall-clock idle logout`, part of #360, merged 2026-07-09) — it replaced a naive `setTimeout` (which misses idle time on a slept device/throttled background tab) with a wall-clock comparison. That fix was never promoted to `main`. **Not touched here** — promoting to prod is a deliberate, separate action per project rules; flagging for explicit go-ahead rather than bundling into this branch.
+3. **HR and Logistics now gated + visible in Users & Roles.** New permission `can_access_hr` gates Staff & Skills, SOP, and Skills Matrix (`/production/staff*`) — these view *other people's* HR data, so they're no longer "anyone logged in can see this." Training & Courses (`/training`, personal course-taking) stays universal since every employee needs to reach their own assigned training. Granted `can_access_hr` by default to every role that already had `can_view_staff` (supervisors, managers, HR roles, Management) so no one currently using it loses access. New permission `can_access_logistics` added alongside Logistics' existing department gate (Production/Quality/Management) so admins can now grant Logistics to someone outside those departments, mirroring the `can_access_maintenance` pattern — Logistics previously had zero presence in the permission matrix.
+
+**Known follow-up (not fixed):** enforcement everywhere in this app is client-side only (`app/(app)/layout.tsx` + Sidebar) — there's no middleware or RLS backing it. `production.employees` RLS is `USING (true)`, so `can_view_staff`/`can_access_hr` aren't enforced at the data layer, only in the UI. Same gap likely exists for Logistics tables. Out of scope for this session (needs a migration + review), flagging for a follow-up.
+
+**Files:** `app/login/page.tsx` (staging banner/theme), `lib/auth/permissions.ts` + `lib/auth/permission-registry.ts` (`can_access_hr`, `can_access_logistics`), `components/layout/Sidebar.tsx` + `app/(app)/layout.tsx` (wire the new gates into nav + route guards, remove `/production/staff` from the always-open list). Also folded in previously-uncommitted HR IA cleanup (`/hr` hub removal, "← HR" back-links removed from `training/page.tsx`, `users/page.tsx`, `StaffTabs.tsx`, `WorkforceTabs.tsx` — direct sidebar links replaced the hub per earlier feedback).
+
 ## 2026-07-14 — Gustav (Granule: add delete tasting)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`

@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
-  FileSpreadsheet, GraduationCap, Building2,
+  FileSpreadsheet, GraduationCap,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -33,7 +33,7 @@ interface NavItem {
 }
 
 // Group order is driven by first-appearance below:
-// Production → Operations → Quality → Maintenance → Sales → Marketing →
+// Production → Operations → HR → Quality → Maintenance → Sales → Marketing →
 // Logistics → Management → Workspace → AXIS → Admin.
 // Home is rendered as a standalone item above the groups (see render).
 const NAV: NavItem[] = [
@@ -51,8 +51,14 @@ const NAV: NavItem[] = [
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
 
-  // ── HR — single hub entry; Staff & Skills and Training live underneath as cards ──
-  { href: '/hr',                        label: 'HR',                         icon: Building2,       group: 'HR' },
+  // ── HR — direct links, no intermediate hub page ──
+  // Staff & Skills / SOP / Skills Matrix view OTHER people's HR data, so they're
+  // gated behind can_access_hr. Training & Courses stays open to everyone — it's
+  // how every employee reaches their own assigned training.
+  { href: '/production/staff',          label: 'Staff & Skills',             icon: Users,           group: 'HR', permission: 'can_access_hr' },
+  { href: '/training',                  label: 'Training & Courses',         icon: GraduationCap,   group: 'HR' },
+  { href: '/production/staff/sops',     label: 'SOP',                        icon: BookOpen,        group: 'HR', permission: 'can_access_hr' },
+  { href: '/production/staff/matrix',   label: 'Skills Matrix',              icon: BarChart2,       group: 'HR', permission: 'can_access_hr' },
 
   // ── Quality ──
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
@@ -83,10 +89,10 @@ const NAV: NavItem[] = [
   { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['Marketing','Sales','Management'], permission: 'can_access_intelligence' as PermissionKey },
 
   // ── Logistics ──
-  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'] },
-  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'] },
-  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'] },
-  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'] },
+  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
 
   // ── Management ──
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },

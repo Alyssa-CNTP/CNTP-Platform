@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowLeft, GraduationCap, Users2, ClipboardCheck, BarChart3, UserCheck2, BookOpenCheck } from 'lucide-react'
+import { GraduationCap, Users2, ClipboardCheck, BarChart3, UserCheck2, BookOpenCheck } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { HubCard, LockedCard } from '@/components/hr/HubCard'
 import { PageInfoButton } from '@/components/hr/PageInfo'
@@ -16,10 +16,6 @@ export default function TrainingHubPage() {
 
   return (
     <div className="px-4 py-6 max-w-[820px] mx-auto space-y-5">
-      <Link href="/hr" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand">
-        <ArrowLeft size={13} /> HR
-      </Link>
-
       <div>
         <div className="flex items-center gap-1.5">
           <h1 className="font-display font-bold text-[20px] text-text flex items-center gap-2">

@@ -15,7 +15,7 @@ import {
   type Department, type PermissionKey, type Permissions,
 } from '@/lib/auth/permissions'
 import { PERMISSION_MATRIX } from '@/lib/auth/permission-registry'
-import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Clock, ArrowLeft } from 'lucide-react'
+import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Clock } from 'lucide-react'
 
 const ALYSSA_UUID = 'df6cc2b1-c0ec-47ed-bb2e-b07771f3bf0e'
 const JAN_UUID    = 'f73cd225-63f7-4056-918e-f5112c9637e8'
@@ -1189,9 +1189,6 @@ export default function UsersPage() {
 
   return (
     <div className="p-5 max-w-6xl">
-      <Link href="/hr" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand mb-3">
-        <ArrowLeft size={13} /> HR
-      </Link>
       {/* Page header */}
       <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div>

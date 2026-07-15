@@ -96,6 +96,8 @@ export type PermissionKey =
   // Ticketing & Workspace
   | 'can_assign_tickets'
   | 'can_access_workspace'
+  // Logistics
+  | 'can_access_logistics'
   // Maintenance
   | 'can_access_maintenance'
   | 'can_raise_breakdown'
@@ -104,6 +106,7 @@ export type PermissionKey =
   | 'can_qc_jobs'
   | 'can_verify_jobs'
   // Staff & Competency
+  | 'can_access_hr'            // gate for the whole HR section (Staff & Skills, SOP, Skills Matrix)
   | 'can_view_staff'           // directory + profiles + matrix (read-only)
   | 'can_edit_staff_profiles'  // edit profile fields, leave, skills
   | 'can_manage_competencies'  // record / assess employee × SOP competencies
@@ -147,8 +150,10 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
+  'can_access_logistics',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
+  'can_access_hr',
   'can_view_staff','can_edit_staff_profiles','can_manage_competencies',
   'can_manage_sop_catalog','can_allocate_staff','can_delete_staff',
   'can_author_training','can_assign_training','can_view_all_competency',
@@ -316,7 +321,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_inventory: true, can_edit_inventory: true,
     can_view_blends: true, can_edit_blends: true,
     // Staff & Competency
-    can_view_staff: true, can_edit_staff_profiles: true,
+    can_access_hr: true, can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
     can_delete_staff: true,
     // Training — can author/assign courses for their own floor sections
@@ -342,11 +347,11 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
 
   // ── HR — authors & assigns training, owns the org-wide competency view ─────
   training_officer: {
-    can_view_staff: true, can_manage_competencies: true,
+    can_access_hr: true, can_view_staff: true, can_manage_competencies: true,
     can_author_training: true, can_assign_training: true, can_view_all_competency: true,
   },
   hr_manager: {
-    can_view_staff: true, can_edit_staff_profiles: true, can_manage_competencies: true,
+    can_access_hr: true, can_view_staff: true, can_edit_staff_profiles: true, can_manage_competencies: true,
     can_author_training: true, can_assign_training: true, can_view_all_competency: true,
   },
 
@@ -368,7 +373,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_raise_planned: true, can_raise_breakdown: true,
     can_assign_tickets: true,
     // Staff & Competency (assesses maintenance WIs)
-    can_view_staff: true, can_manage_competencies: true,
+    can_access_hr: true, can_view_staff: true, can_manage_competencies: true,
   },
   maintenance_technician: {
     can_raise_planned: true,
@@ -413,7 +418,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_add_sieving_runs: true,
     can_approve_runs: true, can_signoff_day: true,
     // Staff & Competency (assesses lab staff against lab SOPs)
-    can_view_staff: true, can_manage_competencies: true,
+    can_access_hr: true, can_view_staff: true, can_manage_competencies: true,
   },
 
   // ── Quality — Quality Manager: Lab Manager + specs + deletes ───────────────
@@ -429,7 +434,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_add_sieving_runs: true, can_delete_sieving_runs: true,
     can_approve_runs: true, can_signoff_day: true,
     // Staff & Competency (FSSC owner — manages SOP catalogue + assesses)
-    can_view_staff: true, can_edit_staff_profiles: true,
+    can_access_hr: true, can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_manage_sop_catalog: true,
     can_delete_staff: true,
     // Training (FSSC owner — also authors/assigns courses + sees org-wide competency)
@@ -455,7 +460,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_reports:    true,
     can_export_reports:  true,
     // Staff directory (read-only)
-    can_view_staff: true,
+    can_access_hr: true, can_view_staff: true,
     // Training — cross-department competency view (read-only)
     can_view_all_competency: true,
     // Shift roster (read-only, all sections)
@@ -649,6 +654,14 @@ export const PERMISSION_GROUPS: {
     ],
   },
   {
+    group: 'Logistics',
+    // No single department — Production/Quality/Management get it by department;
+    // this permission grants it to anyone else.
+    permissions: [
+      { key: 'can_access_logistics', label: 'Access the Logistics module (grant to other departments)' },
+    ],
+  },
+  {
     group: 'Maintenance',
     department: 'Maintenance',
     permissions: [
@@ -664,6 +677,7 @@ export const PERMISSION_GROUPS: {
     group: 'Staff & Competency',
     // No single department — visible across all roles (grayed if not applicable)
     permissions: [
+      { key: 'can_access_hr',           label: 'Access the HR section (Staff & Skills, SOP, Skills Matrix)' },
       { key: 'can_view_staff',          label: 'View staff directory, profiles & competency matrix' },
       { key: 'can_edit_staff_profiles', label: 'Edit staff profiles, leave & skills/certifications' },
       { key: 'can_manage_competencies', label: 'Record, update & assess staff competencies against SOPs' },
