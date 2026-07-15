@@ -45,7 +45,10 @@ const nowISO = () => new Date().toISOString()
 // MAT-0270) — 7 or 8 characters including the dash. Rejecting anything
 // shorter/dash-less at entry is what catches a dropped digit or a missing
 // dash before it becomes a batch number that doesn't match anything real.
-const isValidLot = (lot: string) => {
+// Exported so downstream sections (Blender's Fine/Coarse Leaf batch number,
+// which is always a Sieving Tower lot) enforce the identical rule rather than
+// a second, potentially-drifting copy of it.
+export const isValidLot = (lot: string) => {
   const v = lot.trim()
   return (v.length === 7 || v.length === 8) && /^[A-Z]+-\d+$/.test(v)
 }

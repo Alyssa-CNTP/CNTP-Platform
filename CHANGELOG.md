@@ -5,6 +5,25 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Blender: enforce Sieving Tower's lot-number format on Fine/Coarse Leaf batch numbers)
+
+Confirmed: Blender's Fine/Coarse Leaf batch-number suggestions already pull straight
+from Sieving Tower's real output records (`useSystemBagsForType`'s in-stock `bag_tags`
+query) — so the batch number being entered here always IS a Sieving Tower lot, and
+should be held to the exact same format rule Sieving Tower itself enforces before
+locking a bag: letter prefix + dash + digits, 7–8 characters (e.g. `GS-0299`).
+
+Exported the existing `isValidLot` check from `SievingCapture.tsx` (unchanged
+otherwise) instead of writing a second copy that could drift, and wired it into
+Blender's batch-number field the same way Sieving already uses it: inline error
+message, and the bag can't be locked ("Done — lock this bag") until the format is
+right — catches a dropped digit or missing dash before it becomes a batch number that
+doesn't match anything real.
+
+**Files:** `components/production/capture/SievingCapture.tsx` (`isValidLot` now
+exported, no behaviour change), `components/production/capture/BlenderCapture.tsx`
+(imports and enforces it).
+
 ## 2026-07-15 — Alyssa (Blender: output bag serials now use the real blend-code format)
 
 Output bags were using the generic per-section serial (`BL-DDMMYY-NNN`) like every
