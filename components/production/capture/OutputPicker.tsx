@@ -48,6 +48,11 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   const batchOptions = batchHints.length
     ? Array.from(new Set(batchHints.filter(Boolean)))
     : Array.from(new Set(dbBatches.filter(Boolean)))
+  // When the caller supplies hints, the batch field is tap-only against that
+  // list — an output can never be tagged with a batch that wasn't debagged
+  // this session, which is what let typos (dash vs dot, wrong case, dropped
+  // digits) silently corrupt the record.
+  const restrictBatch = batchHints.length > 0
   const [query, setQuery]     = useState('')
   const [all, setAll]         = useState<InventoryItem[]>([])
   const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; batchTracked: boolean } | null>(null)
@@ -67,6 +72,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   function confirm() {
     if (!picked || !weight) return
     if (picked.batchTracked && !batch.trim()) return
+    if (picked.batchTracked && restrictBatch && !batchOptions.includes(batch.trim())) return
     // Internally-tracked items carry no operator batch — the barcode is the record.
     onAdd({ productType: picked.productType, code: picked.code, description: picked.description, weight, batch: picked.batchTracked ? (batch || defaultBatch) : '' })
   }
@@ -118,7 +124,10 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               {picked.batchTracked && (
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch *</label>
-                  <BatchKeypadField value={batch} onChange={setBatch} options={batchOptions} placeholder="Tap to enter" className={INP} label="Batch" />
+                  <BatchKeypadField value={batch} onChange={setBatch} options={batchOptions} placeholder="Tap to enter" className={INP} label="Batch" restrictToOptions={restrictBatch} />
+                  {restrictBatch && (
+                    <p className="text-[11px] text-text-muted">Must match a batch debagged this session.</p>
+                  )}
                 </div>
               )}
             </div>
@@ -126,7 +135,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               <p className="text-[11px] text-text-muted flex items-center gap-1.5"><Check size={12} /> Tracked by its bag number{LABEL_PRINTING_ENABLED ? ' (barcode)' : ''} — no batch number needed.</p>
             )}
             {picked.code && <p className="text-[11px] text-text-muted font-mono">{picked.code} · {picked.description}</p>}
-            <button onClick={confirm} disabled={!weight}
+            <button onClick={confirm} disabled={!weight || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
               {LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>}
             </button>
