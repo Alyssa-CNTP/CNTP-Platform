@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Blender: product type is a fixed label per section, not an overridable field)
+
+Follow-up to the manual-entry pass earlier today — the new "Change" link on product
+type let a row's material silently disagree with its own section header (e.g. a
+"Sieved Fine Leaf: Export - Conventional" section showing a row actually logged as
+something else). Since the header already declares exactly what belongs there,
+allowing a per-row override broke that consistency. Removed it: product type is now a
+fixed, non-interactive label matching the section it's under, for every input mode
+(scan/system/manual) — the section identity never changes underneath a row. A genuine
+substitute (the "Cut Heavy Stick vs Corn Cutter" case) now goes through "+ Add Other"
+to create its own distinctly-labelled section instead.
+
+Also tightened scan validation to match: a scanned bag is checked against the section's
+full declared material (not just its grade family) — a mismatch is rejected outright
+with a pointer to "+ Add Other", rather than being accepted under a relabeled type.
+
+**Files:** `components/production/capture/BlenderCapture.tsx` only.
+
 ## 2026-07-15 — Alyssa (Blender: smarter manual entry — pre-filled weight/product type, real batch suggestions, "+ Add Other")
 
 Floor feedback (with screenshots) on Blender's manual-entry flow: it was asking the
