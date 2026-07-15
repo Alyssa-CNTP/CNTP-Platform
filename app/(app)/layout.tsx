@@ -66,7 +66,7 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 
   // Logistics (barcode-driven receiving, warehouse, dispatch)
-  { prefix: '/logistics',        departments: ['Production','Quality','Management'] },
+  { prefix: '/logistics',        departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
 
   // Management — /status is IT's platform-diagnostics module.
   // Cross-department: can_view_management grants access from any department.
@@ -87,6 +87,10 @@ const ROUTE_GUARDS: Array<{
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },
   { prefix: '/tags',       departments: ['Production'] },
+
+  // HR — Staff & Skills, SOP, Skills Matrix view OTHER people's HR data, so they
+  // require can_access_hr. Training (/training core) stays universal — see below.
+  { prefix: '/production/staff', permission: 'can_access_hr' },
 
   // Training — the learner entry (/training) is always-open (see below);
   // these are the HR/training-officer authoring & oversight sub-routes.
@@ -120,7 +124,6 @@ const ROUTE_META: Record<string, {
   '/production/staff/allocation': { title: 'Staff Allocation',   variant: 'default', chips: [{ label: 'Phase 2', color: 'purple' }] },
   '/production/operators':   { title: 'Operators',              variant: 'default' },
   '/info':                   { title: 'Section Information',    variant: 'default' },
-  '/hr':                     { title: 'HR',                      variant: 'default' },
   '/training':               { title: 'Training',                variant: 'default' },
   '/training/my':            { title: 'My Training',             variant: 'default' },
   '/training/manage':        { title: 'Manage Courses',          variant: 'default' },
@@ -292,11 +295,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       pathname === '/dashboard' ||
       pathname === '/settings'  ||
       pathname === '/suggest'   ||
-      // Shift Rosters + Staff Directory are universal (Operations, every role)
+      // Shift Rosters are universal (Operations, every role).
+      // Staff Directory (/production/staff*) is NOT here — it's gated by
+      // can_access_hr via ROUTE_GUARDS above.
       pathname.startsWith('/production/roster') ||
-      pathname.startsWith('/production/staff')  ||
-      // HR hub — a navigation hub; cards inside self-gate, so the page itself is open
-      pathname === '/hr' ||
       // Training — the hub, the learner entry and course player are universal;
       // the /training/manage, /manage/*, /signoff and /competency sub-routes are
       // NOT included here and stay gated by ROUTE_GUARDS below.

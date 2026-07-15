@@ -11,6 +11,8 @@ import { getDefaultRoute } from '@/lib/auth/departments'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { Loader2, AlertCircle } from 'lucide-react'
 
+const IS_STAGING = process.env.NEXT_PUBLIC_APP_ENV === 'staging'
+
 export default function LoginPage() {
   const [error,     setError]     = useState('')
   const [msLoading, setMsLoading] = useState(false)
@@ -37,7 +39,14 @@ export default function LoginPage() {
   return (
     <>
       {/* ── Outer wrapper — mobile: gradient bg, desktop: flex row ── */}
-      <div className="login-outer">
+      <div className="login-outer" data-env={IS_STAGING ? 'staging' : 'production'}>
+
+        {IS_STAGING && (
+          <div className="login-staging-banner">
+            <span className="login-staging-dot" />
+            STAGING ENVIRONMENT — not for real production data
+          </div>
+        )}
 
         {/* ── Form panel ─────────────────────────────────────────── */}
         <div className="login-form-panel">
@@ -156,12 +165,49 @@ export default function LoginPage() {
 
         /* ── Base ── */
         .login-outer {
+          position: relative;
           min-height: 100vh;
           min-height: 100dvh;
           display: flex;
           flex-direction: column;
           background: linear-gradient(150deg, #EDF2FB 0%, #F0F7EE 50%, #FDF4F0 100%);
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+        }
+
+        /* ── Staging banner — fixed/overlaid so it never disturbs the split
+           layout (that's what made the earlier in-flow banner feel awkward).
+           No page-wide recolor, just this one clearly-visible strip. ── */
+        .login-staging-banner {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          z-index: 30;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          height: 34px;
+          background: #FFEDD5;
+          border-bottom: 1px solid #FDBA74;
+          color: #9A3412;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 0.03em;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+        }
+        .login-staging-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #F97316;
+          flex-shrink: 0;
+        }
+        /* Reserve room for the fixed banner so it never covers the logo/content */
+        .login-outer[data-env="staging"] .login-form-panel { padding-top: calc(32px + 34px); }
+        .login-outer[data-env="staging"] .login-photo-panel { margin-top: 34px; }
+          flex: 1;
+          min-height: 0;
         }
 
         /* ── Form panel ── */

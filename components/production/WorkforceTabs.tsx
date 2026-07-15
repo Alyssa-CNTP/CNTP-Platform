@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { CalendarRange, Users, ArrowLeft, GraduationCap } from 'lucide-react'
+import { CalendarRange, Users, GraduationCap } from 'lucide-react'
 
 // Planning sub-nav: only the Shift Roster tab (Staff Directory now lives under
 // the Staff & Skills section). Mirrors the StaffTabs cross-reference pattern —
@@ -12,9 +12,6 @@ export function WorkforceTabs() {
   const active = pathname === '/production/roster' || pathname.startsWith('/production/roster/')
   return (
     <div>
-      <Link href="/hr" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand mb-2">
-        <ArrowLeft size={13} /> HR
-      </Link>
       <div className="flex items-center justify-between border-b border-stone-200">
         <div className="flex items-center gap-0">
           <Link href="/production/roster"

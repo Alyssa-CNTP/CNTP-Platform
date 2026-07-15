@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Users, BarChart2, BookOpen, CalendarRange, ArrowLeft, GraduationCap } from 'lucide-react'
+import { Users, BarChart2, BookOpen, CalendarRange, GraduationCap } from 'lucide-react'
 
 const TABS = [
   { href: '/production/staff',        label: 'Directory',      icon: Users       },
@@ -21,9 +21,6 @@ export function StaffTabs() {
 
   return (
     <div>
-      <Link href="/hr" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand mb-2">
-        <ArrowLeft size={13} /> HR
-      </Link>
       <div className="flex items-center justify-between border-b border-stone-200">
         <div className="flex items-center gap-0 overflow-x-auto">
           {TABS.map(t => (
