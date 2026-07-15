@@ -40,6 +40,14 @@ export function emptySievingData(): SievingData {
 // → period so it always parses and is stored in the DB as a proper decimal.
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 const nowISO = () => new Date().toISOString()
+// Sieving lot numbers are a letter prefix + dash + digits (e.g. GS-0299,
+// MAT-0270) — 7 or 8 characters including the dash. Rejecting anything
+// shorter/dash-less at entry is what catches a dropped digit or a missing
+// dash before it becomes a batch number that doesn't match anything real.
+const isValidLot = (lot: string) => {
+  const v = lot.trim()
+  return (v.length === 7 || v.length === 8) && /^[A-Z]+-\d+$/.test(v)
+}
 // Display a logged-at timestamp in SAST (Africa/Johannesburg), e.g. "13:42".
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
@@ -106,7 +114,7 @@ export function SievingCapture({
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
   // Every field on a bulk bag is mandatory before it can be locked.
-  const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && !!r.lot.trim() && n(r.nett) > 0
+  const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && isValidLot(r.lot) && n(r.nett) > 0
 
   // ── Auto-secure: completed bulk bags lock themselves (with a timestamp) as
   // the operator moves on — they never have to remember to tap "secure". Only a
@@ -339,7 +347,10 @@ export function SievingCapture({
                     <div className="space-y-1"><label className={LBL}>Bag no.</label>
                       <BatchKeypadField value={r.bag_no} disabled={locked} onChange={v => updateDebag(r.id, 'bag_no', v)} className={INP} label="Bag no." /></div>
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
-                      <BatchKeypadField value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} label="Lot / serial" placeholder="Tap to enter" /></div>
+                      <BatchKeypadField value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} label="Lot / serial" placeholder="Tap to enter" />
+                      {r.lot.trim() && !isValidLot(r.lot) && (
+                        <p className="text-[11px] text-err">Expected a letter prefix + dash + digits, 7–8 characters (e.g. GS-0299).</p>
+                      )}</div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
                       <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
@@ -348,7 +359,7 @@ export function SievingCapture({
                       </select></div>
                   </div>
                   {!locked && (() => {
-                    const missing = [!r.bag_no.trim() && 'bag no.', !r.lot.trim() && 'lot', n(r.nett) <= 0 && 'weight'].filter(Boolean).join(', ')
+                    const missing = [!r.bag_no.trim() && 'bag no.', !r.lot.trim() && 'lot', r.lot.trim() && !isValidLot(r.lot) && 'a valid lot format', n(r.nett) <= 0 && 'weight'].filter(Boolean).join(', ')
                     return (
                       <>
                         <button onClick={() => setDebagSecured(r.id, true)} disabled={!debagComplete(r)}
