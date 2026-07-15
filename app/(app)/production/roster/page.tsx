@@ -279,6 +279,9 @@ export default function RosterPage() {
                  { onConflict: 'period_id,section' })
       if (error) throw error
       setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'submitted', submitted_by: user?.id ?? null, submitted_at } }))
+      // The DB trigger just deleted any outstanding reminder for this section —
+      // nudge the bell (already mounted in the layout) to drop it immediately.
+      window.dispatchEvent(new CustomEvent('notifications:refresh'))
     } catch (err) {
       console.error('submitSection failed', err)
     } finally {

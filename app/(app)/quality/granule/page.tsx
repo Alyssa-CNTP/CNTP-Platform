@@ -1034,7 +1034,7 @@ function GranuleAddTastingModal({ run, sampleId, onSave, onClose }: { run: any; 
 
 // ─── GranuleInlineTastingRow ──────────────────────────────────────────────────
 
-function GranuleInlineTastingRow({ tasting, colCount, rowBg, onSave }: { tasting: any; colCount: number; rowBg: string; onSave: (id: number, f: any) => void }) {
+function GranuleInlineTastingRow({ tasting, colCount, rowBg, onSave, onDelete }: { tasting: any; colCount: number; rowBg: string; onSave: (id: number, f: any) => void; onDelete: (id: number) => void }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({ assessed_by: tasting.assessed_by || '', granule_aroma: tasting.granule_aroma ?? '', flavour_profile: tasting.flavour_profile ?? '', briskness: tasting.briskness ?? '', strength: tasting.strength ?? '', cup_colour: tasting.cup_colour ?? '', notes: tasting.notes || '', pass_reject: tasting.pass_reject || 'Pass' })
   const [saving, setSaving] = useState(false)
@@ -1063,6 +1063,7 @@ function GranuleInlineTastingRow({ tasting, colCount, rowBg, onSave }: { tasting
             {form.notes && <span className="text-[10px] text-text-muted italic max-w-[200px] truncate overflow-hidden">"{form.notes}"</span>}
             <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${form.pass_reject === 'Pass' ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>{form.pass_reject}</span>
             <button onClick={() => setEditing(true)} className="text-[10px] px-2 py-0.5 rounded border border-surface-rule bg-surface-card cursor-pointer ml-auto">✏️ Edit</button>
+            <button onClick={() => onDelete(tasting.id)} className="text-[10px] px-2 py-0.5 rounded border border-err/30 bg-err/8 text-err cursor-pointer" title="Delete tasting">🗑</button>
           </div>
         </td>
       </tr>
@@ -1360,13 +1361,14 @@ interface RunCardProps {
   onDeleteSample: (id: number) => void
   onCommentSample: (id: number, f: any) => void
   onEditTasting: (id: number, f: any) => void
+  onDeleteTasting: (id: number) => void
   onUpdateBatch: (id: number, bn: string) => void
   onAllocate: (id: number) => void
   onRecall: (id: number) => void
   canApprove: boolean
 }
 
-function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onDeleteSample, onCommentSample, onEditTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
+function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onFinalise, onUpdateSpec, onRecheckSample, onEditSample, onDeleteSample, onCommentSample, onEditTasting, onDeleteTasting, onUpdateBatch, onAllocate, onRecall, canApprove }: RunCardProps) {
   const [expanded, setExpanded]         = useState(true)
   const [editingSpec, setEditingSpec]   = useState(false)
   const [editingSample, setEditingSample] = useState<any>(null)
@@ -1587,15 +1589,15 @@ function GranuleRunCard({ run, isAdmin, onAddSample, onAddTasting, onDelete, onF
                         </tr>
                         {/* Inline tastings — newest first */}
                         {(run.tastings || []).filter((t: any) => t.sample_id === s.id).slice().reverse().map((t: any, ti: number) => (
-                          <GranuleInlineTastingRow key={t.id} tasting={t} colCount={colCount} rowBg={ti % 2 === 0 ? '#fdf8f5' : '#faf5f0'} onSave={onEditTasting} />
+                          <GranuleInlineTastingRow key={t.id} tasting={t} colCount={colCount} rowBg={ti % 2 === 0 ? '#fdf8f5' : '#faf5f0'} onSave={onEditTasting} onDelete={onDeleteTasting} />
                         ))}
-                        {/* Add tasting — capped at exactly one tasting per batch; once recorded, only editing the existing tasting (above) is allowed */}
+                        {/* Add tasting — capped at exactly one tasting per sample; once recorded, only editing the existing tasting (above) is allowed */}
                         <tr style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
                           <td colSpan={colCount} className="px-4 py-1.5 pl-7">
-                            {noTastings ? (
+                            {!(run.tastings || []).some((t: any) => t.sample_id === s.id) ? (
                               <button onClick={() => onAddTasting(run, s.id)} className="text-[10px] px-2.5 py-1 rounded-lg font-semibold cursor-pointer" style={{ border: '1px solid #d97706', background: '#fef3c7', color: '#92400e' }}>🍵 Add Tasting</button>
                             ) : (
-                              <span className="text-[10px] text-text-muted italic">🍵 One tasting already recorded for this batch — edit it above instead of adding another.</span>
+                              <span className="text-[10px] text-text-muted italic">🍵 Tasting already recorded for this sample — edit it above instead of adding another.</span>
                             )}
                           </td>
                         </tr>
@@ -2146,7 +2148,9 @@ export default function GranulePage() {
 
   async function handleAddTasting(form: any) {
     const run = runs.find(r => r.id === form.run_id)
-    if (run && (run.tastings || []).length > 0) { alert('This batch already has a tasting record — edit the existing one instead of adding another.'); setTastingTarget(null); return }
+    if (run && (run.tastings || []).some((t: any) => t.sample_id === form.sample_id)) {
+      alert('This sample already has a tasting record — edit the existing one instead of adding another.'); setTastingTarget(null); return
+    }
     const { data, error } = await db.schema('qms').from('granule_tastings').insert({
       run_id: form.run_id, sample_id: form.sample_id || null, assessed_by: form.assessed_by || '',
       tasting_time: form.tasting_time || '', granule_aroma: form.granule_aroma || null,
@@ -2219,6 +2223,13 @@ export default function GranulePage() {
     const { data, error } = await db.schema('qms').from('granule_tastings').update(form).eq('id', tastingId).select().single()
     if (error) { alert(error.message); return }
     setRuns(prev => prev.map(r => ({ ...r, tastings: (r.tastings || []).map((t: any) => t.id === tastingId ? { ...t, ...data } : t) })))
+  }
+
+  async function handleDeleteTasting(tastingId: number) {
+    if (!confirm('Delete this tasting record?')) return
+    const { error } = await db.schema('qms').from('granule_tastings').delete().eq('id', tastingId)
+    if (error) { alert(error.message); return }
+    setRuns(prev => prev.map(r => ({ ...r, tastings: (r.tastings || []).filter((t: any) => t.id !== tastingId) })))
   }
 
   async function handleDeleteSample(sampleId: number) {
@@ -2356,6 +2367,7 @@ export default function GranulePage() {
                 onDeleteSample={handleDeleteSample}
                 onCommentSample={handleCommentSample}
                 onEditTasting={handleEditTasting}
+                onDeleteTasting={handleDeleteTasting}
                 onUpdateBatch={handleUpdateBatch}
                 onAllocate={handleAllocateRun}
                 onRecall={handleRecallRun}
