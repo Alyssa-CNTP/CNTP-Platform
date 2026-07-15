@@ -69,12 +69,17 @@ export interface BlenderOutputBag {
 
 export interface BlenderData {
   bomId: string | null    // the blend code this production is running — owned by the production, not the shift assignment, so a shift can run several blends without a supervisor re-editing Assign each time
+  // Which numbered run of this blend code these output bags belong to — the "1" in
+  // SFC-KUN25-C/1-01. Resolved once (from existing bag_tags for this blend) the
+  // first time an output bag is created, then reused for every bag in this
+  // production so a page reload/rejoin can't renumber mid-batch.
+  outputRunNo: number | null
   inputs: BlenderInputBag[]
   outputs: BlenderOutputBag[]
 }
 
 export function emptyBlenderData(): BlenderData {
-  return { bomId: null, inputs: [], outputs: [] }
+  return { bomId: null, outputRunNo: null, inputs: [], outputs: [] }
 }
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
@@ -200,14 +205,16 @@ function SystemPickList({ productType, onPick, onClose }: {
   )
 }
 
-// ── Scan row — auto-fills from a scan/lookup, but the product-type field is a
-// live Master Inventory search so the operator can confirm or override it when
-// the actual material differs from what the BOM nominally declared for this slot.
+// ── Scan row — the product type is fixed to this section's declared material
+// (the header already says what it is; showing an override here would let a
+// row silently disagree with its own section). A scanned/picked bag that
+// doesn't actually match gets rejected, not silently accepted under a
+// relabeled type — a genuine substitute belongs in its own "+ Add Other"
+// section, not folded into this one under a different name.
 
-function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, onRemove }: {
+function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove }: {
   row: BlenderInputBag
   group: BlendIngredientGroup
-  items: InventoryItem[]
   variantWord: string
   locked: boolean
   onUpdate: (k: keyof BlenderInputBag, v: string) => void
@@ -217,36 +224,27 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
   const [looking, setLooking] = useState(false)
   const [scanMsg, setScanMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  // Product type is already known the moment it's set (the BOM declared it, or a
-  // scan/pick resolved it) — default to a confirmed display, not an active search;
-  // "Change" is the deliberate override action, not the default interaction.
-  const [changingType, setChangingType] = useState(false)
   // Batches actually in stock for this exact material — same data the system-pick
   // list uses — so the operator picks a batch that's real, not a guess.
   const systemBags = useSystemBagsForType(group.label)
   const availableLots = Array.from(new Set(systemBags.map(b => (b.lot_number ?? '').trim()).filter(Boolean)))
 
-  const expectedGrade = parseGrade(group.label)
+  const normalise = (s: string) => s.trim().toLowerCase()
 
   const triggerLookup = useCallback(async () => {
     if (!row.serial.trim()) return
     setLooking(true)
-    // No allowedTypes gate here — materials genuinely substitute (e.g. a blend's
-    // "Other" slot might be Cut Heavy Stick one run, Corn Cutter Fine Leaf the
-    // next); the operator confirms the real product type via the search field
-    // below. Existence / already-consumed / variant-family / finished-product
-    // checks still apply — those are real mistakes, not substitutions. Grade
-    // (Export / Export Blend / Domestic), however, is enforced below — a bag
-    // graded at Sieving Tower cannot be re-graded on the way into a blend.
+    // Existence / already-consumed / variant-family / finished-product checks
+    // happen in validateBagScan; the material-identity check happens here —
+    // this section is exactly one declared item, so the scanned bag must match
+    // it exactly, not just its grade family.
     const result = await validateBagScan(row.serial, { sessionVariant: variantWord })
     setLooking(false)
     if (result.status === 'ok' && result.tag) {
-      const scannedGrade = parseGrade(result.tag.product_type)
-      if (expectedGrade && scannedGrade && scannedGrade !== expectedGrade) {
-        setScanMsg({ kind: 'error', text: `⛔ Grade mismatch — this bag is "${scannedGrade}" but ${group.label} requires "${expectedGrade}". Scan the correct bag.` })
+      if (normalise(result.tag.product_type) !== normalise(group.label)) {
+        setScanMsg({ kind: 'error', text: `⛔ This bag is "${result.tag.product_type}", but this section is for "${group.label}". If it's a genuine substitute, remove this row and use "+ Add Other" instead.` })
         return
       }
-      onUpdate('productType', result.tag.product_type)
       onUpdate('productCode', result.tag.acumatica_id || '')
       onUpdate('weight', result.tag.weight_kg != null ? String(result.tag.weight_kg) : '')
       onUpdate('variant', result.tag.variant || variantWord || '')
@@ -259,7 +257,7 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
     } else {
       setScanMsg({ kind: 'error', text: result.message })
     }
-  }, [row.serial, variantWord, group, expectedGrade, onUpdate])
+  }, [row.serial, variantWord, group, onUpdate])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') { e.preventDefault(); triggerLookup() }
@@ -301,31 +299,12 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1 col-span-2">
           <label className={LBL}>Product type</label>
-          {row.productType && !changingType ? (
-            <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50">
-              <span className="text-[14px] text-text truncate">{row.productType}</span>
-              {!locked && (
-                <button onClick={() => setChangingType(true)} className="text-[12px] font-medium text-brand hover:underline shrink-0">Change</button>
-              )}
-            </div>
-          ) : (
-            <>
-              <ItemPicker items={items} placeholder={`Search item… (expected: ${group.label})`}
-                onPick={it => {
-                  const pickedGrade = parseGrade(it.description)
-                  if (expectedGrade && pickedGrade && pickedGrade !== expectedGrade) {
-                    setScanMsg({ kind: 'error', text: `⛔ Grade mismatch — "${it.description}" is ${pickedGrade} but ${group.label} requires ${expectedGrade}.` })
-                    return
-                  }
-                  onUpdate('productType', it.description || it.inventory_id)
-                  onUpdate('productCode', it.inventory_id)
-                  setScanMsg(null)
-                  setChangingType(false)
-                }}
-                className={INP} />
-              <p className="text-[10px] text-stone-300 px-1">Search Master Inventory if it's not {group.label}</p>
-            </>
-          )}
+          <div className="px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50">
+            <span className="text-[14px] text-text truncate">{row.productType}</span>
+          </div>
+          <p className="text-[10px] text-stone-400 px-1">
+            Fixed to this section — for a different material, remove this row and use "+ Add Other" below.
+          </p>
           {row.destination && (
             <p className="text-[10px] text-stone-400 px-1">Grade: <span className="font-medium text-stone-500">{row.destination}</span></p>
           )}
@@ -435,11 +414,46 @@ export function BlenderCapture({
   const [extraGroups, setExtraGroups] = useState<BlendIngredientGroup[]>([])
   const [addingOther, setAddingOther] = useState(false)
   const [items, setItems] = useState<InventoryItem[]>([])
+  // Bag sequence + run number for this blend's output serials — seeded once
+  // from bag_tags (see genBlendSerial), then read from the ref rather than
+  // `value` for the rest of this function call: `patch()` only takes effect
+  // on the next render, so re-reading `value.outputRunNo` immediately after
+  // calling it would still see the stale (null) value.
+  const bagSeqRef = useRef<number | null>(null)
+  const runNoRef = useRef<number | null>(null)
   const variantShort = variantToShort(variantWord as any) as ShortVariant
   const workCentre = WORK_CENTRE_FOR_SECTION[sectionId] ?? '05-BLENDER BIG'
 
   const patch = (p: Partial<BlenderData>) => onChange({ ...value, ...p })
   const bomId = value.bomId
+
+  // The real serial convention for a blend's output bags — confirmed from actual
+  // operator reports: {blendCode}/{runNo}-{bagNo}, e.g. SFC-KUN25-C/1-01. runNo
+  // distinguishes separate runs of the same blend (resolved once per production,
+  // from whatever's already in bag_tags for this code); bagNo is sequential
+  // within that run. Falls back to the generic section serial if somehow called
+  // before a blend is chosen (shouldn't happen — the bagging tab is gated on it).
+  async function genBlendSerial(): Promise<string> {
+    if (!bomId) return genSerial()
+    if (bagSeqRef.current === null || runNoRef.current === null) {
+      const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const { data } = await getDb().schema('production').from('bag_tags')
+        .select('serial_number').ilike('serial_number', `${bomId}/%`)
+      const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
+      let runNo = value.outputRunNo
+      if (!runNo) {
+        const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)
+        const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
+        runNo = (runs.length ? Math.max(...runs) : 0) + 1
+        patch({ outputRunNo: runNo })
+      }
+      runNoRef.current = runNo
+      const bagPattern = new RegExp(`^${escaped}\\/${runNo}-(\\d+)$`)
+      bagSeqRef.current = serials.reduce((max, s) => { const m = s.match(bagPattern); return m ? Math.max(max, parseInt(m[1], 10)) : max }, 0)
+    }
+    bagSeqRef.current += 1
+    return `${bomId}/${runNoRef.current}-${String(bagSeqRef.current).padStart(2, '0')}`
+  }
 
   // Prefill from the shift assignment once, purely as a convenience default —
   // the blend picker below is what actually owns this production's blend, so a
@@ -485,14 +499,17 @@ export function BlenderCapture({
 
   function addManualRow(group: BlendIngredientGroup, mode: BlenderInputBag['inputMode']) {
     const locked_ = lockCompleted(value.inputs)
-    const productType = mode === 'manual' ? group.label : ''
+    // Product type is fixed to the section's declared material from the moment a
+    // row exists — the section header already says what it is, whichever input
+    // mode is used to log it. A scanned bag that doesn't match gets rejected in
+    // ScanRow, not silently accepted under a different label.
     patch({ inputs: [...locked_, {
-      id: crypto.randomUUID(), itemKey: group.key, serial: '', productType, productCode: '', variant: variantWord || '',
+      id: crypto.randomUUID(), itemKey: group.key, serial: '', productType: group.label, productCode: '', variant: variantWord || '',
       // Fine/Coarse Leaf bags are a standard 300kg — a starting figure the operator
       // confirms, not a forced value. No lot prefill — batch number is picked fresh
       // each time from what's actually in stock (see the BatchKeypadField below),
       // never defaulted from the shift's blend code or anything else.
-      weight: group.hasLot ? '300' : '', lot: '', destination: parseGrade(productType) ?? '',
+      weight: group.hasLot ? '300' : '', lot: '', destination: parseGrade(group.label) ?? '',
       inputMode: mode, secured: false,
     }] })
   }
@@ -546,7 +563,7 @@ export function BlenderCapture({
 
   async function addOutputBag(weight: string) {
     if (n(weight) <= 0) return
-    const serial = genSerial()
+    const serial = await genBlendSerial()
     const now = nowISO()
     try {
       await getDb().schema('production').from('bag_tags').upsert({
@@ -693,7 +710,7 @@ export function BlenderCapture({
                         {!locked && <button onClick={() => unlockInput(r.id)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Edit</button>}
                       </div>
                     ) : (
-                      <ScanRow key={r.id} row={r} group={g} items={items} variantWord={variantWord} locked={locked}
+                      <ScanRow key={r.id} row={r} group={g} variantWord={variantWord} locked={locked}
                         onUpdate={(k, v) => updateInput(r.id, k, v)} onSecure={() => secureInput(r.id)} onRemove={() => removeInput(r.id)} />
                     ))}
 
