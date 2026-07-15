@@ -11,6 +11,7 @@ import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } 
 import { loadAllInventory } from '@/lib/production/inventory'
 import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
+import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
@@ -216,6 +217,14 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
   const [looking, setLooking] = useState(false)
   const [scanMsg, setScanMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Product type is already known the moment it's set (the BOM declared it, or a
+  // scan/pick resolved it) — default to a confirmed display, not an active search;
+  // "Change" is the deliberate override action, not the default interaction.
+  const [changingType, setChangingType] = useState(false)
+  // Batches actually in stock for this exact material — same data the system-pick
+  // list uses — so the operator picks a batch that's real, not a guess.
+  const systemBags = useSystemBagsForType(group.label)
+  const availableLots = Array.from(new Set(systemBags.map(b => (b.lot_number ?? '').trim()).filter(Boolean)))
 
   const expectedGrade = parseGrade(group.label)
 
@@ -291,19 +300,32 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1 col-span-2">
-          <label className={LBL}>Product type <span className="text-stone-300 font-normal">— search Master Inventory if it's not {group.label}</span></label>
-          <ItemPicker items={items} placeholder={row.productType || `Search item… (expected: ${group.label})`}
-            onPick={it => {
-              const pickedGrade = parseGrade(it.description)
-              if (expectedGrade && pickedGrade && pickedGrade !== expectedGrade) {
-                setScanMsg({ kind: 'error', text: `⛔ Grade mismatch — "${it.description}" is ${pickedGrade} but ${group.label} requires ${expectedGrade}.` })
-                return
-              }
-              onUpdate('productType', it.description || it.inventory_id)
-              onUpdate('productCode', it.inventory_id)
-              setScanMsg(null)
-            }}
-            className={INP} />
+          <label className={LBL}>Product type</label>
+          {row.productType && !changingType ? (
+            <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50">
+              <span className="text-[14px] text-text truncate">{row.productType}</span>
+              {!locked && (
+                <button onClick={() => setChangingType(true)} className="text-[12px] font-medium text-brand hover:underline shrink-0">Change</button>
+              )}
+            </div>
+          ) : (
+            <>
+              <ItemPicker items={items} placeholder={`Search item… (expected: ${group.label})`}
+                onPick={it => {
+                  const pickedGrade = parseGrade(it.description)
+                  if (expectedGrade && pickedGrade && pickedGrade !== expectedGrade) {
+                    setScanMsg({ kind: 'error', text: `⛔ Grade mismatch — "${it.description}" is ${pickedGrade} but ${group.label} requires ${expectedGrade}.` })
+                    return
+                  }
+                  onUpdate('productType', it.description || it.inventory_id)
+                  onUpdate('productCode', it.inventory_id)
+                  setScanMsg(null)
+                  setChangingType(false)
+                }}
+                className={INP} />
+              <p className="text-[10px] text-stone-300 px-1">Search Master Inventory if it's not {group.label}</p>
+            </>
+          )}
           {row.destination && (
             <p className="text-[10px] text-stone-400 px-1">Grade: <span className="font-medium text-stone-500">{row.destination}</span></p>
           )}
@@ -316,8 +338,8 @@ function ScanRow({ row, group, items, variantWord, locked, onUpdate, onSecure, o
         {group.hasLot && (
           <div className="space-y-1 col-span-2">
             <label className={LBL + ' text-amber-600'}>Batch number <span className="text-red-500">*</span></label>
-            <input type="text" value={row.lot} disabled={locked} placeholder="e.g. GS-0271"
-              onChange={e => onUpdate('lot', e.target.value.toUpperCase())}
+            <BatchKeypadField value={row.lot} disabled={locked} placeholder="e.g. GS-0271" options={availableLots}
+              onChange={v => onUpdate('lot', v)}
               className={INP + (!row.lot.trim() ? ' border-amber-400 focus:ring-amber-300' : '')} />
           </div>
         )}
@@ -407,6 +429,11 @@ export function BlenderCapture({
   const [showSystemPick, setShowSystemPick] = useState<string | null>(null)   // item key, or null
   const [outputWeight, setOutputWeight] = useState('')
   const [groups, setGroups] = useState<BlendIngredientGroup[]>([])
+  // Materials the operator added that aren't part of the blend's declared recipe —
+  // client-side only, never written back to bom_components (that stays curated on
+  // the Blends page). Merged with the BOM-declared groups for rendering/totals.
+  const [extraGroups, setExtraGroups] = useState<BlendIngredientGroup[]>([])
+  const [addingOther, setAddingOther] = useState(false)
   const [items, setItems] = useState<InventoryItem[]>([])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
   const workCentre = WORK_CENTRE_FOR_SECTION[sectionId] ?? '05-BLENDER BIG'
@@ -427,27 +454,45 @@ export function BlenderCapture({
 
   useEffect(() => {
     if (!bomId) { setGroups([]); return }
+    setExtraGroups([])
     getBlendComponents(bomId).then(comps => setGroups(groupComponentsByItem(comps)))
   }, [bomId])
 
+  const allGroups = [...groups, ...extraGroups]
   const blendLocked = value.inputs.length > 0 || value.outputs.length > 0
+
+  function addOtherMaterial(it: InventoryItem) {
+    const key = it.inventory_id
+    if (!allGroups.some(g => g.key === key)) {
+      const label = it.description || it.inventory_id
+      setExtraGroups(gs => [...gs, {
+        key, componentItemId: key, label, column: 'F', targetPct: 0,
+        hasLot: /fine leaf|coarse leaf/i.test(label),
+      }])
+    }
+    setAddingOther(false)
+  }
 
   // ── Input bag helpers ──────────────────────────────────────────────────────
 
   const inputComplete = (r: BlenderInputBag) =>
-    !!r.serial.trim() && !!r.productType && n(r.weight) > 0 && (!groups.find(g => g.key === r.itemKey)?.hasLot || !!r.lot.trim())
+    !!r.serial.trim() && !!r.productType && n(r.weight) > 0 && (!allGroups.find(g => g.key === r.itemKey)?.hasLot || !!r.lot.trim())
 
   const lockCompleted = (rows: BlenderInputBag[]): BlenderInputBag[] => {
     const t = nowISO()
     return rows.map(r => (!r.secured && inputComplete(r)) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
   }
 
-  function addManualRow(itemKey: string, mode: BlenderInputBag['inputMode'], declaredLabel: string) {
+  function addManualRow(group: BlendIngredientGroup, mode: BlenderInputBag['inputMode']) {
     const locked_ = lockCompleted(value.inputs)
-    const productType = mode === 'manual' ? declaredLabel : ''
+    const productType = mode === 'manual' ? group.label : ''
     patch({ inputs: [...locked_, {
-      id: crypto.randomUUID(), itemKey, serial: '', productType, productCode: '', variant: variantWord || '',
-      weight: '', lot: assignment?.lot_number ?? '', destination: parseGrade(productType) ?? '',
+      id: crypto.randomUUID(), itemKey: group.key, serial: '', productType, productCode: '', variant: variantWord || '',
+      // Fine/Coarse Leaf bags are a standard 300kg — a starting figure the operator
+      // confirms, not a forced value. No lot prefill — batch number is picked fresh
+      // each time from what's actually in stock (see the BatchKeypadField below),
+      // never defaulted from the shift's blend code or anything else.
+      weight: group.hasLot ? '300' : '', lot: '', destination: parseGrade(productType) ?? '',
       inputMode: mode, secured: false,
     }] })
   }
@@ -614,17 +659,21 @@ export function BlenderCapture({
                 Blend <strong className="font-mono">{bomId}</strong> — only its ingredients are shown below. Scan the barcode, pick from the system, or enter manually; search Master Inventory if the actual material differs from what's declared.
               </p>
 
-              {groups.map(g => {
+              {allGroups.map(g => {
                 const rows = value.inputs.filter(r => r.itemKey === g.key)
                 const kg = byItem[g.key] ?? 0
                 const pct = totalIn > 0 ? (kg / totalIn) * 100 : 0
+                const isExtra = extraGroups.some(e => e.key === g.key)
                 return (
                   <div key={g.key} className="space-y-2">
                     <div className="flex items-center justify-between px-1">
-                      <span className="text-[12px] font-bold" style={{ color: DEBAG_COLOR }}>{g.label}</span>
+                      <span className="text-[12px] font-bold flex items-center gap-1.5" style={{ color: DEBAG_COLOR }}>
+                        {g.label}
+                        {isExtra && <span className="text-[9px] font-semibold uppercase tracking-wide text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded-full">not in recipe</span>}
+                      </span>
                       <span className="text-[11px] font-mono text-stone-500">
                         {kg.toFixed(1)} kg · {pct.toFixed(0)}%
-                        <span className="text-stone-300"> / target {(g.targetPct * 100).toFixed(0)}%</span>
+                        {!isExtra && <span className="text-stone-300"> / target {(g.targetPct * 100).toFixed(0)}%</span>}
                       </span>
                     </div>
 
@@ -668,7 +717,7 @@ export function BlenderCapture({
                               style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
                               <Search size={15} /> Browse in-stock bags
                             </button>
-                          : <button onClick={() => addManualRow(g.key, addMode, g.label)}
+                          : <button onClick={() => addManualRow(g, addMode)}
                               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
                               style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
                               <Plus size={15} /> {addMode === 'scan' ? `Add ${g.label} bag to scan` : `Add ${g.label} bag manually`}
@@ -679,6 +728,22 @@ export function BlenderCapture({
                   </div>
                 )
               })}
+
+              {/* A material not part of the blend's declared recipe — deliberately a
+                  separate action from the sections above, not styled like just
+                  another expected ingredient. */}
+              {!locked && (addingOther ? (
+                <div className="space-y-2 p-3 rounded-2xl border-2 border-dashed border-stone-300">
+                  <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide px-1">Add a material not in this blend's recipe</p>
+                  <ItemPicker items={items} placeholder="Search Master Inventory…" onPick={addOtherMaterial} className={INP} />
+                  <button onClick={() => setAddingOther(false)} className="text-[12px] text-stone-400 hover:text-text px-1">Cancel</button>
+                </div>
+              ) : (
+                <button onClick={() => setAddingOther(true)}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
+                  <Plus size={15} /> Add Other — search Master Inventory
+                </button>
+              ))}
 
               <div className="flex items-center justify-between px-4 py-3 bg-stone-900 text-white rounded-2xl">
                 <span className="text-[12px] font-medium opacity-80">Total — raw material mixed in (I)</span>
@@ -719,11 +784,11 @@ export function BlenderCapture({
               </div>
 
               {/* Blend component ratio table — target vs actual */}
-              {groups.length > 0 && (
+              {allGroups.length > 0 && (
                 <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
                   <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">Blend component ratio — target vs actual</p>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {groups.map(g => {
+                    {allGroups.map(g => {
                       const kg = byItem[g.key] ?? 0
                       const actualPct = totalIn > 0 ? (kg / totalIn) * 100 : 0
                       const targetPct = g.targetPct * 100

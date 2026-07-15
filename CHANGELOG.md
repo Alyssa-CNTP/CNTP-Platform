@@ -5,6 +5,32 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-15 — Alyssa (Blender: smarter manual entry — pre-filled weight/product type, real batch suggestions, "+ Add Other")
+
+Floor feedback (with screenshots) on Blender's manual-entry flow: it was asking the
+operator to redo work the system already knew the answer to, and had one outright bug.
+
+1. **Batch number was pre-filled with the blend code** (e.g. `SFC30-KUN25-C` showing up
+   in a "Batch number" field meant for a Sieving Tower lot like `GS-0415`) — a bug, not
+   a design choice. Removed the `assignment.lot_number` prefill entirely and replaced
+   the plain text field with the same `BatchKeypadField` Sieving Tower already uses
+   (tappable recent-value chips), sourced from batches *actually in stock* for this
+   exact material (reusing the query already built for system-pick) rather than a
+   guess — "confirm based on the batch number and what's existing in the system."
+2. **Weight now pre-fills to 300kg** for Fine Leaf / Coarse Leaf manual rows (the
+   standard bag weight, same convention `OutputPicker.tsx` already uses for Sieving) —
+   a starting figure the operator confirms, not a forced value.
+3. **Product type is now a confirmed display, not an active search box**, whenever it's
+   already known (which is always, for a BOM-declared slot — the recipe already says
+   exactly what goes there). Searching Master Inventory is now a deliberate "Change"
+   action for the override case, not the default interaction every time.
+4. **"+ Add Other"** — a distinct, separate action at the end of the ingredient list for
+   logging a material that isn't part of the blend's declared recipe at all (searches
+   Master Inventory, creates its own section going forward, flagged "not in recipe" in
+   the ratio table) — instead of every ingredient slot looking like it might need one.
+
+**Files:** `components/production/capture/BlenderCapture.tsx` only.
+
 ## 2026-07-15 — Alyssa (Production: schema audit + Sieving Tower per-bag print/write choice + FT-CON run fix)
 
 Ran a full audit of the `production` schema (grown across ~15 migrations, hard to see
