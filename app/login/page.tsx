@@ -42,9 +42,9 @@ export default function LoginPage() {
       <div className="login-outer" data-env={IS_STAGING ? 'staging' : 'production'}>
 
         {IS_STAGING && (
-          <div className="login-staging-badge">
+          <div className="login-staging-banner">
             <span className="login-staging-dot" />
-            Staging
+            STAGING ENVIRONMENT — not for real production data
           </div>
         )}
 
@@ -174,34 +174,38 @@ export default function LoginPage() {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
         }
 
-        /* ── Staging — small, quiet corner badge only, no page-wide recolor ── */
-        .login-staging-badge {
+        /* ── Staging banner — fixed/overlaid so it never disturbs the split
+           layout (that's what made the earlier in-flow banner feel awkward).
+           No page-wide recolor, just this one clearly-visible strip. ── */
+        .login-staging-banner {
           position: fixed;
-          top: 14px;
-          right: 14px;
-          z-index: 20;
+          top: 0;
+          left: 0;
+          right: 0;
+          z-index: 30;
           display: flex;
           align-items: center;
-          gap: 6px;
-          padding: 5px 12px;
-          border-radius: 20px;
-          background: rgba(255,255,255,0.9);
-          backdrop-filter: blur(6px);
-          -webkit-backdrop-filter: blur(6px);
-          border: 1px solid #FDBA74;
+          justify-content: center;
+          gap: 8px;
+          height: 34px;
+          background: #FFEDD5;
+          border-bottom: 1px solid #FDBA74;
           color: #9A3412;
-          font-size: 11px;
-          font-weight: 600;
+          font-size: 12px;
+          font-weight: 700;
           letter-spacing: 0.03em;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+          box-shadow: 0 1px 4px rgba(0,0,0,0.05);
         }
         .login-staging-dot {
-          width: 6px;
-          height: 6px;
+          width: 7px;
+          height: 7px;
           border-radius: 50%;
           background: #F97316;
           flex-shrink: 0;
         }
+        /* Reserve room for the fixed banner so it never covers the logo/content */
+        .login-outer[data-env="staging"] .login-form-panel { padding-top: calc(32px + 34px); }
+        .login-outer[data-env="staging"] .login-photo-panel { margin-top: 34px; }
           flex: 1;
           min-height: 0;
         }
