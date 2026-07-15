@@ -130,6 +130,15 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Cross-department — Production/Quality/Management get it by department;
+    // this permission grants it to anyone outside those departments.
+    module: 'Logistics',
+    resources: [
+      { key: 'logistics.access', label: 'Logistics module', read: 'can_access_logistics',
+        note: 'Grant Read to give a non-Production/Quality/Management user the module.' },
+    ],
+  },
+  {
     module: 'Management', department: 'Management',
     resources: [
       { key: 'management.dashboard', label: 'Management dashboard & reports',
@@ -152,6 +161,9 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     // Cross-department — no single department owns this.
     module: 'Staff & Competency',
     resources: [
+      { key: 'staff.access', label: 'HR section (Staff & Skills, SOP, Skills Matrix)',
+        read: 'can_access_hr',
+        note: 'Grant Read to give someone the HR module at all — the resources below control what they see once inside.' },
       { key: 'staff.directory', label: 'Staff directory & profiles',
         read: 'can_view_staff', write: 'can_edit_staff_profiles',
         manage: [{ key: 'can_delete_staff', label: 'Delete staff records' }] },
