@@ -121,6 +121,15 @@ const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 const DEBAG_COLOR = '#7c3aed'
 const BAG_COLOR   = '#d97706'
 
+// Each ingredient group in the Debagging tab gets its own colour, not one
+// shared purple — two groups can carry the same material label (e.g. two
+// separate Fine Leaf slots at different ratios) and a shared colour made
+// them look like the same slot, which is exactly the kind of mix-up that
+// puts a bag in the wrong group. Cycled by group index, not by label, so
+// same-named groups still land on different colours.
+const GROUP_COLORS = ['#7c3aed', '#2563eb', '#0d9488', '#db2777', '#4f46e5', '#16a34a', '#c026d3', '#0891b2']
+const colorForGroupIndex = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
+
 const nowISO = () => new Date().toISOString()
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
@@ -158,8 +167,9 @@ function useSystemBagsForType(productType: string): SystemBag[] {
   return bags
 }
 
-function SystemPickList({ productType, onPick, onClose }: {
+function SystemPickList({ productType, color, onPick, onClose }: {
   productType: string
+  color: string
   onPick: (b: SystemBag) => void
   onClose: () => void
 }) {
@@ -170,7 +180,7 @@ function SystemPickList({ productType, onPick, onClose }: {
     : systemBags
 
   return (
-    <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden" style={{ borderColor: DEBAG_COLOR + '40' }}>
+    <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden" style={{ borderColor: color + '40' }}>
       <div className="flex items-center gap-2 px-4 py-3 border-b border-stone-100">
         <span className="font-semibold text-[15px] text-text flex-1">Pick bag from system</span>
         <button onClick={onClose} className="text-stone-400 hover:text-text p-1"><X size={18} /></button>
@@ -213,10 +223,11 @@ function SystemPickList({ productType, onPick, onClose }: {
 // relabeled type — a genuine substitute belongs in its own "+ Add Other"
 // section, not folded into this one under a different name.
 
-function ScanRow({ row, group, bagNo, variantWord, locked, typedLots, onUpdate, onSecure, onRemove }: {
+function ScanRow({ row, group, bagNo, color, variantWord, locked, typedLots, onUpdate, onSecure, onRemove }: {
   row: BlenderInputBag
   group: BlendIngredientGroup
   bagNo: number
+  color: string
   variantWord: string
   locked: boolean
   typedLots: string[]
@@ -278,9 +289,9 @@ function ScanRow({ row, group, bagNo, variantWord, locked, typedLots, onUpdate, 
   const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!group.hasLot || isValidLot(row.lot))
 
   return (
-    <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: DEBAG_COLOR + '40' }}>
+    <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: color + '40' }}>
       <div className="flex items-center justify-between">
-        <span className="font-bold text-[13px]" style={{ color: DEBAG_COLOR }}>
+        <span className="font-bold text-[13px]" style={{ color }}>
           {group.label} · Bag {bagNo} · {row.inputMode === 'scan' ? 'scan or type serial' : row.inputMode === 'manual' ? 'manual entry' : 'system pick'}
         </span>
         {!locked && <button onClick={onRemove} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={15} /></button>}
@@ -691,15 +702,17 @@ export function BlenderCapture({
                 Blend <strong className="font-mono">{bomId}</strong> — only its ingredients are shown below. Scan the barcode, pick from the system, or enter manually; search Master Inventory if the actual material differs from what's declared.
               </p>
 
-              {allGroups.map(g => {
+              {allGroups.map((g, gi) => {
                 const rows = value.inputs.filter(r => r.itemKey === g.key)
                 const kg = byItem[g.key] ?? 0
                 const pct = totalIn > 0 ? (kg / totalIn) * 100 : 0
                 const isExtra = extraGroups.some(e => e.key === g.key)
+                const groupColor = colorForGroupIndex(gi)
                 return (
                   <div key={g.key} className="space-y-2">
                     <div className="flex items-center justify-between px-1">
-                      <span className="text-[12px] font-bold flex items-center gap-1.5" style={{ color: DEBAG_COLOR }}>
+                      <span className="text-[12px] font-bold flex items-center gap-1.5" style={{ color: groupColor }}>
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: groupColor }} />
                         {g.label}
                         {isExtra && <span className="text-[9px] font-semibold uppercase tracking-wide text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded-full">not in recipe</span>}
                       </span>
@@ -711,8 +724,8 @@ export function BlenderCapture({
 
                     {rows.map((r, i) => r.secured ? (
                       <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border"
-                        style={{ background: DEBAG_COLOR + '0d', borderColor: DEBAG_COLOR + '40' }}>
-                        <Lock size={15} className="shrink-0" style={{ color: DEBAG_COLOR }} />
+                        style={{ background: groupColor + '0d', borderColor: groupColor + '40' }}>
+                        <Lock size={15} className="shrink-0" style={{ color: groupColor }} />
                         <div className="flex-1 min-w-0">
                           <div className="text-[13px] font-medium text-text">Bag {i + 1} · {r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg</div>
                           <div className="font-mono text-[11px] text-text-muted truncate">
@@ -725,13 +738,13 @@ export function BlenderCapture({
                         {!locked && <button onClick={() => unlockInput(r.id)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Edit</button>}
                       </div>
                     ) : (
-                      <ScanRow key={r.id} row={r} group={g} bagNo={i + 1} variantWord={variantWord} locked={locked}
+                      <ScanRow key={r.id} row={r} group={g} bagNo={i + 1} color={groupColor} variantWord={variantWord} locked={locked}
                         typedLots={rows.filter(x => x.id !== r.id).map(x => x.lot).filter(Boolean)}
                         onUpdate={(k, v) => updateInput(r.id, k, v)} onSecure={() => secureInput(r.id)} onRemove={() => removeInput(r.id)} />
                     ))}
 
                     {showSystemPick === g.key && (
-                      <SystemPickList productType={g.label} onPick={b => handleSystemPick(g.key, b)} onClose={() => setShowSystemPick(null)} />
+                      <SystemPickList productType={g.label} color={groupColor} onPick={b => handleSystemPick(g.key, b)} onClose={() => setShowSystemPick(null)} />
                     )}
 
                     {!locked && showSystemPick !== g.key && (
@@ -747,12 +760,12 @@ export function BlenderCapture({
                         {addMode === 'system'
                           ? <button onClick={() => setShowSystemPick(g.key)}
                               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
-                              style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
+                              style={{ borderColor: groupColor + '50', color: groupColor }}>
                               <Search size={15} /> Browse in-stock bags
                             </button>
                           : <button onClick={() => addManualRow(g, addMode)}
                               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
-                              style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
+                              style={{ borderColor: groupColor + '50', color: groupColor }}>
                               <Plus size={15} /> {addMode === 'scan' ? `Add ${g.label} bag to scan` : `Add ${g.label} bag manually`}
                             </button>
                         }

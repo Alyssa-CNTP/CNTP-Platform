@@ -7,7 +7,7 @@ import {
   loadActivity, loadTimesheet, saveTimesheet, deriveTimesheet, workedMinutes,
   type DerivedTimesheet, type TimesheetBreak, type BreakType,
 } from '@/lib/production/timesheet'
-import { getDb } from '@/lib/supabase/db'
+import { sendMessage } from '@/lib/production/messages'
 import { sectionMeta } from '@/lib/production/capture-config'
 
 // ── ISO ⇄ "HH:mm" helpers (local time, anchored to the session date) ──────────
@@ -123,7 +123,7 @@ export function TimesheetConfirm({
     const base = defaultTime
       ? new Date(`${date}T${defaultTime}:00`).toISOString()
       : startIso ?? new Date(`${date}T08:00:00`).toISOString()
-    const defaultDuration: Record<BreakType, number> = { tea: 15, lunch: 60, changeover: 30, maintenance: 30, other: 15 }
+    const defaultDuration: Record<BreakType, number> = { tea: 30, lunch: 30, changeover: 30, maintenance: 30, other: 15 }
     const endMs = new Date(base).getTime() + defaultDuration[type] * 60000
     setBreaks(bs => [...bs, { type, start: base, end: new Date(endMs).toISOString() }])
   }
@@ -141,21 +141,16 @@ export function TimesheetConfirm({
         shiftStart: startIso, shiftEnd: endIso, breaks,
         derived: derived ?? { shiftStart: startIso, shiftEnd: endIso, breaks, workedMinutes: worked },
       })
-      // Escalate maintenance stoppages to supervisor via line_messages
+      // Escalate maintenance stoppages to the section's line chat — sendMessage
+      // also fans this out to every production supervisor's notification bell
+      // (see lib/production/messages.ts), flagged urgent so it reaches email too.
       const maintenanceBreaks = breaks.filter(b => b.type === 'maintenance')
       if (maintenanceBreaks.length > 0) {
-        const db = getDb()
         const meta = sectionMeta(sectionId)
         for (const b of maintenanceBreaks) {
           const dur = breakDuration(b)
           const body = `🔧 Maintenance stoppage reported by ${operatorName} (${meta.name}, ${shift} shift): ${b.notes?.trim()}${dur ? ` — ${dur}` : ''}`
-          await db.from('line_messages').insert({
-            section_id: sectionId,
-            sender_name: operatorName,
-            sender_id: operatorId,
-            body,
-            type: 'alert',
-          }).throwOnError()
+          await sendMessage({ channel: sectionId, body, authorId: operatorId, authorName: operatorName, authorRole: null, date, shift, urgent: true })
         }
       }
     } catch {
@@ -281,13 +276,13 @@ export function TimesheetConfirm({
           <div className="space-y-2">
             {/* Quick-add buttons */}
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => addBreak('tea', '10:00')}
+              <button onClick={() => addBreak('tea', '10:30')}
                 className="flex items-center justify-center gap-1.5 py-2 rounded-xl border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors">
-                <Coffee size={13} /> Tea ~10:00
+                <Coffee size={13} /> Tea ~10:30
               </button>
-              <button onClick={() => addBreak('lunch', '12:30')}
+              <button onClick={() => addBreak('lunch', '13:00')}
                 className="flex items-center justify-center gap-1.5 py-2 rounded-xl border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors">
-                <UtensilsCrossed size={13} /> Lunch ~12:30
+                <UtensilsCrossed size={13} /> Lunch ~13:00
               </button>
             </div>
             <button onClick={() => addBreak('other')}
