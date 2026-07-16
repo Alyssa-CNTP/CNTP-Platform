@@ -117,10 +117,29 @@ export function workedMinutes(
   return Math.max(0, Math.round(span - breakMin))
 }
 
-/** Read the ordered activity timestamps for a session. */
-export async function loadActivity(sessionId: string): Promise<string[]> {
-  const { data } = await getDb().schema('production').from('capture_activity')
+/**
+ * Read the ordered activity timestamps for a session, scoped to one operator
+ * when a session has more than one working it (each heartbeat row already
+ * carries the operator who was verified when it was written) — otherwise two
+ * operators sharing a shift/session get their heartbeats merged into a single
+ * stream, which both erases each operator's real breaks (masked by whichever
+ * of them is still active) and gives both of them the same derived shift
+ * times when they each confirm their own timesheet.
+ * Falls back to every heartbeat on the session if the operator-scoped query
+ * comes back empty — heartbeats logged before an operator was verified, or a
+ * genuinely single-operator session, still have something to derive from.
+ */
+export async function loadActivity(sessionId: string, operatorId?: string | null): Promise<string[]> {
+  const all = () => getDb().schema('production').from('capture_activity')
     .select('occurred_at').eq('session_id', sessionId).order('occurred_at', { ascending: true })
+
+  if (operatorId) {
+    const { data } = await getDb().schema('production').from('capture_activity')
+      .select('occurred_at').eq('session_id', sessionId).eq('operator_id', operatorId)
+      .order('occurred_at', { ascending: true })
+    if (data && data.length > 0) return data.map((r: any) => r.occurred_at as string)
+  }
+  const { data } = await all()
   return (data ?? []).map((r: any) => r.occurred_at as string)
 }
 

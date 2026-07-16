@@ -376,6 +376,26 @@ function CaptureScreen() {
   }
   const logActivityRef = useRef(logActivity); logActivityRef.current = logActivity
 
+  // ── Heartbeat on ANY real interaction, not just edits to `productions` ────
+  // The debounced effect below only fires when the bag/batch data itself
+  // changes, so a shift spent mostly in Checks, Cleaning, Overview or
+  // Sign-off — or just doing physical floor work between edits — left gaps
+  // in `capture_activity` with nothing to distinguish "operator present but
+  // not touching bag data" from "operator on a break", so deriveTimesheet()
+  // misread ordinary working gaps as tea/lunch. Any tap/keypress anywhere in
+  // the app is a presence signal; logActivity's own 60s throttle keeps this
+  // cheap.
+  useEffect(() => {
+    if (loading || status === 'submitted' || status === 'approved') return
+    const onInteract = () => logActivityRef.current()
+    document.addEventListener('pointerdown', onInteract)
+    document.addEventListener('keydown', onInteract)
+    return () => {
+      document.removeEventListener('pointerdown', onInteract)
+      document.removeEventListener('keydown', onInteract)
+    }
+  }, [loading, status])
+
   // ── Synchronous localStorage write on every change — safety net for tablet
   //    browsers that kill async DB writes on screen-lock / tab exit. Recovered
   //    automatically on next load if DB draft is empty.
