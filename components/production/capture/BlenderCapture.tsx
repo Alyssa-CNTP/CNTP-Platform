@@ -213,11 +213,13 @@ function SystemPickList({ productType, onPick, onClose }: {
 // relabeled type — a genuine substitute belongs in its own "+ Add Other"
 // section, not folded into this one under a different name.
 
-function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove }: {
+function ScanRow({ row, group, bagNo, variantWord, locked, typedLots, onUpdate, onSecure, onRemove }: {
   row: BlenderInputBag
   group: BlendIngredientGroup
+  bagNo: number
   variantWord: string
   locked: boolean
+  typedLots: string[]
   onUpdate: (k: keyof BlenderInputBag, v: string) => void
   onSecure: () => void
   onRemove: () => void
@@ -226,9 +228,14 @@ function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove
   const [scanMsg, setScanMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   // Batches actually in stock for this exact material — same data the system-pick
-  // list uses — so the operator picks a batch that's real, not a guess.
+  // list uses — plus whatever's already been typed into a sibling row this
+  // session (a debagged lot that hasn't made it into bag_tags as its own record
+  // yet is still a real, reusable batch number for the next bag of the same lot).
   const systemBags = useSystemBagsForType(group.label)
-  const availableLots = Array.from(new Set(systemBags.map(b => (b.lot_number ?? '').trim()).filter(Boolean)))
+  const availableLots = Array.from(new Set([
+    ...systemBags.map(b => (b.lot_number ?? '').trim()),
+    ...typedLots.map(l => l.trim()),
+  ].filter(Boolean)))
 
   const normalise = (s: string) => s.trim().toLowerCase()
 
@@ -274,7 +281,7 @@ function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove
     <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: DEBAG_COLOR + '40' }}>
       <div className="flex items-center justify-between">
         <span className="font-bold text-[13px]" style={{ color: DEBAG_COLOR }}>
-          {group.label} · {row.inputMode === 'scan' ? 'scan or type serial' : row.inputMode === 'manual' ? 'manual entry' : 'system pick'}
+          {group.label} · Bag {bagNo} · {row.inputMode === 'scan' ? 'scan or type serial' : row.inputMode === 'manual' ? 'manual entry' : 'system pick'}
         </span>
         {!locked && <button onClick={onRemove} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={15} /></button>}
       </div>
@@ -326,7 +333,7 @@ function ScanRow({ row, group, variantWord, locked, onUpdate, onSecure, onRemove
               onChange={v => onUpdate('lot', v)}
               className={INP + (!isValidLot(row.lot) ? ' border-amber-400 focus:ring-amber-300' : '')} />
             {row.lot.trim() && !isValidLot(row.lot) && (
-              <p className="text-[11px] text-err">Expected a letter prefix + dash + digits, 7–8 characters (e.g. GS-0299).</p>
+              <p className="text-[11px] text-err">Expected at least one dash separating letters/numbers (e.g. GS-0299 or GS26-MIX-A).</p>
             )}
           </div>
         )}
@@ -702,12 +709,12 @@ export function BlenderCapture({
                       </span>
                     </div>
 
-                    {rows.map(r => r.secured ? (
+                    {rows.map((r, i) => r.secured ? (
                       <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border"
                         style={{ background: DEBAG_COLOR + '0d', borderColor: DEBAG_COLOR + '40' }}>
                         <Lock size={15} className="shrink-0" style={{ color: DEBAG_COLOR }} />
                         <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-medium text-text">{r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg</div>
+                          <div className="text-[13px] font-medium text-text">Bag {i + 1} · {r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg</div>
                           <div className="font-mono text-[11px] text-text-muted truncate">
                             {[r.serial, r.variant, r.destination, r.lot].filter(Boolean).join(' · ')}
                             {r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}
@@ -718,7 +725,8 @@ export function BlenderCapture({
                         {!locked && <button onClick={() => unlockInput(r.id)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Edit</button>}
                       </div>
                     ) : (
-                      <ScanRow key={r.id} row={r} group={g} variantWord={variantWord} locked={locked}
+                      <ScanRow key={r.id} row={r} group={g} bagNo={i + 1} variantWord={variantWord} locked={locked}
+                        typedLots={rows.filter(x => x.id !== r.id).map(x => x.lot).filter(Boolean)}
                         onUpdate={(k, v) => updateInput(r.id, k, v)} onSecure={() => secureInput(r.id)} onRemove={() => removeInput(r.id)} />
                     ))}
 

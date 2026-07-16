@@ -34,6 +34,15 @@ interface FlatBag {
 interface BagLotGroup { lot: string; variant: string; grade: string; bags: FlatBag[]; count: number; kg: number }
 interface ProductGroup { product: string; acumaticaCode?: string | null; acumaticaDesc?: string; lots: BagLotGroup[]; totalCount: number; totalKg: number }
 
+// A blend's mass balance is read as a component ratio (target vs actual %
+// per ingredient), not a simple in/out total — computed by the page from the
+// BOM plus this section's captured inputs, since that's the only place that
+// already knows both.
+export interface BlenderRatioGroup {
+  bomId: string
+  rows: { label: string; kg: number; actualPct: number; targetPct: number }[]
+}
+
 // ── Grouping functions ────────────────────────────────────────────────────────
 
 function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketKg: number; machineKg: number } {
@@ -42,13 +51,36 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
   let machineKg = 0
   prods.forEach(p => {
     const d = p.data as any
-    if ('inputs' in d) {
-      // RefiningData: group by serial (each bag = its own row)
+    if ('bomId' in d) {
+      // BlenderData: group by batch number (lot) — this is how mass balance is
+      // actually read for a blend on the floor. Falls back to the ingredient's
+      // material label for slots that don't carry a lot (sugar, flavour, etc.),
+      // then a positional placeholder. Merges into an existing group rather
+      // than overwriting, so two rows sharing a fallback key never clobber
+      // each other (see the RefiningData branch below for why that matters).
       ;(d.inputs ?? []).forEach((r: any, i: number) => {
         if (num(r.weight) === 0) return
-        const serial = r.serial || `Input bag ${i + 1}`
-        const row: DebagRow = { bagNo: serial, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
-        map.set(serial, { lot: serial, rows: [row], totalKg: num(r.weight) })
+        const lot = (r.lot || r.productType || `Input bag ${i + 1}`).trim()
+        const row: DebagRow = { bagNo: r.serial || `Bag ${i + 1}`, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
+        const g = map.get(lot)
+        if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
+        else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
+      })
+    } else if ('inputs' in d) {
+      // RefiningData: group by batch/lot number when one was captured (e.g.
+      // Refining 2's Coarse Leaf, which requires it), falling back to serial,
+      // then a positional placeholder. Merging (not overwriting) matters here:
+      // manual-entry rows without a serial all fall back to the same
+      // "Input bag N" key, and productions from both shifts are passed in
+      // together — an unconditional `map.set` would let a later shift's
+      // fallback-keyed row silently discard an earlier one's kg.
+      ;(d.inputs ?? []).forEach((r: any, i: number) => {
+        if (num(r.weight) === 0) return
+        const lot = (r.lot || r.serial || `Input bag ${i + 1}`).trim()
+        const row: DebagRow = { bagNo: r.serial || `Input bag ${i + 1}`, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
+        const g = map.get(lot)
+        if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
+        else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
       })
     } else if ('blends' in d) {
       // GranuleData: group dust inputs by dust type — the plant reads dust totals first.
@@ -104,7 +136,18 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
 
   prods.forEach((p) => {
     const d = p.data as any
-    if ('inputs' in d) {
+    if ('bomId' in d) {
+      // BlenderData: the output is the blend itself — labeled "Blend {bomId}",
+      // the same convention BlenderCapture uses when it upserts these bags to
+      // bag_tags. There's no per-bag productType/batch/destination on a
+      // BlenderOutputBag (unlike every other section's output shape), so
+      // those are supplied here rather than read off `b`.
+      const label = d.bomId ? `Blend ${d.bomId}` : 'Blended Batch'
+      ;(d.outputs ?? []).forEach((b: any) => addBag(p, {
+        productType: label, weight: b.weight, serial: b.serial,
+        batch: d.bomId || undefined, destination: p.variant, logged_at: b.logged_at,
+      }))
+    } else if ('inputs' in d) {
       // RefiningData: outputA/B/C/D groups each have a bags array
       ;[d.outputA, d.outputB, d.outputC, d.outputD].forEach((grp: any) => {
         if (!grp) return
@@ -149,11 +192,11 @@ const fmtTime = (iso?: string) =>
 
 export function CaptureOverview({
   productions, sectionName, sectionColor, date, shift, showSerials = false,
-  productionOrders, locked = false, balanceRows, balanceNote,
+  productionOrders, locked = false, balanceRows, balanceNote, blenderRatios,
 }: {
   productions: Production[]; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
-  balanceRows?: BalanceRow[]; balanceNote?: string
+  balanceRows?: BalanceRow[]; balanceNote?: string; blenderRatios?: BlenderRatioGroup[]
 }) {
   const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
@@ -391,6 +434,29 @@ export function CaptureOverview({
                 </div>
               </div>
             )}
+
+            {/* ── Blend component ratio — target vs actual (mass balance for a
+                blend is read as a ratio per ingredient, not a simple total) ── */}
+            {blenderRatios && blenderRatios.length > 0 && blenderRatios.map(br => (
+              <div key={br.bomId} className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
+                <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">
+                  Blend <span className="font-mono">{br.bomId}</span> — component ratio (target vs actual)
+                </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {br.rows.map(r => {
+                    const off = Math.abs(r.actualPct - r.targetPct) > 5
+                    return (
+                      <div key={r.label} className={`flex justify-between px-3 py-2 rounded-lg border text-[11px] ${off ? 'bg-amber-50 border-amber-200' : 'bg-stone-50 border-stone-100'}`}>
+                        <span className="text-stone-600 truncate pr-2">{r.label}</span>
+                        <span className={`font-mono font-bold flex-shrink-0 ${off ? 'text-amber-700' : 'text-stone-700'}`}>
+                          {r.actualPct.toFixed(0)}% <span className="text-stone-400">/ {r.targetPct.toFixed(0)}%</span>
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
 
             {/* ── Bagging — out ───────────────────────────────────────────────── */}
             {productGroups.length > 0 && (

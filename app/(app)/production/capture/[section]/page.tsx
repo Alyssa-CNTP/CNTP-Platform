@@ -33,7 +33,8 @@ import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
 import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt'
-import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
+import { CaptureOverview, type BlenderRatioGroup } from '@/components/production/capture/CaptureOverview'
+import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
@@ -127,6 +128,8 @@ function CaptureScreen() {
   const [productions, setProductions] = useState<Production[]>([])
   const [activeIdx, setActiveIdx]     = useState(0)
   const [otherShiftProductions, setOtherShiftProductions] = useState<Production[]>([])
+  const [blenderRatios, setBlenderRatios] = useState<BlenderRatioGroup[]>([])
+  const bomGroupsCacheRef = useRef<Map<string, BlendIngredientGroup[]>>(new Map())
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
   const [continueRun, setContinueRun] = useState<{ id: string; production_order: string | null; variant: string | null; grade: string | null } | null>(null)
   const [endOfRun, setEndOfRun]   = useState(false)       // supervisor: close the run on approval
@@ -385,6 +388,50 @@ function CaptureScreen() {
       )
     } catch { /* storage full — best-effort */ }
   }, [productions, loading, status])
+
+  // ── Blend component ratio for Overview — target vs actual per ingredient,
+  // summed across every Blender production sharing a blend code (both shifts,
+  // same as the rest of Overview's totals). BOM lookups are cached per bomId
+  // so retyping a weight doesn't refetch the recipe on every keystroke.
+  useEffect(() => {
+    if (!isBlenderSection(sectionId)) { setBlenderRatios([]); return }
+    const allProds = [...productions, ...otherShiftProductions]
+    const byBom = new Map<string, Production[]>()
+    allProds.forEach(p => {
+      const bomId = (p.data as BlenderData)?.bomId
+      if (!bomId) return
+      const arr = byBom.get(bomId) ?? []
+      arr.push(p)
+      byBom.set(bomId, arr)
+    })
+    if (byBom.size === 0) { setBlenderRatios([]); return }
+    let cancelled = false
+    Promise.all(Array.from(byBom.entries()).map(async ([bomId, prods]) => {
+      let groups = bomGroupsCacheRef.current.get(bomId)
+      if (!groups) {
+        groups = groupComponentsByItem(await getBlendComponents(bomId))
+        bomGroupsCacheRef.current.set(bomId, groups)
+      }
+      const byItem: Record<string, number> = {}
+      let totalIn = 0
+      prods.forEach(p => {
+        ;((p.data as BlenderData).inputs ?? []).forEach(r => {
+          const kg = parseFloat(String(r.weight).replace(',', '.')) || 0
+          byItem[r.itemKey] = (byItem[r.itemKey] ?? 0) + kg
+          totalIn += kg
+        })
+      })
+      return {
+        bomId,
+        rows: groups!.map(g => ({
+          label: g.label, kg: byItem[g.key] ?? 0,
+          actualPct: totalIn > 0 ? ((byItem[g.key] ?? 0) / totalIn) * 100 : 0,
+          targetPct: g.targetPct * 100,
+        })),
+      }
+    })).then(ratios => { if (!cancelled) setBlenderRatios(ratios) })
+    return () => { cancelled = true }
+  }, [sectionId, productions, otherShiftProductions])
 
   // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
@@ -1422,6 +1469,7 @@ function CaptureScreen() {
                 locked={locked}
                 balanceRows={balanceRows}
                 balanceNote={balanceNote}
+                blenderRatios={blenderRatios}
               />
             </>
           )}

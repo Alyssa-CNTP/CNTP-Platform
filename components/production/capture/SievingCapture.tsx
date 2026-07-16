@@ -41,16 +41,19 @@ export function emptySievingData(): SievingData {
 // → period so it always parses and is stored in the DB as a proper decimal.
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 const nowISO = () => new Date().toISOString()
-// Sieving lot numbers are a letter prefix + dash + digits (e.g. GS-0299,
-// MAT-0270) — 7 or 8 characters including the dash. Rejecting anything
-// shorter/dash-less at entry is what catches a dropped digit or a missing
-// dash before it becomes a batch number that doesn't match anything real.
-// Exported so downstream sections (Blender's Fine/Coarse Leaf batch number,
-// which is always a Sieving Tower lot) enforce the identical rule rather than
-// a second, potentially-drifting copy of it.
+// Sieving lot numbers vary more than a single letter+digit shape — plain
+// source lots like GS-0299 or MAT-0270 alongside manual-mix batches like
+// GS26-MIX-A. The invariant that holds across all real examples is
+// structural, not a fixed length or character class: at least one dash
+// separating alphanumeric segments, not a bare unstructured string.
+// Rejecting anything dash-less/too-short at entry is what catches a dropped
+// digit or a missing dash before it becomes a batch number that doesn't
+// match anything real. Exported so downstream sections (Blender's Fine/
+// Coarse Leaf batch number, which is always a Sieving Tower lot) enforce the
+// identical rule rather than a second, potentially-drifting copy of it.
 export const isValidLot = (lot: string) => {
   const v = lot.trim()
-  return (v.length === 7 || v.length === 8) && /^[A-Z]+-\d+$/.test(v)
+  return v.length >= 3 && v.length <= 20 && /^[A-Z0-9]+(-[A-Z0-9]+)+$/.test(v)
 }
 // Display a logged-at timestamp in SAST (Africa/Johannesburg), e.g. "13:42".
 const fmtTime = (iso?: string) =>
@@ -363,7 +366,7 @@ export function SievingCapture({
                     <div className="space-y-1"><label className={LBL}>Lot / serial</label>
                       <BatchKeypadField value={r.lot} disabled={locked} onChange={v => updateDebag(r.id, 'lot', v)} options={batchOptions} className={INP} label="Lot / serial" placeholder="Tap to enter" />
                       {r.lot.trim() && !isValidLot(r.lot) && (
-                        <p className="text-[11px] text-err">Expected a letter prefix + dash + digits, 7–8 characters (e.g. GS-0299).</p>
+                        <p className="text-[11px] text-err">Expected at least one dash separating letters/numbers (e.g. GS-0299 or GS26-MIX-A).</p>
                       )}</div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
                       <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>

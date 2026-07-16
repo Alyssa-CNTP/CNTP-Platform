@@ -23,20 +23,32 @@ const T = (key: string, area: string, task: string, responsible: string, frequen
   ({ key, area, task, responsible, frequency })
 
 export const CLEANING_TASKS: Record<string, CleaningTaskDef[]> = {
+  // Areas below are relabelled (not re-keyed — `key` stays stable for
+  // cleaning_records audit history) to match the 13 numbered areas on the
+  // paper "SIEVING TOWER DAILY PLANT CLEANING CHECKLIST" form 1:1: Debagging
+  // hopper, Magnet, Conveyor belt, Rolsif, Indent screen, Bucket elevator,
+  // Fanie Sieve, Mini Sifter, Blender, Floor Scale, DB, Dust extraction
+  // system, Walls and floor. sv-3 (aspirator) has no corresponding numbered
+  // area on the paper form — kept as a supplementary task, not removed.
   sieving: [
-    T('sv-1', 'Sieving', 'Vacuum walls and floor', 'Operator / General cleaner'),
-    T('sv-2', 'Sieving', 'Brush sieves (every 2 hrs)', 'Operator'),
+    T('sv-1', 'Walls and floor', 'Vacuum walls and floor', 'Operator / General cleaner'),
+    T('sv-2', 'Fanie Sieve', 'Brush sieves (every 2 hrs)', 'Operator'),
     T('sv-3', 'Sieving', 'Brush off aspirator', 'Operator'),
-    T('sv-4', 'Sieving', 'Clean magnet', 'Operator'),
-    T('sv-5', 'Sieving', 'Brush off dust on conveyors', 'Operator'),
-    T('sv-6', 'Sieving', 'Brush down screen + vacuum dust', 'Operator'),
-    T('sv-7', 'Sieving', 'Check and clean rotary valve', 'Operator'),
-    T('db-1', 'De-bagging', 'Check and clean rotary valve', 'Operator'),
-    T('db-2', 'De-bagging', 'Vacuum walls and floor', 'Operator / General cleaner'),
-    T('db-3', 'De-bagging', 'Sweep spillages', 'General cleaner'),
-    T('dc-1', 'Dust Collection Room', 'Brush crevices and hard-to-reach areas', 'General cleaner', 'weekly'),
-    T('dc-2', 'Dust Collection Room', 'Vacuum walls and floors', 'General cleaner', 'weekly'),
-    T('dc-3', 'Dust Collection Room', 'Change bag filters (Rooibos↔Honeybush)', 'General cleaner', 'monthly'),
+    T('sv-4', 'Magnet', 'Clean magnet', 'Operator'),
+    T('sv-5', 'Conveyor belt', 'Brush off dust on conveyors', 'Operator'),
+    T('sv-6', 'Indent screen', 'Brush down screen + vacuum dust', 'Operator'),
+    T('sv-7', 'Rolsif', 'Check and clean rotary valve', 'Operator'),
+    T('sv-8', 'Bucket elevator', 'Brush off dust and clean bucket elevator', 'Operator'),
+    T('sv-9', 'Mini Sifter', 'Brush off and vacuum Mini Sifter', 'Operator'),
+    T('sv-10', 'Blender', 'Vacuum and brush down Blender unit', 'Operator'),
+    T('sv-11', 'Floor Scale', 'Check and clean floor scale', 'Operator'),
+    T('sv-12', 'DB', 'Vacuum and clean DB', 'Operator / General cleaner'),
+    T('db-1', 'Debagging hopper', 'Check and clean rotary valve', 'Operator'),
+    T('db-2', 'Debagging hopper', 'Vacuum walls and floor', 'Operator / General cleaner'),
+    T('db-3', 'Debagging hopper', 'Sweep spillages', 'General cleaner'),
+    T('dc-1', 'Dust extraction system', 'Brush crevices and hard-to-reach areas', 'General cleaner', 'weekly'),
+    T('dc-2', 'Dust extraction system', 'Vacuum walls and floors', 'General cleaner', 'weekly'),
+    T('dc-3', 'Dust extraction system', 'Change bag filters (Rooibos↔Honeybush)', 'General cleaner', 'monthly'),
   ],
   refining1: [
     T('db-1', 'De-bagging', 'Check and clean rotary valve', 'Operator'),

@@ -5,6 +5,50 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Lot-format fix, Blender batch suggestions/numbering, Overview rendering fixes, Sieving cleaning checklist)
+
+**Files:** `components/production/capture/SievingCapture.tsx`,
+`components/production/capture/BlenderCapture.tsx`,
+`components/production/capture/CaptureOverview.tsx`,
+`app/(app)/production/capture/[section]/page.tsx`, `lib/production/cleaning-config.ts`
+
+- **Lot-number format too strict:** `isValidLot` (letter-prefix + dash + digits, exactly
+  7–8 chars) rejected real batch numbers like `GS26-MIX-A` (a manual-mix batch). Relaxed
+  to the actual invariant across real examples — at least one dash separating
+  alphanumeric segments, 3–20 chars — so multi-segment batch numbers validate correctly
+  on both Sieving Tower and Blender.
+- **Blender batch-number suggestions:** now also include lots already typed into a
+  sibling input row this session (not just in-stock `bag_tags`), since a debagged lot
+  that hasn't been registered as its own bag_tags record yet is still a real, reusable
+  batch number for the next bag of the same lot.
+- **Blender debagging numbering:** input rows now show "Bag 1", "Bag 2"… per ingredient
+  group, matching the numbering convention Sieving Tower already uses for bulk bags.
+- **Overview tab rendering bugs (Blender + Refining 2):** `CaptureOverview.tsx`
+  branched on `'inputs' in d`, which is true for both `RefiningData` and `BlenderData`
+  — so Blender's debag/bag data was silently processed as if it were Refining's,
+  producing wrong/blank output. Added a dedicated Blender branch: debagging groups by
+  batch number (lot) instead of serial, and output bags render as "Blend {bomId}"
+  instead of vanishing (Blender's output shape has no `productType`/`outputA-D`, which
+  the Refining branch expected). Also fixed the Refining branch's `map.set()` — an
+  unconditional overwrite that silently dropped a bag's kg whenever two rows shared a
+  fallback key (e.g. two manual-entry rows across different shifts with no serial both
+  defaulting to "Input bag 1") — now merges into the existing group instead. Refining's
+  debag grouping now also keys off the real lot/batch number, not the serial.
+- **Blender component-ratio table in Overview:** added the same "target vs actual %"
+  ratio table Blender's own Bagging tab shows — this is how mass balance is actually
+  read for a blend, not a simple in/out total. `page.tsx` now fetches each distinct
+  blend code's BOM components (cached per bomId) and sums captured input weights by
+  ingredient across both shifts, passed to `CaptureOverview` as `blenderRatios`.
+- **Sieving Tower cleaning checklist:** the digital checklist
+  (`lib/production/cleaning-config.ts`) only covered 6 of the paper form's 13 numbered
+  areas (folded into 3 generic buckets: Sieving/De-bagging/Dust Collection Room).
+  Relabelled existing tasks to their correct specific area (Magnet, Conveyor belt,
+  Rolsif, Indent screen, Fanie Sieve, Dust extraction system, Debagging hopper) without
+  changing their audit-log keys, and added the 5 areas that had no digital task at all:
+  Bucket elevator, Mini Sifter, Blender (in-line unit), Floor Scale, DB.
+
+---
+
 ## 2026-07-15 — Alyssa (Blender: enforce Sieving Tower's lot-number format on Fine/Coarse Leaf batch numbers)
 
 Confirmed: Blender's Fine/Coarse Leaf batch-number suggestions already pull straight
