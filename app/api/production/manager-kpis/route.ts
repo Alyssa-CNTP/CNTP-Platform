@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
       .schema('production').from('prod_sessions')
       .select('id,section_id,date,status,variant,lot_number')
       .gte('date', startDate)
+      .is('deleted_at', null)   // archived orders don't count toward KPIs
 
     const sessIds = (sessions || []).map((s: any) => s.id)
 

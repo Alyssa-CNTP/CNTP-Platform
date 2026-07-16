@@ -34,7 +34,7 @@ export default function SupervisorAnalytics() {
     async function load() {
       const [ts, ss] = await Promise.all([
         db.schema('production').from('prod_timesheets').select('operator_name,date,worked_minutes').eq('confirmed', true).gte('date', start).lte('date', end),
-        db.schema('production').from('prod_sessions').select('id,section_id,date').gte('date', start).lte('date', end),
+        db.schema('production').from('prod_sessions').select('id,section_id,date').gte('date', start).lte('date', end).is('deleted_at', null),
       ])
       const sess = (ss.data as Sess[]) ?? []
       let mbRows: MB[] = []

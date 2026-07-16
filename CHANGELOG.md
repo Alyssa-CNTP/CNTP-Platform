@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Production Orders page redesign, archived orders excluded from KPIs)
+
+**Files:** `app/(app)/production/orders/page.tsx`, `app/api/production/manager-kpis/route.ts`,
+`app/(app)/supervisor/analytics/page.tsx`, `app/(app)/dashboard/supervisor/page.tsx`,
+`lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`,
+`components/production/ProductionDashboard.tsx`, `components/production/LiveCaptureKPIs.tsx`
+
+Archiving (soft-delete via `prod_sessions.deleted_at`) already existed on `/production/orders`
+but nothing actually excluded an archived order from anywhere it got aggregated — added
+`.is('deleted_at', null)` to every place that reads `prod_sessions` for a KPI/total
+(manager KPIs API, supervisor analytics, both supervisor/production dashboards, and
+the live-capture KPI strip), so archiving a record now actually removes it from
+throughput/yield/mass-balance numbers, not just from the visible list.
+
+Also cleaned up `OrderCard`'s layout — the old design crammed record no./archived
+badge/name/shift/variant, operators/lot/PO, weights, and variance into a rigid
+4-column grid that left ragged empty cells on records with fewer facts and felt
+crowded on ones with more. Replaced with a flowing header line + one muted meta
+line, same information, same actions (edit/reopen/archive/restore), less visual
+noise.
+
+---
+
 ## 2026-07-16 — Alyssa (VSD prompt on Overview, production-order review tab, Blender debagging redesign)
 
 **Files:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/productions/page.tsx`,
