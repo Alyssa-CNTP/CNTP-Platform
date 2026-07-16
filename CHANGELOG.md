@@ -5,6 +5,35 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (VSD prompt on Overview, production-order review tab, Blender debagging redesign)
+
+**Files:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/productions/page.tsx`,
+`components/production/capture/BlenderCapture.tsx`
+
+- **Hourly VSD prompt popping up while just reading Overview/AI summary:** it was
+  rendered unconditionally regardless of tab. Suppressed while `tab === 'overview'` —
+  it still nags on every other tab throughout the shift, just not over someone
+  reading a review, not operating the line.
+- **"Why does the production-orders page open the whole session?"** — there's no
+  separate lightweight review view yet; a supervisor's review link reuses the exact
+  same capture page an operator uses. That link now defaults to `?tab=overview`
+  instead of the live Capture tab, so reviewing a production order actually opens on
+  the Overview + AI summary, not the operator's active data-entry screen.
+- **Blender debagging redesigned as a popup add-bag flow.** The old design had every
+  ingredient group carrying its own always-visible scan/system/manual card + mode
+  toggle — with 5+ groups (a real blend recipe) the tab became a wall of near-
+  identical purple cards, worse once two groups shared a material label. Replaced
+  with one "+ Add debagging bag" button that opens a modal: product type is now a
+  dropdown over the blend's ingredients (first field, not "which of several buttons
+  did I tap"), then serial (scan/type + look-up, or "pick from in-stock bags"),
+  weight (pre-filled 300kg for Fine/Coarse Leaf), batch number when the material
+  needs one. Submitting locks the bag immediately — no partial/unsecured rows ever
+  sit on the main screen. Tapping a logged bag reopens the same modal to edit or
+  remove it. The list itself is now just compact, colour-coded one-line summaries
+  per group.
+
+---
+
 ## 2026-07-16 — Alyssa (Blender: per-group add-mode UX fix, run-continuity serial fix)
 
 **Files:** `components/production/capture/BlenderCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
