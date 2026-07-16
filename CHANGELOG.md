@@ -5,6 +5,40 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Correct break times, operator-message notifications, checks persistence + AI summary retry, Blender group colours)
+
+**Files:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`,
+`lib/notifications/recipients.ts`, `app/api/production/notify-line-message/route.ts`,
+`lib/production/messages.ts`, `components/production/capture/ChecksPanel.tsx`,
+`components/production/capture/BlenderCapture.tsx`
+
+- **Standard break times corrected:** the fallback schedule used when no inactivity gap
+  is detected had tea at 10:00 (15min) and lunch at 12:30 (60min) for morning shift —
+  real times are tea 10:30-11:00 and lunch 13:00-13:30 (30min each). Updated the
+  fallback schedule and the quick-add buttons in the timesheet confirm screen to match.
+- **Operator messages now notify supervisors:** `sendMessage()` (used by every
+  section's line chat, and by maintenance-stoppage escalation at sign-off) now fans out
+  to every production supervisor's notification bell via a new
+  `/api/production/notify-line-message` route + `getProductionSupervisorIds()`, deep-
+  linking back to that section's Messages tab. Also fixed a pre-existing bug in the
+  maintenance-escalation path: it inserted into `line_messages` using columns
+  (`sender_name`/`sender_id`/`type`) that don't exist on that table (real columns are
+  `author_id`/`author_name`/`author_role`) — every maintenance-stoppage message was
+  silently failing to send. Now goes through the same `sendMessage()` helper LineChat
+  already uses correctly.
+- **Sieving Tower checks disappearing after submission:** the load effect only rebuilt
+  VSD readings and raised-maintenance flags from saved events — every other check
+  (confirms, numbers, text, scale verification, mass balance) stayed as empty local
+  state on reload, so a signed check record looked blank on any later visit even
+  though the data was saved. Now rebuilds all of them from events on load. Also added
+  a visible fallback + manual "Generate" retry for the AI shift summary, since a failed
+  Gemini call previously showed nothing with no way to try again.
+- **Blender ingredient groups now colour-coded per group**, not all one purple —
+  two groups with the same material label (e.g. two separate Fine Leaf slots at
+  different ratios) were visually identical, risking a bag going into the wrong slot.
+
+---
+
 ## 2026-07-16 — Alyssa (Timesheet heartbeat coverage + multi-operator conflation fix)
 
 **Files:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/timesheet.ts`,

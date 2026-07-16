@@ -34,8 +34,8 @@ const MS_PER_MIN = 60_000
 // Times are local (SAST) on the session date; ISO conversion happens in the browser.
 const STANDARD_BREAKS: Record<string, { type: BreakType; localTime: string; durationMin: number }[]> = {
   morning: [
-    { type: 'tea',   localTime: '10:00', durationMin: 15 },
-    { type: 'lunch', localTime: '12:30', durationMin: 60 },
+    { type: 'tea',   localTime: '10:30', durationMin: 30 },
+    { type: 'lunch', localTime: '13:00', durationMin: 30 },
   ],
   // Night shift 16:00–01:00: tea at 19:00, meal at 21:00
   afternoon: [
