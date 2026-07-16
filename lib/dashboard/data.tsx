@@ -106,6 +106,7 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
       db.from('prod_sessions')
         .select('id,section_id,section_name,shift,status,submitted_at')
         .eq('date', today)
+        .is('deleted_at', null)
         .order('submitted_at', { ascending: false }),
       db.from('bag_tags')
         .select('weight_kg')

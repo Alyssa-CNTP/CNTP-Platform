@@ -88,6 +88,7 @@ export default function SupervisorDashboard() {
       .from('prod_sessions')
       .select('id,section_id,section_name,shift,status')
       .eq('date', yesterday)
+      .is('deleted_at', null)
 
     const prodSess = (prodData as any[]) ?? []
 
