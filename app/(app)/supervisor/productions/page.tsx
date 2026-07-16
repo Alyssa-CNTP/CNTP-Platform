@@ -173,7 +173,11 @@ export default function SupervisorProductions() {
             {filtered.map(r => {
               const m = sectionMeta(r.section_id)
               const st = STATUS[r.status] ?? { label: r.status, cls: 'bg-stone-100 text-stone-500' }
-              const href = `/production/capture/${r.section_id}?date=${r.date}&shift=${r.shift}`
+              // Reviewing a production order means reading its Overview/AI summary,
+              // not landing on the live Capture tab an operator would use — this
+              // still opens the same session (there's no separate read-only review
+              // view yet), just on the tab that's actually useful for review.
+              const href = `/production/capture/${r.section_id}?date=${r.date}&shift=${r.shift}&tab=overview`
               const hasNote = !!(r.comments && r.comments.trim())
               const open = expanded.has(r.id)
               return (

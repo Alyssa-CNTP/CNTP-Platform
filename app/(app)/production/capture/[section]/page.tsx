@@ -1204,13 +1204,19 @@ function CaptureScreen() {
 
       {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
           and stays available after checks are signed (page-level, not in the
-          Checks tab). Only sections with an hourly VSD check surface it. */}
-      <HourlyVsdPrompt
-        sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
-        running={totalIn > 0}
-        active={status !== 'submitted' && status !== 'approved'}
-        operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
-      />
+          Checks tab). Only sections with an hourly VSD check surface it.
+          Suppressed on the Overview tab — that's a "just reading" view (often
+          reached from a supervisor's production-order review), and a modal
+          popping up over someone reading the AI summary rather than actually
+          operating the line reads as a bug, not a reminder. */}
+      {tab !== 'overview' && (
+        <HourlyVsdPrompt
+          sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
+          running={totalIn > 0}
+          active={status !== 'submitted' && status !== 'approved'}
+          operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
+        />
+      )}
 
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"

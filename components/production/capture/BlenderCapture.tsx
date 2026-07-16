@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle, Printer, PenLine, Shuffle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
@@ -154,12 +154,6 @@ const nowISO = () => new Date().toISOString()
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
 
-const INPUT_MODES: { id: BlenderInputBag['inputMode']; label: string; hint: string }[] = [
-  { id: 'scan',   label: 'Scan / type serial', hint: 'Scan the barcode or type the serial from the bag tag.' },
-  { id: 'system', label: 'Pick from system',   hint: 'Choose a bag that is already in stock in the system.' },
-  { id: 'manual', label: 'Manual entry',        hint: 'Bag not in system — fill all fields by hand.' },
-]
-
 // ── System bag pick list, scoped to one ingredient slot's declared material ──
 
 interface SystemBag {
@@ -236,153 +230,192 @@ function SystemPickList({ productType, color, onPick, onClose }: {
   )
 }
 
-// ── Scan row — the product type is fixed to this section's declared material
-// (the header already says what it is; showing an override here would let a
-// row silently disagree with its own section). A scanned/picked bag that
-// doesn't actually match gets rejected, not silently accepted under a
-// relabeled type — a genuine substitute belongs in its own "+ Add Other"
-// section, not folded into this one under a different name.
-
-function ScanRow({ row, group, bagNo, color, variantWord, locked, typedLots, onUpdate, onSecure, onRemove }: {
-  row: BlenderInputBag
-  group: BlendIngredientGroup
-  bagNo: number
-  color: string
+// ── Add/edit-bag modal — a single "+ Add debagging bag" action replaces the
+// old always-visible per-group scan/system/manual card + toggle. With five or
+// more ingredient groups each carrying their own full input form, the tab
+// became a wall of near-identical cards where it was easy to lose track of
+// which card belonged to which material — especially confusing when two
+// groups share the same material label (e.g. two Fine Leaf slots at
+// different ratios). Product type is now the first field IN the modal (a
+// dropdown over the blend's own groups) rather than which of several inline
+// buttons happened to be tapped; the material-identity check on scan/lookup
+// still applies, so a bag that doesn't match the selected material is still
+// rejected, not silently relabelled.
+function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow, onClose, onSave, onDelete }: {
+  groups: BlendIngredientGroup[]
+  colorFor: (key: string) => string
   variantWord: string
-  locked: boolean
-  typedLots: string[]
-  onUpdate: (k: keyof BlenderInputBag, v: string) => void
-  onSecure: () => void
-  onRemove: () => void
+  existingInputs: BlenderInputBag[]
+  editingRow?: BlenderInputBag | null
+  onClose: () => void
+  onSave: (row: BlenderInputBag) => void
+  onDelete?: () => void
 }) {
+  const [groupKey, setGroupKey] = useState(editingRow?.itemKey ?? groups[0]?.key ?? '')
+  const group = groups.find(g => g.key === groupKey) ?? groups[0]
+  const [serial, setSerial] = useState(editingRow?.serial ?? '')
+  const [weight, setWeight] = useState(editingRow?.weight ?? (group?.hasLot ? '300' : ''))
+  const [lot, setLot] = useState(editingRow?.lot ?? '')
+  const [productCode, setProductCode] = useState(editingRow?.productCode ?? '')
+  const [variant, setVariant] = useState(editingRow?.variant ?? variantWord)
+  const [notInSystem, setNotInSystem] = useState(editingRow?.notInSystem ?? '')
+  const [inputMode, setInputMode] = useState<BlenderInputBag['inputMode']>(editingRow?.inputMode ?? 'scan')
+  const [browsing, setBrowsing] = useState(false)
   const [looking, setLooking] = useState(false)
   const [scanMsg, setScanMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+
+  const color = group ? colorFor(group.key) : DEBAG_COLOR
   // Batches actually in stock for this exact material — same data the system-pick
-  // list uses — plus whatever's already been typed into a sibling row this
+  // list uses — plus whatever's already been typed into a sibling bag this
   // session (a debagged lot that hasn't made it into bag_tags as its own record
   // yet is still a real, reusable batch number for the next bag of the same lot).
-  const systemBags = useSystemBagsForType(group.label)
+  const systemBags = useSystemBagsForType(group?.label ?? '')
   const availableLots = Array.from(new Set([
     ...systemBags.map(b => (b.lot_number ?? '').trim()),
-    ...typedLots.map(l => l.trim()),
+    ...existingInputs.filter(r => r.itemKey === groupKey && r.id !== editingRow?.id).map(r => r.lot.trim()),
   ].filter(Boolean)))
+
+  function pickGroup(key: string) {
+    setGroupKey(key)
+    if (editingRow?.itemKey === key) return   // switching back to the row's own material — keep its values
+    const g = groups.find(x => x.key === key)
+    setWeight(g?.hasLot ? '300' : '')
+    setLot('')
+  }
 
   const normalise = (s: string) => s.trim().toLowerCase()
 
-  const triggerLookup = useCallback(async () => {
-    if (!row.serial.trim()) return
+  async function triggerLookup() {
+    if (!serial.trim() || !group) return
     setLooking(true)
     // Existence / already-consumed / variant-family / finished-product checks
     // happen in validateBagScan; the material-identity check happens here —
-    // this section is exactly one declared item, so the scanned bag must match
-    // it exactly, not just its grade family.
-    const result = await validateBagScan(row.serial, { sessionVariant: variantWord })
+    // the selected group is exactly one declared item, so the scanned bag
+    // must match it exactly, not just its grade family.
+    const result = await validateBagScan(serial, { sessionVariant: variantWord })
     setLooking(false)
     if (result.status === 'ok' && result.tag) {
       if (normalise(result.tag.product_type) !== normalise(group.label)) {
-        setScanMsg({ kind: 'error', text: `⛔ This bag is "${result.tag.product_type}", but this section is for "${group.label}". If it's a genuine substitute, remove this row and use "+ Add Other" instead.` })
+        setScanMsg({ kind: 'error', text: `⛔ This bag is "${result.tag.product_type}", but "${group.label}" is selected above. Pick the matching material, or use "+ Add Other" instead.` })
         return
       }
-      onUpdate('productCode', result.tag.acumatica_id || '')
-      onUpdate('weight', result.tag.weight_kg != null ? String(result.tag.weight_kg) : '')
-      onUpdate('variant', result.tag.variant || variantWord || '')
-      if (group.hasLot && result.tag.lot_number && result.tag.lot_number !== 'NOT TRACKED') onUpdate('lot', result.tag.lot_number)
-      onUpdate('notInSystem', '')
+      setProductCode(result.tag.acumatica_id || '')
+      setWeight(result.tag.weight_kg != null ? String(result.tag.weight_kg) : '')
+      setVariant(result.tag.variant || variantWord || '')
+      if (group.hasLot && result.tag.lot_number && result.tag.lot_number !== 'NOT TRACKED') setLot(result.tag.lot_number)
+      setNotInSystem(''); setInputMode('scan')
       setScanMsg({ kind: 'ok', text: result.message })
     } else if (result.status === 'not_found') {
-      onUpdate('notInSystem', 'true')
+      setNotInSystem('true'); setInputMode('manual')
       setScanMsg({ kind: 'error', text: result.message })
     } else {
       setScanMsg({ kind: 'error', text: result.message })
     }
-  }, [row.serial, variantWord, group, onUpdate])
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') { e.preventDefault(); triggerLookup() }
   }
 
-  // Fine/Coarse Leaf batch numbers are always a Sieving Tower lot (see the
-  // BatchKeypadField suggestions below, pulled straight from Sieving's own
-  // output records) — so the same format rule applies: letter prefix + dash +
-  // digits, 7-8 characters. Catches a dropped digit before it locks in.
-  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!group.hasLot || isValidLot(row.lot))
+  function pickSystemBag(b: SystemBag) {
+    setSerial(b.serial_number); setProductCode(b.acumatica_id || '')
+    setWeight(b.weight_kg ? String(b.weight_kg) : ''); setVariant(b.variant || variantWord || '')
+    setLot(b.lot_number || ''); setInputMode('system'); setNotInSystem(''); setBrowsing(false)
+  }
+
+  // Fine/Coarse Leaf batch numbers are always a Sieving Tower lot — letter/
+  // number prefix + dash + more letters/numbers. Catches a dropped digit or
+  // missing dash before it locks in.
+  const complete = !!group && !!serial.trim() && n(weight) > 0 && (!group.hasLot || isValidLot(lot))
+
+  function submit() {
+    if (!complete || !group) return
+    onSave({
+      id: editingRow?.id ?? crypto.randomUUID(), itemKey: group.key, serial: serial.trim(),
+      productType: group.label, productCode, variant: variant || variantWord || '',
+      weight, lot, destination: parseGrade(group.label) ?? '', inputMode, secured: true,
+      logged_at: editingRow?.logged_at, notInSystem,
+    })
+  }
 
   return (
-    <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: color + '40' }}>
-      <div className="flex items-center justify-between">
-        <span className="font-bold text-[13px]" style={{ color }}>
-          {group.label} · Bag {bagNo} · {row.inputMode === 'scan' ? 'scan or type serial' : row.inputMode === 'manual' ? 'manual entry' : 'system pick'}
-        </span>
-        {!locked && <button onClick={onRemove} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={15} /></button>}
-      </div>
-
-      <div className="space-y-1">
-        <label className={LBL}>Bag serial no.</label>
-        <div className="flex gap-2">
-          <input ref={inputRef} data-serial="true" type="text" value={row.serial} disabled={locked}
-            placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
-            onChange={e => { onUpdate('serial', e.target.value.toUpperCase()); setScanMsg(null) }}
-            onKeyDown={handleKeyDown}
-            className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />
-          {!locked && (
-            <button onClick={triggerLookup} disabled={!row.serial.trim() || looking}
-              className="px-3 rounded-xl border border-stone-200 text-stone-500 hover:border-brand hover:text-brand text-[12px] font-medium disabled:opacity-40 shrink-0">
-              {looking ? '…' : 'Look up'}
-            </button>
-          )}
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9997, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 16 }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-stone-100 shrink-0" style={{ background: color + '10' }}>
+          <span className="font-bold text-[15px]" style={{ color }}>{editingRow ? 'Edit bag' : 'Add debagging bag'}</span>
+          <button onClick={onClose} className="text-stone-400 hover:text-text p-1"><X size={18} /></button>
         </div>
-        {scanMsg && (
-          <p className={`text-[11px] flex items-center gap-1.5 ${scanMsg.kind === 'ok' ? 'text-ok' : 'text-amber-600'}`}>
-            <AlertTriangle size={12} /> {scanMsg.text}
-          </p>
-        )}
-      </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1 col-span-2">
-          <label className={LBL}>Product type</label>
-          <div className="px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50">
-            <span className="text-[14px] text-text truncate">{row.productType}</span>
+        <div className="p-5 space-y-3 overflow-y-auto">
+          <div className="space-y-1">
+            <label className={LBL}>Product type</label>
+            <select value={groupKey} onChange={e => pickGroup(e.target.value)} className={INP}>
+              {groups.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
+            </select>
           </div>
-          <p className="text-[10px] text-stone-400 px-1">
-            Fixed to this section — for a different material, remove this row and use "+ Add Other" below.
-          </p>
-          {row.destination && (
-            <p className="text-[10px] text-stone-400 px-1">Grade: <span className="font-medium text-stone-500">{row.destination}</span></p>
+
+          {browsing ? (
+            <SystemPickList productType={group?.label ?? ''} color={color} onPick={pickSystemBag} onClose={() => setBrowsing(false)} />
+          ) : (
+            <>
+              <div className="space-y-1">
+                <label className={LBL}>Bag serial no.</label>
+                <div className="flex gap-2">
+                  <input autoFocus type="text" value={serial}
+                    placeholder="Scan or type — press Enter to look up"
+                    onChange={e => { setSerial(e.target.value.toUpperCase()); setScanMsg(null) }}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); triggerLookup() } }}
+                    className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />
+                  <button onClick={triggerLookup} disabled={!serial.trim() || looking}
+                    className="px-3 rounded-xl border border-stone-200 text-stone-500 hover:border-brand hover:text-brand text-[12px] font-medium disabled:opacity-40 shrink-0">
+                    {looking ? '…' : 'Look up'}
+                  </button>
+                </div>
+                {scanMsg && (
+                  <p className={`text-[11px] flex items-center gap-1.5 ${scanMsg.kind === 'ok' ? 'text-ok' : 'text-amber-600'}`}>
+                    <AlertTriangle size={12} /> {scanMsg.text}
+                  </p>
+                )}
+                <button onClick={() => setBrowsing(true)} className="text-[11px] text-brand hover:underline">or pick from in-stock bags</button>
+              </div>
+
+              <div className="space-y-1">
+                <label className={LBL}>Weight (kg)</label>
+                <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight}
+                  onChange={e => setWeight(e.target.value)} className={INP} />
+              </div>
+
+              {group?.hasLot && (
+                <div className="space-y-1">
+                  <label className={LBL + ' text-amber-600'}>Batch number <span className="text-red-500">*</span></label>
+                  <BatchKeypadField value={lot} placeholder="e.g. GS-0271" options={availableLots} onChange={setLot}
+                    className={INP + (!isValidLot(lot) ? ' border-amber-400 focus:ring-amber-300' : '')} />
+                  {lot.trim() && !isValidLot(lot) && (
+                    <p className="text-[11px] text-err">Expected at least one dash separating letters/numbers (e.g. GS-0299 or GS26-MIX-A).</p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
-        <div className="space-y-1 col-span-2">
-          <label className={LBL}>Weight (kg)</label>
-          <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={row.weight} disabled={locked}
-            onChange={e => onUpdate('weight', e.target.value)} className={INP} />
-        </div>
-        {group.hasLot && (
-          <div className="space-y-1 col-span-2">
-            <label className={LBL + ' text-amber-600'}>Batch number <span className="text-red-500">*</span></label>
-            <BatchKeypadField value={row.lot} disabled={locked} placeholder="e.g. GS-0271" options={availableLots}
-              onChange={v => onUpdate('lot', v)}
-              className={INP + (!isValidLot(row.lot) ? ' border-amber-400 focus:ring-amber-300' : '')} />
-            {row.lot.trim() && !isValidLot(row.lot) && (
-              <p className="text-[11px] text-err">Expected at least one dash separating letters/numbers (e.g. GS-0299 or GS26-MIX-A).</p>
+
+        {!browsing && (
+          <div className="p-5 pt-0 space-y-2 shrink-0">
+            {!complete && (
+              <p className="text-[11px] text-stone-400 text-center">
+                {[!serial.trim() && 'serial', n(weight) <= 0 && 'weight', group?.hasLot && !isValidLot(lot) && (lot.trim() ? 'a valid batch format' : 'batch number')].filter(Boolean).join(', ')} still needed.
+              </p>
             )}
+            <div className="flex gap-2">
+              {editingRow && onDelete && (
+                <button onClick={onDelete} className="px-4 py-2.5 rounded-xl border border-stone-200 text-err text-[13px] font-medium hover:bg-err/5">
+                  Remove
+                </button>
+              )}
+              <button onClick={submit} disabled={!complete}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
+                <Check size={15} /> Done — lock this bag
+              </button>
+            </div>
           </div>
         )}
       </div>
-
-      {!locked && (
-        <>
-          <button onClick={onSecure} disabled={!complete}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
-            <Check size={15} /> Done — lock this bag
-          </button>
-          {!complete && (
-            <p className="text-[11px] text-stone-400 text-center">
-              {[!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight', group.hasLot && !isValidLot(row.lot) && (row.lot.trim() ? 'a valid batch format' : 'batch number')].filter(Boolean).join(', ')} still needed.
-            </p>
-          )}
-        </>
-      )}
     </div>
   )
 }
@@ -450,17 +483,11 @@ export function BlenderCapture({
   operatorId?: string | null
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
-  // Per-group, not one shared toggle — a single `addMode` made every group's
-  // mode selector highlight identically the moment any one of them was
-  // changed (e.g. tapping "Manual entry" for Cutter Fine Leaf visually lit up
-  // "Manual entry" for every other ingredient too), which read as "all groups
-  // are now in manual mode" even though only one row's add-button actually
-  // was.
-  const [addModeByGroup, setAddModeByGroup] = useState<Record<string, BlenderInputBag['inputMode']>>({})
-  const getAddMode = (key: string) => addModeByGroup[key] ?? 'scan'
-  const setAddModeFor = (key: string, mode: BlenderInputBag['inputMode']) =>
-    setAddModeByGroup(m => ({ ...m, [key]: mode }))
-  const [showSystemPick, setShowSystemPick] = useState<string | null>(null)   // item key, or null
+  // One "+ Add debagging bag" action opens this instead of each group having
+  // its own always-visible scan/system/manual form — see AddBagModal for why.
+  // null = closed; { editing: null } = adding a new bag; { editing: row } =
+  // editing/removing an existing one.
+  const [bagModal, setBagModal] = useState<{ editing: BlenderInputBag | null } | null>(null)
   const [outputWeight, setOutputWeight] = useState('')
   const [groups, setGroups] = useState<BlendIngredientGroup[]>([])
   // Materials the operator added that aren't part of the blend's declared recipe —
@@ -544,75 +571,32 @@ export function BlenderCapture({
 
   // ── Input bag helpers ──────────────────────────────────────────────────────
 
-  const inputComplete = (r: BlenderInputBag) =>
-    !!r.serial.trim() && !!r.productType && n(r.weight) > 0 && (!allGroups.find(g => g.key === r.itemKey)?.hasLot || isValidLot(r.lot))
-
-  const lockCompleted = (rows: BlenderInputBag[]): BlenderInputBag[] => {
+  // AddBagModal always submits a fully-filled, already-secured row — one
+  // path for both "add new" and "edit existing" (matched by id), instead of
+  // the old separate add/update/secure/system-pick functions. Consumption
+  // side effects (bag_tags upsert for manual entries, markBagConsumed) run
+  // every commit, same as they did on every secure/re-secure before.
+  function commitBagFromModal(row: BlenderInputBag) {
+    const isNew = !value.inputs.some(r => r.id === row.id)
     const t = nowISO()
-    return rows.map(r => (!r.secured && inputComplete(r)) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
-  }
-
-  function addManualRow(group: BlendIngredientGroup, mode: BlenderInputBag['inputMode']) {
-    const locked_ = lockCompleted(value.inputs)
-    // Product type is fixed to the section's declared material from the moment a
-    // row exists — the section header already says what it is, whichever input
-    // mode is used to log it. A scanned bag that doesn't match gets rejected in
-    // ScanRow, not silently accepted under a different label.
-    patch({ inputs: [...locked_, {
-      id: crypto.randomUUID(), itemKey: group.key, serial: '', productType: group.label, productCode: '', variant: variantWord || '',
-      // Fine/Coarse Leaf bags are a standard 300kg — a starting figure the operator
-      // confirms, not a forced value. No lot prefill — batch number is picked fresh
-      // each time from what's actually in stock (see the BatchKeypadField below),
-      // never defaulted from the shift's blend code or anything else.
-      weight: group.hasLot ? '300' : '', lot: '', destination: parseGrade(group.label) ?? '',
-      inputMode: mode, secured: false,
-    }] })
-  }
-
-  function updateInput(id: string, k: keyof BlenderInputBag, v: string) {
-    patch({ inputs: value.inputs.map(r => r.id === id ? {
-      ...r, [k]: v,
-      ...(k === 'serial' ? { notInSystem: '' } : {}),
-      // Grade is derived from the item, never typed separately.
-      ...(k === 'productType' ? { destination: parseGrade(v) ?? '' } : {}),
-    } : r) })
-  }
-
-  function secureInput(id: string) {
-    const t = nowISO()
-    const updated = value.inputs.map(r => r.id === id ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
-    patch({ inputs: updated })
-    const row = updated.find(r => r.id === id)
-    if (row?.serial) {
-      if (row.inputMode === 'manual') {
+    const finalRow: BlenderInputBag = { ...row, secured: true, logged_at: row.logged_at ?? t }
+    patch({ inputs: isNew ? [...value.inputs, finalRow] : value.inputs.map(r => r.id === row.id ? finalRow : r) })
+    if (finalRow.serial) {
+      if (finalRow.inputMode === 'manual') {
         getDb().schema('production').from('bag_tags').upsert({
-          serial_number: row.serial, section_id: sectionId, session_id: null,
-          product_type: row.productType, variant: variantWord || null,
-          weight_kg: n(row.weight) || null, lot_number: row.lot || null,
+          serial_number: finalRow.serial, section_id: sectionId, session_id: null,
+          product_type: finalRow.productType, variant: variantWord || null,
+          weight_kg: n(finalRow.weight) || null, lot_number: finalRow.lot || null,
           status: 'consumed', consumed_at_section: sectionId,
           location_updated_at: t,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
       }
-      markBagConsumed(row.serial, sectionId, null, n(row.weight) || undefined, operatorId ?? null)
+      markBagConsumed(finalRow.serial, sectionId, null, n(finalRow.weight) || undefined, operatorId ?? null)
     }
+    setBagModal(null)
   }
 
   function removeInput(id: string) { patch({ inputs: value.inputs.filter(r => r.id !== id) }) }
-  function unlockInput(id: string) { patch({ inputs: value.inputs.map(r => r.id === id ? { ...r, secured: false } : r) }) }
-
-  function handleSystemPick(itemKey: string, bag: SystemBag) {
-    const t = nowISO()
-    const locked_ = lockCompleted(value.inputs)
-    const row: BlenderInputBag = {
-      id: crypto.randomUUID(), itemKey, serial: bag.serial_number,
-      productType: bag.product_type, productCode: bag.acumatica_id || '', variant: bag.variant || variantWord || '',
-      weight: bag.weight_kg ? String(bag.weight_kg) : '', lot: bag.lot_number || '',
-      destination: parseGrade(bag.product_type) ?? '', inputMode: 'system', secured: true, logged_at: t,
-    }
-    patch({ inputs: [...locked_, row] })
-    markBagConsumed(bag.serial_number, sectionId, null, bag.weight_kg ?? undefined, operatorId ?? null)
-    setShowSystemPick(null)
-  }
 
   // ── Output bag helpers ─────────────────────────────────────────────────────
 
@@ -728,7 +712,8 @@ export function BlenderCapture({
           {tab === 'debag' && (
             <>
               <p className="text-[12px] text-stone-500 px-1">
-                Blend <strong className="font-mono">{bomId}</strong> — only its ingredients are shown below. Scan the barcode, pick from the system, or enter manually; search Master Inventory if the actual material differs from what's declared.
+                Blend <strong className="font-mono">{bomId}</strong> — only its ingredients are shown below.
+                Each is colour-coded; tap "+ Add debagging bag" to scan, look up, or enter one.
               </p>
 
               {allGroups.map((g, gi) => {
@@ -751,62 +736,45 @@ export function BlenderCapture({
                       </span>
                     </div>
 
-                    {rows.map((r, i) => r.secured ? (
-                      <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border"
-                        style={{ background: groupColor + '0d', borderColor: groupColor + '40' }}>
-                        <Lock size={15} className="shrink-0" style={{ color: groupColor }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-medium text-text">Bag {i + 1} · {r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg</div>
-                          <div className="font-mono text-[11px] text-text-muted truncate">
-                            {[r.serial, r.variant, r.destination, r.lot].filter(Boolean).join(' · ')}
-                            {r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}
-                            {r.inputMode === 'system' ? ' · from system' : r.inputMode === 'manual' && r.notInSystem ? ' · registered' : ''}
-                            {r.productType && r.productType !== g.label ? ` · substituted for ${g.label}` : ''}
+                    {rows.length === 0 ? (
+                      <p className="text-[11px] text-stone-400 px-1 italic">No bags logged yet.</p>
+                    ) : rows.map((r, i) => {
+                      const incomplete = !r.serial.trim() || n(r.weight) <= 0 || (g.hasLot && !isValidLot(r.lot))
+                      return (
+                        <button key={r.id} onClick={() => !locked && setBagModal({ editing: r })}
+                          className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 border text-left transition-opacity hover:opacity-90"
+                          style={{ background: groupColor + '0d', borderColor: groupColor + '40' }}>
+                          {incomplete ? <AlertTriangle size={15} className="shrink-0 text-amber-500" /> : <Lock size={15} className="shrink-0" style={{ color: groupColor }} />}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[13px] font-medium text-text">
+                              Bag {i + 1} · {r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg
+                              {incomplete && <span className="ml-1.5 text-[11px] font-normal text-amber-600">— needs details</span>}
+                            </div>
+                            <div className="font-mono text-[11px] text-text-muted truncate">
+                              {[r.serial, r.variant, r.destination, r.lot].filter(Boolean).join(' · ')}
+                              {r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}
+                              {r.inputMode === 'system' ? ' · from system' : r.inputMode === 'manual' && r.notInSystem ? ' · registered' : ''}
+                              {r.productType && r.productType !== g.label ? ` · substituted for ${g.label}` : ''}
+                            </div>
                           </div>
-                        </div>
-                        {!locked && <button onClick={() => unlockInput(r.id)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Edit</button>}
-                      </div>
-                    ) : (
-                      <ScanRow key={r.id} row={r} group={g} bagNo={i + 1} color={groupColor} variantWord={variantWord} locked={locked}
-                        typedLots={rows.filter(x => x.id !== r.id).map(x => x.lot).filter(Boolean)}
-                        onUpdate={(k, v) => updateInput(r.id, k, v)} onSecure={() => secureInput(r.id)} onRemove={() => removeInput(r.id)} />
-                    ))}
-
-                    {showSystemPick === g.key && (
-                      <SystemPickList productType={g.label} color={groupColor} onPick={b => handleSystemPick(g.key, b)} onClose={() => setShowSystemPick(null)} />
-                    )}
-
-                    {!locked && showSystemPick !== g.key && (
-                      <div className="space-y-2">
-                        <div className="flex rounded-xl border border-stone-200 overflow-hidden bg-white">
-                          {INPUT_MODES.map(m => (
-                            <button key={m.id} onClick={() => setAddModeFor(g.key, m.id)}
-                              className={`flex-1 py-2 text-[12px] font-medium transition-colors ${getAddMode(g.key) === m.id ? 'bg-brand text-white' : 'text-stone-500 hover:bg-stone-50'}`}>
-                              {m.label}
-                            </button>
-                          ))}
-                        </div>
-                        {getAddMode(g.key) === 'system'
-                          ? <button onClick={() => setShowSystemPick(g.key)}
-                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
-                              style={{ borderColor: groupColor + '50', color: groupColor }}>
-                              <Search size={15} /> Browse in-stock bags
-                            </button>
-                          : <button onClick={() => addManualRow(g, getAddMode(g.key))}
-                              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
-                              style={{ borderColor: groupColor + '50', color: groupColor }}>
-                              <Plus size={15} /> {getAddMode(g.key) === 'scan' ? `Add ${g.label} bag to scan` : `Add ${g.label} bag manually`}
-                            </button>
-                        }
-                      </div>
-                    )}
+                          {!locked && <Pencil size={13} className="shrink-0 text-stone-400" />}
+                        </button>
+                      )
+                    })}
                   </div>
                 )
               })}
 
+              {!locked && (
+                <button onClick={() => setBagModal({ editing: null })}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed text-[13px] font-semibold transition-colors"
+                  style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
+                  <Plus size={16} /> Add debagging bag
+                </button>
+              )}
+
               {/* A material not part of the blend's declared recipe — deliberately a
-                  separate action from the sections above, not styled like just
-                  another expected ingredient. */}
+                  separate action from the button above, not folded into its dropdown. */}
               {!locked && (addingOther ? (
                 <div className="space-y-2 p-3 rounded-2xl border-2 border-dashed border-stone-300">
                   <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide px-1">Add a material not in this blend's recipe</p>
@@ -824,6 +792,15 @@ export function BlenderCapture({
                 <span className="text-[12px] font-medium opacity-80">Total — raw material mixed in (I)</span>
                 <span className="font-mono font-bold text-[16px]">{totalIn.toFixed(1)} kg</span>
               </div>
+
+              {bagModal && (
+                <AddBagModal
+                  groups={allGroups} colorFor={key => colorForGroupIndex(allGroups.findIndex(g => g.key === key))}
+                  variantWord={variantWord} existingInputs={value.inputs} editingRow={bagModal.editing}
+                  onClose={() => setBagModal(null)} onSave={commitBagFromModal}
+                  onDelete={bagModal.editing ? () => { removeInput(bagModal.editing!.id); setBagModal(null) } : undefined}
+                />
+              )}
             </>
           )}
 
