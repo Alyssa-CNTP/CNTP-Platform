@@ -87,7 +87,7 @@ export function TimesheetConfirm({
           onConfirmedChange?.(true)
           return
         }
-        const stamps = await loadActivity(sessionId)
+        const stamps = await loadActivity(sessionId, operatorId)
         const d = deriveTimesheet(stamps, { shift, date })
         if (!alive) return
         setDerived(d)
@@ -103,7 +103,7 @@ export function TimesheetConfirm({
     }
     load()
     return () => { alive = false }
-  }, [sessionId, operatorName])
+  }, [sessionId, operatorName, operatorId])
 
   const worked = workedMinutes(startIso, endIso, breaks)
 

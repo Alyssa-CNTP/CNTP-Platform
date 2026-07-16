@@ -5,6 +5,42 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Timesheet heartbeat coverage + multi-operator conflation fix)
+
+**Files:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/timesheet.ts`,
+`components/production/capture/TimesheetConfirm.tsx`
+
+Investigated "timesheets not working well across all sections." Root causes (shared
+code, affects every section identically):
+
+- **Heartbeat coverage gap:** `logActivity()` only ever fired as a side-effect of the
+  `productions` array changing (bag/batch data edits), so a shift spent on Checks,
+  Cleaning, Overview or Sign-off — or doing real floor work between edits (walking to
+  weigh a bag, waiting on a scale) — left gaps in `capture_activity` with nothing to
+  distinguish "present but not editing bag data" from "on a break." `deriveTimesheet()`
+  then misread those ordinary working gaps as tea/lunch breaks, or — when there weren't
+  even two heartbeats — collapsed `shiftStart === shiftEnd` and reported 0 minutes
+  worked. Added a generic `pointerdown`/`keydown` listener that heartbeats on any real
+  interaction anywhere in the app (still throttled to once/60s), not just data edits.
+- **Multi-operator session conflation:** `loadActivity(sessionId)` ignored
+  `operator_id` entirely, so when two operators shared a section/shift session, their
+  heartbeats merged into one stream — masking each operator's real breaks (hidden
+  whenever the other was still active) and giving both operators identical, individually
+  wrong derived shift times when they each confirmed. `loadActivity` now scopes to the
+  confirming operator's own heartbeats, falling back to the full session stream only
+  if that comes back empty.
+
+Flagged separately (not fixed — needs a product decision, see chat): `/production/live`
+has its own independent manual timesheet (writes to a plain `timesheets` table, no
+`capture_activity`/`prod_timesheets` involved) and `PasteuriserForm.tsx` has a third,
+also-independent variant — if operators use either of these in parallel with the main
+capture route, that shift's real timesheet is invisible to `/supervisor/timesheets`
+(which only reads `prod_timesheets`). `TimesheetTab.tsx` is unused dead code (confirmed
+via repo-wide grep) implementing yet a fourth model — never wired up, but a trap for a
+future edit.
+
+---
+
 ## 2026-07-16 — Alyssa (Lot-format fix, Blender batch suggestions/numbering, Overview rendering fixes, Sieving cleaning checklist)
 
 **Files:** `components/production/capture/SievingCapture.tsx`,
