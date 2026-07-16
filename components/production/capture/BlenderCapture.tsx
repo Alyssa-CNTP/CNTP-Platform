@@ -103,6 +103,26 @@ export interface CapturedCode { label: string; code: string; resolved: boolean }
  * pick) gets a second pair of eyes before the session is approved and the
  * code is treated as ground truth in the database.
  */
+/**
+ * The highest existing output-run number already used for a blend code, or
+ * null if none exist yet. Standalone (not reusing genBlendSerial's internal
+ * scan below) so page.tsx's "Continue the production run from the previous
+ * shift?" flow can seed a continuing production's `outputRunNo` with the
+ * SAME run being continued — without this, accepting "continue" still left
+ * `outputRunNo` null, so genBlendSerial() would derive its own next run
+ * (max existing + 1) and silently fork bag numbering to a new run the moment
+ * the shift changed, even though the operator explicitly said to continue.
+ */
+export async function resolveExistingBlendRunNo(bomId: string): Promise<number | null> {
+  const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const { data } = await getDb().schema('production').from('bag_tags')
+    .select('serial_number').ilike('serial_number', `${bomId}/%`)
+  const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
+  const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)
+  const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
+  return runs.length ? Math.max(...runs) : null
+}
+
 export function blenderCapturedCodes(d: BlenderData): CapturedCode[] {
   const seen = new Map<string, CapturedCode>()
   for (const r of d.inputs ?? []) {
@@ -430,7 +450,16 @@ export function BlenderCapture({
   operatorId?: string | null
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
-  const [addMode, setAddMode] = useState<BlenderInputBag['inputMode']>('scan')
+  // Per-group, not one shared toggle — a single `addMode` made every group's
+  // mode selector highlight identically the moment any one of them was
+  // changed (e.g. tapping "Manual entry" for Cutter Fine Leaf visually lit up
+  // "Manual entry" for every other ingredient too), which read as "all groups
+  // are now in manual mode" even though only one row's add-button actually
+  // was.
+  const [addModeByGroup, setAddModeByGroup] = useState<Record<string, BlenderInputBag['inputMode']>>({})
+  const getAddMode = (key: string) => addModeByGroup[key] ?? 'scan'
+  const setAddModeFor = (key: string, mode: BlenderInputBag['inputMode']) =>
+    setAddModeByGroup(m => ({ ...m, [key]: mode }))
   const [showSystemPick, setShowSystemPick] = useState<string | null>(null)   // item key, or null
   const [outputWeight, setOutputWeight] = useState('')
   const [groups, setGroups] = useState<BlendIngredientGroup[]>([])
@@ -751,22 +780,22 @@ export function BlenderCapture({
                       <div className="space-y-2">
                         <div className="flex rounded-xl border border-stone-200 overflow-hidden bg-white">
                           {INPUT_MODES.map(m => (
-                            <button key={m.id} onClick={() => setAddMode(m.id)}
-                              className={`flex-1 py-2 text-[12px] font-medium transition-colors ${addMode === m.id ? 'bg-brand text-white' : 'text-stone-500 hover:bg-stone-50'}`}>
+                            <button key={m.id} onClick={() => setAddModeFor(g.key, m.id)}
+                              className={`flex-1 py-2 text-[12px] font-medium transition-colors ${getAddMode(g.key) === m.id ? 'bg-brand text-white' : 'text-stone-500 hover:bg-stone-50'}`}>
                               {m.label}
                             </button>
                           ))}
                         </div>
-                        {addMode === 'system'
+                        {getAddMode(g.key) === 'system'
                           ? <button onClick={() => setShowSystemPick(g.key)}
                               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
                               style={{ borderColor: groupColor + '50', color: groupColor }}>
                               <Search size={15} /> Browse in-stock bags
                             </button>
-                          : <button onClick={() => addManualRow(g, addMode)}
+                          : <button onClick={() => addManualRow(g, getAddMode(g.key))}
                               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
                               style={{ borderColor: groupColor + '50', color: groupColor }}>
-                              <Plus size={15} /> {addMode === 'scan' ? `Add ${g.label} bag to scan` : `Add ${g.label} bag manually`}
+                              <Plus size={15} /> {getAddMode(g.key) === 'scan' ? `Add ${g.label} bag to scan` : `Add ${g.label} bag manually`}
                             </button>
                         }
                       </div>

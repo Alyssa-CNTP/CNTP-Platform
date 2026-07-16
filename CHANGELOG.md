@@ -5,6 +5,29 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Blender: per-group add-mode UX fix, run-continuity serial fix)
+
+**Files:** `components/production/capture/BlenderCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Confusing shared "Manual entry" highlight:** the scan/system/manual mode toggle
+  was one shared piece of state across every ingredient group, so tapping "Manual
+  entry" for one group visually lit up "Manual entry" for every other group too —
+  looked like the whole screen had switched modes when only one row's add-button
+  had. Made it per-group.
+- **Verified** the Blender Overview batch-grouping + component-ratio table shipped
+  in the 2026-07-16 lot-format/overview PR is working as intended — no changes needed.
+- **Run continuity across shifts:** the app already prompts "Continue the production
+  run from the previous shift?" (explicitly naming the blend code for Blender) when
+  the same blend/variant/PO has an open run from an earlier shift — that part already
+  worked. But accepting "Continue" only linked the session to the run for mass-balance
+  totals; it never seeded the new shift's output-run number, so the first bag added
+  still forked to a brand-new run (`…/2-01`) instead of continuing the same one
+  (`…/1-13`) even though the operator explicitly chose to continue. Added
+  `resolveExistingBlendRunNo()` and seed it into the continuing production's
+  `outputRunNo` when "Continue run" is accepted.
+
+---
+
 ## 2026-07-16 — Alyssa (Correct break times, operator-message notifications, checks persistence + AI summary retry, Blender group colours)
 
 **Files:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`,

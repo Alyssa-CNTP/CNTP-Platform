@@ -26,7 +26,7 @@ import {
   type GranuleData,
 } from '@/components/production/capture/GranuleCapture'
 import {
-  BlenderCapture, emptyBlenderData, blenderTotals, blenderCapturedCodes,
+  BlenderCapture, emptyBlenderData, blenderTotals, blenderCapturedCodes, resolveExistingBlendRunNo,
   type BlenderData, type CapturedCode,
 } from '@/components/production/capture/BlenderCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -163,7 +163,7 @@ function CaptureScreen() {
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
-  const updateActiveData = (d: SievingData | RefiningData | GranuleData) =>
+  const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
@@ -578,7 +578,24 @@ function CaptureScreen() {
 
   async function acceptContinueRun() {
     const cr = continueRun; setContinueRun(null)
-    if (cr) await linkSessionToRun(cr.id)
+    if (!cr) return
+    await linkSessionToRun(cr.id)
+    // Blender's run number is embedded in the bag serial (…/1-01…/1-13), a
+    // separate mechanism from `production_runs` — linking the session alone
+    // doesn't touch it. Without seeding it here, the new shift's BlenderData
+    // still starts with outputRunNo null, and genBlendSerial() would derive
+    // its OWN next run (existing max + 1) the first time a bag is added —
+    // silently forking to …/2-01 even though the operator just said this is
+    // the same continuing blend, not a new one.
+    if (isBlenderRun && cr.grade) {
+      const existingRunNo = await resolveExistingBlendRunNo(cr.grade)
+      if (existingRunNo) {
+        const idx = activeIdx
+        const p = productionsRef.current[idx]
+        const bd = p?.data as BlenderData | undefined
+        if (bd && !bd.outputRunNo) updateActiveData({ ...bd, outputRunNo: existingRunNo })
+      }
+    }
   }
 
   async function declineContinueRun() {
