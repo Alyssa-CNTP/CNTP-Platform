@@ -96,6 +96,53 @@ export const MASS_BALANCE_TOLERANCE_KG = 15
 // so it can be hand-written. Flip to true the day a printer is wired up.
 export const LABEL_PRINTING_ENABLED = false
 
+// ── Label printers ─────────────────────────────────────────────────────────
+// Label command language per printer. Zebra = ZPL, Argox CP = PPLB. The app
+// generates the right command string per printer, so one deployment drives
+// mixed hardware.
+export type PrinterLang = 'zpl' | 'pplb'
+
+export interface PrinterConfig {
+  ip: string
+  lang: PrinterLang
+  port?: number   // defaults to 9100 (raw print) when omitted
+}
+
+// Known physical printers on the factory network — the pick-list shown on the
+// Printers admin page. Sections choose from here (and several sections may share
+// one printer). Add a printer once here and it becomes selectable everywhere.
+export interface KnownPrinter {
+  id: string          // stable id / device serial
+  label: string       // shown in the dropdown
+  ip: string
+  lang: PrinterLang
+}
+
+// Labels are the device serials for now — no friendly names assigned yet.
+export const KNOWN_PRINTERS: KnownPrinter[] = [
+  { id: 'D5J261603773', label: 'D5J261603773 (Zebra)', ip: '192.168.0.115', lang: 'zpl' },
+  { id: 'D5J261605257', label: 'D5J261605257 (Zebra)', ip: '192.168.0.124', lang: 'zpl' },
+  { id: 'D5J261603949', label: 'D5J261603949 (Zebra)', ip: '192.168.0.126', lang: 'zpl' },
+  { id: 'argox-cp2140', label: 'Argox CP-2140EX (Pasteuriser)', ip: '192.168.0.55', lang: 'pplb' },
+  { id: 'spare',        label: 'Spare — not wired yet (Refining 1 & 2)', ip: '', lang: 'zpl' },
+]
+
+// Section → printer. Each section points at a printer + language; several sections
+// may share one printer. These are the fallback/seed defaults used until the
+// Printers module saves rows to production.printers. The server running Next.js
+// must have network line-of-sight to these IPs on the raw-print port.
+//   Sieving / Blender / Granule → own dedicated Zebra each
+//   Pasteuriser → Argox CP-2140EX
+//   Refining 1 & 2 → the spare Zebra (share it) — IP set once it's wired up
+export const SECTION_PRINTER: Record<string, PrinterConfig> = {
+  sieving:     { ip: '192.168.0.115', lang: 'zpl' },  // Zebra D5J261603773
+  blender:     { ip: '192.168.0.124', lang: 'zpl' },  // Zebra D5J261605257
+  granule:     { ip: '192.168.0.126', lang: 'zpl' },  // Zebra D5J261603949
+  pasteuriser: { ip: '192.168.0.55',  lang: 'pplb' }, // Argox CP-2140EX
+  refining1:   { ip: '', lang: 'zpl' },               // spare — to be wired
+  refining2:   { ip: '', lang: 'zpl' },               // shares the spare with Refining 1
+}
+
 // Which master-inventory product groups a section bags as outputs. The picker
 // shows only items in these groups, matching the production's variant (and, for
 // Leaf, the chosen destination) — so codes/names come straight from the master.

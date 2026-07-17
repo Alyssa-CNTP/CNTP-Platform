@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
-  FileSpreadsheet, GraduationCap,
+  FileSpreadsheet, GraduationCap, Printer,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -50,6 +50,7 @@ const NAV: NavItem[] = [
   // ── Operations — cross-role, universal entries ──
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
+  { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'] },
 
   // ── HR — direct links, no intermediate hub page ──
   // Staff & Skills / SOP / Skills Matrix view OTHER people's HR data, so they're
