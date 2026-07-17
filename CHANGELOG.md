@@ -5,6 +5,38 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Shift Roster: admin-only "Backend status" panel)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/insights/route.ts` (new),
+`app/api/production/roster/cron/route.ts`, `supabase/migrations/20260717_002_roster_cron_log.sql` (new)
+
+- **New admin-only "Backend status" panel** on the roster page (collapsed by
+  default) so real backend state is visible in the UI instead of requiring a
+  manual DB check — this is the same class of check that caught the false
+  "Published" bug earlier today. Shows three things, fetched from a new
+  admin-gated `/api/production/roster/insights` route:
+  - **Real per-section submission state** — the literal `roster_section_status`
+    rows for the period (section, status, submitter's actual name, exact
+    timestamp), not the derived checkmark shown in the regular confirmation
+    tracker.
+  - **Cron history** — when rotate/remind last ran and what happened
+    (reminded count + pending sections, or rotate/skip reason). The
+    rotate/remind cron previously left no trace inside the app — the Jul
+    8/12/13 `CRON_SECRET` 401 outage was only visible in GitHub Actions logs.
+  - **Recent activity** — the audit trail (added earlier today) for this
+    specific period: who edited/submitted/published/reopened what, and when.
+- New table `production.roster_cron_log` (migration `20260717_002`) records
+  each rotate/remind run; the cron route now writes a best-effort log row
+  after every run. RLS denies `authenticated` entirely — only the service-role
+  cron route and the admin-gated insights route touch it.
+- Gated to full admins only (`role === 'senior_developer'`), matching the
+  Reopen action added earlier today.
+- **Needs migration `20260717_002_roster_cron_log.sql` run in Supabase SQL
+  editor (staging, then production)** before the "Cron history" section will
+  show data — it degrades gracefully (shows "No runs logged yet") until then.
+
+---
+
 ## 2026-07-17 — Gustav (Sieving: add hourly "By Hour" view to Mesh Trend/Outliers charts)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
