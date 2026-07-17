@@ -5,7 +5,7 @@ import { addDays, format, parseISO } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
-  RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Download, Printer,
+  RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Unlock, Download, Printer,
   Info, Eye, Edit3, ShieldCheck,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
@@ -94,7 +94,7 @@ export default function RosterPage() {
   const [showGenerate, setShowGenerate] = useState(false)
   const [showHelp,     setShowHelp]     = useState(false)
   const [generating,   setGenerating]   = useState(false)
-  const [publishing,   setPublishing]   = useState(false)
+  const [reopening,    setReopening]    = useState(false)
   // which cell editor is open: `add:${roleKey}:${shift}` for an add, entry id for edit
   const [editing, setEditing] = useState<string | null>(null)
   // drag-and-drop state
@@ -378,7 +378,6 @@ export default function RosterPage() {
   // ── Publish period + sync maintenance duty_roster ─────────────────────────
   async function publishPeriod() {
     if (!periodId || !period) return
-    setPublishing(true)
     try {
       await db().from('roster_periods').update({
         status: 'published', published_at: new Date().toISOString(),
@@ -419,8 +418,29 @@ export default function RosterPage() {
         }
         if (slots.length > 0) await getDb().schema('maintenance' as any).from('duty_roster').insert(slots)
       }
-    } catch { /* maintenance sync is best-effort */ } finally {
-      setPublishing(false)
+    } catch { /* maintenance sync is best-effort */ }
+  }
+
+  // ── Reopen a published period (admin-only) ─────────────────────────────────
+  // Publish is now ONLY ever automatic — it fires the moment every department
+  // has genuinely submitted (see the autoPublishedRef effect below). There is
+  // no manual early-publish override, so "Published" always means "everyone
+  // confirmed." Reopen exists purely to correct a period that needs another
+  // look: it just flips the period back to draft. Section submission status is
+  // left untouched — if every section really was already submitted, the
+  // auto-publish effect will simply re-publish it on the next check.
+  async function reopenPeriod() {
+    if (!periodId || !period) return
+    setReopening(true)
+    try {
+      await db().from('roster_periods').update({
+        status: 'draft', published_at: null,
+      } as any).eq('id', periodId)
+      setPeriods(ps => ps.map(p => p.id === periodId ? { ...p, status: 'draft', published_at: null } : p))
+      if (autoPublishedRef.current === periodId) autoPublishedRef.current = null
+      logRosterAudit('roster_unpublish', { periodId, periodName: period.name, detail: 'Period reopened by admin' })
+    } finally {
+      setReopening(false)
     }
   }
 
@@ -588,14 +608,18 @@ export default function RosterPage() {
               <Plus size={14} /> New period
             </button>
           )}
-          {/* Publish — needs edit rights somewhere */}
-          {period && !isPublished && canEditAny && (
+          {/* Reopen — admin-only. Publish is now automatic-only (fires once every
+              department has genuinely confirmed), so "Published" always means
+              fully confirmed. This is the sole way to correct a period that was
+              published in error (e.g. before this rule existed). */}
+          {period && isPublished && isFullAdmin && (
             <button
-              onClick={publishPeriod} disabled={publishing || !dbReady}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-ok text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-40 transition-colors"
+              onClick={() => { if (confirm(`Reopen "${period.name}"? This unpublishes it. It will publish again automatically once every department has genuinely confirmed.`)) reopenPeriod() }}
+              disabled={reopening || !dbReady}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40 transition-colors"
             >
-              {publishing ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-              Publish
+              {reopening ? <Loader2 size={13} className="animate-spin" /> : <Unlock size={13} />}
+              Reopen
             </button>
           )}
           {/* Delete — needs delete rights somewhere */}
@@ -614,7 +638,7 @@ export default function RosterPage() {
       {isPublished && period?.published_at && (
         <div className="no-print flex items-center gap-2.5 px-4 py-3 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">
           <Lock size={14} className="shrink-0" />
-          <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — maintenance duty roster has been synced. Printing/export is ready (green buttons above). Changes are still possible but will require re-publishing.</span>
+          <span>Published {format(parseISO(period.published_at), 'd MMM yyyy HH:mm')} — every department confirmed and the maintenance duty roster has been synced. Printing/export is ready (green buttons above). Editing a section reopens it for that department to reconfirm; the roster republishes automatically once everyone has again.</span>
         </div>
       )}
 
@@ -874,7 +898,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         {/* Publish */}
         <div className="flex items-start gap-2.5 px-3.5 py-3 bg-ok/5 border border-ok/20 rounded-xl">
           <CheckCircle2 size={14} className="text-ok shrink-0 mt-0.5" />
-          <p className="text-[12px] text-text-muted"><strong className="text-text">The roster publishes automatically once every department has confirmed.</strong> You can still publish early with the green <strong>Publish</strong> button (needs edit rights). Publishing syncs the Maintenance section to the maintenance duty roster and turns the <strong>Export</strong> / <strong>Print</strong> buttons green so the confirmed roster is ready to share. The roster stays visible across the app whether or not it&apos;s been published.</p>
+          <p className="text-[12px] text-text-muted"><strong className="text-text">The roster publishes automatically once every department has confirmed — there is no manual early-publish.</strong> "Published" always means every section was genuinely submitted. Publishing syncs the Maintenance section to the maintenance duty roster and turns the <strong>Export</strong> / <strong>Print</strong> buttons green so the confirmed roster is ready to share. A full admin can <strong>Reopen</strong> a published period to correct it — it will publish again automatically once every department re-confirms. The roster stays visible across the app whether or not it&apos;s been published.</p>
         </div>
 
         {/* Export / print */}
