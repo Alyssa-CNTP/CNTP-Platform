@@ -42,6 +42,18 @@ const COA_WORDING = {
     'As prescribed by EU Commission Regulation (EC) No. 1881/2006 of December 19, 2006, with amendments.',
   sensorical: 'Reddish brown liquid with a characteristic aroma and taste of rooibos',
   company: 'Cape Natural Tea Products (Pty) Ltd',
+  signatories: [
+    { title: 'Laboratory Supervisor', name: 'Monique Gordon' },
+    { title: 'Quality Assurance Manager', name: 'Michelle Brown' },
+  ],
+  companyFooter: [
+    'CAPE NATURAL TEA PRODUCTS (PTY) LTD',
+    'P.O. BOX 30',
+    'BLACKHEATH, 7581',
+    'SOUTH AFRICA',
+    'Reg. no: 1996/018192/07',
+    'Vat no: 4370164420',
+  ],
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -203,12 +215,15 @@ export default function CoaGeneratorPage() {
     const key = normBatch(batch)
 
     // Pull every source in parallel, then match on the normalised batch number.
-    const [pRes, lRes, csRes] = await Promise.all([
+    const [pRes, lRes, csRes, oRes] = await Promise.all([
       db.schema('qms').from('quality_records').select('*').eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run').order('created_at', { ascending: false }).limit(1000),
       db.schema('qms').from('lab_results').select('*').order('created_at', { ascending: false }).limit(2000),
       db.schema('qms').from('coa_specs').select('*'),
+      db.schema('qms').from('coa_orders').select('*'),
     ])
     setAllSpecs(csRes.data ?? [])
+    // Saved logistics order details for this batch (if any)
+    const orderRow = (oRes.data ?? []).find((o: any) => normBatch(o.batch_no) === key)
 
     // ── Pasteuriser batch (header + moisture/BD + sieve/cut-length averages) ──
     const pastRow = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
@@ -259,10 +274,12 @@ export default function CoaGeneratorPage() {
       header: {
         date_of_issue: new Date().toLocaleDateString('en-ZA', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'),
         batch_number: past?.batch_number || batch,
-        grade, destination: customer,
+        grade, destination: orderRow?.destination || customer,
         production_date: monthYear(past?.production_date || ''),
         best_before: bestBefore(past?.production_date || ''),
-        invoice_no: '', order_number: '', quantity_kg: '', quantity_bags: '',
+        // Logistics fields — pulled from a saved coa_orders row if present, else blank for later entry
+        invoice_no: orderRow?.invoice_no || '', order_number: orderRow?.order_number || '',
+        quantity_kg: orderRow?.quantity_kg || '', quantity_bags: orderRow?.quantity_bags || '',
       },
       candidateDocs: candidates.map((x: any) => ({ doc_no: x.s.doc_no, label: `${x.s.doc_no} — ${x.s.product_description || ''} (${x.s.variant || '—'})` })),
     }
@@ -289,6 +306,23 @@ export default function CoaGeneratorPage() {
         snapshot: { header: m.header, micro: m.micro, cutLength: m.cutLength, other: m.other, sections: m.sections, isOrganic: m.isOrganic },
       })
     } catch { /* non-blocking */ }
+  }
+
+  // Save the logistics order fields (invoice, order no, quantities, destination)
+  // against the batch so they persist and pull through on future generations.
+  const [savingOrder, setSavingOrder] = useState(false)
+  const saveOrderDetails = async () => {
+    if (!model) return
+    setSavingOrder(true)
+    const { error } = await db.schema('qms').from('coa_orders').upsert({
+      batch_no: model.header.batch_number || model.batch,
+      invoice_no: model.header.invoice_no || null, order_number: model.header.order_number || null,
+      quantity_kg: model.header.quantity_kg || null, quantity_bags: model.header.quantity_bags || null,
+      destination: model.header.destination || null, updated_by: whoAmI, updated_at: new Date().toISOString(),
+    }, { onConflict: 'batch_no' })
+    setSavingOrder(false)
+    if (error) { alert('Save failed: ' + error.message); return }
+    alert('Order details saved for ' + (model.header.batch_number || model.batch))
   }
 
   // ── Field mutators ──
@@ -418,6 +452,27 @@ export default function CoaGeneratorPage() {
             </div>
           )}
 
+          {/* Logistics order details — entered later by logistics, saved per batch */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-bold uppercase text-gray-500">🚚 Order details (logistics)</div>
+              <button onClick={saveOrderDetails} disabled={savingOrder}
+                className="px-3 py-1 rounded-lg text-white text-[11px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>
+                {savingOrder ? 'Saving…' : '💾 Save order details'}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {([['invoice_no','Invoice No.'],['order_number','Order Number'],['quantity_kg',"Quantity (Kg's)"],['quantity_bags','Quantity of Bags'],['destination','Destination']] as const).map(([k,l]) => (
+                <div key={k}>
+                  <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">{l}</label>
+                  <input value={model.header[k] || ''} onChange={e => setHeader(k, e.target.value)}
+                    placeholder="—" className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] outline-none focus:border-blue-500" />
+                </div>
+              ))}
+            </div>
+            <div className="text-[10px] text-gray-400 mt-1">These fill in the header and persist against the batch — logistics can enter them later; they'll pull through next time.</div>
+          </div>
+
           <div className="flex gap-2 mb-4 no-print">
             <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
             <button onClick={() => { logGeneration(model); exportPdf(model, description) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
@@ -425,7 +480,13 @@ export default function CoaGeneratorPage() {
 
           {/* ── COA preview (editable) ── */}
           <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>
-            <div className="text-center font-bold text-[16px] tracking-wide mb-4 border-b-2 border-gray-800 pb-2">CERTIFICATE OF ANALYSIS</div>
+            {/* Logo + title */}
+            <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo.png" alt="Cape Natural Tea Products" style={{ height: 56, width: 'auto', objectFit: 'contain' }} />
+              <div className="flex-1 text-center font-bold text-[16px] tracking-wide">CERTIFICATE OF ANALYSIS</div>
+              <div style={{ width: 56 }} />
+            </div>
 
             {/* Header grid */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
@@ -485,7 +546,23 @@ export default function CoaGeneratorPage() {
                 if (realIdx >= 0) setLine('other', realIdx, f, v)
               }} />
 
-            <div className="mt-6 text-[10px] text-gray-500">{COA_WORDING.company}</div>
+            {/* Signatures */}
+            <div className="flex justify-between gap-8 mt-10">
+              {COA_WORDING.signatories.map((s, i) => (
+                <div key={i} style={{ flex: 1, maxWidth: 260 }}>
+                  <div style={{ borderTop: '1px solid #111', marginTop: 34, paddingTop: 3 }} />
+                  <div className="text-[11px] font-semibold">{s.title}</div>
+                  <div className="text-[11px]">{s.name}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Company footer */}
+            <div className="text-center mt-8">
+              {COA_WORDING.companyFooter.map((line, i) => (
+                <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -535,7 +612,12 @@ function SampleCoa() {
           <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 inline-block">
             Illustrative sample only — batch 26138-CON-SG. Enter a real batch above to generate an editable COA.
           </div>
-          <div className="text-center font-bold text-[16px] tracking-wide mb-4 border-b-2 border-gray-800 pb-2">CERTIFICATE OF ANALYSIS</div>
+          <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="Cape Natural Tea Products" style={{ height: 56, width: 'auto', objectFit: 'contain' }} />
+            <div className="flex-1 text-center font-bold text-[16px] tracking-wide">CERTIFICATE OF ANALYSIS</div>
+            <div style={{ width: 56 }} />
+          </div>
           <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
             {header.map(([l, v]) => (
               <div key={l} className="flex items-center gap-2">
@@ -550,7 +632,20 @@ function SampleCoa() {
           </div>
           <SampleTable title="Microbiological Analyses" cols={['Organism', "Specification (cfu's/g)", "Result (cfu's/g)"]} lines={micro} />
           <SampleTable title="Other Analysis" cols={['Description', 'Specification', 'Result']} lines={other} />
-          <div className="mt-6 text-[10px] text-gray-500">{COA_WORDING.company}</div>
+          <div className="flex justify-between gap-8 mt-10">
+            {COA_WORDING.signatories.map((s, i) => (
+              <div key={i} style={{ flex: 1, maxWidth: 260 }}>
+                <div style={{ borderTop: '1px solid #111', marginTop: 34, paddingTop: 3 }} />
+                <div className="text-[11px] font-semibold">{s.title}</div>
+                <div className="text-[11px]">{s.name}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-center mt-8">
+            {COA_WORDING.companyFooter.map((line, i) => (
+              <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -675,18 +770,38 @@ function CoaTable({ title, cols, lines, onEdit }: {
   )
 }
 
+// Fetch an image URL and return a data URL + natural dimensions (for jsPDF).
+async function loadImage(url: string): Promise<{ dataUrl: string; w: number; h: number } | null> {
+  try {
+    const res = await fetch(url); const blob = await res.blob()
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const r = new FileReader(); r.onload = () => resolve(r.result as string); r.onerror = reject; r.readAsDataURL(blob)
+    })
+    const dim = await new Promise<{ w: number; h: number }>((resolve) => {
+      const img = new Image(); img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight }); img.onerror = () => resolve({ w: 1, h: 1 }); img.src = dataUrl
+    })
+    return { dataUrl, w: dim.w, h: dim.h }
+  } catch { return null }
+}
+
 // ─── PDF export (jsPDF, laid out to mirror the template) ──────────────────────
 
-function exportPdf(model: CoaModel, description: string) {
+async function exportPdf(model: CoaModel, description: string) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const pageW = doc.internal.pageSize.getWidth()
   const margin = 40
   let y = 50
 
+  // Logo (top-left) + centred title
+  const logo = await loadImage('/logo.png')
+  if (logo) {
+    const h = 42, w = logo.w * (h / logo.h)
+    doc.addImage(logo.dataUrl, 'PNG', margin, y - 28, w, h)
+  }
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15)
   doc.text('CERTIFICATE OF ANALYSIS', pageW / 2, y, { align: 'center' })
-  doc.setLineWidth(1.2); doc.line(margin, y + 6, pageW - margin, y + 6)
-  y += 26
+  doc.setLineWidth(1.2); doc.line(margin, y + 18, pageW - margin, y + 18)
+  y += 40
 
   // Header — two columns
   const hdr: [string, string][] = [
@@ -748,6 +863,26 @@ function exportPdf(model: CoaModel, description: string) {
     if (l.label === 'MOSH/MOAH') return model.sections.moshMoah
     return true
   }))
+
+  // Signatures — two blocks with a ruled signing line
+  y += 40
+  const sigW = 170
+  const sigX = [margin + 20, pageW - margin - 20 - sigW]
+  COA_WORDING.signatories.forEach((s, i) => {
+    const x = sigX[i]
+    doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title, x, y + 12)
+    doc.setFont('helvetica', 'normal'); doc.text(s.name, x, y + 23)
+  })
+  y += 46
+
+  // Centred company footer
+  COA_WORDING.companyFooter.forEach((line, i) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(i === 0 ? 8 : 7)
+    doc.setTextColor(i === 0 ? 22 : 75, i === 0 ? 101 : 85, i === 0 ? 52 : 99)
+    doc.text(line, pageW / 2, y, { align: 'center' }); y += (i === 0 ? 9 : 8)
+  })
+  doc.setTextColor(0, 0, 0)
 
   doc.save(`COA_${normBatch(model.batch)}.pdf`)
 }

@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (COA Generator: logo, signatures, company footer + logistics order details)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_005_coa_orders.sql` (new)
+
+- **Cape Natural logo** now appears top-left of the COA (on-screen preview, print, and PDF export), matching the standard certificate design.
+- **Signature blocks** added at the bottom — Laboratory Supervisor (Monique Gordon) and Quality Assurance Manager (Michelle Brown), each with a ruled signing line — plus the centred company footer (CAPE NATURAL TEA PRODUCTS (PTY) LTD, address, Reg/VAT no.).
+- **Logistics order details:** invoice no., order number, quantities and destination are now a dedicated "🚚 Order details (logistics)" section with a **Save** button. They persist per batch in the new `qms.coa_orders` table, so logistics can fill them in later when ready and they pull through automatically on the next generation. (The header fields remain inline-editable too.)
+
+---
+
 ## 2026-07-17 — Gustav (COA Generator: pull specifications from customer specs by grade+customer+variant, + generation history)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_004_coa_generated.sql` (new)
