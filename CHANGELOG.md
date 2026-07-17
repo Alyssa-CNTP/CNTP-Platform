@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (Lab Results: fix duplicate ≤ in spec column, edit-after-extraction for every tab, heavy metals/PA extraction no longer collapses detection-limit values)
+
+**Files changed:** `app/(app)/quality/lab-results/page.tsx`, `app/api/upload/route.ts`
+
+- **Fixed duplicate "≤≤" in the Spec column.** `expandRecord()` was prefixing "≤" onto values that had already been extracted with their own "≤" (or another comparison operator), producing "≤≤1.0". Added a `formatSpec()` helper that only prefixes "≤" when the value doesn't already start with a comparison operator.
+- **Added edit-after-extraction to every non-Micro tab** (Residue, Heavy Metals, EtO, Aflatoxins, MOSH/MOAH, PAs, Glyphosate) — Micro already had this via `MicroEditCell`. New `RecordEditModal` handles the three result shapes: `compounds_detected[]` (Residue), `analytes[]` (everything else), and a flat-field fallback for any older records with neither. An ✏️ Edit button now sits next to the existing 🗑 Delete on every record.
+- **Fixed heavy metals (and PA) extraction dropping the lab's actual reported value.** The Gemini prompt explicitly told the model to collapse any below-detection-limit result (e.g. a printed "<0.010") into the generic string "None detected" — discarding the real reported threshold. Reworded both prompts to keep the value exactly as printed (e.g. "<0.010"), only falling back to "None detected" when the document truly has no value/threshold printed.
+
+---
+
 ## 2026-07-17 — Alyssa (Shift Roster: wire WhatsApp into reminders, real delivery counts, self-test tool)
 
 **Files:** `app/api/production/roster/cron/route.ts`, `app/api/production/roster/notify-test/route.ts` (new),

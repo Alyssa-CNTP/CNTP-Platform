@@ -68,6 +68,15 @@ function StatusBadge({ s }: { s: string|null }) {
   return <span style={{ fontSize:9, padding:'2px 8px', borderRadius:10, background:bg, color, fontWeight:700 }}>{s}</span>
 }
 
+// Prefixes a numeric spec/MRL value with "≤" — guards against double-prefixing
+// when the extracted value already carries a comparison operator (≤, <, ≥, >),
+// which otherwise showed up as "≤≤1.0" in the table.
+function formatSpec(v: any): string {
+  if (v == null || v === '') return '—'
+  const s = String(v).trim()
+  return /^[≤≥<>~]/.test(s) ? s : `≤${s}`
+}
+
 /** Expand a single LabResult record into display rows (mirrors Express allRows logic) */
 function expandRecord(r: LabResult): any[] {
   const d = r.results || r
@@ -84,7 +93,7 @@ function expandRecord(r: LabResult): any[] {
         result: isFP ? (c.result_mg_kg!=null?String(c.result_mg_kg):'—') : (`${c.detected_value_prefix||''}${c.detected_value_mg_kg??''}`||'—'),
         unit:'mg/kg',
         mrl: isFP?(c.default_export_mrl!=null?c.default_export_mrl:'—'):(c.mrl_eu_mg_kg!=null?c.mrl_eu_mg_kg:'—'),
-        spec: isFP?(c.default_export_mrl!=null?`≤${c.default_export_mrl}`:'—'):(c.mrl_eu_mg_kg!=null?`≤${c.mrl_eu_mg_kg}`:'—'),
+        spec: isFP?formatSpec(c.default_export_mrl):formatSpec(c.mrl_eu_mg_kg),
         status: isFP?(d.overall_status||'PASS'):(c.eu_mrl_exceeded?'Fail':'Pass'),
       }
     })
@@ -114,7 +123,7 @@ function expandRecord(r: LabResult): any[] {
       compound:c.analyte||c.metal||'—', analyte:c.analyte||c.metal||'—',
       result: c.result!=null&&c.result!=='' ? String(c.result) : 'None detected',
       unit:c.unit||'—',
-      mrl:c.eu_mrl??c.spec??'—', spec:c.spec!=null?`≤${c.spec}`:(c.eu_mrl!=null?`≤${c.eu_mrl}`:'—'),
+      mrl:c.eu_mrl??c.spec??'—', spec: c.spec!=null?formatSpec(c.spec):formatSpec(c.eu_mrl),
       status:c.status||d.overall_status||'—',
     }))
   }
@@ -563,6 +572,156 @@ function MicroTable({ records, canWrite, onDelete, onUpdate }: {
   )
 }
 
+// ─── RecordEditModal ──────────────────────────────────────────────────────────
+// Generic edit-after-extraction for every non-Micro tab (residue, heavy
+// metals, EtO, aflatoxins, MOSH/MOAH, PAs, glyphosate). Handles the three
+// shapes expandRecord() understands: compounds_detected[] (residue),
+// analytes[] (everything else), or a flat scalar object as a fallback.
+
+function RecordEditModal({ record, onClose, onSaved }: { record: any; onClose: () => void; onSaved: (r: any) => void }) {
+  const db = getDb()
+  const d = record.results || record
+  const isCompounds = Array.isArray(d.compounds_detected)
+  const isAnalytes  = Array.isArray(d.analytes)
+
+  const [batchNo, setBatchNo]   = useState(record.batch_no || d.batch_no || '')
+  const [overallStatus, setOverallStatus] = useState(d.overall_status || record.overall_status || 'Pass')
+  const [rows, setRows] = useState<any[]>(() => {
+    if (isCompounds) return d.compounds_detected.map((c: any) => ({ ...c }))
+    if (isAnalytes)   return d.analytes.map((a: any) => ({ ...a }))
+    return []
+  })
+  // Flat fallback — every scalar top-level field not otherwise handled.
+  const flatKeys = (isCompounds || isAnalytes) ? [] : Object.keys(d).filter(k =>
+    !k.startsWith('_') && !['id','created_at','batch_no','overall_status','test_type','lab_name','order_no','date_issued','date_received','pdf_path'].includes(k) &&
+    (typeof d[k] === 'string' || typeof d[k] === 'number'))
+  const [flatForm, setFlatForm] = useState<Record<string,string>>(() => Object.fromEntries(flatKeys.map(k => [k, String(d[k] ?? '')])))
+  const [saving, setSaving] = useState(false)
+
+  function setRow(i: number, key: string, val: string) {
+    setRows(rs => rs.map((r, idx) => idx === i ? { ...r, [key]: val } : r))
+  }
+
+  async function save() {
+    setSaving(true)
+    const newResults: any = { ...d, overall_status: overallStatus, batch_no: batchNo }
+    if (isCompounds) newResults.compounds_detected = rows
+    else if (isAnalytes) newResults.analytes = rows
+    else Object.assign(newResults, flatForm)
+    const { data, error } = await db.schema('qms').from('lab_results')
+      .update({ results: newResults, batch_no: batchNo, overall_status: overallStatus })
+      .eq('id', record.id).select().single()
+    if (error) { alert('Save failed: ' + error.message); setSaving(false); return }
+    onSaved(data)
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ background:'#fff', borderRadius:12, padding:22, width:640, maxWidth:'100%', maxHeight:'85vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,.3)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+          <div style={{ fontWeight:800, fontSize:14 }}>✏️ Edit Extracted Results — {batchNo || '—'}</div>
+          <button onClick={onClose} style={{ border:'none', background:'none', fontSize:18, cursor:'pointer' }}>✕</button>
+        </div>
+
+        <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
+          <div>
+            <label style={{ fontSize:10, fontWeight:700, display:'block', marginBottom:2, color:'#374151' }}>Batch No.</label>
+            <input value={batchNo} onChange={e=>setBatchNo(e.target.value)}
+              style={{ padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:12 }}/>
+          </div>
+          <div>
+            <label style={{ fontSize:10, fontWeight:700, display:'block', marginBottom:2, color:'#374151' }}>Overall Status</label>
+            <select value={overallStatus} onChange={e=>setOverallStatus(e.target.value)}
+              style={{ padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:12, background:'#fff' }}>
+              <option>Pass</option><option>Fail</option>
+            </select>
+          </div>
+        </div>
+
+        {isCompounds && (
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11, marginBottom:10 }}>
+            <thead><tr style={{ background:'#166534', color:'#fff' }}>
+              {['Compound','Result (mg/kg)','Export MRL'].map(h=><th key={h} style={{ padding:'4px 8px', textAlign:'left' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map((c:any,i:number) => (
+                <tr key={i} style={{ background:i%2===0?'#fff':'#f9fafb', borderBottom:'1px solid #e5e7eb' }}>
+                  <td style={{ padding:'4px 8px', fontWeight:600 }}>{c.compound_name||'—'}</td>
+                  <td style={{ padding:'3px 8px' }}>
+                    <input value={c.result_mg_kg??''} onChange={e=>setRow(i,'result_mg_kg',e.target.value)}
+                      style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, fontFamily:'monospace', fontWeight:700, boxSizing:'border-box' }}/>
+                  </td>
+                  <td style={{ padding:'3px 8px' }}>
+                    <input value={c.default_export_mrl??''} onChange={e=>setRow(i,'default_export_mrl',e.target.value)}
+                      style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, boxSizing:'border-box' }}/>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {isAnalytes && (
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11, marginBottom:10 }}>
+            <thead><tr style={{ background:'#1f4e79', color:'#fff' }}>
+              {['Analyte','Result','Unit','MRL / Spec','Status'].map(h=><th key={h} style={{ padding:'4px 8px', textAlign:'left' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map((a:any,i:number) => (
+                <tr key={i} style={{ background:i%2===0?'#fff':'#f9fafb', borderBottom:'1px solid #e5e7eb' }}>
+                  <td style={{ padding:'4px 8px', fontWeight:600 }}>{a.analyte||'—'}</td>
+                  <td style={{ padding:'3px 8px' }}>
+                    <input value={a.result??''} onChange={e=>setRow(i,'result',e.target.value)}
+                      style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, fontFamily:'monospace', fontWeight:700, boxSizing:'border-box' }}/>
+                  </td>
+                  <td style={{ padding:'3px 8px' }}>
+                    <input value={a.unit??''} onChange={e=>setRow(i,'unit',e.target.value)}
+                      style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, boxSizing:'border-box' }}/>
+                  </td>
+                  <td style={{ padding:'3px 8px' }}>
+                    <input value={a.eu_mrl ?? a.spec ?? ''} onChange={e=>setRow(i, a.eu_mrl!=null ? 'eu_mrl' : 'spec', e.target.value)}
+                      style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, boxSizing:'border-box' }}/>
+                  </td>
+                  <td style={{ padding:'3px 8px' }}>
+                    <select value={a.status||'Pass'} onChange={e=>setRow(i,'status',e.target.value)}
+                      style={{ padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, background:'#fff' }}>
+                      <option>Pass</option><option>Fail</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {!isCompounds && !isAnalytes && (
+          flatKeys.length === 0 ? (
+            <div style={{ fontSize:11, color:'#9ca3af', padding:'10px 0' }}>No editable fields found on this record.</div>
+          ) : (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
+              {flatKeys.map(k => (
+                <div key={k}>
+                  <label style={{ fontSize:10, fontWeight:700, display:'block', marginBottom:2, color:'#374151', textTransform:'uppercase' }}>{k.replace(/_/g,' ')}</label>
+                  <input value={flatForm[k]} onChange={e=>setFlatForm(f=>({...f,[k]:e.target.value}))}
+                    style={{ width:'100%', padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:12, boxSizing:'border-box' }}/>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+
+        <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+          <button onClick={onClose} style={{ padding:'7px 14px', borderRadius:6, border:'1px solid #d1d5db', background:'#fff', cursor:'pointer', fontSize:12 }}>Cancel</button>
+          <button onClick={save} disabled={saving} style={{ padding:'7px 16px', borderRadius:6, border:'none', background:'#166534', color:'#fff', cursor:'pointer', fontSize:12, fontWeight:700 }}>
+            {saving?'Saving…':'✓ Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function LabResultsPage() {
@@ -578,6 +737,7 @@ export default function LabResultsPage() {
   const [showHistory, setShowHistory] = useState(false)
   const [historyRecs, setHistoryRecs] = useState<any[]>([])
   const [searchText,  setSearchText]  = useState('')
+  const [editingRecord, setEditingRecord] = useState<LabResult|null>(null)
 
   const load = useCallback(async (tab: TestType) => {
     setLoading(true); setError('')
@@ -789,6 +949,7 @@ export default function LabResultsPage() {
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
             <thead>
               <tr style={{ background:'#1f4e79', color:'#fff' }}>
+                {canWrite && <th style={{ padding:'6px 8px', width:36, fontSize:9, color:'#bfdbfe' }}>Edit</th>}
                 {canWrite && <th style={{ padding:'6px 8px', width:36 }}></th>}
                 <th style={{ padding:'6px 10px', textAlign:'left', whiteSpace:'nowrap' }}>Batch</th>
                 {cols.map(([k,l])=>(
@@ -802,6 +963,12 @@ export default function LabResultsPage() {
                 <tr key={gi} style={{ background:r._isFirst&&gi>0?'#fff':gi%2===0?'#fff':'#f9fafb',
                   borderTop:r._isFirst&&gi>0?'2px solid #e5e7eb':undefined,
                   borderBottom:'1px solid #f3f4f6' }}>
+                  {r._isFirst && canWrite && (
+                    <td rowSpan={r._span} style={{ padding:'4px 6px', textAlign:'center', verticalAlign:'top', paddingTop:6 }}>
+                      <button onClick={()=>{ const rec = current.find((x:any)=>x.id===r.id); if (rec) setEditingRecord(rec) }}
+                        style={{ padding:'2px 8px', borderRadius:4, border:'1px solid #d1d5db', background:'#f9fafb', cursor:'pointer', fontSize:10, fontWeight:600 }}>✏️</button>
+                    </td>
+                  )}
                   {r._isFirst && canWrite && (
                     <td rowSpan={r._span} style={{ padding:'4px 6px', textAlign:'center', verticalAlign:'top', paddingTop:6 }}>
                       <button onClick={()=>deleteRecord(r.id)}
@@ -842,6 +1009,18 @@ export default function LabResultsPage() {
             ? `No results match "${searchText}"`
             : `No ${TEST_TYPES.find(t=>t.key===activeTab)?.label} results yet — drop a PDF above`}
         </div>
+      )}
+
+      {/* Edit-after-extraction modal — every non-Micro tab */}
+      {editingRecord && (
+        <RecordEditModal
+          record={editingRecord}
+          onClose={() => setEditingRecord(null)}
+          onSaved={(updated: any) => {
+            setRecords(p => ({ ...p, [activeTab]: p[activeTab].map(r => r.id === updated.id ? updated : r) }))
+            setEditingRecord(null)
+          }}
+        />
       )}
 
       {/* Historical */}
