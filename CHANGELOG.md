@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (Customer Specs: import Client_Specs.xlsx as an editable per-customer COA requirements matrix)
+
+**Files changed:** `components/quality/CoaSpecsTab.tsx` (new), `app/(app)/quality/customer-specs/page.tsx`, `supabase/migrations/20260717_003_coa_specs.sql` (new), `supabase/seeds/coa_specs_seed.sql` (new)
+
+- **New `qms.coa_specs` table** holding the full per-customer COA specification matrix imported from `Client_Specs.xlsx` (67 customer product specs across 30 customers). Identity + physical fields are columns; the ~70 analysis fields (mesh, micro, contaminants, residue/foreign/sensorial) live in a `specs` jsonb. A field is stored only when it carries a real spec — an absent field means **NOT REQUIRED** on that customer's COA (this is how "what requires specs vs not" is represented). All 67 rows seeded into the staging DB.
+- **New "📄 COA Requirements" tab** on the Customer Specs page (default tab; the old sieve-spec table moves under a "🧪 Sieve Specs" tab). Lists every customer spec with search, a required-analysis count, and at-a-glance badges (Micro / Sieve / Metals / PA / Residue) showing which COA blocks each customer needs.
+- **Fully editable and saved back to the database:** an Edit modal groups every field (Identity, Physical, Sieve/mesh with spec+min+max, Microbiology, Contaminants, Other) — blank = NOT REQUIRED, a value = required with that spec. Add / edit / delete rows, gated on `can_edit_customer_specs`.
+- This is the per-customer template the COA Generator will read from to decide which sections a batch's certificate requires and the spec-column values (wiring the generator to it is the next step).
+
+---
+
 ## 2026-07-17 — Gustav (COA Generator: add filled-in example template at the bottom)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

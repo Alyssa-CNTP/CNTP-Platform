@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import CoaSpecsTab from '@/components/quality/CoaSpecsTab'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,7 @@ function EC({id,col,value,width=50,onSave,savedKey}:{id:number;col:string;value:
 export default function CustomerSpecsPage() {
   const {p}=useAuth(); const canWrite=p('can_edit_customer_specs')
   const db=getDb()
+  const [tab,setTab]=useState<'sieve'|'coa'>('coa')
   const [specs,setSpecs]=useState<Spec[]>([])
   const [loading,setLoading]=useState(true)
   const [err,setErr]=useState('')
@@ -149,6 +151,20 @@ export default function CustomerSpecsPage() {
 
   return (
     <div className="p-5 max-w-[1400px]">
+      {/* Tab switch */}
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        {([['coa','📄 COA Requirements (per customer)'],['sieve','🧪 Sieve Specs']] as const).map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{padding:'8px 16px',borderRadius:10,fontSize:12,fontWeight:700,cursor:'pointer',
+              border:`1px solid ${tab===k?'#1f4e79':'#e5e7eb'}`,background:tab===k?'#1f4e79':'#fff',color:tab===k?'#fff':'#6b7280'}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {tab==='coa' && <CoaSpecsTab canWrite={canWrite} />}
+
+      {tab==='sieve' && (<>
       {/* Toolbar */}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
         <span style={{fontWeight:700,fontSize:13}}>📋 Product Specifications</span>
@@ -392,6 +408,7 @@ export default function CustomerSpecsPage() {
           )}
         </div>
       )}
+      </>)}
     </div>
   )
 }
