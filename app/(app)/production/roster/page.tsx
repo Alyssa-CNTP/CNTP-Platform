@@ -805,6 +805,26 @@ function BackendStatusPanel({ periodId }: { periodId: string }) {
     if (next && !data && !loading) load()
   }
 
+  // Self-test: sends a real email + WhatsApp (+ in-app) to the calling admin's
+  // own contact info, right now — the fast way to check whether a channel is
+  // actually configured on this server, without waiting for the Mon/Wed cron.
+  const [testing, setTesting]         = useState(false)
+  const [testResult, setTestResult]   = useState<any>(null)
+  const [testError, setTestError]     = useState<string | null>(null)
+  async function runTest() {
+    setTesting(true); setTestError(null); setTestResult(null)
+    try {
+      const res = await fetch('/api/production/roster/notify-test', { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || `Error ${res.status}`)
+      setTestResult(json)
+    } catch (err: any) {
+      setTestError(err?.message ?? 'Failed to send test')
+    } finally {
+      setTesting(false)
+    }
+  }
+
   const fmtAgo = (iso: string) => {
     try { return formatDistanceToNow(parseISO(iso), { addSuffix: true }) } catch { return iso }
   }
@@ -823,12 +843,46 @@ function BackendStatusPanel({ periodId }: { periodId: string }) {
 
       {open && (
         <div className="px-4 pb-4 space-y-4 border-t border-stone-200 pt-3">
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-3">
+            <button onClick={runTest} disabled={testing}
+              className="flex items-center gap-1.5 text-[11px] font-medium text-stone-500 hover:text-brand disabled:opacity-40">
+              {testing ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Send test to me
+            </button>
             <button onClick={load} disabled={loading}
               className="flex items-center gap-1.5 text-[11px] font-medium text-stone-500 hover:text-brand disabled:opacity-40">
               {loading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Refresh
             </button>
           </div>
+
+          {testError && <p className="text-[12px] text-err">{testError}</p>}
+
+          {testResult && (
+            <div className="rounded-xl border border-stone-200 bg-white p-3 space-y-1.5 text-[12px]">
+              <p className="font-mono text-[10px] uppercase tracking-wide text-stone-400">
+                Test sent to {testResult.recipient?.name ?? 'you'} ({testResult.recipient?.email ?? 'no email on file'}{testResult.recipient?.phone ? `, ${testResult.recipient.phone}` : ', no phone on file'})
+              </p>
+              <p>
+                <strong className="text-text">In-app:</strong>{' '}
+                <span className={testResult.inApp?.ok ? 'text-ok' : 'text-err'}>{testResult.inApp?.ok ? 'delivered — check the bell' : 'failed'}</span>
+              </p>
+              <p>
+                <strong className="text-text">Email</strong> (SMTP {testResult.config?.smtpConfigured ? 'configured' : 'NOT configured'}):{' '}
+                <span className={testResult.email?.ok && !testResult.email?.skipped ? 'text-ok' : 'text-err'}>
+                  {testResult.email?.skipped ? `skipped — ${testResult.email?.error ?? 'SMTP_USER / SMTP_PASS not set'}`
+                    : testResult.email?.ok ? 'sent — check your inbox (and spam)'
+                    : `failed — ${testResult.email?.error ?? 'unknown error'}`}
+                </span>
+              </p>
+              <p>
+                <strong className="text-text">WhatsApp</strong> (provider: {testResult.config?.whatsappProvider ?? 'not set'}):{' '}
+                <span className={testResult.whatsapp?.ok && !testResult.whatsapp?.skipped ? 'text-ok' : 'text-err'}>
+                  {testResult.whatsapp?.skipped ? `skipped — ${testResult.whatsapp?.error ?? 'not configured'}`
+                    : testResult.whatsapp?.ok ? 'sent — check WhatsApp'
+                    : `failed — ${testResult.whatsapp?.error ?? 'unknown error'}`}
+                </span>
+              </p>
+            </div>
+          )}
 
           {error && <p className="text-[12px] text-err">{error}</p>}
 
@@ -862,7 +916,10 @@ function BackendStatusPanel({ periodId }: { periodId: string }) {
                     <p>
                       <strong className="text-text">Last remind</strong> — {fmtAgo(data.cron.remind.ran_at)} ({fmtAt(data.cron.remind.ran_at)}):{' '}
                       {data.cron.remind.result?.reminded != null
-                        ? `reminded ${data.cron.remind.result.reminded}, pending [${(data.cron.remind.result.pending ?? []).join(', ') || 'none'}]`
+                        ? `attempted ${data.cron.remind.result.reminded}` +
+                          (data.cron.remind.result?.emailSent != null ? `, email sent ${data.cron.remind.result.emailSent}` : '') +
+                          (data.cron.remind.result?.whatsappSent != null ? `, WhatsApp sent ${data.cron.remind.result.whatsappSent}` : '') +
+                          `, pending [${(data.cron.remind.result.pending ?? []).join(', ') || 'none'}]`
                         : (data.cron.remind.result?.reason ?? 'no result')}
                     </p>
                   ) : <p className="text-stone-400">No remind runs logged yet.</p>}
