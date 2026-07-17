@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Timesheets: fix worked-minutes — anchor to login → sign-off, stop inferring breaks from gaps, changeover prompt)
+
+**Files changed:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260717_008_timesheet_worked_minutes_recompute.sql` (new, optional/manual)
+
+- **Root cause fixed:** worked-time was `span − inferred_breaks`, and *any* inactivity gap ≥5 min was inferred as a break (>30 min = lunch). Operators do long stretches of physical floor work without touching the tablet, so a full shift collapsed into one giant "lunch" and worked-time came out as minutes (e.g. an 08:24–15:57 shift showing **8m**, several showing **0m**).
+- **`deriveTimesheet` rewritten** to anchor to real clock events, never gaps:
+  - **shift start = the operator's first activity stamp = login / page-open** — fixed, read-only ("can't be changed").
+  - **shift end = when they reach sign-off / submit** (passed in as `endIso`), falling back to the last stamp.
+  - **breaks = the standard tea/lunch schedule for the shift only**, clipped to the worked window so an out-of-window break (e.g. a 13:00 lunch for someone who left at 12:00) can't subtract. No gap-inference.
+  - `workedMinutes` now subtracts only the portion of each break that overlaps `[start, end]`; never negative.
+- **TimesheetConfirm:** the start field is now read-only (login-anchored); the end defaults to sign-off time; copy updated. Removed the dead gap constants.
+- **Changeover-aware submit:** when a **morning** operator submits **before 15h30** having already run **2+ production orders**, a *"Is there a changeover?"* prompt appears. "Yes" logs a structured handover note (shows in Productions history + the next shift's handover banner) and submits; the incoming afternoon/night operator's own login records their shift start on a fresh record. "No" submits as end-of-day.
+- **Verified** against 6 scenarios incl. the exact screenshot case → now **6h 33m** (was 8m), end-anchored-to-submit, and out-of-window break clipping.
+- **Optional historical recompute** (`…_008_…recompute.sql`) — preview-first SELECT then a transaction-wrapped UPDATE to re-approximate existing confirmed rows (morning −60m, afternoon/night −75m). Approximate by design: old rows' end was the last tap, so they can be made sane but not exact. **Not auto-run.**
+
+---
+
 ## 2026-07-17 — Gustav (COA Generator: editable signatory names + drawable, persistent signatures)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_006_coa_signatories.sql` (new)
