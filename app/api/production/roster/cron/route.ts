@@ -115,6 +115,9 @@ async function handle(req: NextRequest) {
   try {
     const prod = getAdminClient().schema('production' as any)
     const result = task === 'rotate' ? await doRotate(prod) : await doRemind(prod)
+    // Best-effort: record that this run happened + what it did, so the admin
+    // "backend status" panel can show real cron history instead of nothing.
+    try { await prod.from('roster_cron_log').insert({ task, result }) } catch { /* logging is best-effort */ }
     return NextResponse.json({ ok: true, task, ...result })
   } catch (err: any) {
     console.error('[api/production/roster/cron]', err)
