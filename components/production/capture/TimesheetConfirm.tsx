@@ -88,7 +88,10 @@ export function TimesheetConfirm({
           return
         }
         const stamps = await loadActivity(sessionId, operatorId)
-        const d = deriveTimesheet(stamps, { shift, date })
+        // Reaching sign-off = the operator wrapping up, so the shift ends NOW.
+        // Start stays anchored to their first stamp (login); worked = login→now
+        // minus the standard breaks — never inferred from gaps between taps.
+        const d = deriveTimesheet(stamps, { shift, date, endIso: new Date().toISOString() })
         if (!alive) return
         setDerived(d)
         setHadActivity(stamps.length > 0)
@@ -107,8 +110,8 @@ export function TimesheetConfirm({
 
   const worked = workedMinutes(startIso, endIso, breaks)
 
-  function setStart(t: string) { setStartTime(t); setStartIso(timeToIso(t, startIso, date)) }
-  function setEnd(t: string)   { setEndTime(t);   setEndIso(timeToIso(t, endIso, date)) }
+  // Start is login-anchored and read-only; only the end is user-adjustable.
+  function setEnd(t: string) { setEndTime(t); setEndIso(timeToIso(t, endIso, date)) }
 
   function updateBreak(i: number, patch: Partial<TimesheetBreak>) {
     setBreaks(bs => bs.map((b, j) => j === i ? { ...b, ...patch } : b))
@@ -217,16 +220,18 @@ export function TimesheetConfirm({
         <Info size={14} className="shrink-0 mt-0.5" />
         <span>
           {hadActivity
-            ? 'Auto-filled from your capture activity. Check the times and breaks, then confirm.'
-            : 'No activity was recorded — enter your start, end and breaks, then confirm.'}
+            ? 'Your start is your login time and can’t be changed. The end is now (sign-off). Check your breaks, then confirm.'
+            : 'No login was recorded — enter your start, end and breaks, then confirm.'}
         </span>
       </div>
 
-      {/* Start / end */}
+      {/* Start / end. Start is the login time — fixed, never editable (a shift
+          can only start when the operator logged in). End defaults to now. */}
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Shift start</label>
-          <input type="time" value={startTime} disabled={locked} onChange={e => setStart(e.target.value)} className={TIME_INP + ' w-full'} />
+          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Shift start · login</label>
+          <input type="time" value={startTime} disabled readOnly title="Set automatically from your login — can’t be changed"
+            className={TIME_INP + ' w-full bg-stone-50 text-stone-500 cursor-not-allowed'} />
         </div>
         <div className="space-y-1">
           <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Shift end</label>

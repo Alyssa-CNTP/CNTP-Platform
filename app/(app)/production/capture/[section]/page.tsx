@@ -157,6 +157,7 @@ function CaptureScreen() {
   const [saved, setSaved]         = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
+  const [changeoverAsk, setChangeoverAsk] = useState(false) // early-submit "is there a changeover?" prompt
   const [error, setError]         = useState<string | null>(null)
 
   // Serial counter, seeded from existing tags for this section+date
@@ -1035,14 +1036,53 @@ function CaptureScreen() {
     ).eq('id', sid)
   }
 
+  // How many production orders/batches this shift actually captured (this
+  // session + any siblings). Two or more before an early submit means the
+  // operator switched product mid-shift — the signal for a changeover.
+  function capturedProductionCount(): number {
+    return [...productions, ...siblingProductions].filter(p => hasCaptureData([p])).length
+  }
+
+  // Prompt "is there a changeover?" only on an EARLY morning submit (before
+  // 15h30 SAST — the tablet runs on SAST, same convention as pastChangeover)
+  // that already captured 2+ POs. A normal end-of-morning submit near 16h00 is
+  // not a changeover, so it never nags. The afternoon operator's own login
+  // records their shift start on a fresh session/timesheet.
+  function earlyChangeoverLikely(): boolean {
+    if (shift !== 'morning') return false
+    const now = new Date()
+    if (dateParam !== format(now, 'yyyy-MM-dd')) return false
+    const beforeCutoff = now.getHours() < 15 || (now.getHours() === 15 && now.getMinutes() < 30)
+    return beforeCutoff && capturedProductionCount() >= 2
+  }
+
   async function handleSubmit() {
+    // Intercept an early multi-PO morning submit to ask about a changeover; the
+    // modal's buttons call submitSession() directly with the answer.
+    if (earlyChangeoverLikely()) { setChangeoverAsk(true); return }
+    await submitSession(false)
+  }
+
+  async function submitSession(changeover: boolean) {
+    setChangeoverAsk(false)
+    // On a confirmed changeover, log it as a structured handover note so it
+    // shows in Productions history and the next shift's handover banner. We
+    // don't write shift_takeovers here — the incoming operator isn't known yet;
+    // they're recorded when they log in and open the afternoon record.
+    const note = changeover
+      ? `⇄ Shift changeover at ${format(new Date(), 'HH:mm')} — handed over mid-shift; the afternoon/night shift continues on a new record.`
+      : null
+    const finalComments = note
+      ? (comments.trim() ? `${comments.trim()}\n${note}` : note)
+      : (comments.trim() || null)
+    if (note) setComments(finalComments!)   // reflect in the UI immediately
     await saveDraft()
     setSubmitting(true)
     try {
       const sid = await ensureSession()
       await getDb().schema('production').from('prod_sessions').update({
         status: 'submitted', submitted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-        comments: comments.trim() || null,
+        comments: finalComments,
       } as any).eq('id', sid)
       setStatus('submitted')
       // A floor operator submitting = end of their shift on this tablet: sign
@@ -1216,6 +1256,16 @@ function CaptureScreen() {
           hasRoster={afternoonOps.length > 0}
           onConfirm={confirmChangeover}
           onBack={() => router.push('/production/capture')}
+        />
+      )}
+
+      {/* Early-submit changeover check — asked when a morning operator submits
+          before 15h30 having already run 2+ POs. */}
+      {changeoverAsk && (
+        <ChangeoverSubmitModal
+          sectionName={meta.name}
+          onAnswer={submitSession}
+          onCancel={() => setChangeoverAsk(false)}
         />
       )}
 
@@ -1792,6 +1842,45 @@ function ChangeoverModal({ sectionName, hasRoster, onConfirm, onBack }: {
           {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Confirm &amp; continue
         </button>
         <button onClick={onBack} className="w-full text-[12px] text-stone-400 hover:text-stone-600">Back to sections</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Early-submit changeover prompt ──────────────────────────────────────────────
+// Shown when a morning operator submits before 15h30 having already run 2+ POs.
+// "Yes" logs the changeover as a handover note and submits; "No" just submits
+// (a genuine early end of shift). Either way the operator is signed out and the
+// incoming afternoon/night operator starts fresh on a new record.
+function ChangeoverSubmitModal({ sectionName, onAnswer, onCancel }: {
+  sectionName: string
+  onAnswer: (changeover: boolean) => void
+  onCancel: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const answer = (v: boolean) => { setBusy(true); onAnswer(v) }
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center shrink-0"><ArrowRight size={18} className="text-brand" /></div>
+          <div className="min-w-0">
+            <div className="font-semibold text-[16px] text-text leading-tight">Is there a changeover?</div>
+            <div className="text-[12px] text-text-muted mt-0.5">Submitting {sectionName} early, with more than one order run.</div>
+          </div>
+        </div>
+        <p className="text-[12px] text-text-muted">
+          Is the afternoon/night shift taking over this line, or is this the end of production for the day?
+        </p>
+        <button onClick={() => answer(true)} disabled={busy}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-semibold text-[14px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />} Yes — the next shift takes over
+        </button>
+        <button onClick={() => answer(false)} disabled={busy}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-white text-text font-medium text-[14px] disabled:opacity-40 hover:bg-stone-50 transition-colors">
+          <CheckCircle2 size={16} /> No — production finished for today
+        </button>
+        <button onClick={onCancel} disabled={busy} className="w-full text-[12px] text-stone-400 hover:text-stone-600 disabled:opacity-40">Keep capturing</button>
       </div>
     </div>
   )
