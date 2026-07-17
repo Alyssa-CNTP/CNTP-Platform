@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (COA Generator: editable signatory names + drawable, persistent signatures)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_006_coa_signatories.sql` (new)
+
+- **Signatory names and titles are now editable** (no longer hard-coded), stored in the new `qms.coa_signatories` table and shared across every COA. Seeded with the current two — Laboratory Supervisor (Monique Gordon) and Quality Assurance Manager (Michelle Brown).
+- **Drawable signatures:** each signatory has a signature pad (draw with mouse or touch) in a new "✍ Signatories" section. Saved signatures persist and render above the signing line on the COA preview, print, and PDF export. Draw once and it's maintained for future COAs; Clear + redraw to change.
+
+---
+
 ## 2026-07-17 — Gustav (COA Generator: logo, signatures, company footer + logistics order details)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_005_coa_orders.sql` (new)

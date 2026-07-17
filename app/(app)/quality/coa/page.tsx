@@ -199,8 +199,31 @@ export default function CoaGeneratorPage() {
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
+  const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; signature: string }[]>([])
+  const [showSigEditor, setShowSigEditor] = useState(false)
+  const [savingSig, setSavingSig]   = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
   const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
+
+  // Load the shared COA signatories (editable names + drawable signatures).
+  useEffect(() => {
+    db.schema('qms').from('coa_signatories').select('*').order('slot')
+      .then(({ data }: { data: any[] | null }) => {
+        setSignatories((data ?? []).map((r: any) => ({ slot: r.slot, title: r.title || '', name: r.name || '', signature: r.signature || '' })))
+      })
+  }, [db])
+
+  const setSig = (slot: number, field: 'title' | 'name' | 'signature', v: string) =>
+    setSignatories(prev => prev.map(s => s.slot === slot ? { ...s, [field]: v } : s))
+
+  const saveSignatories = async () => {
+    setSavingSig(true)
+    const rows = signatories.map(s => ({ slot: s.slot, title: s.title, name: s.name, signature: s.signature || null, updated_by: whoAmI, updated_at: new Date().toISOString() }))
+    const { error } = await db.schema('qms').from('coa_signatories').upsert(rows, { onConflict: 'slot' })
+    setSavingSig(false)
+    if (error) { alert('Save failed: ' + error.message); return }
+    alert('Signatories saved.')
+  }
 
   const loadHistory = useCallback(async () => {
     const { data } = await db.schema('qms').from('coa_generated').select('*').order('generated_at', { ascending: false }).limit(200)
@@ -473,9 +496,35 @@ export default function CoaGeneratorPage() {
             <div className="text-[10px] text-gray-400 mt-1">These fill in the header and persist against the batch — logistics can enter them later; they'll pull through next time.</div>
           </div>
 
+          {/* Signatories — editable names + drawable signatures (shared across all COAs) */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <button onClick={() => setShowSigEditor(s => !s)} className="text-[11px] font-bold uppercase text-gray-500 flex items-center gap-1">
+                <span>{showSigEditor ? '▼' : '▶'}</span> ✍ Signatories
+              </button>
+              {showSigEditor && <button onClick={saveSignatories} disabled={savingSig}
+                className="px-3 py-1 rounded-lg text-white text-[11px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>{savingSig ? 'Saving…' : '💾 Save signatories'}</button>}
+            </div>
+            {showSigEditor && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {signatories.map(s => (
+                  <div key={s.slot} className="border border-gray-100 rounded-lg p-2">
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Title</label>
+                    <input value={s.title} onChange={e => setSig(s.slot, 'title', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Name</label>
+                    <input value={s.name} onChange={e => setSig(s.slot, 'name', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Signature (draw below)</label>
+                    <SignaturePad value={s.signature} onChange={v => setSig(s.slot, 'signature', v)} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {!showSigEditor && <div className="text-[10px] text-gray-400">{signatories.map(s => `${s.name} (${s.title})${s.signature ? ' ✍' : ''}`).join('  ·  ') || 'No signatories set'}</div>}
+          </div>
+
           <div className="flex gap-2 mb-4 no-print">
             <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => { logGeneration(model); exportPdf(model, description) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatories) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
 
           {/* ── COA preview (editable) ── */}
@@ -546,11 +595,15 @@ export default function CoaGeneratorPage() {
                 if (realIdx >= 0) setLine('other', realIdx, f, v)
               }} />
 
-            {/* Signatures */}
+            {/* Signatures — editable names + drawn signature images */}
             <div className="flex justify-between gap-8 mt-10">
-              {COA_WORDING.signatories.map((s, i) => (
+              {(signatories.length ? signatories : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))).map((s: any, i: number) => (
                 <div key={i} style={{ flex: 1, maxWidth: 260 }}>
-                  <div style={{ borderTop: '1px solid #111', marginTop: 34, paddingTop: 3 }} />
+                  <div style={{ height: 40, display: 'flex', alignItems: 'flex-end' }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {s.signature ? <img src={s.signature} alt="signature" style={{ maxHeight: 40, maxWidth: 200 }} /> : null}
+                  </div>
+                  <div style={{ borderTop: '1px solid #111', paddingTop: 3 }} />
                   <div className="text-[11px] font-semibold">{s.title}</div>
                   <div className="text-[11px]">{s.name}</div>
                 </div>
@@ -727,6 +780,47 @@ function buildModel(src: any, spec: any): CoaModel {
   }
 }
 
+// ─── Signature pad (draw with mouse or touch) ─────────────────────────────────
+
+function SignaturePad({ value, onChange }: { value: string; onChange: (dataUrl: string) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const drawing = useRef(false)
+  const last = useRef<{ x: number; y: number } | null>(null)
+
+  // Paint an existing signature into the canvas on mount / when value changes externally.
+  useEffect(() => {
+    const c = canvasRef.current; if (!c) return
+    const ctx = c.getContext('2d'); if (!ctx) return
+    ctx.clearRect(0, 0, c.width, c.height)
+    if (value) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, c.width, c.height); img.src = value }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const pos = (e: React.PointerEvent) => {
+    const c = canvasRef.current!; const r = c.getBoundingClientRect()
+    return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) }
+  }
+  const start = (e: React.PointerEvent) => { drawing.current = true; last.current = pos(e); (e.target as Element).setPointerCapture(e.pointerId) }
+  const move = (e: React.PointerEvent) => {
+    if (!drawing.current) return
+    const c = canvasRef.current!; const ctx = c.getContext('2d')!; const p = pos(e)
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+    ctx.beginPath(); ctx.moveTo(last.current!.x, last.current!.y); ctx.lineTo(p.x, p.y); ctx.stroke()
+    last.current = p
+  }
+  const end = () => { if (!drawing.current) return; drawing.current = false; const c = canvasRef.current!; onChange(c.toDataURL('image/png')) }
+  const clear = () => { const c = canvasRef.current!; c.getContext('2d')!.clearRect(0, 0, c.width, c.height); onChange('') }
+
+  return (
+    <div>
+      <canvas ref={canvasRef} width={280} height={70}
+        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end}
+        style={{ border: '1px dashed #9ca3af', borderRadius: 6, background: '#fff', touchAction: 'none', cursor: 'crosshair', width: 280, height: 70 }} />
+      <button onClick={clear} className="text-[10px] text-gray-500 mt-0.5">Clear signature</button>
+    </div>
+  )
+}
+
 // Result string for a "Complies / None detected" style block from a lab record.
 function coaComplies(rec: any): string {
   const d = rec.results || rec
@@ -786,7 +880,7 @@ async function loadImage(url: string): Promise<{ dataUrl: string; w: number; h: 
 
 // ─── PDF export (jsPDF, laid out to mirror the template) ──────────────────────
 
-async function exportPdf(model: CoaModel, description: string) {
+async function exportPdf(model: CoaModel, description: string, signatories?: { slot: number; title: string; name: string; signature: string }[]) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const pageW = doc.internal.pageSize.getWidth()
   const margin = 40
@@ -864,15 +958,17 @@ async function exportPdf(model: CoaModel, description: string) {
     return true
   }))
 
-  // Signatures — two blocks with a ruled signing line
-  y += 40
+  // Signatures — two blocks with the drawn signature above a ruled line
+  y += 50
+  const sigList = (signatories && signatories.length ? signatories : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))) as any[]
   const sigW = 170
   const sigX = [margin + 20, pageW - margin - 20 - sigW]
-  COA_WORDING.signatories.forEach((s, i) => {
+  sigList.slice(0, 2).forEach((s: any, i: number) => {
     const x = sigX[i]
+    if (s.signature) { try { doc.addImage(s.signature, 'PNG', x, y - 32, 120, 30) } catch { /* ignore bad image */ } }
     doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title, x, y + 12)
-    doc.setFont('helvetica', 'normal'); doc.text(s.name, x, y + 23)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title || '', x, y + 12)
+    doc.setFont('helvetica', 'normal'); doc.text(s.name || '', x, y + 23)
   })
   y += 46
 
