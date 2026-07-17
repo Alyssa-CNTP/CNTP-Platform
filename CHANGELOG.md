@@ -5,6 +5,365 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Production Orders page redesign, archived orders excluded from KPIs)
+
+**Files:** `app/(app)/production/orders/page.tsx`, `app/api/production/manager-kpis/route.ts`,
+`app/(app)/supervisor/analytics/page.tsx`, `app/(app)/dashboard/supervisor/page.tsx`,
+`lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`,
+`components/production/ProductionDashboard.tsx`, `components/production/LiveCaptureKPIs.tsx`
+
+Archiving (soft-delete via `prod_sessions.deleted_at`) already existed on `/production/orders`
+but nothing actually excluded an archived order from anywhere it got aggregated — added
+`.is('deleted_at', null)` to every place that reads `prod_sessions` for a KPI/total
+(manager KPIs API, supervisor analytics, both supervisor/production dashboards, and
+the live-capture KPI strip), so archiving a record now actually removes it from
+throughput/yield/mass-balance numbers, not just from the visible list.
+
+Also cleaned up `OrderCard`'s layout — the old design crammed record no./archived
+badge/name/shift/variant, operators/lot/PO, weights, and variance into a rigid
+4-column grid that left ragged empty cells on records with fewer facts and felt
+crowded on ones with more. Replaced with a flowing header line + one muted meta
+line, same information, same actions (edit/reopen/archive/restore), less visual
+noise.
+
+---
+
+## 2026-07-16 — Alyssa (VSD prompt on Overview, production-order review tab, Blender debagging redesign)
+
+**Files:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/productions/page.tsx`,
+`components/production/capture/BlenderCapture.tsx`
+
+- **Hourly VSD prompt popping up while just reading Overview/AI summary:** it was
+  rendered unconditionally regardless of tab. Suppressed while `tab === 'overview'` —
+  it still nags on every other tab throughout the shift, just not over someone
+  reading a review, not operating the line.
+- **"Why does the production-orders page open the whole session?"** — there's no
+  separate lightweight review view yet; a supervisor's review link reuses the exact
+  same capture page an operator uses. That link now defaults to `?tab=overview`
+  instead of the live Capture tab, so reviewing a production order actually opens on
+  the Overview + AI summary, not the operator's active data-entry screen.
+- **Blender debagging redesigned as a popup add-bag flow.** The old design had every
+  ingredient group carrying its own always-visible scan/system/manual card + mode
+  toggle — with 5+ groups (a real blend recipe) the tab became a wall of near-
+  identical purple cards, worse once two groups shared a material label. Replaced
+  with one "+ Add debagging bag" button that opens a modal: product type is now a
+  dropdown over the blend's ingredients (first field, not "which of several buttons
+  did I tap"), then serial (scan/type + look-up, or "pick from in-stock bags"),
+  weight (pre-filled 300kg for Fine/Coarse Leaf), batch number when the material
+  needs one. Submitting locks the bag immediately — no partial/unsecured rows ever
+  sit on the main screen. Tapping a logged bag reopens the same modal to edit or
+  remove it. The list itself is now just compact, colour-coded one-line summaries
+  per group.
+
+---
+
+## 2026-07-16 — Alyssa (Blender: per-group add-mode UX fix, run-continuity serial fix)
+
+**Files:** `components/production/capture/BlenderCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+- **Confusing shared "Manual entry" highlight:** the scan/system/manual mode toggle
+  was one shared piece of state across every ingredient group, so tapping "Manual
+  entry" for one group visually lit up "Manual entry" for every other group too —
+  looked like the whole screen had switched modes when only one row's add-button
+  had. Made it per-group.
+- **Verified** the Blender Overview batch-grouping + component-ratio table shipped
+  in the 2026-07-16 lot-format/overview PR is working as intended — no changes needed.
+- **Run continuity across shifts:** the app already prompts "Continue the production
+  run from the previous shift?" (explicitly naming the blend code for Blender) when
+  the same blend/variant/PO has an open run from an earlier shift — that part already
+  worked. But accepting "Continue" only linked the session to the run for mass-balance
+  totals; it never seeded the new shift's output-run number, so the first bag added
+  still forked to a brand-new run (`…/2-01`) instead of continuing the same one
+  (`…/1-13`) even though the operator explicitly chose to continue. Added
+  `resolveExistingBlendRunNo()` and seed it into the continuing production's
+  `outputRunNo` when "Continue run" is accepted.
+
+---
+
+## 2026-07-16 — Alyssa (Correct break times, operator-message notifications, checks persistence + AI summary retry, Blender group colours)
+
+**Files:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`,
+`lib/notifications/recipients.ts`, `app/api/production/notify-line-message/route.ts`,
+`lib/production/messages.ts`, `components/production/capture/ChecksPanel.tsx`,
+`components/production/capture/BlenderCapture.tsx`
+
+- **Standard break times corrected:** the fallback schedule used when no inactivity gap
+  is detected had tea at 10:00 (15min) and lunch at 12:30 (60min) for morning shift —
+  real times are tea 10:30-11:00 and lunch 13:00-13:30 (30min each). Updated the
+  fallback schedule and the quick-add buttons in the timesheet confirm screen to match.
+- **Operator messages now notify supervisors:** `sendMessage()` (used by every
+  section's line chat, and by maintenance-stoppage escalation at sign-off) now fans out
+  to every production supervisor's notification bell via a new
+  `/api/production/notify-line-message` route + `getProductionSupervisorIds()`, deep-
+  linking back to that section's Messages tab. Also fixed a pre-existing bug in the
+  maintenance-escalation path: it inserted into `line_messages` using columns
+  (`sender_name`/`sender_id`/`type`) that don't exist on that table (real columns are
+  `author_id`/`author_name`/`author_role`) — every maintenance-stoppage message was
+  silently failing to send. Now goes through the same `sendMessage()` helper LineChat
+  already uses correctly.
+- **Sieving Tower checks disappearing after submission:** the load effect only rebuilt
+  VSD readings and raised-maintenance flags from saved events — every other check
+  (confirms, numbers, text, scale verification, mass balance) stayed as empty local
+  state on reload, so a signed check record looked blank on any later visit even
+  though the data was saved. Now rebuilds all of them from events on load. Also added
+  a visible fallback + manual "Generate" retry for the AI shift summary, since a failed
+  Gemini call previously showed nothing with no way to try again.
+- **Blender ingredient groups now colour-coded per group**, not all one purple —
+  two groups with the same material label (e.g. two separate Fine Leaf slots at
+  different ratios) were visually identical, risking a bag going into the wrong slot.
+
+---
+
+## 2026-07-16 — Alyssa (Timesheet heartbeat coverage + multi-operator conflation fix)
+
+**Files:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/timesheet.ts`,
+`components/production/capture/TimesheetConfirm.tsx`
+
+Investigated "timesheets not working well across all sections." Root causes (shared
+code, affects every section identically):
+
+- **Heartbeat coverage gap:** `logActivity()` only ever fired as a side-effect of the
+  `productions` array changing (bag/batch data edits), so a shift spent on Checks,
+  Cleaning, Overview or Sign-off — or doing real floor work between edits (walking to
+  weigh a bag, waiting on a scale) — left gaps in `capture_activity` with nothing to
+  distinguish "present but not editing bag data" from "on a break." `deriveTimesheet()`
+  then misread those ordinary working gaps as tea/lunch breaks, or — when there weren't
+  even two heartbeats — collapsed `shiftStart === shiftEnd` and reported 0 minutes
+  worked. Added a generic `pointerdown`/`keydown` listener that heartbeats on any real
+  interaction anywhere in the app (still throttled to once/60s), not just data edits.
+- **Multi-operator session conflation:** `loadActivity(sessionId)` ignored
+  `operator_id` entirely, so when two operators shared a section/shift session, their
+  heartbeats merged into one stream — masking each operator's real breaks (hidden
+  whenever the other was still active) and giving both operators identical, individually
+  wrong derived shift times when they each confirmed. `loadActivity` now scopes to the
+  confirming operator's own heartbeats, falling back to the full session stream only
+  if that comes back empty.
+
+Flagged separately (not fixed — needs a product decision, see chat): `/production/live`
+has its own independent manual timesheet (writes to a plain `timesheets` table, no
+`capture_activity`/`prod_timesheets` involved) and `PasteuriserForm.tsx` has a third,
+also-independent variant — if operators use either of these in parallel with the main
+capture route, that shift's real timesheet is invisible to `/supervisor/timesheets`
+(which only reads `prod_timesheets`). `TimesheetTab.tsx` is unused dead code (confirmed
+via repo-wide grep) implementing yet a fourth model — never wired up, but a trap for a
+future edit.
+
+---
+
+## 2026-07-16 — Alyssa (Lot-format fix, Blender batch suggestions/numbering, Overview rendering fixes, Sieving cleaning checklist)
+
+**Files:** `components/production/capture/SievingCapture.tsx`,
+`components/production/capture/BlenderCapture.tsx`,
+`components/production/capture/CaptureOverview.tsx`,
+`app/(app)/production/capture/[section]/page.tsx`, `lib/production/cleaning-config.ts`
+
+- **Lot-number format too strict:** `isValidLot` (letter-prefix + dash + digits, exactly
+  7–8 chars) rejected real batch numbers like `GS26-MIX-A` (a manual-mix batch). Relaxed
+  to the actual invariant across real examples — at least one dash separating
+  alphanumeric segments, 3–20 chars — so multi-segment batch numbers validate correctly
+  on both Sieving Tower and Blender.
+- **Blender batch-number suggestions:** now also include lots already typed into a
+  sibling input row this session (not just in-stock `bag_tags`), since a debagged lot
+  that hasn't been registered as its own bag_tags record yet is still a real, reusable
+  batch number for the next bag of the same lot.
+- **Blender debagging numbering:** input rows now show "Bag 1", "Bag 2"… per ingredient
+  group, matching the numbering convention Sieving Tower already uses for bulk bags.
+- **Overview tab rendering bugs (Blender + Refining 2):** `CaptureOverview.tsx`
+  branched on `'inputs' in d`, which is true for both `RefiningData` and `BlenderData`
+  — so Blender's debag/bag data was silently processed as if it were Refining's,
+  producing wrong/blank output. Added a dedicated Blender branch: debagging groups by
+  batch number (lot) instead of serial, and output bags render as "Blend {bomId}"
+  instead of vanishing (Blender's output shape has no `productType`/`outputA-D`, which
+  the Refining branch expected). Also fixed the Refining branch's `map.set()` — an
+  unconditional overwrite that silently dropped a bag's kg whenever two rows shared a
+  fallback key (e.g. two manual-entry rows across different shifts with no serial both
+  defaulting to "Input bag 1") — now merges into the existing group instead. Refining's
+  debag grouping now also keys off the real lot/batch number, not the serial.
+- **Blender component-ratio table in Overview:** added the same "target vs actual %"
+  ratio table Blender's own Bagging tab shows — this is how mass balance is actually
+  read for a blend, not a simple in/out total. `page.tsx` now fetches each distinct
+  blend code's BOM components (cached per bomId) and sums captured input weights by
+  ingredient across both shifts, passed to `CaptureOverview` as `blenderRatios`.
+- **Sieving Tower cleaning checklist:** the digital checklist
+  (`lib/production/cleaning-config.ts`) only covered 6 of the paper form's 13 numbered
+  areas (folded into 3 generic buckets: Sieving/De-bagging/Dust Collection Room).
+  Relabelled existing tasks to their correct specific area (Magnet, Conveyor belt,
+  Rolsif, Indent screen, Fanie Sieve, Dust extraction system, Debagging hopper) without
+  changing their audit-log keys, and added the 5 areas that had no digital task at all:
+  Bucket elevator, Mini Sifter, Blender (in-line unit), Floor Scale, DB.
+
+---
+
+## 2026-07-15 — Alyssa (Blender: enforce Sieving Tower's lot-number format on Fine/Coarse Leaf batch numbers)
+
+Confirmed: Blender's Fine/Coarse Leaf batch-number suggestions already pull straight
+from Sieving Tower's real output records (`useSystemBagsForType`'s in-stock `bag_tags`
+query) — so the batch number being entered here always IS a Sieving Tower lot, and
+should be held to the exact same format rule Sieving Tower itself enforces before
+locking a bag: letter prefix + dash + digits, 7–8 characters (e.g. `GS-0299`).
+
+Exported the existing `isValidLot` check from `SievingCapture.tsx` (unchanged
+otherwise) instead of writing a second copy that could drift, and wired it into
+Blender's batch-number field the same way Sieving already uses it: inline error
+message, and the bag can't be locked ("Done — lock this bag") until the format is
+right — catches a dropped digit or missing dash before it becomes a batch number that
+doesn't match anything real.
+
+**Files:** `components/production/capture/SievingCapture.tsx` (`isValidLot` now
+exported, no behaviour change), `components/production/capture/BlenderCapture.tsx`
+(imports and enforces it).
+
+## 2026-07-15 — Alyssa (Blender: output bag serials now use the real blend-code format)
+
+Output bags were using the generic per-section serial (`BL-DDMMYY-NNN`) like every
+other section — but Blender's actual paper convention, confirmed from real operator
+reports, embeds the blend code itself: `{blendCode}/{runNo}-{bagNo}`, e.g.
+`SFC-KUN25-C/1-01`, `SFC-KUN25-C/1-02`. `runNo` distinguishes separate runs of the same
+blend (e.g. if it's made again on a different day); `bagNo` is sequential within that
+run. Both are resolved from whatever's already in `bag_tags` for that blend code the
+first time an output bag is added to a production, then held in a ref and incremented
+locally so every "Add bag" tap after the first doesn't re-query. `runNo` is also
+persisted onto the batch record (`BlenderData.outputRunNo`) so a page reload mid-batch
+can't renumber it. Generic `genSerial()` (still used everywhere else) is kept as a
+fallback for the edge case of adding an output bag with no blend chosen, which
+shouldn't be reachable — the Bagging tab is gated on a blend being picked first.
+
+**Files:** `components/production/capture/BlenderCapture.tsx` only.
+
+## 2026-07-15 — Alyssa (Blender: product type is a fixed label per section, not an overridable field)
+
+Follow-up to the manual-entry pass earlier today — the new "Change" link on product
+type let a row's material silently disagree with its own section header (e.g. a
+"Sieved Fine Leaf: Export - Conventional" section showing a row actually logged as
+something else). Since the header already declares exactly what belongs there,
+allowing a per-row override broke that consistency. Removed it: product type is now a
+fixed, non-interactive label matching the section it's under, for every input mode
+(scan/system/manual) — the section identity never changes underneath a row. A genuine
+substitute (the "Cut Heavy Stick vs Corn Cutter" case) now goes through "+ Add Other"
+to create its own distinctly-labelled section instead.
+
+Also tightened scan validation to match: a scanned bag is checked against the section's
+full declared material (not just its grade family) — a mismatch is rejected outright
+with a pointer to "+ Add Other", rather than being accepted under a relabeled type.
+
+**Files:** `components/production/capture/BlenderCapture.tsx` only.
+
+## 2026-07-15 — Alyssa (Blender: smarter manual entry — pre-filled weight/product type, real batch suggestions, "+ Add Other")
+
+Floor feedback (with screenshots) on Blender's manual-entry flow: it was asking the
+operator to redo work the system already knew the answer to, and had one outright bug.
+
+1. **Batch number was pre-filled with the blend code** (e.g. `SFC30-KUN25-C` showing up
+   in a "Batch number" field meant for a Sieving Tower lot like `GS-0415`) — a bug, not
+   a design choice. Removed the `assignment.lot_number` prefill entirely and replaced
+   the plain text field with the same `BatchKeypadField` Sieving Tower already uses
+   (tappable recent-value chips), sourced from batches *actually in stock* for this
+   exact material (reusing the query already built for system-pick) rather than a
+   guess — "confirm based on the batch number and what's existing in the system."
+2. **Weight now pre-fills to 300kg** for Fine Leaf / Coarse Leaf manual rows (the
+   standard bag weight, same convention `OutputPicker.tsx` already uses for Sieving) —
+   a starting figure the operator confirms, not a forced value.
+3. **Product type is now a confirmed display, not an active search box**, whenever it's
+   already known (which is always, for a BOM-declared slot — the recipe already says
+   exactly what goes there). Searching Master Inventory is now a deliberate "Change"
+   action for the override case, not the default interaction every time.
+4. **"+ Add Other"** — a distinct, separate action at the end of the ingredient list for
+   logging a material that isn't part of the blend's declared recipe at all (searches
+   Master Inventory, creates its own section going forward, flagged "not in recipe" in
+   the ratio table) — instead of every ingredient slot looking like it might need one.
+
+**Files:** `components/production/capture/BlenderCapture.tsx` only.
+
+## 2026-07-15 — Alyssa (Production: schema audit + Sieving Tower per-bag print/write choice + FT-CON run fix)
+
+Ran a full audit of the `production` schema (grown across ~15 migrations, hard to see
+the current state of any table from one file) at the request of understanding what's in
+`prod_debagging`/`prod_bagging`/`capture_activity` before wiring in traceability.
+Reconstructed every table's true current columns from migration history and
+cross-checked against real staging data. Findings (not all acted on yet — see below):
+- `capture_activity` is a plain flat table (`session_id, operator_id, section_id,
+  occurred_at`) — **not** JSON, despite appearing that way at a glance. The JSONB blobs
+  are `prod_sessions.draft_data` and `prod_timesheets.{breaks,derived_data}`.
+- **Fixed:** `production_runs.variant` was missing `'FT-CON'` in its CHECK constraint —
+  it was created two weeks after the migration that widened every sibling table for
+  FT-CON, and was never included. Any FT-CON session's day-level run rollup was
+  silently failing to be created (the run-linking code wraps this in a try/catch on
+  purpose so a run-schema hiccup never blocks the actual capture save — but it meant
+  the rollup just silently never happened). `20260715_002_production_runs_ft_con.sql`
+  brings it in line with `prod_sessions`/`bag_tags`/`prod_debagging`/`prod_bagging`/
+  `shift_assignments`, which already all allow it.
+- **Flagged, not yet acted on:** `bag_tags.destination` is read in 4+ places but only
+  ever written by a dead legacy route (`/production/live/capture`, unreachable —
+  operators are hard-redirected away from it) — every bag made through the *current*
+  capture flow leaves it permanently NULL. That whole legacy cluster (`BagScanner.tsx`,
+  `SievingTowerForm.tsx`, `PasteuriserForm.tsx`, `GranuleLineForm.tsx`,
+  `RefiningForms.tsx`, the live-capture route) references `bag_tags` columns that don't
+  exist in the schema at all — predates the 2026-06-11 schema rewrite, candidate for
+  deletion. Also ~8 columns across several tables that are declared but never written
+  by any live page (`prod_sessions.{scale_std_kg,scale_actual_kg}`, `bag_tags.location`,
+  `shift_assignments.notes`, `bom_components.{warehouse,uom}`,
+  `prod_mass_balance.{water_kg,dust_extraction_kg,floor_waste_kg}`). Left in place
+  pending a decision on each — dropping a column is a one-way door, wanted confirmation
+  first.
+
+**Sieving Tower now has the same per-bag "Print label" / "Write on tag" choice Blender
+already has**, instead of the site-wide `LABEL_PRINTING_ENABLED` flag (which stays
+`false` and now goes unused by Sieving — every other section using it is unaffected).
+Lets Sieving Tower test the real printer today without turning printing on everywhere
+that flag touches. Reprint is still available once a bag's tagged as printed.
+
+**⚠️ Manual steps:** run `supabase/migrations/20260715_002_production_runs_ft_con.sql`
+on staging (this session's `20260715_001_production_ref.sql` should already be in from
+earlier today).
+
+**Files:** `components/production/capture/SievingCapture.tsx` (per-bag tag-method
+choice, mirrors `BlenderCapture.tsx`'s pattern), `supabase/migrations/
+20260715_002_production_runs_ft_con.sql` (new).
+
+## 2026-07-15 — Alyssa (Blender: purple/orange debag-bag colors, grade enforcement, traceability groundwork)
+
+Floor feedback on the Blender screen, from real screenshots and a Pasteuriser job card
+(the paper form that shows blend ratios/grades are genuinely fixed by the material's own
+identity, not a free per-row choice):
+
+1. **Debagging/Bagging tabs were both shades of purple** — barely distinguishable. Now
+   purple (in) / orange (out), matching Sieving Tower's established in/out color pairing.
+2. **Removed the manual "Local/Export" dropdown.** Grade (Export / Export Blend /
+   Domestic) is already baked into which specific Master Inventory item a bag is — the
+   BOM lists "Sieved Fine Leaf: Export Blend - Conventional" as a distinct component from
+   "...Export..." or "...Domestic...". A separate dropdown defaulting to "Export" was
+   redundant at best, actively wrong at worst (every Blender debag row has been writing
+   `local_or_export = 'Export'` regardless of what was actually scanned — that field is a
+   real, pre-existing column also used by Sieving, just never populated correctly here).
+   `destination` is now derived from the picked/scanned item's own description.
+3. **Grade consistency is now enforced.** A bag graded "Export Blend" at Sieving Tower
+   must not be consumable under a "Domestic" slot at Blender — that's a hard rule, unlike
+   the flexible "Other" ingredient slot (Cut Heavy Stick vs Corn Cutter, which stays a
+   free search — those are legitimate substitutes, not a data error). Scanning or
+   searching in a bag whose grade doesn't match the slot's declared grade is now
+   rejected with a clear message; slots with no grade concept (Blocks, Sticks, Granules)
+   are unaffected.
+4. **Traceability groundwork** (not a trace feature yet — real scan data needs to be
+   flowing consistently first): which blend a debagging/bagging row belongs to was only
+   ever recorded as free text inside `notes` (e.g. "blend 25CH60C40WBC") — unreliable to
+   query. Added a real `production_ref` column to `prod_debagging`/`prod_bagging` so a
+   future "trace this bag back to its Sieving Tower batch" feature has something solid
+   to query against once bag-tag scanning is consistently used on the floor instead of
+   the current dual paper/system run.
+
+**⚠️ Manual step required:** run `supabase/migrations/20260715_001_production_ref.sql`
+in the staging Supabase SQL editor (adds `production_ref` to both tables).
+
+**Files:** `components/production/capture/BlenderCapture.tsx` (colors, grade
+derivation/enforcement, `parseGrade`), `app/(app)/production/capture/[section]/page.tsx`
+(`production_ref` + `local_or_export` now actually written for Blender's debag/bag rows),
+`supabase/migrations/20260715_001_production_ref.sql` (new).
+
+- Explicitly deferred (discussed, not building yet): a real bag-lineage trace UI, and
+  moving blend selection toward "confirm the Pasteuriser job card you're executing"
+  instead of a free search — both are real follow-ups once today's data-quality fixes
+  are live and scanning is consistent, not day-one work.
+
 ## 2026-07-15 — Alyssa (Sieving: restrict output batch to lots debagged this session)
 
 Floor feedback: batch/lot numbers were free-typed on both Sieving Tower and Granule Line, and typos (a `.` instead of a `-`, lowercase instead of caps, a dropped digit) were slipping bad batch numbers into records — an output could end up tagged with a batch that was never actually debagged that session.

@@ -41,7 +41,7 @@ export function LiveCaptureKPIs() {
     const todayStart = `${today}T00:00:00`
 
     const [{ data: sessions }, { data: bags }] = await Promise.all([
-      db.schema('production').from('prod_sessions').select('id,section_id,status').eq('date', today),
+      db.schema('production').from('prod_sessions').select('id,section_id,status').eq('date', today).is('deleted_at', null),
       db.schema('production').from('bag_tags').select('section_id,weight_kg,created_at').gte('created_at', todayStart),
     ])
     const sess = (sessions as any[]) ?? []

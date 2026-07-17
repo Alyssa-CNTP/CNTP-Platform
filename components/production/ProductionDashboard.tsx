@@ -164,7 +164,7 @@ export default function ProductionDashboard() {
     // Fetch KPI data from API + section status + breakdowns in parallel
     const [kpiRes, { data: sess }, { data: bags }, { data: bd }] = await Promise.all([
       fetch(`/api/production/manager-kpis?days=${windowDays}`).then(r => r.json()),
-      db.schema('production').from('prod_sessions').select('id,section_id,status,date').eq('date', today),
+      db.schema('production').from('prod_sessions').select('id,section_id,status,date').eq('date', today).is('deleted_at', null),
       db.schema('production').from('bag_tags').select('section_id,weight_kg').gte('created_at', `${today}T00:00:00`),
       db.schema('maintenance').from('job_cards').select('card_no,area,machine,status,raised_at').eq('workflow', 'breakdown').neq('status', 'complete'),
     ])

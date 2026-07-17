@@ -34,8 +34,8 @@ const MS_PER_MIN = 60_000
 // Times are local (SAST) on the session date; ISO conversion happens in the browser.
 const STANDARD_BREAKS: Record<string, { type: BreakType; localTime: string; durationMin: number }[]> = {
   morning: [
-    { type: 'tea',   localTime: '10:00', durationMin: 15 },
-    { type: 'lunch', localTime: '12:30', durationMin: 60 },
+    { type: 'tea',   localTime: '10:30', durationMin: 30 },
+    { type: 'lunch', localTime: '13:00', durationMin: 30 },
   ],
   // Night shift 16:00–01:00: tea at 19:00, meal at 21:00
   afternoon: [
@@ -117,10 +117,29 @@ export function workedMinutes(
   return Math.max(0, Math.round(span - breakMin))
 }
 
-/** Read the ordered activity timestamps for a session. */
-export async function loadActivity(sessionId: string): Promise<string[]> {
-  const { data } = await getDb().schema('production').from('capture_activity')
+/**
+ * Read the ordered activity timestamps for a session, scoped to one operator
+ * when a session has more than one working it (each heartbeat row already
+ * carries the operator who was verified when it was written) — otherwise two
+ * operators sharing a shift/session get their heartbeats merged into a single
+ * stream, which both erases each operator's real breaks (masked by whichever
+ * of them is still active) and gives both of them the same derived shift
+ * times when they each confirm their own timesheet.
+ * Falls back to every heartbeat on the session if the operator-scoped query
+ * comes back empty — heartbeats logged before an operator was verified, or a
+ * genuinely single-operator session, still have something to derive from.
+ */
+export async function loadActivity(sessionId: string, operatorId?: string | null): Promise<string[]> {
+  const all = () => getDb().schema('production').from('capture_activity')
     .select('occurred_at').eq('session_id', sessionId).order('occurred_at', { ascending: true })
+
+  if (operatorId) {
+    const { data } = await getDb().schema('production').from('capture_activity')
+      .select('occurred_at').eq('session_id', sessionId).eq('operator_id', operatorId)
+      .order('occurred_at', { ascending: true })
+    if (data && data.length > 0) return data.map((r: any) => r.occurred_at as string)
+  }
+  const { data } = await all()
   return (data ?? []).map((r: any) => r.occurred_at as string)
 }
 

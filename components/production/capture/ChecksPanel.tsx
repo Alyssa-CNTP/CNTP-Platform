@@ -48,6 +48,7 @@ export function ChecksPanel({
   const [recordId, setRecordId] = useState<string | null>(null)
   const [signedStatus, setSignedStatus] = useState<string | null>(null)
   const [aiSummary, setAiSummary] = useState<string>('')
+  const [summarizing, setSummarizing] = useState(false)
   const [pin, setPin] = useState('')
   const [signing, setSigning] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +71,29 @@ export function ChecksPanel({
         const r: Record<string, number> = {}
         events.forEach((e: any) => { if (e.maintenance_card_id) r[e.check_key] = e.maintenance_card_id })
         setRaised(r)
+
+        // Rebuild every other check kind from its events too — previously only
+        // vsd/raised were restored here, so a submitted check looked blank
+        // ("gone") on any later reload of this tab even though the record was
+        // signed and the events were saved. Events are ascending by
+        // recorded_at, so the last one per check_key wins (a re-signed/edited
+        // check reflects its most recent value).
+        const confirmsR: Record<string, { flagged: boolean; reason: string }> = {}
+        const numbersR: Record<string, string> = {}
+        const textsR: Record<string, string> = {}
+        let scaleStdR = '', scaleActR = ''
+        let mbConfirmedR = false
+        events.forEach((e: any) => {
+          if (e.kind === 'confirm') confirmsR[e.check_key] = { flagged: e.status === 'flagged', reason: e.reason ?? '' }
+          else if (e.kind === 'number' && e.check_key !== 'infeed_vsd' && e.value_num != null) numbersR[e.check_key] = String(e.value_num)
+          else if (e.kind === 'text' && e.value_text != null) textsR[e.check_key] = e.value_text
+          else if (e.kind === 'scale') {
+            const m = String(e.value_text ?? '').match(/std\s+([\d.]+)\s*\/\s*actual\s+([\d.]+)/)
+            if (m) { scaleStdR = m[1]; scaleActR = m[2] } else if (e.value_num != null) scaleActR = String(e.value_num)
+          } else if (e.kind === 'massbalance') mbConfirmedR = true
+        })
+        setConfirms(confirmsR); setNumbers(numbersR); setTexts(textsR)
+        setScaleStd(scaleStdR); setScaleAct(scaleActR); setMbConfirmed(mbConfirmedR)
       }
       setLoading(false)
     })
@@ -229,29 +253,40 @@ export function ChecksPanel({
         operator_signed_at: now,
       } as any).eq('id', id)
 
-      // AI shift summary (best-effort).
-      try {
-        const sres = await fetch('/api/production/check-summary', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            section: sectionId, shift, date, variant, grade,
-            massBalance: { in: massBalance.totalIn, out: massBalance.totalOut, variance: massBalance.variance },
-            vsd: vsd.map(r => r.value),
-            checks: checks.map(c => ({ label: c.label, value: c.kind === 'confirm' ? (confirms[c.key]?.flagged ? 'flagged' : 'ok') : c.kind === 'scale' ? `${scaleStd}/${scaleAct}` : c.kind === 'text' ? texts[c.key] : numbers[c.key] })),
-            exceptions: checks.filter(c => confirms[c.key]?.flagged).map(c => ({ check: c.label, reason: confirms[c.key]?.reason })),
-            maintenanceRaised: Object.keys(raised),
-          }),
-        })
-        const sj = await sres.json().catch(() => ({}))
-        if (sj.summary) {
-          setAiSummary(sj.summary)
-          await getDb().schema('production').from('check_records').update({ ai_summary: sj.summary } as any).eq('id', id)
-        }
-      } catch { /* summary is best-effort */ }
-
       setSignedStatus('operator_signed')
+      generateAiSummary(id)   // best-effort, generated once here then persisted — see below
     } catch (e: any) { setError(e.message) }
     setSigning(false)
+  }
+
+  // Generated once right after sign-off, stored on check_records.ai_summary so
+  // it displays for the rest of the day on every later reload (restored from
+  // record.ai_summary in the load effect above) instead of being regenerated.
+  // Exposed as its own function — not just inlined in sign() — so a failed
+  // attempt (Gemini error/timeout) isn't a dead end: the "Generate" retry
+  // button below calls this directly on an already-signed record that never
+  // got a summary, rather than silently showing nothing forever.
+  async function generateAiSummary(id: string) {
+    setSummarizing(true)
+    try {
+      const sres = await fetch('/api/production/check-summary', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          section: sectionId, shift, date, variant, grade,
+          massBalance: { in: massBalance.totalIn, out: massBalance.totalOut, variance: massBalance.variance },
+          vsd: vsd.map(r => r.value),
+          checks: checks.map(c => ({ label: c.label, value: c.kind === 'confirm' ? (confirms[c.key]?.flagged ? 'flagged' : 'ok') : c.kind === 'scale' ? `${scaleStd}/${scaleAct}` : c.kind === 'text' ? texts[c.key] : numbers[c.key] })),
+          exceptions: checks.filter(c => confirms[c.key]?.flagged).map(c => ({ check: c.label, reason: confirms[c.key]?.reason })),
+          maintenanceRaised: Object.keys(raised),
+        }),
+      })
+      const sj = await sres.json().catch(() => ({}))
+      if (sj.summary) {
+        setAiSummary(sj.summary)
+        await getDb().schema('production').from('check_records').update({ ai_summary: sj.summary } as any).eq('id', id)
+      }
+    } catch { /* summary is best-effort */ }
+    setSummarizing(false)
   }
 
   if (loading) return <div className="flex items-center justify-center h-32"><Loader2 size={20} className="animate-spin text-text-muted" /></div>
@@ -269,6 +304,18 @@ export function ChecksPanel({
         <div className="px-4 py-3 bg-ok/5 border border-ok/30 rounded-2xl">
           <div className="flex items-center gap-1.5 mb-1 text-[11px] font-semibold text-ok uppercase tracking-wide"><Sparkles size={13} /> Shift summary</div>
           <p className="text-[13px] text-text leading-relaxed">{aiSummary}</p>
+        </div>
+      )}
+
+      {signed && !aiSummary && (
+        <div className="flex items-center justify-between px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl">
+          <span className="flex items-center gap-1.5 text-[12px] text-stone-500">
+            <Sparkles size={13} /> {summarizing ? 'Generating shift summary…' : 'Shift summary not generated yet.'}
+          </span>
+          {!summarizing && recordId && (
+            <button onClick={() => generateAiSummary(recordId)}
+              className="text-[12px] font-medium text-brand hover:underline">Generate</button>
+          )}
         </div>
       )}
 

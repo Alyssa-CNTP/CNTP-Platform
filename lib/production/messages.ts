@@ -46,14 +46,26 @@ export async function loadLatestPerChannel(): Promise<Map<string, ChannelLatest>
 
 export async function sendMessage(args: {
   channel: string; body: string; authorId: string | null; authorName: string; authorRole: string | null
+  // Optional context so the supervisor notification (below) can deep-link
+  // straight back to the right shift instead of the general messages list.
+  date?: string; shift?: string; urgent?: boolean
 }): Promise<LineMessage | null> {
+  const sectionId = args.channel === GENERAL ? null : args.channel
   const { data } = await tbl().insert({
-    section_id:  args.channel === GENERAL ? null : args.channel,
+    section_id:  sectionId,
     author_id:   args.authorId,
     author_name: args.authorName,
     author_role: args.authorRole,
     body:        args.body,
   } as any).select('id,section_id,author_id,author_name,author_role,body,created_at').maybeSingle()
+
+  // Fan out to every production supervisor's notification bell — best-effort,
+  // fire-and-forget, never blocks the send or fails the chat on a network hiccup.
+  fetch('/api/production/notify-line-message', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sectionId, authorName: args.authorName, body: args.body, date: args.date, shift: args.shift, urgent: args.urgent }),
+  }).catch(() => {})
+
   return (data as LineMessage) ?? null
 }
 

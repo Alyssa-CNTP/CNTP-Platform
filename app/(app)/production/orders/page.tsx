@@ -336,46 +336,47 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
     production_orders: form.production_orders.split(',').map(x => x.trim()).filter(Boolean),
   })
 
+  // Meta line — one flowing row of muted facts instead of a rigid grid column,
+  // so a record with fewer facts (no PO, no lot) doesn't leave a ragged empty
+  // cell and one with more doesn't get cramped.
+  const metaParts = [
+    s.operator_names?.length ? s.operator_names.join(', ') : 'No operators',
+    s.lot_number,
+    s.production_orders?.length ? `PO ${s.production_orders.join(', ')}` : null,
+  ].filter(Boolean)
+
   return (
     <div className={`bg-white border rounded-2xl transition-all ${archived ? 'border-stone-200 opacity-70' : 'border-stone-200 hover:border-brand/40 hover:shadow-sm'}`}>
-      <div className="flex items-center gap-3 px-5 py-4">
+      <div className="flex items-center gap-3 px-5 py-3.5">
         <Link href={`/production/capture/${s.section_id}?date=${s.date}&shift=${s.shift}&session=${s.id}`}
-          className="flex items-center gap-4 flex-1 min-w-0">
+          className="flex items-center gap-3.5 flex-1 min-w-0">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm" style={{ background: meta.colorHex }}>
             <span className="font-mono font-bold text-[11px] text-white">{meta.code}</span>
           </div>
-          <div className="flex-1 min-w-0 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 items-center">
-            <div className="col-span-2 sm:col-span-1">
-              <div className="flex items-center gap-1.5">
-                {s.record_no && <span className="font-mono text-[10px] font-semibold text-brand">{s.record_no}</span>}
-                {archived && <span className="text-[9px] font-semibold uppercase tracking-wide text-stone-500 bg-stone-100 rounded px-1.5 py-0.5">Archived</span>}
-              </div>
-              <div className="font-semibold text-[14px] text-text">{meta.name}</div>
-              <div className="text-[11px] text-text-muted capitalize">{s.shift} shift · {s.variant ?? '—'}</div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-semibold text-[14px] text-text">{meta.name}</span>
+              <span className="text-[11px] text-text-muted capitalize">{s.shift} · {s.variant ?? '—'}</span>
+              {s.record_no && <span className="font-mono text-[10px] font-semibold text-brand">{s.record_no}</span>}
+              {archived && <span className="text-[9px] font-semibold uppercase tracking-wide text-stone-500 bg-stone-100 rounded px-1.5 py-0.5">Archived</span>}
             </div>
-            <div>
-              {s.operator_names?.length ? (
-                <div className="inline-flex items-center gap-1 text-[11px] text-stone-500"><Users size={11} /> {s.operator_names.join(', ')}</div>
-              ) : (
-                <span className="text-[11px] text-stone-300">No operators</span>
-              )}
-              {s.lot_number && <div className="font-mono text-[10px] text-stone-400 mt-0.5">{s.lot_number}</div>}
-              {s.production_orders?.length ? <div className="font-mono text-[10px] text-stone-400 mt-0.5">PO {s.production_orders.join(', ')}</div> : null}
-            </div>
-            <div className="flex items-center gap-1.5 text-[12px]">
-              {hasData ? (<>
-                <span className="inline-flex items-center gap-1 text-stone-600"><Package size={12} /> {s.total_input_kg.toFixed(1)} kg</span>
-                <ArrowRight size={11} className="text-stone-300" />
-                <span className="inline-flex items-center gap-1 text-stone-600"><PackageCheck size={12} /> {s.total_output_b_kg.toFixed(1)} kg</span>
-              </>) : (<span className="text-stone-300 text-[11px]">No data</span>)}
-            </div>
-            <div>
-              {hasData ? (
-                <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-                  <Scale size={11} />{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg{!withinTol && <AlertTriangle size={11} />}
+            <div className="text-[11px] text-stone-400 truncate mt-0.5">{metaParts.join(' · ')}</div>
+          </div>
+
+          <div className="text-right shrink-0 hidden sm:block">
+            {hasData ? (
+              <>
+                <div className="flex items-center justify-end gap-1 text-[12px] text-stone-600">
+                  <Package size={11} /> {s.total_input_kg.toFixed(1)}
+                  <ArrowRight size={10} className="text-stone-300" />
+                  <PackageCheck size={11} /> {s.total_output_b_kg.toFixed(1)} kg
+                </div>
+                <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full mt-0.5 ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+                  <Scale size={10} />{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg{!withinTol && <AlertTriangle size={10} />}
                 </span>
-              ) : null}
-            </div>
+              </>
+            ) : <span className="text-stone-300 text-[11px]">No data</span>}
           </div>
         </Link>
 
@@ -398,7 +399,7 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
                   {canEdit && <button onClick={() => { setEditing(e => !e); setMenuOpen(false) }} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-stone-50"><Pencil size={14} /> Edit details</button>}
                   {canEdit && (s.status === 'submitted' || s.status === 'approved') &&
                     <button onClick={() => act('reopen')} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-stone-50"><Unlock size={14} /> Reopen for edits</button>}
-                  {canDelete && <button onClick={() => { if (confirm('Archive this record? It will be hidden but kept for the audit trail and can be restored.')) act('delete') }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-err hover:bg-err/5"><Trash2 size={14} /> Archive</button>}
+                  {canDelete && <button onClick={() => { if (confirm('Archive this record? It will be hidden but kept for the audit trail and can be restored. Archived orders are excluded from KPI totals.')) act('delete') }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-err hover:bg-err/5"><Trash2 size={14} /> Archive</button>}
                 </>)}
               </div>
             </>)}
@@ -407,6 +408,19 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
           <ChevronRight size={16} className="text-stone-300 shrink-0" />
         )}
       </div>
+
+      {/* Small-screen data row — the two-column right-aligned block above hides
+          under sm; show the same facts inline instead of dropping them. */}
+      {hasData && (
+        <div className="sm:hidden flex items-center gap-2 px-5 pb-3 -mt-1 text-[11px] text-stone-500">
+          <Package size={11} /> {s.total_input_kg.toFixed(1)} kg
+          <ArrowRight size={10} className="text-stone-300" />
+          <PackageCheck size={11} /> {s.total_output_b_kg.toFixed(1)} kg
+          <span className={`inline-flex items-center gap-1 font-medium px-1.5 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
+            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
+          </span>
+        </div>
+      )}
 
       {editing && (
         <div className="border-t border-stone-100 px-5 py-4 bg-stone-50/50 space-y-3">

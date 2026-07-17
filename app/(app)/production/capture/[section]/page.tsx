@@ -26,14 +26,15 @@ import {
   type GranuleData,
 } from '@/components/production/capture/GranuleCapture'
 import {
-  BlenderCapture, emptyBlenderData, blenderTotals, blenderCapturedCodes,
+  BlenderCapture, emptyBlenderData, blenderTotals, blenderCapturedCodes, resolveExistingBlendRunNo,
   type BlenderData, type CapturedCode,
 } from '@/components/production/capture/BlenderCapture'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
 import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt'
-import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
+import { CaptureOverview, type BlenderRatioGroup } from '@/components/production/capture/CaptureOverview'
+import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
@@ -127,6 +128,8 @@ function CaptureScreen() {
   const [productions, setProductions] = useState<Production[]>([])
   const [activeIdx, setActiveIdx]     = useState(0)
   const [otherShiftProductions, setOtherShiftProductions] = useState<Production[]>([])
+  const [blenderRatios, setBlenderRatios] = useState<BlenderRatioGroup[]>([])
+  const bomGroupsCacheRef = useRef<Map<string, BlendIngredientGroup[]>>(new Map())
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
   const [continueRun, setContinueRun] = useState<{ id: string; production_order: string | null; variant: string | null; grade: string | null } | null>(null)
   const [endOfRun, setEndOfRun]   = useState(false)       // supervisor: close the run on approval
@@ -160,7 +163,7 @@ function CaptureScreen() {
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
-  const updateActiveData = (d: SievingData | RefiningData | GranuleData) =>
+  const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
@@ -373,6 +376,26 @@ function CaptureScreen() {
   }
   const logActivityRef = useRef(logActivity); logActivityRef.current = logActivity
 
+  // ── Heartbeat on ANY real interaction, not just edits to `productions` ────
+  // The debounced effect below only fires when the bag/batch data itself
+  // changes, so a shift spent mostly in Checks, Cleaning, Overview or
+  // Sign-off — or just doing physical floor work between edits — left gaps
+  // in `capture_activity` with nothing to distinguish "operator present but
+  // not touching bag data" from "operator on a break", so deriveTimesheet()
+  // misread ordinary working gaps as tea/lunch. Any tap/keypress anywhere in
+  // the app is a presence signal; logActivity's own 60s throttle keeps this
+  // cheap.
+  useEffect(() => {
+    if (loading || status === 'submitted' || status === 'approved') return
+    const onInteract = () => logActivityRef.current()
+    document.addEventListener('pointerdown', onInteract)
+    document.addEventListener('keydown', onInteract)
+    return () => {
+      document.removeEventListener('pointerdown', onInteract)
+      document.removeEventListener('keydown', onInteract)
+    }
+  }, [loading, status])
+
   // ── Synchronous localStorage write on every change — safety net for tablet
   //    browsers that kill async DB writes on screen-lock / tab exit. Recovered
   //    automatically on next load if DB draft is empty.
@@ -385,6 +408,50 @@ function CaptureScreen() {
       )
     } catch { /* storage full — best-effort */ }
   }, [productions, loading, status])
+
+  // ── Blend component ratio for Overview — target vs actual per ingredient,
+  // summed across every Blender production sharing a blend code (both shifts,
+  // same as the rest of Overview's totals). BOM lookups are cached per bomId
+  // so retyping a weight doesn't refetch the recipe on every keystroke.
+  useEffect(() => {
+    if (!isBlenderSection(sectionId)) { setBlenderRatios([]); return }
+    const allProds = [...productions, ...otherShiftProductions]
+    const byBom = new Map<string, Production[]>()
+    allProds.forEach(p => {
+      const bomId = (p.data as BlenderData)?.bomId
+      if (!bomId) return
+      const arr = byBom.get(bomId) ?? []
+      arr.push(p)
+      byBom.set(bomId, arr)
+    })
+    if (byBom.size === 0) { setBlenderRatios([]); return }
+    let cancelled = false
+    Promise.all(Array.from(byBom.entries()).map(async ([bomId, prods]) => {
+      let groups = bomGroupsCacheRef.current.get(bomId)
+      if (!groups) {
+        groups = groupComponentsByItem(await getBlendComponents(bomId))
+        bomGroupsCacheRef.current.set(bomId, groups)
+      }
+      const byItem: Record<string, number> = {}
+      let totalIn = 0
+      prods.forEach(p => {
+        ;((p.data as BlenderData).inputs ?? []).forEach(r => {
+          const kg = parseFloat(String(r.weight).replace(',', '.')) || 0
+          byItem[r.itemKey] = (byItem[r.itemKey] ?? 0) + kg
+          totalIn += kg
+        })
+      })
+      return {
+        bomId,
+        rows: groups!.map(g => ({
+          label: g.label, kg: byItem[g.key] ?? 0,
+          actualPct: totalIn > 0 ? ((byItem[g.key] ?? 0) / totalIn) * 100 : 0,
+          targetPct: g.targetPct * 100,
+        })),
+      }
+    })).then(ratios => { if (!cancelled) setBlenderRatios(ratios) })
+    return () => { cancelled = true }
+  }, [sectionId, productions, otherShiftProductions])
 
   // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
@@ -511,7 +578,24 @@ function CaptureScreen() {
 
   async function acceptContinueRun() {
     const cr = continueRun; setContinueRun(null)
-    if (cr) await linkSessionToRun(cr.id)
+    if (!cr) return
+    await linkSessionToRun(cr.id)
+    // Blender's run number is embedded in the bag serial (…/1-01…/1-13), a
+    // separate mechanism from `production_runs` — linking the session alone
+    // doesn't touch it. Without seeding it here, the new shift's BlenderData
+    // still starts with outputRunNo null, and genBlendSerial() would derive
+    // its OWN next run (existing max + 1) the first time a bag is added —
+    // silently forking to …/2-01 even though the operator just said this is
+    // the same continuing blend, not a new one.
+    if (isBlenderRun && cr.grade) {
+      const existingRunNo = await resolveExistingBlendRunNo(cr.grade)
+      if (existingRunNo) {
+        const idx = activeIdx
+        const p = productionsRef.current[idx]
+        const bd = p?.data as BlenderData | undefined
+        if (bd && !bd.outputRunNo) updateActiveData({ ...bd, outputRunNo: existingRunNo })
+      }
+    }
   }
 
   async function declineContinueRun() {
@@ -687,7 +771,9 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            notes: [`blend ${bd.bomId ?? ''}`.trim(), r.destination || null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            production_ref: bd.bomId || null,
+            local_or_export: r.destination || null,
+            notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
             kg_nett: n(r.weight), is_spillage: false,
@@ -764,6 +850,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: prod.lot || null,
+            production_ref: bomId || null,
             product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
             kg: n(b.weight), bagging_time: b.time || null,
           })
@@ -1117,13 +1204,19 @@ function CaptureScreen() {
 
       {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
           and stays available after checks are signed (page-level, not in the
-          Checks tab). Only sections with an hourly VSD check surface it. */}
-      <HourlyVsdPrompt
-        sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
-        running={totalIn > 0}
-        active={status !== 'submitted' && status !== 'approved'}
-        operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
-      />
+          Checks tab). Only sections with an hourly VSD check surface it.
+          Suppressed on the Overview tab — that's a "just reading" view (often
+          reached from a supervisor's production-order review), and a modal
+          popping up over someone reading the AI summary rather than actually
+          operating the line reads as a bug, not a reminder. */}
+      {tab !== 'overview' && (
+        <HourlyVsdPrompt
+          sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
+          running={totalIn > 0}
+          active={status !== 'submitted' && status !== 'approved'}
+          operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
+        />
+      )}
 
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
@@ -1419,6 +1512,7 @@ function CaptureScreen() {
                 locked={locked}
                 balanceRows={balanceRows}
                 balanceNote={balanceNote}
+                blenderRatios={blenderRatios}
               />
             </>
           )}
