@@ -387,6 +387,20 @@ function monthRangeLabel(monthOffset: number): string {
   return d.toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' })
 }
 
+// dayOffset: 0 = today, 1 = yesterday, etc. — for the live, per-hour "By Hour"
+// view so an out-of-spec reading is visible the same shift it happened, not
+// just once the day rolls into a weekly bucket.
+function dateForDayOffset(dayOffset: number): Date {
+  const d = new Date(); d.setDate(d.getDate() - dayOffset); return d
+}
+function hourBucketsForDay(dayOffset: number): { key: string; label: string }[] {
+  const dateKey = isoDate(dateForDayOffset(dayOffset))
+  return Array.from({ length: 24 }, (_, h) => ({ key: `${dateKey}T${String(h).padStart(2, '0')}`, label: `${String(h).padStart(2, '0')}:00` }))
+}
+function dayRangeLabel(dayOffset: number): string {
+  return dateForDayOffset(dayOffset).toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 // Representative spec key used for the mesh-trend reference band. The %
 // mesh bounds are identical across Export/Domestic for a given CON/ORG
 // mesh set in every product in SIEVING_SPECS_DB — only Leaf Shade differs
@@ -397,12 +411,13 @@ const TREND_SPEC_KEY = 'Export|CON'
 function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPointClick }: {
   runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>; onPointClick?: (runId: any) => void
 }) {
-  const [view, setView]           = useState<'week' | 'month'>('week')
+  const [view, setView]           = useState<'day' | 'week' | 'month'>('day')
   const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
+  const [dayOffset, setDayOffset]     = useState(0)   // 0 = today, 1 = yesterday, ...
   const [weekOffset, setWeekOffset]   = useState(0)   // 0 = this week, 1 = last week, ...
   const [monthOffset, setMonthOffset] = useState(0)   // 0 = this month, 1 = last month, ...
-  const offset = view === 'week' ? weekOffset : monthOffset
-  const setOffset = view === 'week' ? setWeekOffset : setMonthOffset
+  const offset = view === 'day' ? dayOffset : view === 'week' ? weekOffset : monthOffset
+  const setOffset = view === 'day' ? setDayOffset : view === 'week' ? setWeekOffset : setMonthOffset
   const meshOptions = sdGetMesh(activeProduct, 'CON')
   const metricOptions = [
     { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
@@ -412,25 +427,33 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   const [metric, setMetric] = useState(metricOptions[0].key)
   const metricDef = metricOptions.find(m => m.key === metric) || metricOptions[0]
 
-  // Bucket definitions for the selected window — day-of-week for "This Week",
-  // week-of-month for "This Month". Runs outside the window are excluded.
+  // Bucket definitions for the selected window — hour-of-day for "By Hour"
+  // (live, same-shift visibility), day-of-week for "By Week", week-of-month
+  // for "By Month". Runs outside the window are excluded. dayOffset/
   // weekOffset/monthOffset step the window back in time — a timeline, not
-  // just the current week/month.
+  // just the current day/week/month.
+  const hourBuckets = hourBucketsForDay(dayOffset)
   const dayBuckets  = dayBucketsForWeek(weekOffset)
   const weekBuckets = weekBucketsForMonth(monthOffset)
-  const rangeLabel  = view === 'week' ? weekRangeLabel(weekOffset) : monthRangeLabel(monthOffset)
-  const bucketOf = (dateStr: string): string | null => {
-    if (view === 'week') {
-      const key = dateStr
-      return dayBuckets.some(b => b.key === key) ? key : null
+  const rangeLabel  = view === 'day' ? dayRangeLabel(dayOffset) : view === 'week' ? weekRangeLabel(weekOffset) : monthRangeLabel(monthOffset)
+  const bucketKeyFor = (r: any): string | null => {
+    if (!r.date) return null
+    if (view === 'day') {
+      if (r.date !== hourBuckets[0].key.slice(0, 10)) return null
+      const hh = parseInt((r.time || '').split(':')[0], 10)
+      if (isNaN(hh) || hh < 0 || hh > 23) return null
+      return `${r.date}T${String(hh).padStart(2, '0')}`
     }
-    const d = new Date(dateStr + 'T12:00:00')
+    if (view === 'week') {
+      return dayBuckets.some(b => b.key === r.date) ? r.date : null
+    }
+    const d = new Date(r.date + 'T12:00:00')
     const b = weekBuckets.find(wb => d >= wb.from && d <= wb.to)
     return b ? b.key : null
   }
-  const bucketLabels = view === 'week' ? dayBuckets : weekBuckets
+  const bucketLabels = view === 'day' ? hourBuckets : view === 'week' ? dayBuckets : weekBuckets
 
-  const inWindow = runs.filter((r: any) => r.date && bucketOf(r.date) != null)
+  const inWindow = runs.filter((r: any) => bucketKeyFor(r) != null)
 
   // Spec band per mesh — see TREND_SPEC_KEY note above.
   const specSource = activeSpecs || specDef.variants
@@ -441,7 +464,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
 
   // ── Mesh Trend data: one row per bucket, one column per sieve fraction (mean) ──
   const trendData = bucketLabels.map(b => {
-    const rows = inWindow.filter((r: any) => r.runType === 'in-process' && bucketOf(r.date) === b.key)
+    const rows = inWindow.filter((r: any) => r.runType === 'in-process' && bucketKeyFor(r) === b.key)
     const entry: any = { period: b.label }
     meshOptions.forEach(m => {
       const vals = rows.map((r: any) => parseFloat(r[m])).filter((v: number) => !isNaN(v))
@@ -456,7 +479,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
 
   // ── Outliers data: every run in the window for the chosen metric, ±2.5σ band ──
   const points = inWindow
-    .map((r: any) => ({ period: bucketLabels.find(b => b.key === bucketOf(r.date))?.label || '', value: parseFloat(r[metric]), run: r }))
+    .map((r: any) => ({ period: bucketLabels.find(b => b.key === bucketKeyFor(r))?.label || '', value: parseFloat(r[metric]), run: r }))
     .filter((p: any) => !isNaN(p.value))
   const values = points.map((p: any) => p.value)
   const m = mean(values), sd = stdDev(values)
@@ -481,15 +504,15 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
           ))}
         </div>
         <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
-          {(['week','month'] as const).map(v => (
+          {(['day','week','month'] as const).map(v => (
             <button key={v} onClick={()=>setView(v)}
               style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
                 background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
-              {v==='week'?'By Week':'By Month'}
+              {v==='day'?'By Hour':v==='week'?'By Week':'By Month'}
             </button>
           ))}
         </div>
-        {/* Timeline navigator — step back through previous weeks/months */}
+        {/* Timeline navigator — step back through previous days/weeks/months */}
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           <button onClick={()=>setOffset((o:number)=>o+1)} title={`Previous ${view}`}
             style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
@@ -545,7 +568,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
                   <ResponsiveContainer width="100%" height={160}>
                     <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                      <XAxis dataKey="period" tick={{ fontSize:9 }} />
+                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={view==='day'?2:0} />
                       <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
                       <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
                       {/* Spec band — in-spec shaded green, out-of-spec zones shaded a dark red so it's unmistakable at a glance, plus solid dark boundary lines */}
@@ -587,7 +610,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
           <ResponsiveContainer width="100%" height={220}>
             <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} />
+              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={view==='day'?1:0} />
               <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
               <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
                 labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />

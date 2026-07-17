@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (Sieving: add hourly "By Hour" view to Mesh Trend/Outliers charts)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **New "By Hour" view** alongside By Week / By Month on the Sieving Tower's Mesh Trend and Outliers charts. Buckets the day into 24 hourly slots (parsed from each run's `time_of_run`), so an out-of-spec reading is visible the same shift it happened — not just once the day rolls into a weekly average. Defaults to today, with the same ◀ ▶ / Today navigator to step back through previous days.
+- Unified the day/week/month bucketing behind a single `bucketKeyFor(run)` function (previously date-only `bucketOf`), since hourly bucketing needs both date and time.
+- X-axis tick density is thinned for the 24-slot hourly view (`interval` prop) so hour labels don't collide on the per-mesh mini charts.
+
+---
+
 ## 2026-07-17 — Alyssa (Shift Roster: publish now requires genuine full confirmation, admin Reopen action)
 
 **Files:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/audit/route.ts`
