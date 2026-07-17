@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (COA Generator — v1: type a batch number, auto-populate a customer COA from linked sources)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx` (new), `components/layout/Sidebar.tsx`
+
+- **New "📋 COA Generator" tab** (Quality → COA Generator, gated on `can_save_lab_results`). Type a batch number — the single join key across every source — and it builds a standard Certificate of Analysis:
+  - **Header** (grade, production date, destination/customer) ← pasteuriser batch; invoice/order/quantities typed on the form; **Best Before auto-computed** = production + 3 years.
+  - **Microbiology** ← Final Product Lab Results (`micro`) — TPC, E.coli, Salmonella, Yeast, Mould, Listeria, E.coli O157, with COA-standard result wording (E.coli/Listeria "Not detected", Salmonella "Absent").
+  - **Cut length / sieving** ← pasteuriser sieve samples, averaged across the batch (the pasteuriser >6/>10/>12/>16/>20/>60/Dust mesh set matches the COA exactly). Optional.
+  - **Moisture / Bulk Density** ← pasteuriser samples, averaged. Plus Foreign Material.
+  - **Pesticide residue** ← Lab Results (`residue`); **Pyrrolizidine Alkaloids** ← Lab Results (`pa_final`); **Heavy metals / MOSH-MOAH** ← Lab Results (optional) — all rendered as "Complies" / "None detected".
+  - **Description of goods** (organic vs conventional) + **Sensorical properties** ← centralised standard wording (`COA_WORDING`) so every COA reads identically.
+- **Outstanding-data panel** flags any included section that has no source data yet. **Section toggles** let the lab manager include/exclude blocks (some customers need heavy metals/residue/PA, some don't).
+- Every header field, spec and result is **editable inline** before generating (specs blank/default for now — they'll be driven by a per-customer template under Customer Specs later, per the plan).
+- **Output: both** — on-screen preview, browser **Print**, and **PDF export** (jsPDF) laid out to mirror the template.
+- Batch matching is separator/case-insensitive (`normBatch`) so "26138-CON-SG" / "26138 CON SG" / "26138/CON/SG" all resolve to the same batch across pasteuriser and lab results.
+
+---
+
 ## 2026-07-17 — Gustav (Lab Results: fix duplicate ≤ in spec column, edit-after-extraction for every tab, heavy metals/PA extraction no longer collapses detection-limit values)
 
 **Files changed:** `app/(app)/quality/lab-results/page.tsx`, `app/api/upload/route.ts`
