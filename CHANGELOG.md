@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (COA Generator: pull specifications from customer specs by grade+customer+variant, + generation history)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_004_coa_generated.sql` (new)
+
+- **Specification column now auto-fills from the customer COA specs.** When a batch is generated, the generator matches a `qms.coa_specs` row by **customer + grade + variant** (derived from the pasteuriser batch) and fills every Specification cell — micro limits, cut-length mesh specs, moisture/BD, residue regulation wording, PA limit, heavy-metal limits, sensorial wording. Which sections appear is now driven by what that customer's spec requires (not just what data exists), so e.g. a customer that needs heavy metals shows that block even before the lab report lands (flagged outstanding).
+- **Customer-spec picker:** a dropdown lists all of that customer's specs, auto-selecting the best match; the lab manager can switch to a different product spec and every Specification cell re-fills instantly.
+- **Variant-aware matching:** Conventional / Organic / RA-Organic / RA-Conventional (and Fairtrade variants) are normalised on both sides so the right spec is chosen.
+- **Generation history:** new `qms.coa_generated` table logs every Print/Export with a full JSON snapshot; a 🕘 History panel shows past generations (date, batch, customer, grade, spec used, by whom).
+
+---
+
 ## 2026-07-17 — Gustav (Customer Specs: import Client_Specs.xlsx as an editable per-customer COA requirements matrix)
 
 **Files changed:** `components/quality/CoaSpecsTab.tsx` (new), `app/(app)/quality/customer-specs/page.tsx`, `supabase/migrations/20260717_003_coa_specs.sql` (new), `supabase/seeds/coa_specs_seed.sql` (new)

@@ -25,9 +25,10 @@
 //
 // Wording is centralised in COA_WORDING so every generated COA reads identically.
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDateTime } from '@/lib/utils/formatDate'
 import { jsPDF } from 'jspdf'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
@@ -117,6 +118,56 @@ interface CoaModel {
   cutLength: CoaLine[]
   other: CoaLine[]
   sections: { micro: boolean; cutLength: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean }
+  matchedDoc: string          // doc_no of the customer spec applied ('' = none)
+  candidateDocs: { doc_no: string; label: string }[]  // this customer's specs, for the picker
+}
+
+// Map the COA cut-length rows (gt6…dust) to coa_specs mesh keys (">6"…"Dust -60").
+const CUT_TO_MESH: Record<string, string[]> = {
+  gt6: ['>6'], gt10: ['>10'], gt12: ['>12'], gt16: ['>16'], gt20: ['>20'], gt60: ['>60'], dust: ['Dust -60', 'Dust'],
+}
+// Map the COA micro rows to coa_specs.micro keys.
+const MICRO_TO_SPECKEY: Record<string, string> = {
+  tpc: 'tpc', ecoli: 'ecoli', salmonella_25g: 'salmonella', listeria: 'listeria', ecoli_o157: 'ecoli_o157', yeast: 'yeast', mould: 'mould',
+}
+
+function normVariant(v: string): string {
+  const s = (v || '').toLowerCase()
+  const ra = /\bra\b|rainforest/.test(s)
+  const org = /org/.test(s)
+  if (ra && org) return 'ra-organic'
+  if (ra) return 'ra-conventional'
+  if (org) return 'organic'
+  return 'conventional'
+}
+function normText(s: string) { return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() }
+
+// Score how well a coa_specs row matches a batch's customer / grade / variant.
+function scoreSpec(spec: any, customer: string, grade: string, variant: string): number {
+  let score = 0
+  const c = normText(customer), sc = normText(spec.customer || '')
+  if (c && sc && (sc.includes(c) || c.includes(sc))) score += 100
+  if (normVariant(variant) === normVariant(spec.variant || '')) score += 30
+  const g = new Set(normText(grade).split(' ').filter(Boolean))
+  const sg = new Set(normText([spec.grade, spec.product_description].filter(Boolean).join(' ')).split(' ').filter(Boolean))
+  let overlap = 0; g.forEach(t => { if (sg.has(t)) overlap++ })
+  score += overlap * 8
+  return score
+}
+
+// Build the Bulk Density spec string from a coa_specs row's bd_min/bd_max.
+function bdSpec(min: any, max: any): string {
+  const mn = min != null && String(min).trim() !== '' ? String(min) : ''
+  const mx = max != null && String(max).trim() !== '' ? String(max) : ''
+  if (mn && mx) return `${mn} – ${mx}cc/100g`
+  if (mx) return /[a-z%]/i.test(mx) ? mx : `max ${mx}cc/100g`
+  if (mn) return `min ${mn}cc/100g`
+  return ''
+}
+function moistSpec(v: any): string {
+  const s = String(v ?? '').trim()
+  if (!s) return ''
+  return /%/.test(s) ? s : `${s}%`
 }
 
 const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none focus:border-blue-500'
@@ -124,7 +175,7 @@ const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none f
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CoaGeneratorPage() {
-  const { p } = useAuth()
+  const { p, session } = useAuth()
   const canUse = p('can_save_lab_results') || p('can_approve_runs')
   const db = getDb()
 
@@ -132,7 +183,18 @@ export default function CoaGeneratorPage() {
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState('')
   const [model, setModel]           = useState<CoaModel | null>(null)
+  const [sources, setSources]       = useState<any>(null)   // raw inputs, for re-applying a different spec
+  const [allSpecs, setAllSpecs]     = useState<any[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  const [history, setHistory]       = useState<any[]>([])
   const printRef = useRef<HTMLDivElement>(null)
+  const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
+
+  const loadHistory = useCallback(async () => {
+    const { data } = await db.schema('qms').from('coa_generated').select('*').order('generated_at', { ascending: false }).limit(200)
+    setHistory(data ?? [])
+  }, [db])
+  useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
 
   const lookup = useCallback(async (batchRaw: string) => {
     const batch = batchRaw.trim()
@@ -141,11 +203,12 @@ export default function CoaGeneratorPage() {
     const key = normBatch(batch)
 
     // Pull every source in parallel, then match on the normalised batch number.
-    const [pRes, lRes, sRes] = await Promise.all([
+    const [pRes, lRes, csRes] = await Promise.all([
       db.schema('qms').from('quality_records').select('*').eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run').order('created_at', { ascending: false }).limit(1000),
       db.schema('qms').from('lab_results').select('*').order('created_at', { ascending: false }).limit(2000),
-      db.schema('qms').from('sd_runs').select('*').order('created_at', { ascending: false }).limit(2000),
+      db.schema('qms').from('coa_specs').select('*'),
     ])
+    setAllSpecs(csRes.data ?? [])
 
     // ── Pasteuriser batch (header + moisture/BD + sieve/cut-length averages) ──
     const pastRow = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
@@ -157,11 +220,12 @@ export default function CoaGeneratorPage() {
 
     const moistureAvg = avg(mbSamples.map(s => parseFloat(s.moisture)))
     const bdAvg       = avg(mbSamples.map(s => parseFloat(s.untapped_bd)))
-    const cutLength: CoaLine[] = CUT_LENGTH_ROWS.map(row => {
+    const cutResults: Record<string, string> = {}
+    CUT_LENGTH_ROWS.forEach(row => {
       const a = avg(sieveSamples.map(s => parseFloat(s[row.key])))
-      return { label: row.label, spec: '', result: a != null ? `${a.toFixed(1).replace('.', ',')}%` : '' }
+      cutResults[row.key] = a != null ? `${a.toFixed(1).replace('.', ',')}%` : ''
     })
-    const hasSieve = sieveSamples.length > 0 && cutLength.some(c => c.result !== '')
+    const hasSieve = sieveSamples.length > 0 && Object.values(cutResults).some(v => v !== '')
 
     // ── Lab results for this batch, indexed by test type ──
     const labFor = (t: string) => (lRes.data ?? []).find((r: any) => r.test_type === t && normBatch(r.batch_no) === key)
@@ -170,55 +234,62 @@ export default function CoaGeneratorPage() {
     const paRec     = labFor('pa_final')
     const hmRec     = labFor('heavy_metals')
     const moshRec   = labFor('mosh_moah')
-
-    // ── Microbiology rows ──
     const microData = microRec ? (microRec.results || microRec) : {}
-    const micro: CoaLine[] = MICRO_ROWS
-      .map(r => ({ key: r.key, label: r.label, spec: r.specDefault, result: microDisplay(r.key, microData[r.key]) }))
-      .filter(r => r.result !== '')   // only rows the lab actually reported
-      .map(({ label, spec, result }) => ({ label, spec, result }))
 
-    // ── Other analysis rows ──
-    const isOrganic = !!(past?.is_organic) || /org/i.test(past?.variant || '') || /organic|org/i.test(key)
-    const residueResult = residueRec ? coaComplies(residueRec) : ''
-    const paResult      = paRec ? coaComplies(paRec) : ''
+    const customer = past?.customer || ''
+    const grade    = past?.type_grade || [past?.grade, past?.variant].filter(Boolean).join(' ') || ''
+    const variant  = past?.variant || (past?.is_organic ? 'Organic' : '') || key
 
-    const other: CoaLine[] = []
-    if (moistureAvg != null) other.push({ label: 'Moisture', spec: '<10%', result: `${moistureAvg.toFixed(1).replace('.', ',')}%` })
-    if (bdAvg != null)       other.push({ label: 'Bulk Density', spec: '280 – 340cc/100g', result: `${Math.round(bdAvg)}cc/100g` })
-    other.push({ label: 'Foreign Material', spec: '<1%', result: '0.0%' })
-    if (residueRec) other.push({ label: 'Pesticide residue', spec: COA_WORDING.residueRegulation, result: residueResult })
-    if (paRec)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: '<50 μg', result: paResult })
-    if (hmRec)      other.push({ label: 'Heavy Metals', spec: '', result: coaComplies(hmRec) })
-    if (moshRec)    other.push({ label: 'MOSH/MOAH', spec: '', result: coaComplies(moshRec) })
-    other.push({ label: 'Sensorical Properties', spec: COA_WORDING.sensorical, result: 'Complies' })
+    // ── Candidate customer specs + best match ──
+    const specs = csRes.data ?? []
+    const candidates = specs
+      .map((s: any) => ({ s, score: scoreSpec(s, customer, grade, variant) }))
+      .filter((x: any) => x.score >= 100)   // must at least match the customer
+      .sort((a: any, b: any) => b.score - a.score)
+    const bestSpec = candidates.length ? candidates[0].s : null
 
-    const built: CoaModel = {
-      batch,
-      found: {
-        pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec,
-        heavyMetals: !!hmRec, moshMoah: !!moshRec, sieving: hasSieve,
+    const src = {
+      batch, past, microData, moistureAvg, bdAvg, cutResults, hasSieve,
+      found: { pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec, sieving: hasSieve },
+      results: {
+        residue: residueRec ? coaComplies(residueRec) : '', pa: paRec ? coaComplies(paRec) : '',
+        hm: hmRec ? coaComplies(hmRec) : '', mosh: moshRec ? coaComplies(moshRec) : '',
       },
-      isOrganic,
+      isOrganic: !!(past?.is_organic) || /org/i.test(past?.variant || '') || /organic|org/i.test(key),
       header: {
         date_of_issue: new Date().toLocaleDateString('en-ZA', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'),
         batch_number: past?.batch_number || batch,
-        grade: past?.type_grade || [past?.grade, past?.variant].filter(Boolean).join(' ') || '',
-        destination: past?.customer || '',
+        grade, destination: customer,
         production_date: monthYear(past?.production_date || ''),
         best_before: bestBefore(past?.production_date || ''),
         invoice_no: '', order_number: '', quantity_kg: '', quantity_bags: '',
       },
-      micro, cutLength, other,
-      sections: {
-        micro: !!microRec, cutLength: hasSieve, residue: !!residueRec,
-        pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec,
-      },
+      candidateDocs: candidates.map((x: any) => ({ doc_no: x.s.doc_no, label: `${x.s.doc_no} — ${x.s.product_description || ''} (${x.s.variant || '—'})` })),
     }
-    setModel(built)
+    setSources(src)
+    setModel(buildModel(src, bestSpec))
     if (!past && !microRec && !residueRec) setError(`No pasteuriser or lab data found for batch "${batch}".`)
     setLoading(false)
   }, [db])
+
+  // Re-apply a different customer spec (from the picker) to the current sources.
+  const applyDoc = (docNo: string) => {
+    if (!sources) return
+    const spec = allSpecs.find(s => s.doc_no === docNo) || null
+    setModel(buildModel(sources, spec))
+  }
+
+  // Log a generated COA to history (on Print / Export).
+  const logGeneration = async (m: CoaModel) => {
+    try {
+      await db.schema('qms').from('coa_generated').insert({
+        batch_no: m.header.batch_number || m.batch, customer: m.header.destination || '',
+        grade: m.header.grade || '', variant: sources?.past?.variant || '',
+        doc_no: m.matchedDoc || null, generated_by: whoAmI,
+        snapshot: { header: m.header, micro: m.micro, cutLength: m.cutLength, other: m.other, sections: m.sections, isOrganic: m.isOrganic },
+      })
+    } catch { /* non-blocking */ }
+  }
 
   // ── Field mutators ──
   const setHeader = (k: string, v: string) => setModel(m => m ? { ...m, header: { ...m.header, [k]: v } } : m)
@@ -262,13 +333,62 @@ export default function CoaGeneratorPage() {
           className="px-5 py-2 rounded-lg text-white text-[13px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>
           {loading ? 'Loading…' : 'Generate'}
         </button>
+        <button onClick={() => setShowHistory(h => !h)}
+          className="px-4 py-2 rounded-lg border text-[13px] font-semibold" style={{ borderColor: showHistory ? '#d97706' : '#e5e7eb', background: showHistory ? '#fef3c7' : '#fff', color: showHistory ? '#92400e' : '#374151' }}>
+          🕘 History
+        </button>
       </div>
+
+      {/* Generation history */}
+      {showHistory && (
+        <div className="mb-4 no-print border border-amber-200 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-amber-50 text-[11px] font-bold uppercase text-amber-800">🕘 Generated COAs</div>
+          {history.length === 0 ? (
+            <div className="p-4 text-center text-[12px] text-gray-400">No COAs generated yet.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
+                <thead><tr className="bg-gray-100">{['Generated','Batch','Customer','Grade','Spec used','By'].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <tbody>
+                  {history.map((h, i) => (
+                    <tr key={h.id} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
+                      <td className="px-2 py-1 whitespace-nowrap text-gray-500">{isoDateTime(h.generated_at)}</td>
+                      <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{h.batch_no}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{h.customer || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{h.grade || '—'}</td>
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{h.doc_no || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{h.generated_by || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {error && <div className="mb-4 text-[12px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 no-print">{error}</div>}
 
       {model && (
         <>
           {/* Outstanding + section toggles */}
+          {/* Customer spec picker — drives the Specification column + which sections apply */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="text-[11px] font-bold uppercase text-gray-500 mb-1">Customer specification</div>
+            {model.candidateDocs.length === 0 ? (
+              <div className="text-[12px] text-amber-700">No customer spec found for this batch's customer — specs will be blank. Add one under Customer Specs → COA Requirements.</div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <select value={model.matchedDoc} onChange={e => applyDoc(e.target.value)}
+                  className="flex-1 min-w-[280px] px-2 py-1.5 border border-gray-300 rounded-lg text-[12px]">
+                  <option value="">— none (blank specs) —</option>
+                  {model.candidateDocs.map(c => <option key={c.doc_no} value={c.doc_no}>{c.label}</option>)}
+                </select>
+                <span className="text-[11px] text-gray-500">Matched by customer + grade + variant — change if needed.</span>
+              </div>
+            )}
+          </div>
+
           <div className="mb-4 grid grid-cols-2 gap-3 no-print">
             <div className="border border-gray-200 rounded-lg p-3">
               <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">Data sources</div>
@@ -299,8 +419,8 @@ export default function CoaGeneratorPage() {
           )}
 
           <div className="flex gap-2 mb-4 no-print">
-            <button onClick={() => window.print()} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => exportPdf(model, description)} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
 
           {/* ── COA preview (editable) ── */}
@@ -457,6 +577,59 @@ function SampleTable({ title, cols, lines }: { title: string; cols: string[]; li
       </table>
     </div>
   )
+}
+
+// Build the full COA model from raw sources + an optional matched customer spec.
+// When a spec is supplied, the Specification columns and which sections appear
+// are driven by the customer's requirements; results come from the lab/pasteuriser.
+function buildModel(src: any, spec: any): CoaModel {
+  const sp = spec?.specs || {}
+  const req = (v: any) => v != null && String(v).trim() !== '' && String(v).trim().toUpperCase() !== 'NOT REQUIRED'
+
+  // ── Microbiology: rows required by the spec (or, with no spec, whatever the lab reported) ──
+  let micro: CoaLine[]
+  if (spec) {
+    micro = MICRO_ROWS
+      .filter(r => req(sp.micro?.[MICRO_TO_SPECKEY[r.key]]))
+      .map(r => ({ label: r.label, spec: String(sp.micro[MICRO_TO_SPECKEY[r.key]]), result: microDisplay(r.key, src.microData[r.key]) }))
+  } else {
+    micro = MICRO_ROWS
+      .map(r => ({ key: r.key, label: r.label, spec: r.specDefault, result: microDisplay(r.key, src.microData[r.key]) }))
+      .filter(r => r.result !== '').map(({ label, spec, result }) => ({ label, spec, result }))
+  }
+
+  // ── Cut length: spec from the matched customer spec's mesh set ──
+  const cutLength: CoaLine[] = CUT_LENGTH_ROWS.map(row => {
+    let specVal = ''
+    if (spec) { for (const mk of CUT_TO_MESH[row.key]) { const m = sp.mesh?.[mk]; if (m && req(m.spec)) { specVal = String(m.spec); break } } }
+    return { label: row.label, spec: specVal, result: src.cutResults[row.key] || '' }
+  })
+
+  // ── Other analysis ──
+  const other: CoaLine[] = []
+  if (src.moistureAvg != null) other.push({ label: 'Moisture', spec: spec ? moistSpec(spec.moisture_max) || '<10%' : '<10%', result: `${src.moistureAvg.toFixed(1).replace('.', ',')}%` })
+  if (src.bdAvg != null) other.push({ label: 'Bulk Density', spec: spec ? (bdSpec(spec.bd_min, spec.bd_max) || '280 – 340cc/100g') : '280 – 340cc/100g', result: `${Math.round(src.bdAvg)}cc/100g` })
+  other.push({ label: 'Foreign Material', spec: (spec && req(sp.other?.foreign_material)) ? String(sp.other.foreign_material) : '<1%', result: '0.0%' })
+  const wantResidue = spec ? req(sp.other?.residue_reg) : src.found.residue
+  const wantPa      = spec ? req(sp.contaminants?.pyrrolizidine_alkaloids) : src.found.pa
+  const wantHm      = spec ? ['lead','cadmium','mercury','arsenic','copper'].some(k => req(sp.contaminants?.[k])) : src.found.heavyMetals
+  const wantMosh    = spec ? req(sp.contaminants?.mosh_moah) : src.found.moshMoah
+  if (wantResidue) other.push({ label: 'Pesticide residue', spec: (spec && req(sp.other?.residue_reg)) ? String(sp.other.residue_reg) : COA_WORDING.residueRegulation, result: src.results.residue })
+  if (wantPa)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: (spec && req(sp.contaminants?.pyrrolizidine_alkaloids)) ? String(sp.contaminants.pyrrolizidine_alkaloids) : '<50 μg', result: src.results.pa })
+  if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? ['lead','cadmium','mercury','arsenic','copper'].filter(k => req(sp.contaminants?.[k])).map(k => `${k[0].toUpperCase()+k.slice(1)} ${sp.contaminants[k]}`).join('; ') : '', result: src.results.hm })
+  if (wantMosh)    other.push({ label: 'MOSH/MOAH', spec: (spec && req(sp.contaminants?.mosh_moah)) ? String(sp.contaminants.mosh_moah) : '', result: src.results.mosh })
+  other.push({ label: 'Sensorical Properties', spec: (spec && req(sp.other?.sensorial)) ? String(sp.other.sensorial) : COA_WORDING.sensorical, result: 'Complies' })
+
+  const wantMicro = spec ? micro.length > 0 : src.found.micro
+  const wantCut   = spec ? cutLength.some(c => c.spec !== '') : src.found.sieving
+
+  return {
+    batch: src.batch, found: src.found, isOrganic: src.isOrganic, header: { ...src.header },
+    micro, cutLength, other,
+    sections: { micro: wantMicro, cutLength: wantCut, residue: wantResidue, pa: wantPa, heavyMetals: wantHm, moshMoah: wantMosh },
+    matchedDoc: spec?.doc_no || '',
+    candidateDocs: src.candidateDocs || [],
+  }
 }
 
 // Result string for a "Complies / None detected" style block from a lab record.
