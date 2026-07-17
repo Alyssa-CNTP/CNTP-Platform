@@ -5,6 +5,47 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Shift Roster: wire WhatsApp into reminders, real delivery counts, self-test tool)
+
+**Files:** `app/api/production/roster/cron/route.ts`, `app/api/production/roster/notify-test/route.ts` (new),
+`app/(app)/production/roster/page.tsx`
+
+- **Root cause found for "submitted the roster but never got the reminder
+  email"** (real reports from Monique Gordon and Shaun De Beer): email is sent
+  via Office365 SMTP (`lib/notifications/email.ts`, `SMTP_USER`/`SMTP_PASS`) —
+  if those env vars aren't set on the server, `sendEmail()` silently skips and
+  reports `ok:true, skipped:true`. The cron's `reminded: 15` figure from the
+  Jul 15 run counted **attempts**, not deliveries, so the outage was invisible
+  from the app's own numbers. `doRemind()` now tracks real `emailSent` /
+  `whatsappSent` counts (from `notify()`'s actual per-channel result) alongside
+  the attempt count, visible in the Backend status panel's cron history.
+- **Wired WhatsApp into roster reminders.** The `urgent` channel
+  (`lib/notifications/urgent.ts`, Meta WhatsApp Cloud API or Twilio) was
+  already fully built and used for maintenance breakdowns / Axis tickets, but
+  never included in the roster reminder's `channels` array, and the cron
+  didn't resolve recipients' phone numbers at all (built emails inline instead
+  of via `resolveRecipients()`). Fixed both — reminders now attempt in-app +
+  email + WhatsApp for anyone with a phone number on file
+  (`shared.app_roles.phone`), same "one template serves everything" setup as
+  breakdowns (see `docs/whatsapp-setup.md`).
+- **New self-test tool** in the Backend status panel ("Send test to me") — an
+  admin-only button that sends a real test notification to the calling
+  admin's own email/phone right now (no waiting for the Mon/Wed cron, no
+  effect on real roster data) and reports exactly what happened per channel:
+  configured or not, sent or skipped or failed, with the raw provider error if
+  one occurred.
+- **Still needed (ops, not code):** confirm `SMTP_USER`/`SMTP_PASS` are
+  actually set in the VPS `.env` for both `cntp-staging` and
+  `cntp-production` — Office365/Microsoft 365 tenants increasingly block
+  legacy SMTP AUTH by default, so if the account password doesn't work, check
+  Exchange Admin Center → that mailbox → "Authenticated SMTP" is enabled, and
+  use an app password if MFA is on. WhatsApp needs `WHATSAPP_PROVIDER=meta`
+  (or `twilio`) plus the corresponding credentials — full setup in
+  `docs/whatsapp-setup.md`. Neither can be checked or set from this session
+  (no VPS SSH access).
+
+---
+
 ## 2026-07-17 — Alyssa (Shift Roster: admin-only "Backend status" panel)
 
 **Files:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/insights/route.ts` (new),
