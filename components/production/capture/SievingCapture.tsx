@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { printLabel } from '@/lib/production/label-print'
+import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
@@ -204,7 +204,7 @@ export function SievingCapture({
   }
 
   function reprint(b: OutBag) {
-    printLabel({
+    printLabelAuto({
       id: b.id, serial_number: b.serial, product_type: b.productType, variant: variantShort,
       grade: (b.destination || 'A') as any, weight_kg: n(b.weight), lot_number: b.batch,
       section_id: 'sieving', section_name: 'Sieving Tower', created_at: new Date().toISOString(),

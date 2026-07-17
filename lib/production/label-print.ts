@@ -158,3 +158,32 @@ export function printLabel(bag: OutputBag): void {
 export function reprintLabel(bag: OutputBag): void {
   openAndPrint(buildLabelHtml(bag))
 }
+
+async function printLabelDirect(bag: OutputBag): Promise<void> {
+  // The server resolves the printer from the bag's section (SECTION_PRINTER),
+  // so the client never picks a printer — the section→printer binding is enforced.
+  const res = await fetch('/api/print/label', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bag }),
+  })
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: 'Unknown error' }))
+    throw new Error(error)
+  }
+}
+
+/**
+ * Print to the networked label printer assigned to this bag's section (Zebra/ZPL
+ * or Argox/PPLB, over TCP 9100). Falls back to the browser print window if the
+ * printer is unreachable or no printer is assigned to the section.
+ */
+export async function printLabelAuto(bag: OutputBag): Promise<void> {
+  try {
+    await printLabelDirect(bag)
+    return
+  } catch (err) {
+    console.warn('[printLabelAuto] Direct print failed, falling back to browser:', err)
+  }
+  openAndPrint(buildLabelHtml(bag))
+}

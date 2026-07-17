@@ -7,16 +7,17 @@
 // Machine spillage is entered here (not in capture) and is session-level.
 // Combined totals merge both shifts when same variant+grade+lot are passed in.
 
-import React, { useState, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
 import { type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
+import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
@@ -336,6 +337,10 @@ export function CaptureOverview({
         ) : (
           <>
             {/* ── Debagging — in ──────────────────────────────────────────────── */}
+            {/* Flat list of lot cards (not a table) — each bag inside shows its
+                serial as its own chip, isolated from the surrounding text, so
+                wrapping it in a link to Bag Tracking later is a one-line change
+                once barcodes drive that lookup, not a layout rework. */}
             {(debagGroups.length > 0 || bucketKg > 0) && (
               <div className="rounded-xl border-2 overflow-hidden" style={{ borderColor: DEBAG_BLUE + '40' }}>
                 <div className="flex items-center justify-between px-3 py-2" style={{ background: DEBAG_BLUE + '12' }}>
@@ -345,92 +350,59 @@ export function CaptureOverview({
                   <span className="font-mono font-bold text-[13px]" style={{ color: DEBAG_BLUE }}>{totalIncl.toFixed(1)} kg</span>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse min-w-[420px]">
-                    <thead>
-                      <tr className="border-b border-stone-100 text-left text-[9px] font-bold uppercase tracking-wide text-stone-400">
-                        <td className="px-3 py-2 w-7"></td>
-                        <td className="px-3 py-2">Lot / Batch</td>
-                        <td className="px-3 py-2">Bag No.</td>
-                        <td className="px-3 py-2">Variant</td>
-                        <td className="px-3 py-2 text-right">Nett (kg)</td>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {debagGroups.map(g => {
-                        const open = expandedDebagLots.has(g.lot)
-                        return (
-                          <React.Fragment key={g.lot}>
-                            <tr onClick={() => toggleDebagLot(g.lot)}
-                              className="border-b border-stone-100 cursor-pointer hover:bg-stone-50 transition-colors"
-                              style={open ? { background: DEBAG_BLUE + '06' } : undefined}>
-                              <td className="px-3 py-2 w-7">
-                                {open
-                                  ? <ChevronDown size={13} className="text-stone-400" />
-                                  : <ChevronRight size={13} className="text-stone-400" />}
-                              </td>
-                              <td className="px-3 py-2 font-semibold text-[13px] text-stone-800">{g.lot}</td>
-                              <td className="px-3 py-2 text-[11px] text-stone-400">{g.rows.length} bag{g.rows.length !== 1 ? 's' : ''}</td>
-                              <td className="px-3 py-2"></td>
-                              <td className="px-3 py-2 text-right font-mono font-bold text-[13px] text-stone-800">{g.totalKg.toFixed(1)} kg</td>
-                            </tr>
-                            {open && g.rows.map((r, ri) => (
-                              <tr key={ri} className="border-b border-stone-50 last:border-0" style={{ background: DEBAG_BLUE + '04' }}>
-                                <td className="px-3 py-2"></td>
-                                <td className="px-3 py-2 pl-7 text-stone-400 text-[11px]">↳</td>
-                                <td className="px-3 py-2 font-mono text-[12px] text-stone-700">{r.bagNo}</td>
-                                <td className="px-3 py-2 text-[11px] text-stone-500">{r.variant}</td>
-                                <td className="px-3 py-2 text-right font-mono text-[12px] text-stone-700">
-                                  {r.kg.toFixed(1)} kg
-                                  {r.loggedAt && <span className="ml-1.5 text-[10px] text-stone-400">{fmtTime(r.loggedAt)}</span>}
-                                </td>
-                              </tr>
+                <div className="divide-y divide-stone-100">
+                  {debagGroups.map(g => {
+                    const open = expandedDebagLots.has(g.lot)
+                    return (
+                      <div key={g.lot}>
+                        <button onClick={() => toggleDebagLot(g.lot)}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-stone-50 transition-colors"
+                          style={open ? { background: DEBAG_BLUE + '06' } : undefined}>
+                          {open ? <ChevronDown size={13} className="text-stone-400 shrink-0" /> : <ChevronRight size={13} className="text-stone-400 shrink-0" />}
+                          <span className="font-semibold text-[13px] text-stone-800 truncate">{g.lot}</span>
+                          <span className="text-[11px] text-stone-400 shrink-0">{g.rows.length} bag{g.rows.length !== 1 ? 's' : ''}</span>
+                          <span className="flex-1" />
+                          <span className="font-mono font-bold text-[13px] text-stone-800 shrink-0">{g.totalKg.toFixed(1)} kg</span>
+                        </button>
+                        {open && (
+                          <div className="pl-9 pr-3 pb-2 space-y-1">
+                            {g.rows.map((r, ri) => (
+                              <div key={ri} className="flex items-center gap-2 py-1 text-[12px]">
+                                <span className="font-mono text-[11px] font-medium text-stone-600 bg-stone-100 border border-stone-200 rounded-md px-1.5 py-0.5 shrink-0">{r.bagNo}</span>
+                                <span className="text-stone-400 truncate flex-1">{r.variant}</span>
+                                {r.loggedAt && <span className="text-[10px] text-stone-400 shrink-0">{fmtTime(r.loggedAt)}</span>}
+                                <span className="font-mono text-stone-700 shrink-0 w-16 text-right">{r.kg.toFixed(1)} kg</span>
+                              </div>
                             ))}
-                          </React.Fragment>
-                        )
-                      })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
 
-                      {/* Total excl. spillage separator */}
-                      {(bucketKg > 0 || machineKg > 0) && debagGroups.length > 0 && (
-                        <tr className="border-t-2 border-stone-200">
-                          <td className="px-3 py-2"></td>
-                          <td colSpan={3} className="px-3 py-2 text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Total debagging (excl. spillage)</td>
-                          <td className="px-3 py-2 text-right font-mono font-bold text-stone-800">{debagOnlyKg.toFixed(1)} kg</td>
-                        </tr>
-                      )}
-
-                      {/* Bucket elevator */}
-                      {bucketKg > 0 && (
-                        <tr className="border-t border-stone-100" style={{ background: '#f59e0b0d' }}>
-                          <td className="px-3 py-2"></td>
-                          <td colSpan={3} className="px-3 py-2 text-[12px] font-medium text-amber-700">
-                            <Scale size={12} className="inline mr-1.5 mb-0.5 text-amber-500" />
-                            Bucket elevator spillage
-                          </td>
-                          <td className="px-3 py-2 text-right font-mono text-[12px] font-medium text-amber-700">{bucketKg.toFixed(1)} kg</td>
-                        </tr>
-                      )}
-
-                      {/* Machine spillage — captured in the Debagging step, shown here */}
-                      <tr className="border-t border-stone-100" style={{ background: '#f59e0b08' }}>
-                        <td className="px-3 py-2"></td>
-                        <td colSpan={3} className="px-3 py-2 text-[12px] font-medium text-amber-700">
-                          <Scale size={12} className="inline mr-1.5 mb-0.5 text-amber-500" />
-                          Machine spillage
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono text-[12px] font-medium text-amber-700">
-                          {machineKg > 0 ? `${machineKg.toFixed(1)} kg` : <span className="text-stone-400 font-normal">—</span>}
-                        </td>
-                      </tr>
-
-                      {/* Total incl. spillage */}
-                      <tr className="border-t-2 border-stone-300" style={{ background: DEBAG_BLUE + '08' }}>
-                        <td className="px-3 py-2.5"></td>
-                        <td colSpan={3} className="px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide">Total incl. spillage</td>
-                        <td className="px-3 py-2.5 text-right font-mono font-bold text-[14px] text-stone-900">{totalIncl.toFixed(1)} kg</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                {/* Totals + spillage — plain summary rows, not part of the lot list */}
+                <div className="border-t-2 border-stone-200 divide-y divide-stone-100">
+                  {(bucketKg > 0 || machineKg > 0) && debagGroups.length > 0 && (
+                    <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
+                      <span>Total debagging (excl. spillage)</span>
+                      <span className="font-mono font-bold text-stone-800 normal-case">{debagOnlyKg.toFixed(1)} kg</span>
+                    </div>
+                  )}
+                  {bucketKg > 0 && (
+                    <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b0d' }}>
+                      <span className="flex items-center gap-1.5"><Scale size={12} className="text-amber-500" /> Bucket elevator spillage</span>
+                      <span className="font-mono">{bucketKg.toFixed(1)} kg</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b08' }}>
+                    <span className="flex items-center gap-1.5"><Scale size={12} className="text-amber-500" /> Machine spillage</span>
+                    <span className="font-mono">{machineKg > 0 ? `${machineKg.toFixed(1)} kg` : <span className="text-stone-400 font-normal">—</span>}</span>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide" style={{ background: DEBAG_BLUE + '08' }}>
+                    <span>Total incl. spillage</span>
+                    <span className="font-mono font-bold text-[14px] text-stone-900 normal-case">{totalIncl.toFixed(1)} kg</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -476,114 +448,77 @@ export function CaptureOverview({
                   </div>
                 )}
 
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse min-w-[480px]">
-                    <thead>
-                      <tr className="border-b border-stone-100 text-left text-[9px] font-bold uppercase tracking-wide text-stone-400">
-                        <td className="px-3 py-2 w-7"></td>
-                        <td className="px-3 py-2">Product</td>
-                        <td className="px-3 py-2">Lot / Batch</td>
-                        <td className="px-3 py-2">Variant</td>
-                        <td className="px-3 py-2">Grade</td>
-                        <td className="px-3 py-2 text-right">Bags</td>
-                        <td className="px-3 py-2 text-right">Weight</td>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredProducts.map(pg => {
-                        const isProdOpen = expandedProducts.has(pg.product)
-                        return (
-                          <React.Fragment key={pg.product}>
-                            {/* Product row */}
-                            <tr onClick={() => toggleProduct(pg.product)}
-                              className="border-b border-stone-200 cursor-pointer hover:opacity-90 transition-opacity font-semibold"
-                              style={{ background: BAG_ORANGE + '0e' }}>
-                              <td className="px-3 py-2.5 w-7">
-                                {isProdOpen
-                                  ? <ChevronDown size={13} className="text-stone-500" />
-                                  : <ChevronRight size={13} className="text-stone-500" />}
-                              </td>
-                              <td className="px-3 py-2.5 font-bold text-[13px] text-stone-900">
-                                {pg.product}
-                                {(pg.acumaticaDesc || pg.acumaticaCode) && (
-                                  <span className="ml-2 font-mono text-[10px] font-normal text-stone-400">
-                                    {pg.acumaticaDesc || pg.acumaticaCode}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2.5 text-[11px] text-stone-500">
-                                {pg.lots.length === 1 ? pg.lots[0].lot : `${pg.lots.length} lots`}
-                              </td>
-                              <td className="px-3 py-2.5 text-[11px] text-stone-600">
-                                {Array.from(new Set(pg.lots.map(l => l.variant))).join(', ')}
-                              </td>
-                              <td className="px-3 py-2.5 text-[11px] text-stone-600">
-                                {Array.from(new Set(pg.lots.map(l => l.grade))).join(', ')}
-                              </td>
-                              <td className="px-3 py-2.5 text-right font-mono font-bold text-stone-700">{pg.totalCount}</td>
-                              <td className="px-3 py-2.5 text-right font-mono font-bold text-stone-900">{pg.totalKg.toFixed(1)} kg</td>
-                            </tr>
+                <div className="divide-y divide-stone-200">
+                  {filteredProducts.map(pg => {
+                    const isProdOpen = expandedProducts.has(pg.product)
+                    return (
+                      <div key={pg.product}>
+                        <button onClick={() => toggleProduct(pg.product)}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-left font-semibold hover:opacity-90 transition-opacity"
+                          style={{ background: BAG_ORANGE + '0e' }}>
+                          {isProdOpen ? <ChevronDown size={13} className="text-stone-500 shrink-0" /> : <ChevronRight size={13} className="text-stone-500 shrink-0" />}
+                          <span className="font-bold text-[13px] text-stone-900 truncate">{pg.product}</span>
+                          {(pg.acumaticaDesc || pg.acumaticaCode) && (
+                            <span className="font-mono text-[10px] font-normal text-stone-400 truncate">{pg.acumaticaDesc || pg.acumaticaCode}</span>
+                          )}
+                          <span className="flex-1" />
+                          <span className="text-[11px] font-normal text-stone-500 shrink-0 hidden sm:inline">
+                            {Array.from(new Set(pg.lots.map(l => l.variant))).join(', ')}
+                            {pg.lots.some(l => l.grade) ? ` · ${Array.from(new Set(pg.lots.map(l => l.grade))).join(', ')}` : ''}
+                          </span>
+                          <span className="font-mono font-bold text-stone-700 shrink-0">{pg.totalCount}</span>
+                          <span className="font-mono font-bold text-stone-900 shrink-0 w-20 text-right">{pg.totalKg.toFixed(1)} kg</span>
+                        </button>
 
-                            {/* Lot rows */}
-                            {isProdOpen && pg.lots.map(lg => {
+                        {isProdOpen && (
+                          <div className="divide-y divide-stone-100">
+                            {pg.lots.map(lg => {
                               const lotKey  = `${pg.product}||${lg.lot}||${lg.variant}||${lg.grade}`
                               const isLotOpen = expandedLots.has(lotKey)
                               return (
-                                <React.Fragment key={lotKey}>
-                                  <tr onClick={() => toggleLot(lotKey)}
-                                    className="border-b border-stone-100 cursor-pointer hover:bg-stone-50 transition-colors"
+                                <div key={lotKey}>
+                                  <button onClick={() => toggleLot(lotKey)}
+                                    className="w-full flex items-center gap-1.5 pl-8 pr-3 py-2 text-left hover:bg-stone-50 transition-colors"
                                     style={{ background: BAG_ORANGE + '06' }}>
-                                    <td className="px-3 py-2"></td>
-                                    <td className="px-3 py-2 pl-7 text-stone-700 text-[12px]">
-                                      <div className="flex items-center gap-1.5">
-                                        {isLotOpen
-                                          ? <ChevronDown size={11} className="text-stone-400" />
-                                          : <ChevronRight size={11} className="text-stone-400" />}
-                                        <span className="font-mono">{lg.lot}</span>
-                                      </div>
-                                    </td>
-                                    <td className="px-3 py-2"></td>
-                                    <td className="px-3 py-2 text-[11px] text-stone-500">{lg.variant}</td>
-                                    <td className="px-3 py-2 text-[11px] text-stone-500">{lg.grade}</td>
-                                    <td className="px-3 py-2 text-right font-mono text-[12px] text-stone-600">{lg.count}</td>
-                                    <td className="px-3 py-2 text-right font-mono text-[12px] font-medium text-stone-700">{lg.kg.toFixed(1)} kg</td>
-                                  </tr>
+                                    {isLotOpen ? <ChevronDown size={11} className="text-stone-400 shrink-0" /> : <ChevronRight size={11} className="text-stone-400 shrink-0" />}
+                                    <span className="font-mono text-[12px] text-stone-700">{lg.lot}</span>
+                                    <span className="text-[11px] text-stone-500">{[lg.variant, lg.grade].filter(Boolean).join(' · ')}</span>
+                                    <span className="flex-1" />
+                                    <span className="font-mono text-[12px] text-stone-600 shrink-0">{lg.count}</span>
+                                    <span className="font-mono text-[12px] font-medium text-stone-700 shrink-0 w-16 text-right">{lg.kg.toFixed(1)} kg</span>
+                                  </button>
 
-                                  {/* Individual bags */}
-                                  {isLotOpen && lg.bags.map((b, bi) => (
-                                    <tr key={`${lotKey}-${bi}`} className="border-b border-stone-50 last:border-0" style={{ background: BAG_ORANGE + '03' }}>
-                                      <td className="px-3 py-1.5"></td>
-                                      <td className="px-3 py-1.5 pl-12 text-[11px] text-stone-400">
-                                        ↳ bag {bi + 1}
-                                        {b.serial && (
-                                          <div className="font-mono text-[10px] text-stone-400 mt-0.5">{b.serial}</div>
-                                        )}
-                                      </td>
-                                      <td className="px-3 py-1.5 font-mono text-[11px] text-stone-500">{b.lot}</td>
-                                      <td className="px-3 py-1.5 text-[11px] text-stone-500">{b.variant}</td>
-                                      <td className="px-3 py-1.5 text-[11px] text-stone-500">{b.grade}</td>
-                                      <td className="px-3 py-1.5 text-right text-stone-400">
-                                        {b.loggedAt && <span className="font-mono text-[10px]">{fmtTime(b.loggedAt)}</span>}
-                                      </td>
-                                      <td className="px-3 py-1.5 text-right font-mono text-[12px] font-medium text-stone-700">{b.kg.toFixed(1)} kg</td>
-                                    </tr>
-                                  ))}
-                                </React.Fragment>
+                                  {isLotOpen && (
+                                    <div className="pl-12 pr-3 pb-2 space-y-1" style={{ background: BAG_ORANGE + '03' }}>
+                                      {lg.bags.map((b, bi) => (
+                                        <div key={bi} className="flex items-center gap-2 py-1 text-[12px]">
+                                          {b.serial
+                                            ? <span className="font-mono text-[11px] font-medium text-stone-600 bg-stone-100 border border-stone-200 rounded-md px-1.5 py-0.5 shrink-0">{b.serial}</span>
+                                            : <span className="text-[11px] text-stone-400 shrink-0">bag {bi + 1}</span>}
+                                          <span className="text-stone-400 truncate flex-1">{[b.variant, b.grade].filter(Boolean).join(' · ')}</span>
+                                          {b.loggedAt && <span className="font-mono text-[10px] text-stone-400 shrink-0">{fmtTime(b.loggedAt)}</span>}
+                                          <span className="font-mono text-stone-700 shrink-0 w-16 text-right">{b.kg.toFixed(1)} kg</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               )
                             })}
-                          </React.Fragment>
-                        )
-                      })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
 
-                      {/* Grand total */}
-                      <tr className="border-t-2 border-stone-300" style={{ background: BAG_ORANGE + '08' }}>
-                        <td className="px-3 py-2.5"></td>
-                        <td colSpan={4} className="px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide">Total bagged out</td>
-                        <td className="px-3 py-2.5 text-right font-mono font-bold text-stone-900">{totalBags}</td>
-                        <td className="px-3 py-2.5 text-right font-mono font-bold text-[14px] text-stone-900">{totalOut.toFixed(1)} kg</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                {/* Grand total */}
+                <div className="flex items-center justify-between px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide border-t-2 border-stone-300" style={{ background: BAG_ORANGE + '08' }}>
+                  <span>Total bagged out</span>
+                  <span className="flex items-center gap-3 normal-case">
+                    <span className="font-mono font-bold text-stone-900">{totalBags} bags</span>
+                    <span className="font-mono font-bold text-[14px] text-stone-900">{totalOut.toFixed(1)} kg</span>
+                  </span>
                 </div>
               </div>
             )}

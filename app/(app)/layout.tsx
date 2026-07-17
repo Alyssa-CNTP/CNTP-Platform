@@ -47,6 +47,9 @@ const ROUTE_GUARDS: Array<{
   // Supervisor hub — production supervisors + management
   { prefix: '/supervisor',           departments: ['Production','Management'] },
 
+  // Stock Control (Operations) — printer assignment + future stock modules
+  { prefix: '/stock-control',        departments: ['Production','Management'] },
+
   // Production
   { prefix: '/count',                departments: ['Production'], permission: 'can_submit_count'       },
   { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
@@ -133,6 +136,7 @@ const ROUTE_META: Record<string, {
   '/training/competency':    { title: 'Competency Dashboard',     variant: 'default' },
   '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
   '/users':                  { title: 'Users & Roles',          variant: 'default' },
+  '/stock-control':          { title: 'Stock Control',          variant: 'default' },
   '/settings':               { title: 'Account Settings',       variant: 'default' },
   '/tags':                   { title: 'Bag Tracking',           variant: 'default' },
 
