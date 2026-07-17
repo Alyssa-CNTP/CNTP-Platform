@@ -5,6 +5,83 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (Sieving: add hourly "By Hour" view to Mesh Trend/Outliers charts)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **New "By Hour" view** alongside By Week / By Month on the Sieving Tower's Mesh Trend and Outliers charts. Buckets the day into 24 hourly slots (parsed from each run's `time_of_run`), so an out-of-spec reading is visible the same shift it happened — not just once the day rolls into a weekly average. Defaults to today, with the same ◀ ▶ / Today navigator to step back through previous days.
+- Unified the day/week/month bucketing behind a single `bucketKeyFor(run)` function (previously date-only `bucketOf`), since hourly bucketing needs both date and time.
+- X-axis tick density is thinned for the 24-slot hourly view (`interval` prop) so hour labels don't collide on the per-mesh mini charts.
+
+---
+
+## 2026-07-17 — Alyssa (Shift Roster: publish now requires genuine full confirmation, admin Reopen action)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/audit/route.ts`
+
+- **Root cause found for "roster says Published but nobody actually confirmed":**
+  the manual "Publish" button was shown to anyone holding edit rights on just
+  ONE section, and clicking it marked the WHOLE period `published` regardless
+  of whether the other departments had submitted. Confirmed live on staging —
+  the "20–24 Jul" period was `published` (since 11 Jul) with **zero** rows in
+  `roster_section_status`, i.e. no department had submitted anything. Fixed by
+  removing the manual early-publish override entirely: publishing now only
+  ever happens automatically, the moment every department has genuinely
+  submitted (existing `autoPublishedRef` logic, unchanged). "Published" now
+  always means fully confirmed, with no exceptions.
+- **Added an admin-only "Reopen" action** (full admin, shown only when a period
+  is published) so a period can be unpublished for correction without touching
+  the database directly — it just flips the period back to draft; section
+  submission status is untouched, so it re-publishes automatically for real
+  once every department re-confirms.
+- Corrected the affected staging period ("20–24 Jul") back to draft directly
+  via the service-role API (no DB migration needed — this was a data fix, not
+  a schema change). **Production has the same code path and needs the
+  equivalent correction** — either via the new Reopen button (once this ships
+  to prod) or a targeted `UPDATE production.roster_periods SET status='draft',
+  published_at=NULL WHERE id='<period id>'` for any period published with no
+  real section submissions.
+- Removed the now-dead `publishing` state (no longer read since the manual
+  Publish button is gone) and updated the roster Help modal + published-notice
+  banner copy to match the new behaviour.
+
+---
+
+## 2026-07-17 — Alyssa (Shift Roster: Maintenance Manager role, drop stale tech list, roster audit trail)
+
+**Files:** `lib/production/roster-config.ts`, `lib/maintenance/constants.ts`,
+`supabase/migrations/20260717_001_roster_maintenance_manager.sql` (new),
+`app/api/production/roster/audit/route.ts` (new), `app/(app)/production/roster/page.tsx`
+
+- **Maintenance Manager is now a roster role.** The roster's Maintenance section
+  only had "Maintenance Tech" and "Maintenance Assistant" rows, and both keys
+  are the on-duty technician keys (`MAINT_ROLE_KEYS` in `lib/maintenance/roster.ts`)
+  used to auto-route urgent breakdowns and sync `maintenance.duty_roster` on
+  publish. With no Manager row, Shuaib Sentso (the maintenance manager, SSO
+  login, not a PIN tech) could only be placed under "Maintenance Tech" — which
+  made the system treat him as an on-duty technician eligible for breakdown
+  auto-assignment. Added a dedicated `maintenance_manager` role (sorted above
+  Tech) that is deliberately NOT one of the on-duty keys, so a manager is
+  rostered for visibility but never auto-assigned a breakdown. Migration also
+  moves any existing Shuaib tech/asst entries onto the new Manager row.
+- **Removed Shuaib from the stale `TECHS` fallback** in `lib/maintenance/constants.ts`
+  so he is never re-introduced as a technician before the live staff directory loads.
+- **Roster activity now writes to the audit trail.** The roster mutated
+  `production.roster_*` client-side with no audit record, so pre-planning and
+  changes never appeared in Users & Roles → Audit. Added a small server route
+  (`/api/production/roster/audit`) that records edit / submit / publish /
+  generate / delete events into `axis.audit_log` with the verified caller as
+  actor; the roster page calls it fire-and-forget after each successful mutation.
+- **Verification (notifications):** the rotate/remind GitHub Actions workflow is
+  live on `main` and firing on schedule, but Jul 8/12/13 runs failed with HTTP
+  401 (GitHub `CRON_SECRET` did not match the server env); Jul 15 succeeded
+  (`reminded: 15`) so the secret is now aligned. All six sections were still
+  `pending` on Jul 15 — reminders dispatch but no section has been submitted.
+  Still to confirm server-side: email provider env (in-app notifications work
+  regardless; email delivery depends on the provider being configured).
+
+---
+
 ## 2026-07-16 — Alyssa (Fix multi-record data loss in Overview/mass balance, Overview redesign, empty-record discard)
 
 **Files:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`,
