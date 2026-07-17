@@ -5,6 +5,83 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-16 — Alyssa (Fix multi-record data loss in Overview/mass balance, Overview redesign, empty-record discard)
+
+**Files:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`,
+`app/(app)/production/orders/page.tsx`
+
+- **Root cause found for "Refining Overview missing bags" and "only the most
+  recent work got saved":** the same bug. A shift can have more than one
+  `prod_sessions` row (a batch submitted — with errors or not — then "Start
+  new batch record" opens another), but the page only ever loaded the single
+  newest row for this shift, and the newest row for the other shift, into
+  Overview/mass balance. The only way an earlier record's data could still
+  count was the optional "Continue the production run?" banner — easy to
+  skip by ignoring it or picking "Start new run." Sieving rarely revisits
+  this flow (one batch per shift); Refining commonly runs several batches a
+  shift, so it hit the bug far more often. Fixed by loading every session row
+  for this shift (and the other shift) and folding every one of them into
+  Overview and the on-screen mass balance, independent of run-linking.
+- **Overview redesigned** — Debagging and Bagging were dense HTML tables;
+  converted to flowing card/list rows matching the rest of the app's recent
+  redesigns (Blender debagging, Production Orders). Each bag's serial is now
+  its own isolated chip element (not part of a joined string), so wiring it
+  to a Bag Tracking hyperlink later is a one-line change, not a layout
+  rework.
+- **Empty submitted records now flagged with a direct discard action** — a
+  record submitted/signed-off with zero debagging or bagging shows a visible
+  "Empty record" warning right on its card (not buried in the "…" menu), with
+  a one-click Discard for permissioned roles (reuses the existing archive
+  flow — hidden, kept for audit, restorable, excluded from KPIs). Generic
+  across all sections, not just Blender, since the gap was in the shared
+  Production Orders card.
+
+---
+
+## 2026-07-16 — Alyssa (Direct-to-printer label printing + Printers admin page)
+
+**New files:** `lib/production/label-zpl.ts`, `lib/production/label-pplb.ts`,
+`lib/production/printer-registry.ts`, `lib/production/print-socket.ts`,
+`app/api/print/label/route.ts`, `app/api/print/test/route.ts`,
+`app/(app)/users/printers/page.tsx`, `supabase/migrations/20260619_003_printers.sql`
+
+**Changed:** `lib/production/label-print.ts`, `lib/production/capture-config.ts`,
+`components/production/capture/SievingCapture.tsx`, `components/layout/Sidebar.tsx`,
+`app/(app)/layout.tsx`
+
+Added direct printing from the app to networked label printers over raw TCP (port 9100),
+replacing the browser print dialog. The app generates the printer's native command language
+— **ZPL** for Zebra (e.g. ZD230) and **PPLB/EPL2** for Argox (e.g. CP-2140EX) — and streams it
+to the printer via `net.Socket`. Both builders reproduce the existing 100×50mm tag (product,
+section, Code-128 barcode = serial, variant/grade badge, lot/weight/date/QC footer).
+
+The section→printer binding is enforced **server-side**: the client only sends the bag, and
+`/api/print/label` resolves the printer purely from the bag's `section_id`, so a section's tags
+can only ever reach the printer assigned to that section (no printer picker, no OS dialog).
+`printLabelAuto()` falls back to the browser print window if a printer is unreachable.
+
+Made the binding editable at runtime via a **Printers** module inside a new **Stock Control** page
+under Operations (`/stock-control`, gated to Production + Management; Stock Control is a module
+container so more stock tools can be added later). One row per production section with printer
+name/IP/port/language, a per-row **Test print** button (`/api/print/test`, prints a sample label to
+the on-screen IP), and Save. Assignments persist to a new `production.printers` table; the print API
+reads it with a ~30s cache (`printer-registry.ts`), so UI edits take effect within about half a
+minute with no code change. The `SECTION_PRINTER` map remains as the fallback/seed when the table
+has no row for a section.
+
+Added a `KNOWN_PRINTERS` catalogue (three Zebra ZD230s by serial — D5J261603773/.115,
+D5J261605257/.124, D5J261603949/.126 — the Argox CP-2140EX at .55, and a not-yet-wired spare)
+surfaced as an "Assigned printer" dropdown per section; picking one fills IP/language/name, and
+several sections can share a printer by picking the same one. Seed defaults: Sieving→.115,
+Blender→.124, Granule→.126 (each its own Zebra), Pasteuriser→Argox .55, Refining 1&2→the spare
+(blank IP until it's wired, so they share it). Added an About panel explaining the server-side
+binding, the ~30s cache window, and the dual ZPL/PPLB language support.
+
+**Migration:** run `supabase/migrations/20260619_003_printers.sql` in the Supabase SQL Editor
+(staging, then prod) before the page's Save/persistence works.
+
+---
+
 ## 2026-07-16 — Alyssa (Production Orders page redesign, archived orders excluded from KPIs)
 
 **Files:** `app/(app)/production/orders/page.tsx`, `app/api/production/manager-kpis/route.ts`,

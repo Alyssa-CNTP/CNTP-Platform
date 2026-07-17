@@ -409,6 +409,27 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
         )}
       </div>
 
+      {/* Empty record submitted/signed-off with nothing actually captured — e.g.
+          an operator hit errors mid-batch, submitted anyway, and started a new
+          record instead. Surfaced directly (not buried in the "…" menu) so it
+          doesn't just sit there as silent clutter; discarding still goes
+          through the same permissioned archive action as any other record. */}
+      {!hasData && !archived && (s.status === 'submitted' || s.status === 'approved') && (
+        <div className="flex items-center gap-2 px-5 pb-3 -mt-1 flex-wrap">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-warn bg-warn/10 px-2 py-1 rounded-full">
+            <AlertTriangle size={11} /> Empty record — no debagging or bagging captured
+          </span>
+          {canDelete && (
+            <button
+              onClick={() => { if (confirm('This record has no captured data. Archive it now? It will be hidden but kept for the audit trail and can be restored.')) act('delete') }}
+              disabled={busy}
+              className="text-[11px] font-medium text-err hover:underline disabled:opacity-40">
+              Discard
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Small-screen data row — the two-column right-aligned block above hides
           under sm; show the same facts inline instead of dropping them. */}
       {hasData && (
