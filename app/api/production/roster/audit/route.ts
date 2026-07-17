@@ -21,18 +21,20 @@ import { ROSTER_SECTION_KEYS, rosterPerm } from '@/lib/auth/permissions'
 const ALLOWED_ACTIONS = new Set([
   'roster_edit',      // a department section was saved
   'roster_submit',    // a section was signed off
-  'roster_publish',   // the period was published
+  'roster_publish',   // the period was published (only fires automatically now)
+  'roster_unpublish', // an admin reopened a published period
   'roster_generate',  // next week's period was generated
   'roster_delete',    // a period was deleted
 ])
 
 // Which production table each action best maps to, for the audit record.
 const ACTION_TABLE: Record<string, string> = {
-  roster_edit:     'roster_entries',
-  roster_submit:   'roster_section_status',
-  roster_publish:  'roster_periods',
-  roster_generate: 'roster_periods',
-  roster_delete:   'roster_periods',
+  roster_edit:      'roster_entries',
+  roster_submit:    'roster_section_status',
+  roster_publish:   'roster_periods',
+  roster_unpublish: 'roster_periods',
+  roster_generate:  'roster_periods',
+  roster_delete:    'roster_periods',
 }
 
 export async function POST(req: NextRequest) {

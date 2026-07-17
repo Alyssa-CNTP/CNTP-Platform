@@ -5,6 +5,38 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Shift Roster: publish now requires genuine full confirmation, admin Reopen action)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/audit/route.ts`
+
+- **Root cause found for "roster says Published but nobody actually confirmed":**
+  the manual "Publish" button was shown to anyone holding edit rights on just
+  ONE section, and clicking it marked the WHOLE period `published` regardless
+  of whether the other departments had submitted. Confirmed live on staging —
+  the "20–24 Jul" period was `published` (since 11 Jul) with **zero** rows in
+  `roster_section_status`, i.e. no department had submitted anything. Fixed by
+  removing the manual early-publish override entirely: publishing now only
+  ever happens automatically, the moment every department has genuinely
+  submitted (existing `autoPublishedRef` logic, unchanged). "Published" now
+  always means fully confirmed, with no exceptions.
+- **Added an admin-only "Reopen" action** (full admin, shown only when a period
+  is published) so a period can be unpublished for correction without touching
+  the database directly — it just flips the period back to draft; section
+  submission status is untouched, so it re-publishes automatically for real
+  once every department re-confirms.
+- Corrected the affected staging period ("20–24 Jul") back to draft directly
+  via the service-role API (no DB migration needed — this was a data fix, not
+  a schema change). **Production has the same code path and needs the
+  equivalent correction** — either via the new Reopen button (once this ships
+  to prod) or a targeted `UPDATE production.roster_periods SET status='draft',
+  published_at=NULL WHERE id='<period id>'` for any period published with no
+  real section submissions.
+- Removed the now-dead `publishing` state (no longer read since the manual
+  Publish button is gone) and updated the roster Help modal + published-notice
+  banner copy to match the new behaviour.
+
+---
+
 ## 2026-07-17 — Alyssa (Shift Roster: Maintenance Manager role, drop stale tech list, roster audit trail)
 
 **Files:** `lib/production/roster-config.ts`, `lib/maintenance/constants.ts`,
