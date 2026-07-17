@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (COA Generator: add filled-in example template at the bottom)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added a collapsible, read-only **example template** at the bottom of the COA Generator, populated with the real 26138-CON-SG sample values, so anyone can see exactly how a completed certificate looks (header, description, microbiology, other analysis) before generating a real one. Clearly labelled as illustrative and hidden from print.
+
+---
+
 ## 2026-07-17 — Gustav (COA Generator — v1: type a batch number, auto-populate a customer COA from linked sources)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx` (new), `components/layout/Sidebar.tsx`

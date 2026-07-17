@@ -369,6 +369,92 @@ export default function CoaGeneratorPage() {
           </div>
         </>
       )}
+
+      {/* ── Filled-in example template (always shown, read-only) ── */}
+      <SampleCoa />
+    </div>
+  )
+}
+
+// ─── Filled-in example template ───────────────────────────────────────────────
+// A read-only, fully-populated sample COA so anyone can see exactly how a
+// generated certificate looks and what each block maps to. Uses the real
+// 26138-CON-SG example values. Purely illustrative — not saved anywhere.
+
+function SampleCoa() {
+  const [open, setOpen] = useState(true)
+  const header: [string, string][] = [
+    ['DATE OF ISSUE', '02.06.2026'], ['BATCH NUMBER', '26138-CON-SG'],
+    ['INVOICE No.', 'BH-INV0000189'], ['GRADE', 'Super Grade'],
+    ['DESTINATION', 'Motherwell Investments (Pty) Ltd'], ['QUANTITY OF BAGS', '1600 x 18kg'],
+    ['ORDER NUMBER', 'PO 1185'], ['PRODUCTION DATE', 'May 2026'],
+    ["QUANTITY (Kg's)", '28 800kg'], ['BEST BEFORE DATE', 'May 2029'],
+  ]
+  const micro: CoaLine[] = [
+    { label: 'Total Plate Count', spec: '<300 000', result: '140' },
+    { label: 'E.coli', spec: 'Not Detected', result: 'Not detected' },
+    { label: 'Salmonella', spec: 'Absent/25g', result: 'Absent' },
+    { label: 'Yeast', spec: '<5000', result: '20' },
+    { label: 'Mould', spec: '<5000', result: '<10' },
+  ]
+  const other: CoaLine[] = [
+    { label: 'Moisture', spec: '<10%', result: '7,9%' },
+    { label: 'Bulk Density', spec: '280 – 340cc/100g', result: '287cc/100g' },
+    { label: 'Foreign Material', spec: '<1%', result: '0.0%' },
+    { label: 'Pesticide residue', spec: COA_WORDING.residueRegulation, result: 'Complies' },
+    { label: 'Sensorical Properties', spec: COA_WORDING.sensorical, result: 'Complies' },
+  ]
+  return (
+    <div className="mt-8 no-print">
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 text-[12px] font-semibold text-gray-600 mb-2">
+        <span>{open ? '▼' : '▶'}</span> 📄 Example template — how a completed COA looks (sample data)
+      </button>
+      {open && (
+        <div className="bg-white border border-gray-300 rounded-lg p-6 text-[12px] opacity-95" style={{ color: '#111' }}>
+          <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 inline-block">
+            Illustrative sample only — batch 26138-CON-SG. Enter a real batch above to generate an editable COA.
+          </div>
+          <div className="text-center font-bold text-[16px] tracking-wide mb-4 border-b-2 border-gray-800 pb-2">CERTIFICATE OF ANALYSIS</div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
+            {header.map(([l, v]) => (
+              <div key={l} className="flex items-center gap-2">
+                <span className="font-bold text-[10px] uppercase text-gray-600 w-[130px] shrink-0">{l}</span>
+                <span className="flex-1 text-[12px] border-b border-dashed border-gray-200 pb-0.5">{v}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mb-3">
+            <div className="font-bold text-[11px] uppercase mb-1">Description of Goods</div>
+            <div className="text-[11px] italic">{COA_WORDING.descriptionConventional}</div>
+          </div>
+          <SampleTable title="Microbiological Analyses" cols={['Organism', "Specification (cfu's/g)", "Result (cfu's/g)"]} lines={micro} />
+          <SampleTable title="Other Analysis" cols={['Description', 'Specification', 'Result']} lines={other} />
+          <div className="mt-6 text-[10px] text-gray-500">{COA_WORDING.company}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SampleTable({ title, cols, lines }: { title: string; cols: string[]; lines: CoaLine[] }) {
+  return (
+    <div className="mb-3">
+      <div className="font-bold text-[11px] uppercase mb-1">{title}</div>
+      <table className="w-full border-collapse text-[11px]">
+        <thead>
+          <tr>{cols.map((c, i) => <th key={i} className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold">{c}</th>)}</tr>
+        </thead>
+        <tbody>
+          {lines.map((l, i) => (
+            <tr key={i}>
+              <td className="border border-gray-300 px-2 py-1">{l.label}</td>
+              <td className="border border-gray-300 px-2 py-1 text-center">{l.spec}</td>
+              <td className="border border-gray-300 px-2 py-1 text-center font-semibold">{l.result}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
