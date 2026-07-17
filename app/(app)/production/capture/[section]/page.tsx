@@ -128,6 +128,14 @@ function CaptureScreen() {
   const [productions, setProductions] = useState<Production[]>([])
   const [activeIdx, setActiveIdx]     = useState(0)
   const [otherShiftProductions, setOtherShiftProductions] = useState<Production[]>([])
+  // Other prod_sessions rows for this EXACT section+date+shift — e.g. an earlier
+  // batch that got submitted (with errors, or just finished) before "Start new
+  // batch record" opened a fresh session row. Only the newest such row is ever
+  // the active/editable `productions`; without also loading its siblings here,
+  // Overview and the on-screen mass balance silently dropped everything the
+  // earlier record captured — invisible unless the operator happened to link
+  // both to the same production run (an optional, easy-to-skip banner).
+  const [siblingProductions, setSiblingProductions] = useState<Production[]>([])
   const [blenderRatios, setBlenderRatios] = useState<BlenderRatioGroup[]>([])
   const bomGroupsCacheRef = useRef<Map<string, BlendIngredientGroup[]>>(new Map())
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
@@ -197,11 +205,20 @@ function CaptureScreen() {
       // A specific record can be opened for editing from Production Orders via
       // ?session=<id> (there can be several sessions per section/shift once a batch
       // is signed off and a new one starts); otherwise load this shift's latest.
-      const baseSel = db.schema('production').from('prod_sessions').select('id,status,draft_data,comments')
-      const { data: sess } = await (sessionParam
-        ? baseSel.eq('id', sessionParam)
-        : baseSel.eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift).order('created_at', { ascending: false }).limit(1)
-      ).maybeSingle()
+      // Every session row for this exact section+date+shift — not just the
+      // newest. A shift can have more than one (a batch submitted, then "Start
+      // new batch record" opens another): the newest/named-by-?session one is
+      // the active, editable record; every other one is a sibling whose data
+      // still needs to count in Overview/mass balance even though it isn't
+      // being edited right now.
+      const { data: shiftSess } = await db.schema('production').from('prod_sessions')
+        .select('id,status,draft_data,comments,created_at')
+        .eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .order('created_at', { ascending: false })
+      const shiftRows = (shiftSess as any[]) ?? []
+      const sess = sessionParam ? (shiftRows.find(r => r.id === sessionParam) ?? null) : (shiftRows[0] ?? null)
+      const siblingRows = shiftRows.filter(r => r.id !== sess?.id)
+      setSiblingProductions(siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[]))
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).
@@ -314,16 +331,16 @@ function CaptureScreen() {
         if (!sp.get('tab') && fresh && !signed) setTab('checks')
       } catch { /* routing is best-effort */ }
 
-      // Load other shift's session so the overview can show combined cross-shift totals.
+      // Load the other shift's session(s) so the overview can show combined
+      // cross-shift totals — every row for that shift, not just the newest,
+      // for the same reason siblingProductions loads every row for this one.
       try {
         const otherShift = shift === 'morning' ? 'afternoon' : 'morning'
         const { data: otherSess } = await db.schema('production').from('prod_sessions')
           .select('draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', otherShift)
-          .order('created_at', { ascending: false }).limit(1).maybeSingle()
-        const otherProds = (otherSess as any)?.draft_data?.productions
-        if (Array.isArray(otherProds) && otherProds.length > 0) {
-          setOtherShiftProductions(otherProds as Production[])
-        }
+          .order('created_at', { ascending: false })
+        const otherProds = ((otherSess as any[]) ?? []).flatMap(r => (r.draft_data?.productions ?? []) as Production[])
+        if (otherProds.length > 0) setOtherShiftProductions(otherProds)
       } catch { /* cross-shift load is best-effort */ }
 
       setLoading(false)
@@ -415,7 +432,7 @@ function CaptureScreen() {
   // so retyping a weight doesn't refetch the recipe on every keystroke.
   useEffect(() => {
     if (!isBlenderSection(sectionId)) { setBlenderRatios([]); return }
-    const allProds = [...productions, ...otherShiftProductions]
+    const allProds = [...productions, ...siblingProductions, ...otherShiftProductions]
     const byBom = new Map<string, Production[]>()
     allProds.forEach(p => {
       const bomId = (p.data as BlenderData)?.bomId
@@ -451,7 +468,7 @@ function CaptureScreen() {
       }
     })).then(ratios => { if (!cancelled) setBlenderRatios(ratios) })
     return () => { cancelled = true }
-  }, [sectionId, productions, otherShiftProductions])
+  }, [sectionId, productions, siblingProductions, otherShiftProductions])
 
   // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
@@ -1087,7 +1104,7 @@ function CaptureScreen() {
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
   // This shift's own contribution, and the other shift's (each with its own
   // bucket-elevator direction), so the balance can be shown per shift and totalled.
-  const st = sessionTotals(productions, shiftBal)
+  const st = sessionTotals([...productions, ...siblingProductions], shiftBal)
   const ot = sessionTotals(otherShiftProductions, otherShiftBal)
   const morningTotals   = shiftBal === 'morning'   ? st : ot
   const afternoonTotals = shiftBal === 'afternoon' ? st : ot
@@ -1114,7 +1131,7 @@ function CaptureScreen() {
       ? undefined
       : 'One balance for the whole production run (07h00–01h00), combined across every shift.'
   if (sectionId === 'granule') {
-    const runProds = runSpansShifts ? [...productions, ...otherShiftProductions] : productions
+    const runProds = runSpansShifts ? [...productions, ...siblingProductions, ...otherShiftProductions] : [...productions, ...siblingProductions]
     let A = 0, cStar = 0, carry = 0
     runProds.forEach(p => {
       const g = granuleTotals(p.data as GranuleData)
@@ -1502,7 +1519,7 @@ function CaptureScreen() {
                 <span>{runId ? 'Totals are combined across the whole production run (all shifts), grouped by product, variant and grade.' : 'Totals are grouped and combined across both shifts where variant and grade match.'} Copy or print for Acumatica data entry.</span>
               </div>
               <CaptureOverview
-                productions={[...productions, ...otherShiftProductions]}
+                productions={[...productions, ...siblingProductions, ...otherShiftProductions]}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
                 date={dateParam}
