@@ -67,6 +67,10 @@ export const ROSTER_ROLE_SEED: RosterRole[] = [
   { key: 'cleaner_operator',   name: 'Cleaner Operator',            category: 'cleaning',   sort: 400 },
   { key: 'cleaner',            name: 'Cleaner',                     category: 'cleaning',   sort: 410 },
 
+  // Manager sits ABOVE tech/asst and is deliberately NOT one of the on-duty
+  // technician role keys (see lib/maintenance/roster.ts MAINT_ROLE_KEYS) — the
+  // manager is rostered for visibility but is never auto-assigned a breakdown.
+  { key: 'maintenance_manager', name: 'Maintenance Manager',         category: 'maintenance', sort: 490 },
   { key: 'maintenance_tech',   name: 'Maintenance Tech',            category: 'maintenance', sort: 500 },
   { key: 'maintenance_asst',   name: 'Maintenance Assistant',       category: 'maintenance', sort: 510 },
 

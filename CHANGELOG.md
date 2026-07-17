@@ -5,6 +5,41 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Shift Roster: Maintenance Manager role, drop stale tech list, roster audit trail)
+
+**Files:** `lib/production/roster-config.ts`, `lib/maintenance/constants.ts`,
+`supabase/migrations/20260717_001_roster_maintenance_manager.sql` (new),
+`app/api/production/roster/audit/route.ts` (new), `app/(app)/production/roster/page.tsx`
+
+- **Maintenance Manager is now a roster role.** The roster's Maintenance section
+  only had "Maintenance Tech" and "Maintenance Assistant" rows, and both keys
+  are the on-duty technician keys (`MAINT_ROLE_KEYS` in `lib/maintenance/roster.ts`)
+  used to auto-route urgent breakdowns and sync `maintenance.duty_roster` on
+  publish. With no Manager row, Shuaib Sentso (the maintenance manager, SSO
+  login, not a PIN tech) could only be placed under "Maintenance Tech" — which
+  made the system treat him as an on-duty technician eligible for breakdown
+  auto-assignment. Added a dedicated `maintenance_manager` role (sorted above
+  Tech) that is deliberately NOT one of the on-duty keys, so a manager is
+  rostered for visibility but never auto-assigned a breakdown. Migration also
+  moves any existing Shuaib tech/asst entries onto the new Manager row.
+- **Removed Shuaib from the stale `TECHS` fallback** in `lib/maintenance/constants.ts`
+  so he is never re-introduced as a technician before the live staff directory loads.
+- **Roster activity now writes to the audit trail.** The roster mutated
+  `production.roster_*` client-side with no audit record, so pre-planning and
+  changes never appeared in Users & Roles → Audit. Added a small server route
+  (`/api/production/roster/audit`) that records edit / submit / publish /
+  generate / delete events into `axis.audit_log` with the verified caller as
+  actor; the roster page calls it fire-and-forget after each successful mutation.
+- **Verification (notifications):** the rotate/remind GitHub Actions workflow is
+  live on `main` and firing on schedule, but Jul 8/12/13 runs failed with HTTP
+  401 (GitHub `CRON_SECRET` did not match the server env); Jul 15 succeeded
+  (`reminded: 15`) so the secret is now aligned. All six sections were still
+  `pending` on Jul 15 — reminders dispatch but no section has been submitted.
+  Still to confirm server-side: email provider env (in-app notifications work
+  regardless; email delivery depends on the provider being configured).
+
+---
+
 ## 2026-07-16 — Alyssa (Fix multi-record data loss in Overview/mass balance, Overview redesign, empty-record discard)
 
 **Files:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`,

@@ -8,7 +8,9 @@ export { STATUSES, URGENCIES } from './types'
 export const AREAS = ['Sieving Tower', 'Pasteurizer', 'Granules - RB', 'Refining 1', 'Refining 2', 'Diamond Blender', 'Rosehips Crusher', 'Rosehips Cutter', 'Rosehips Hammer Mill', 'Rosehips Blending', 'Rosehips Granules', 'Vacuum Packing', 'Pallet Wrapper', 'Stitching Machine', 'Facility', 'Boiler Room', 'Workshop', 'Lab', 'Reception', 'Admin Office', 'Chemical Room', 'Stores', 'Unit 1', 'Unit 2', 'Unit 3 Blender', 'Production Staff Male', 'Production Staff Female', 'Quality Office', 'Forklift Charging', 'Outside Back', 'Outside Front', 'Factory']
 
 // Fallback technician list — used until the live staff directory loads.
-export const TECHS = ['Shuaib Sentso', 'Shane', 'Mohapi', 'John', 'Yamkela', 'Melikhaya']
+// Shuaib Sentso is the maintenance MANAGER (SSO login, not a PIN technician) —
+// deliberately excluded so he is never treated as an on-duty technician.
+export const TECHS = ['Shane', 'Mohapi', 'John', 'Yamkela', 'Melikhaya']
 
 // Breakdown is its own workflow now — removed from the selectable planned types
 export const PLANNED_TYPES = ['Planned Maintenance', 'Safety Related', 'Engineering', 'Repair', 'Temporary Repair', 'Improvement', 'Audit/Inspection Finding']

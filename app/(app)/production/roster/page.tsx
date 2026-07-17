@@ -35,6 +35,22 @@ interface Employee {
 interface SectionStatus { section: string; status: string; submitted_by: string | null; submitted_at: string | null }
 
 const db = () => getDb().schema('production')
+
+// Fire-and-forget: record a roster activity event to the central audit trail
+// (Users & Roles → Audit) so pre-planning and changes are visible there. The
+// roster mutates the DB client-side, so this hits a small server route that
+// writes the audit row with the verified caller as actor. Never blocks the
+// action it records.
+function logRosterAudit(action: string, payload: {
+  periodId?: string | null; periodName?: string | null; section?: string | null; detail?: string | null
+}) {
+  fetch('/api/production/roster/audit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...payload }),
+  }).catch(() => {})
+}
+
 const fmtRange = (p: Period) =>
   `${format(parseISO(p.start_date + 'T12:00:00'), 'd MMM')} – ${format(parseISO(p.end_date + 'T12:00:00'), 'd MMM yyyy')}`
 
@@ -251,6 +267,10 @@ export default function RosterPage() {
       }
       setEntries(es => [...es.filter(e => !catRoleKeys.includes(e.role_key)), ...fresh])
       setDirtyCategories(s => { const n = new Set(s); n.delete(categoryKey); return n })
+      logRosterAudit('roster_edit', {
+        periodId, periodName: period?.name ?? null, section: categoryKey,
+        detail: `Saved ${toInsert.length} ${toInsert.length === 1 ? 'person' : 'people'}`,
+      })
       // A save means the section changed — it is no longer "submitted".
       // Best-effort: don't let a missing status table break the save.
       try {
@@ -279,6 +299,10 @@ export default function RosterPage() {
                  { onConflict: 'period_id,section' })
       if (error) throw error
       setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'submitted', submitted_by: user?.id ?? null, submitted_at } }))
+      logRosterAudit('roster_submit', {
+        periodId, periodName: period?.name ?? null, section: categoryKey,
+        detail: 'Section signed off',
+      })
       // The DB trigger just deleted any outstanding reminder for this section —
       // nudge the bell (already mounted in the layout) to drop it immediately.
       window.dispatchEvent(new CustomEvent('notifications:refresh'))
@@ -337,6 +361,10 @@ export default function RosterPage() {
       setPeriodId(np.id)
       setEntries((newEntries as Entry[]) ?? [])
       setSectionStatus({})  // fresh period — every section starts as draft
+      logRosterAudit('roster_generate', {
+        periodId: np.id, periodName: np.name,
+        detail: `Generated from "${period?.name ?? 'previous period'}" (day/night swapped)`,
+      })
 
       // Email each section's responsible submitter that next week is ready to
       // review/submit. Fire-and-forget; recipients derive from the submit perm.
@@ -358,6 +386,7 @@ export default function RosterPage() {
       setPeriods(ps => ps.map(p => p.id === periodId
         ? { ...p, status: 'published', published_at: new Date().toISOString() }
         : p))
+      logRosterAudit('roster_publish', { periodId, periodName: period.name, detail: 'Roster published' })
 
       // Sync maintenance entries to maintenance.duty_roster
       const maintRoleKeys = ['maintenance_tech', 'maintenance_asst']
@@ -396,7 +425,9 @@ export default function RosterPage() {
   }
 
   async function deletePeriod(id: string) {
+    const deletedName = periods.find(p => p.id === id)?.name ?? null
     await db().from('roster_periods').delete().eq('id', id)
+    logRosterAudit('roster_delete', { periodId: id, periodName: deletedName, detail: 'Period deleted' })
     const rest = periods.filter(p => p.id !== id)
     setPeriods(rest)
     setPeriodId(rest[0]?.id ?? null)
