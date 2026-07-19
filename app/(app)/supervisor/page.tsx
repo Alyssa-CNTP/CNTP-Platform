@@ -5,12 +5,18 @@ import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import {
   Users, Loader2, Save, Send, Printer, X, Plus, CheckCircle2,
-  Lock, ArrowRight, Info,
+  Lock, ArrowRight, Info, ClipboardList,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { ROSTER_ROLE_SEED, type RosterRole } from '@/lib/production/roster-config'
 import { HubHeader } from '@/components/supervisor/HubTabs'
+// The daily "Assign sections" tool (operators + variant + lot + PO per section,
+// per shift) is embedded here as a second view of the Roster tab. It is
+// imported UNCHANGED — its own logic, save behaviour and capture-unlock stay
+// exactly as they are on /production/capture/assign; this only gives it a home
+// back inside the Hub. It carries its own Suspense boundary for useSearchParams.
+import AssignSectionsTool from '@/app/(app)/production/capture/assign/page'
 
 // Supervisor Hub's "Roster" tab — a deliberately small window onto the Shift
 // Roster: just the Production category, for the two people who actually own
@@ -61,6 +67,9 @@ export default function SupervisorRoster() {
   const [saved, setSaved]       = useState(false)
   const [error, setError]       = useState<string | null>(null)
   const [addingCell, setAddingCell] = useState<string | null>(null)  // `${roleKey}:${shift}`
+  // 'staffing' = the fortnightly who-works-which-role grid (this file);
+  // 'sections' = the daily Assign-sections tool, embedded unchanged.
+  const [view, setView] = useState<'staffing' | 'sections'>('staffing')
 
   async function load() {
     setLoading(true); setError(null)
@@ -181,24 +190,41 @@ export default function SupervisorRoster() {
 
   const totalAssigned = entries.length
 
-  if (loading) {
-    return <div className="px-4 py-6 max-w-[900px] mx-auto"><HubHeader subtitle="Loading…" /><div className="flex items-center justify-center py-24"><Loader2 size={22} className="animate-spin text-stone-300" /></div></div>
-  }
-
   return (
     <div className="px-4 py-6 max-w-[900px] mx-auto space-y-5 print-full-width">
       <div className="no-print">
         <HubHeader
-          subtitle={period ? `${period.name} · ${format(parseISO(period.start_date + 'T12:00:00'), 'd MMM')}–${format(parseISO(period.end_date + 'T12:00:00'), 'd MMM')}` : 'Who is on which line this roster period'}
-          action={
-            <button onClick={() => window.print()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[12px] text-stone-600 hover:border-brand hover:text-brand transition-colors">
-              <Printer size={13} /> Print
-            </button>
-          }
+          subtitle={view === 'sections'
+            ? "Today's operators, variant, lot & production order per section"
+            : (period ? `${period.name} · ${format(parseISO(period.start_date + 'T12:00:00'), 'd MMM')}–${format(parseISO(period.end_date + 'T12:00:00'), 'd MMM')}` : 'Who is on which line this roster period')}
+          action={view === 'staffing'
+            ? (
+              <button onClick={() => window.print()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[12px] text-stone-600 hover:border-brand hover:text-brand transition-colors">
+                <Printer size={13} /> Print
+              </button>
+            )
+            : undefined}
         />
       </div>
 
-      {!period ? (
+      {/* Sub-view toggle — the fortnightly staffing grid vs today's per-section
+          assignment. Two different jobs that both live under "Roster": who works
+          which role over the period, and who runs which section (with variant /
+          lot / PO) today. */}
+      <div className="no-print flex gap-1 p-1 bg-stone-100 rounded-lg w-max">
+        {([['staffing', 'Staffing', Users], ['sections', "Today's sections", ClipboardList]] as const).map(([v, label, Icon]) => (
+          <button key={v} onClick={() => setView(v)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${view === v ? 'bg-white text-brand shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>
+            <Icon size={13} /> {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'sections' ? (
+        <div className="no-print"><AssignSectionsTool /></div>
+      ) : loading ? (
+        <div className="flex items-center justify-center py-24"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
+      ) : !period ? (
         <div className="text-center py-16 bg-surface-card border border-surface-rule rounded-2xl">
           <p className="font-mono text-[12px] text-stone-400">No roster period covers today yet.</p>
           <Link href="/production/roster" className="text-[12px] text-brand hover:underline mt-1 inline-block">Set one up on the full Shift Roster →</Link>
