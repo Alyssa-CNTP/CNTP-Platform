@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Supervisor Hub Phase 2: redesign to 5 tabs, Production Manager sign-off role, PO reopen-request flow)
+
+**Files changed:** `components/supervisor/HubTabs.tsx`, `app/(app)/supervisor/page.tsx` (rewritten), `app/(app)/supervisor/signoff/page.tsx` (new), `app/(app)/supervisor/productions/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/auth/departments.ts`, `lib/notifications/recipients.ts`, `app/api/production/orders/[id]/reopen-request/route.ts` (new), `supabase/migrations/20260717_009_po_reopen_requests.sql` (new)
+
+- **Hub restructured to 5 tabs**, matched to what a low-tech-comfort supervisor actually needs day to day: **Roster → Sign-off → Productions → Messages → Timesheets**. The old Overview/Analytics/Calendar/Assign tabs are no longer in the primary nav (pages still exist, just not linked from the hub) — decluttered on purpose.
+- **New "Roster" tab** (`/supervisor`, the hub's landing page): a focused, Production-only editor over the *same* `roster_entries` / `roster_periods` / `roster_section_status` tables the full company-wide Shift Roster uses — not a data fork. A supervisor edits who's on each line and **Saves** a draft; only a **Production Manager** can **Submit** it (edit/save stays with the supervisor; sign-off moves up a tier). **Print** is open to anyone who can view. Links out to the full multi-department roster tool for period management.
+- **New "Sign-off" tab** (`/supervisor/signoff`): the "which lines are running, what's waiting on my signature" view, extracted from the old Overview — KPI strip and 7-day trend charts were deliberately cut (analytics, not a daily tool).
+- **New role: Production Manager** (`production_manager`, Production dept) — submits the Roster's Production section and decides "reopen this PO" requests; does not edit capture sessions or the roster directly. New permission `can_approve_reopen_request`. `production_supervisor` no longer holds `can_submit_roster_production` (moved to the new role) but keeps everything else, incl. Maintenance roster submit.
+- **"Productions" tab reopen-request flow**: a supervisor can no longer reopen a submitted/signed-off session directly from the Hub — they **submit a request with a reason**; it notifies Production Managers + IT (in-app + email), who **approve or decline** from a panel right on the same tab. Approval flips the session back to `draft` (same effect as the existing direct "Reopen for edits" action on `/production/orders`, which is untouched and still available to whoever holds `can_edit_session`) and is written to the audit log. New table `production.po_reopen_requests`.
+- **Verification:** `tsc --noEmit` across the whole project — identical error set before/after (30 pre-existing errors, none in touched files). `next build` compiled successfully across the whole app (including every new/changed file); the one build-time failure that followed is in an unrelated, untouched route (`/api/accounts/[id]`, pre-existing env issue). **Could not drive the logged-in Supervisor Hub flows in a browser — no valid login credentials were available in this environment.** Please click through Roster (save + submit as both roles), Sign-off, and the reopen-request flow on staging before treating this as fully verified.
+
+---
+
 ## 2026-07-17 — Alyssa (Timesheets: fix worked-minutes — anchor to login → sign-off, stop inferring breaks from gaps, changeover prompt)
 
 **Files changed:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260717_008_timesheet_worked_minutes_recompute.sql` (new, optional/manual)
