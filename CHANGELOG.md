@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Supervisor Hub Roster: always show an auto pre-filled draft, never blank)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`
+
+- The Roster tab's Staffing view now **never sits blank**. When the roster period covering today has no production crew yet — or no period covers today at all — it shows an **unsaved pre-filled draft** carried over from the most recent populated period with **day↔night swapped** (the same rule the weekly rotate cron uses). A brand-tinted banner explains it's a starting point; the supervisor adjusts and **Saves** to confirm.
+- **Save now materialises a period if none exists.** `saveDraft()` returns the period it wrote into; a missing "this week" period is created via `nextPeriodConfig()` chained forward from the latest period — the *same cadence the rotate cron uses*, so the dates line up and the cron's idempotency check skips it (no duplicate/overlap). Falls back to a 7-day week from today only when there's no roster history at all.
+- No change to the weekly **auto-swap cron** (`/api/production/roster/cron?task=rotate`), `roster-rotate.ts`, the full `/production/roster` tool, or the capture-section autofill — all untouched. This only makes the Hub's Roster tab self-sufficient so a supervisor always has something to work from.
+- **Verified:** `tsc --noEmit` identical to baseline; `/supervisor` compiles and serves 200 with no console errors. Logged-in flows (pre-fill save when period empty, and save-creates-period when none covers today) still need a click-through on staging — no credentials in this environment.
+
+---
+
 ## 2026-07-17 — Alyssa (Supervisor Hub Phase 2: redesign to 5 tabs, Production Manager sign-off role, PO reopen-request flow)
 
 **Files changed:** `components/supervisor/HubTabs.tsx`, `app/(app)/supervisor/page.tsx` (rewritten), `app/(app)/supervisor/signoff/page.tsx` (new), `app/(app)/supervisor/productions/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/auth/departments.ts`, `lib/notifications/recipients.ts`, `app/api/production/orders/[id]/reopen-request/route.ts` (new), `supabase/migrations/20260717_009_po_reopen_requests.sql` (new)
