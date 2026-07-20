@@ -709,7 +709,8 @@ function SampleTable({ title, cols, lines }: { title: string; cols: string[]; li
   return (
     <div className="mb-3">
       <div className="font-bold text-[11px] uppercase mb-1">{title}</div>
-      <table className="w-full border-collapse text-[11px]">
+      <table className="w-full border-collapse text-[11px]" style={{ tableLayout: 'fixed' }}>
+        <colgroup><col style={{ width: '32%' }} /><col style={{ width: '38%' }} /><col style={{ width: '30%' }} /></colgroup>
         <thead>
           <tr>{cols.map((c, i) => <th key={i} className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold">{c}</th>)}</tr>
         </thead>
@@ -840,7 +841,11 @@ function CoaTable({ title, cols, lines, onEdit }: {
   return (
     <div className="mb-3">
       <div className="font-bold text-[11px] uppercase mb-1">{title}</div>
-      <table className="w-full border-collapse text-[11px]">
+      {/* Fixed column widths (shared with every COA table) so the vertical
+          borders line up across Microbiology / Cut Length / Other Analysis,
+          instead of each table auto-sizing to its own longest label. */}
+      <table className="w-full border-collapse text-[11px]" style={{ tableLayout: 'fixed' }}>
+        <colgroup><col style={{ width: '32%' }} /><col style={{ width: '38%' }} /><col style={{ width: '30%' }} /></colgroup>
         <thead>
           <tr>{cols.map((c, i) => <th key={i} className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold">{c}</th>)}</tr>
         </thead>

@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (COA Generator: align table column widths)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Fixed misaligned vertical column borders across the COA's stacked Microbiological Analyses, Cut Length Guidelines, and Other Analysis tables. Each `<table>` was auto-sizing its own 3 columns based on that table's longest cell content, so the borders drifted from one table to the next.
+- Both `CoaTable` (the live/editable generator preview) and `SampleTable` (the read-only example template at the bottom of the page) now use `table-layout: fixed` with a shared `<colgroup>` (32% / 38% / 30%), so column boundaries line up consistently across all tables. The PDF export (`exportPdf`) already computed matching widths and was unaffected.
+
+---
+
 ## 2026-07-17 — Alyssa (Supervisor Hub Roster: always show an auto pre-filled draft, never blank)
 
 **Files changed:** `app/(app)/supervisor/page.tsx`
