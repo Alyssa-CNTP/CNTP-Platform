@@ -1,349 +1,442 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { format, parseISO, subDays, eachDayOfInterval } from 'date-fns'
+import { format, parseISO, addDays } from 'date-fns'
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts'
-import {
-  Users, Clock, Factory, Wrench, HardHat, Scale, AlertTriangle,
-  ChevronRight, RefreshCw, PenLine, CheckCircle2, Loader2, Pen, Play, Lock, ArrowRight,
+  Users, Loader2, Save, Send, Printer, X, Plus, CheckCircle2,
+  Lock, ArrowRight, Info, ClipboardList, Sparkles,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { resolveOnDutyTechnician } from '@/lib/maintenance/roster'
-import { currentShift, SHIFT_LABEL, shiftValuesFor } from '@/lib/production/shifts'
-import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import type { Shift } from '@/lib/supabase/database.types'
+import { useAuth } from '@/lib/auth/context'
+import { ROSTER_ROLE_SEED, type RosterRole } from '@/lib/production/roster-config'
+import { nextPeriodConfig } from '@/lib/production/roster-rotate'
 import { HubHeader } from '@/components/supervisor/HubTabs'
+// The daily "Assign sections" tool (operators + variant + lot + PO per section,
+// per shift) is embedded here as a second view of the Roster tab. It is
+// imported UNCHANGED — its own logic, save behaviour and capture-unlock stay
+// exactly as they are on /production/capture/assign; this only gives it a home
+// back inside the Hub. It carries its own Suspense boundary for useSearchParams.
+import AssignSectionsTool from '@/app/(app)/production/capture/assign/page'
 
-const todayStr = () => format(new Date(), 'yyyy-MM-dd')
-const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
-const AXIS = { fontSize: 11, fill: '#637056' }
-const GRID = '#F0F2F5'
+// Supervisor Hub's "Roster" tab — a deliberately small window onto the Shift
+// Roster: just the Production category, for the two people who actually own
+// it day to day. It reads and writes the SAME production.roster_entries /
+// roster_periods / roster_section_status tables as the full multi-department
+// tool at /production/roster — this is not a fork of the data, just a
+// decluttered view of one slice of it. Period creation/rotation/publish stays
+// on the full tool (link at the bottom); this tab only edits people.
+//
+// The save/submit split: the supervisor can edit and Save a draft any time;
+// only someone holding can_submit_roster_production (the Production Manager)
+// can Submit it. Print is open to anyone who can view.
 
-const LINE_STATUS: Record<string, { label: string; cls: string; dot: string; icon: any }> = {
-  none:      { label: 'Not started',    cls: 'bg-stone-100 text-stone-500',  dot: 'bg-stone-300', icon: Play },
-  draft:     { label: 'In progress',    cls: 'bg-warn/10 text-warn',         dot: 'bg-warn',      icon: Pen },
-  submitted: { label: 'Awaiting sign-off', cls: 'bg-info/10 text-info',      dot: 'bg-info',      icon: Clock },
-  approved:  { label: 'Signed off',     cls: 'bg-ok/10 text-ok',             dot: 'bg-ok',        icon: CheckCircle2 },
+type RShift = 'day' | 'night'
+const SHIFTS: { key: RShift; label: string; window: string }[] = [
+  { key: 'day',   label: 'Day',   window: '07h00–16h00' },
+  { key: 'night', label: 'Night', window: '16h00–01h00' },
+]
+const PRODUCTION_ROLES: RosterRole[] = ROSTER_ROLE_SEED.filter(r => r.category === 'production').sort((a, b) => a.sort - b.sort)
+
+interface Period { id: string; name: string; start_date: string; end_date: string; day_label: string; night_label: string; status: string }
+interface Entry {
+  id: string; period_id: string; role_key: string; shift: RShift
+  employee_id: string | null; operator_id: string | null; person_name: string
+}
+interface Employee { id: string; name: string; display_name: string | null; operator_id: string | null }
+
+const db = () => getDb().schema('production')
+
+// Today's date in SAST (Africa/Johannesburg), independent of the browser's timezone.
+function sastToday(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 }
 
-interface Sess { id: string; section_id: string; date: string; shift: string; status: string; operator_names: string[] | null }
-interface MB   { session_id: string; total_input_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
-interface Sheet { date: string; worked_minutes: number | null }
+export default function SupervisorRoster() {
+  const { user, p, isFullAdmin } = useAuth()
+  const canEdit   = isFullAdmin || p('can_edit_roster_production')
+  const canSubmit = isFullAdmin || p('can_submit_roster_production')
 
-interface Pending { id: string; section_id: string; date: string; shift: string; operators: string[]; submitted_at: string | null }
+  const [period, setPeriod]     = useState<Period | null>(null)
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [entries, setEntries]   = useState<Entry[]>([])
+  const [status, setStatus]     = useState<{ status: string; submitted_by: string | null; submitted_at: string | null } | null>(null)
+  const [leaveIds, setLeaveIds] = useState<Set<string>>(new Set())
+  const [loading, setLoading]   = useState(true)
+  const [saving, setSaving]     = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [saved, setSaved]       = useState(false)
+  const [error, setError]       = useState<string | null>(null)
+  const [addingCell, setAddingCell] = useState<string | null>(null)  // `${roleKey}:${shift}`
+  // 'staffing' = the fortnightly who-works-which-role grid (this file);
+  // 'sections' = the daily Assign-sections tool, embedded unchanged.
+  const [view, setView] = useState<'staffing' | 'sections'>('staffing')
+  // The tab is never blank: when the period covering today has no production
+  // crew yet (or no period exists at all), we show an unsaved DRAFT pre-filled
+  // from the most recent populated period, day↔night swapped — the same rule
+  // the weekly rotate cron uses. isPrefill flags that the shown grid isn't saved
+  // yet; latestPeriod is the newest period overall (for cadence chaining when we
+  // have to create today's period on save); prefillSourceName is for the banner.
+  const [isPrefill, setIsPrefill]           = useState(false)
+  const [latestPeriod, setLatestPeriod]     = useState<Period | null>(null)
+  const [prefillSourceName, setPrefillSourceName] = useState<string | null>(null)
 
-interface Line { sectionId: string; status: string; operators: string[]; kg: number }
-
-export default function SupervisorOverview() {
-  const today = todayStr()
-  const shift = currentShift()
-  const start7 = format(subDays(new Date(), 6), 'yyyy-MM-dd')
-
-  const [sess, setSess]   = useState<Sess[]>([])
-  const [mb, setMb]       = useState<Map<string, MB>>(new Map())
-  const [sheets, setSheets] = useState<Sheet[]>([])
-  const [opMap, setOpMap] = useState<Record<string, string>>({})
-  const [roster, setRoster] = useState<{ section_id: string; operator_ids: string[] }[]>([])
-  const [pending, setPending] = useState<Pending[]>([])
-  const [breakdowns, setBreakdowns] = useState(0)
-  const [dutyTech, setDutyTech] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  async function loadLeave(start: string, end: string) {
+    const { data: leave } = await db().from('employee_leave_active').select('employee_id')
+      .lte('start_date', end).gte('end_date', start)
+    setLeaveIds(new Set(((leave as any[]) ?? []).map(r => r.employee_id).filter(Boolean)))
+  }
 
   async function load() {
-    setLoading(true)
-    const db = getDb()
-    const [assigns, sess7, sheets7, bd, duty, submitted, ops] = await Promise.all([
-      db.schema('production').from('shift_assignments').select('section_id,operator_ids').eq('date', today).in('shift', shiftValuesFor(shift)),
-      db.schema('production').from('prod_sessions').select('id,section_id,date,shift,status,operator_names').gte('date', start7).lte('date', today),
-      db.schema('production').from('prod_timesheets').select('date,worked_minutes').eq('confirmed', true).gte('date', start7).lte('date', today),
-      db.schema('maintenance').from('job_cards').select('id').eq('workflow', 'breakdown').neq('status', 'complete'),
-      resolveOnDutyTechnician(db as any),
-      db.schema('production').from('prod_sessions')
-        .select('id,section_id,date,shift,operator_names,submitted_at')
-        .eq('status', 'submitted').order('submitted_at', { ascending: true }),
-      db.schema('production').from('operators').select('id,name,display_name').eq('active', true),
-    ])
+    setLoading(true); setError(null)
+    try {
+      const today = sastToday()
+      const roleKeys = PRODUCTION_ROLES.map(r => r.key)
+      // Pull the recent periods (not just today's) so we can both find the one
+      // covering today AND fall back to the last populated one for a pre-fill.
+      const [{ data: periodsData }, { data: emps }] = await Promise.all([
+        db().from('roster_periods')
+          .select('id,name,start_date,end_date,day_label,night_label,status')
+          .order('start_date', { ascending: false }).limit(8),
+        db().from('employees').select('id,name,display_name,operator_id').eq('active', true).order('name'),
+      ])
+      setEmployees((emps as Employee[]) ?? [])
+      const periodsList = (periodsData as Period[]) ?? []
+      setLatestPeriod(periodsList[0] ?? null)
+      const covering = periodsList.find(pp => pp.start_date <= today && today <= pp.end_date) ?? null
 
-    const sessRows = (sess7.data as Sess[]) ?? []
-    let mbRows: MB[] = []
-    if (sessRows.length) {
-      const { data } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
-        .in('session_id', sessRows.map(s => s.id))
-      mbRows = (data as MB[]) ?? []
+      // Production entries for every recent period in one query, grouped by period.
+      const byPeriod = new Map<string, Entry[]>()
+      if (periodsList.length) {
+        const { data: allRows } = await db().from('roster_entries')
+          .select('id,period_id,role_key,shift,employee_id,operator_id,person_name')
+          .in('period_id', periodsList.map(pp => pp.id)).in('role_key', roleKeys)
+        ;((allRows as Entry[]) ?? []).forEach(e => {
+          const a = byPeriod.get(e.period_id) ?? []; a.push(e); byPeriod.set(e.period_id, a)
+        })
+      }
+      const coveringEntries = covering ? (byPeriod.get(covering.id) ?? []) : []
+
+      if (covering && coveringEntries.length > 0) {
+        // Normal path — the covering period already has a crew (usually written
+        // by the weekly rotate cron). Show it as-is.
+        setPeriod(covering); setEntries(coveringEntries)
+        setIsPrefill(false); setPrefillSourceName(null)
+        const { data: st } = await db().from('roster_section_status')
+          .select('status,submitted_by,submitted_at').eq('period_id', covering.id).eq('section', 'production').maybeSingle()
+        setStatus((st as any) ?? { status: 'draft', submitted_by: null, submitted_at: null })
+        await loadLeave(covering.start_date, covering.end_date)
+      } else {
+        // Empty or missing covering period → build an unsaved pre-fill draft from
+        // the most recent period that HAS a crew, day↔night swapped, so the tab
+        // is never blank. It saves into the covering period (created on save if
+        // none exists yet).
+        const source = periodsList.find(pp => pp.id !== covering?.id && (byPeriod.get(pp.id)?.length ?? 0) > 0) ?? null
+        setPeriod(covering)  // may be null — saveDraft() will create it
+        if (source) {
+          const src = byPeriod.get(source.id) ?? []
+          setEntries(src.map((e, i) => ({
+            id: `tmp-prefill-${i}`, period_id: covering?.id ?? '',
+            role_key: e.role_key, shift: (e.shift === 'day' ? 'night' : 'day') as RShift,
+            employee_id: e.employee_id, operator_id: e.operator_id, person_name: e.person_name,
+          })))
+          setIsPrefill(true); setPrefillSourceName(source.name)
+        } else {
+          setEntries([]); setIsPrefill(false); setPrefillSourceName(null)
+        }
+        setStatus({ status: 'draft', submitted_by: null, submitted_at: null })
+        await loadLeave(covering?.start_date ?? today, covering?.end_date ?? today)
+      }
+    } catch (e: any) {
+      setError(e.message)
     }
-
-    const m: Record<string, string> = {}
-    ;((ops.data as any[]) ?? []).forEach(o => { m[o.id] = o.display_name || o.name })
-
-    setSess(sessRows)
-    setMb(new Map(mbRows.map(r => [r.session_id, r])))
-    setSheets((sheets7.data as Sheet[]) ?? [])
-    setOpMap(m)
-    setRoster(((assigns.data as any[]) ?? []).map(a => ({ section_id: a.section_id, operator_ids: a.operator_ids ?? [] })))
-    setPending(((submitted.data as any[]) ?? []).map(s => ({
-      id: s.id, section_id: s.section_id, date: s.date, shift: s.shift,
-      operators: s.operator_names ?? [], submitted_at: s.submitted_at,
-    })))
-    setBreakdowns(((bd.data as any[]) ?? []).length)
-    setDutyTech(duty?.name ?? null)
     setLoading(false)
   }
 
   useEffect(() => { load() }, [])
 
-  const kgOut = (s: Sess) => { const r = mb.get(s.id); return r ? (Number(r.total_output_b_kg) || 0) + (Number(r.total_output_c_kg) || 0) + (Number(r.total_output_d_kg) || 0) : 0 }
+  const cellEntries = (roleKey: string, shift: RShift) => entries.filter(e => e.role_key === roleKey && e.shift === shift)
 
-  // Today only, derived from the 7-day pull.
-  const todaySess = useMemo(() => sess.filter(s => s.date === today), [sess, today])
+  function addPerson(roleKey: string, shift: RShift, employeeId: string) {
+    const emp = employees.find(e => e.id === employeeId)
+    if (!emp) return
+    if (cellEntries(roleKey, shift).some(e => e.employee_id === employeeId)) { setAddingCell(null); return }
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    setEntries(es => [...es, {
+      id: tempId, period_id: period?.id ?? '', role_key: roleKey, shift,
+      employee_id: emp.id, operator_id: emp.operator_id ?? null,
+      person_name: emp.display_name || emp.name,
+    }])
+    setAddingCell(null)
+    setSaved(false)
+  }
+  function removePerson(id: string) {
+    setEntries(es => es.filter(e => e.id !== id))
+    setSaved(false)
+  }
 
-  const kpis = useMemo(() => {
-    const operators = new Set<string>()
-    roster.forEach(r => r.operator_ids.forEach(id => operators.add(id)))
-    const kg = todaySess.reduce((sum, s) => sum + kgOut(s), 0)
-    const hoursMin = sheets.filter(s => s.date === today).reduce((sum, s) => sum + (s.worked_minutes ?? 0), 0)
-    const signedOff = todaySess.filter(s => s.status === 'approved').length
-    return { productions: todaySess.length, kg: Math.round(kg), hoursMin, operators: operators.size, signedOff }
-  }, [todaySess, roster, sheets, mb, today])
+  const isSubmitted = status?.status === 'submitted'
 
-  // Live status of every line rostered for this shift.
-  const lines: Line[] = useMemo(() => {
-    return roster
-      .slice()
-      .sort((a, b) => SECTION_ORDER.indexOf(a.section_id as any) - SECTION_ORDER.indexOf(b.section_id as any))
-      .map(r => {
-        const s = todaySess.find(x => x.section_id === r.section_id && x.shift === shift)
-        return {
-          sectionId: r.section_id,
-          status: s?.status ?? 'none',
-          operators: r.operator_ids.map(id => opMap[id] ?? '—'),
-          kg: s ? Math.round(kgOut(s)) : 0,
-        }
-      })
-  }, [roster, todaySess, opMap, shift, mb])
+  // The period covering today, creating it if none exists. New periods are dated
+  // by chaining nextPeriodConfig() forward from the latest period — the SAME
+  // cadence the rotate cron uses — so a period created here lines up with what
+  // the cron would have made (its idempotency check then skips it, no duplicate).
+  // With no history at all, fall back to a plain 7-day week starting today.
+  async function ensurePeriod(): Promise<Period | null> {
+    if (period) return period
+    const today = sastToday()
+    let cfg: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }
+    if (latestPeriod) {
+      let c = nextPeriodConfig(latestPeriod)
+      let guard = 0
+      while (c.end < today && guard < 104) {
+        c = nextPeriodConfig({ id: '', name: c.name, start_date: c.start, end_date: c.end, day_label: c.dayLabel, night_label: c.nightLabel })
+        guard++
+      }
+      cfg = c
+      // If the newest period is itself in the future, the chain overshoots today;
+      // fall back to a today-anchored week rather than create a wrong-dated one.
+      if (cfg.start > today) {
+        const s = parseISO(today + 'T12:00:00'), e = addDays(s, 6)
+        cfg = { name: `${format(s, 'd')}–${format(e, 'd MMM')}`, start: today, end: format(e, 'yyyy-MM-dd'), dayLabel: latestPeriod.night_label || 'Shift B', nightLabel: latestPeriod.day_label || 'Shift A' }
+      }
+    } else {
+      const s = parseISO(today + 'T12:00:00'), e = addDays(s, 6)
+      cfg = { name: `${format(s, 'd')}–${format(e, 'd MMM')}`, start: today, end: format(e, 'yyyy-MM-dd'), dayLabel: 'Shift A', nightLabel: 'Shift B' }
+    }
+    const { data, error: e } = await db().from('roster_periods').insert({
+      name: cfg.name, start_date: cfg.start, end_date: cfg.end,
+      day_label: cfg.dayLabel, night_label: cfg.nightLabel, created_by: user?.id ?? null,
+    } as any).select('id,name,start_date,end_date,day_label,night_label,status').single()
+    if (e || !data) throw (e ?? new Error('Could not create a roster period'))
+    const created = { ...(data as any), status: (data as any).status ?? 'draft' } as Period
+    setPeriod(created)
+    return created
+  }
 
-  // 7-day trend — continuous day axis, gaps filled with zeros.
-  const trend = useMemo(() => {
-    const kgByDay = new Map<string, number>(), minByDay = new Map<string, number>()
-    sess.forEach(s => kgByDay.set(s.date, (kgByDay.get(s.date) ?? 0) + kgOut(s)))
-    sheets.forEach(s => minByDay.set(s.date, (minByDay.get(s.date) ?? 0) + (s.worked_minutes ?? 0)))
-    let days: string[] = []
-    try { days = eachDayOfInterval({ start: parseISO(start7), end: parseISO(today) }).map(d => format(d, 'yyyy-MM-dd')) } catch { days = [] }
-    return days.map(d => ({
-      day: format(parseISO(d), 'EEE'),
-      kg: Math.round(kgByDay.get(d) ?? 0),
-      hours: +((minByDay.get(d) ?? 0) / 60).toFixed(1),
-    }))
-  }, [sess, sheets, mb, start7, today])
+  // Returns the period it saved into (null on failure) so the caller (submit)
+  // can act on a period that was created during this same save.
+  async function saveDraft(): Promise<Period | null> {
+    if (!canEdit) return null
+    setSaving(true); setError(null)
+    try {
+      const per = period ?? await ensurePeriod()
+      if (!per) throw new Error('No roster period')
+      const roleKeys = PRODUCTION_ROLES.map(r => r.key)
+      await db().from('roster_entries').delete().eq('period_id', per.id).in('role_key', roleKeys)
+      const toInsert = entries.map((e, i) => ({
+        period_id: per.id, role_key: e.role_key, shift: e.shift,
+        employee_id: e.employee_id, operator_id: e.operator_id, person_name: e.person_name, sort_order: i,
+      }))
+      let fresh: Entry[] = []
+      if (toInsert.length > 0) {
+        const { data, error: iErr } = await db().from('roster_entries').insert(toInsert as any)
+          .select('id,period_id,role_key,shift,employee_id,operator_id,person_name')
+        if (iErr) throw iErr
+        fresh = (data as Entry[]) ?? []
+      }
+      setEntries(fresh)
+      setIsPrefill(false)  // it's now saved, no longer an unsaved pre-fill
+      // Editing again un-submits it — matches the full roster tool's rule that a
+      // save always drops the section back to draft (submit is a deliberate,
+      // separate step over the CURRENT saved state, never stale).
+      await db().from('roster_section_status').upsert({
+        period_id: per.id, section: 'production', status: 'draft', submitted_by: null, submitted_at: null,
+      } as any, { onConflict: 'period_id,section' })
+      setStatus({ status: 'draft', submitted_by: null, submitted_at: null })
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+      return per
+    } catch (e: any) {
+      setError(e.message)
+      return null
+    } finally {
+      setSaving(false)
+    }
+  }
 
-  const v = (n: string | number) => loading ? '—' : String(n)
-  const kpiTiles = [
-    { label: 'Pending sign-off', value: v(pending.length), icon: PenLine, cls: pending.length ? 'text-info' : 'text-text-muted', href: undefined },
-    { label: 'Operators on shift', value: v(kpis.operators), icon: Users, cls: 'text-text' },
-    { label: 'Productions today', value: v(kpis.productions), icon: Factory, cls: 'text-text' },
-    { label: 'kg out today', value: loading ? '—' : kpis.kg.toLocaleString(), icon: Scale, cls: 'text-brand' },
-    { label: 'Hours logged', value: loading ? '—' : hrsLabel(kpis.hoursMin), icon: Clock, cls: 'text-text' },
-    { label: 'Open breakdowns', value: v(breakdowns), icon: Wrench, cls: breakdowns ? 'text-warn' : 'text-text-muted' },
-    { label: 'Tech on duty', value: loading ? '—' : (dutyTech ?? 'None'), icon: HardHat, cls: dutyTech ? 'text-text' : 'text-text-muted', small: true },
-  ]
+  async function submit() {
+    if (!canSubmit) return
+    setSubmitting(true); setError(null)
+    try {
+      const per = await saveDraft()
+      if (!per) { setSubmitting(false); return }
+      const submitted_at = new Date().toISOString()
+      await db().from('roster_section_status').upsert({
+        period_id: per.id, section: 'production', status: 'submitted',
+        submitted_by: user?.id ?? null, submitted_at,
+      } as any, { onConflict: 'period_id,section' })
+      setStatus({ status: 'submitted', submitted_by: user?.id ?? null, submitted_at })
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setSubmitting(false)
+  }
+
+  const availableFor = (roleKey: string, shift: RShift) => {
+    const taken = new Set(cellEntries(roleKey, shift).map(e => e.employee_id))
+    return employees.filter(e => !taken.has(e.id))
+  }
+
+  const totalAssigned = entries.length
 
   return (
-    <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <HubHeader
-        subtitle={`${format(new Date(), 'EEEE d MMM')} · ${SHIFT_LABEL[shift]} shift`}
-        action={
-          <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text">
-            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
-          </button>
-        }
-      />
+    <div className="px-4 py-6 max-w-[900px] mx-auto space-y-5 print-full-width">
+      <div className="no-print">
+        <HubHeader
+          subtitle={view === 'sections'
+            ? "Today's operators, variant, lot & production order per section"
+            : (period ? `${period.name} · ${format(parseISO(period.start_date + 'T12:00:00'), 'd MMM')}–${format(parseISO(period.end_date + 'T12:00:00'), 'd MMM')}` : 'Who is on which line this roster period')}
+          action={view === 'staffing'
+            ? (
+              <button onClick={() => window.print()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[12px] text-stone-600 hover:border-brand hover:text-brand transition-colors">
+                <Printer size={13} /> Print
+              </button>
+            )
+            : undefined}
+        />
+      </div>
 
-      {/* KPI strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-        {kpiTiles.map(t => (
-          <div key={t.label} className="bg-surface-card border border-surface-rule rounded-xl p-3.5">
-            <t.icon size={14} className={`${t.cls} mb-2`} />
-            <div className={`font-display font-bold leading-none ${t.cls} ${(t as any).small ? 'text-[14px]' : 'text-[22px]'}`}>{t.value}</div>
-            <div className="font-mono text-[10px] text-text-muted uppercase tracking-wide mt-1">{t.label}</div>
-          </div>
+      {/* Sub-view toggle — the fortnightly staffing grid vs today's per-section
+          assignment. Two different jobs that both live under "Roster": who works
+          which role over the period, and who runs which section (with variant /
+          lot / PO) today. */}
+      <div className="no-print flex gap-1 p-1 bg-stone-100 rounded-lg w-max">
+        {([['staffing', 'Staffing', Users], ['sections', "Today's sections", ClipboardList]] as const).map(([v, label, Icon]) => (
+          <button key={v} onClick={() => setView(v)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${view === v ? 'bg-white text-brand shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>
+            <Icon size={13} /> {label}
+          </button>
         ))}
       </div>
 
-      {/* Live shift + approvals */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2">
-          <ShiftLines lines={lines} loading={loading} shift={shift} today={today} signedOff={kpis.signedOff} />
-        </div>
-        <div>
-          <SignOffQueue pending={pending} loading={loading} />
-        </div>
-      </div>
-
-      {/* Trends */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-display font-bold text-[13px] text-text-muted uppercase tracking-wide">Last 7 days</h3>
-          <Link href="/supervisor/analytics" className="flex items-center gap-1 text-[11px] font-medium text-brand hover:underline">
-            Full analytics <ArrowRight size={12} />
-          </Link>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <ChartCard title="kg bagged out" subtitle="From mass balance">
-            {loading ? <ChartLoading /> : (
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={trend} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <defs>
-                    <linearGradient id="ovKg" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#2A7CB8" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#2A7CB8" stopOpacity={0.04} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
-                  <XAxis dataKey="day" tick={AXIS} axisLine={false} tickLine={false} />
-                  <YAxis tick={AXIS} axisLine={false} tickLine={false} width={40} tickFormatter={(x: number) => x >= 1000 ? `${(x / 1000).toFixed(0)}t` : `${x}`} />
-                  <Tooltip formatter={(x: any) => [`${Number(x).toLocaleString()} kg`, 'Out']} contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #E4E7EC' }} />
-                  <Area type="monotone" dataKey="kg" stroke="#2A7CB8" strokeWidth={2} fill="url(#ovKg)" dot={false} activeDot={{ r: 4 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </ChartCard>
-          <ChartCard title="Hours worked" subtitle="Confirmed timesheets">
-            {loading ? <ChartLoading /> : (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={trend} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
-                  <XAxis dataKey="day" tick={AXIS} axisLine={false} tickLine={false} />
-                  <YAxis tick={AXIS} axisLine={false} tickLine={false} width={32} />
-                  <Tooltip formatter={(x: any) => [`${x} h`, 'Hours']} contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #E4E7EC' }} />
-                  <Bar dataKey="hours" fill="#1A3A0E" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </ChartCard>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Live shift lines ───────────────────────────────────────────────────────────
-function ShiftLines({ lines, loading, shift, today, signedOff }: { lines: Line[]; loading: boolean; shift: Shift; today: string; signedOff: number }) {
-  return (
-    <div className="bg-surface-card border border-surface-rule rounded-2xl overflow-hidden h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-surface-rule bg-surface">
-        <div className="flex items-center gap-2">
-          <Factory size={15} className="text-text-muted" />
-          <span className="font-display font-bold text-[14px] text-text">Lines this shift</span>
-        </div>
-        {!loading && lines.length > 0 && (
-          <span className="font-mono text-[11px] text-text-muted">{signedOff}/{lines.length} signed off</span>
-        )}
-      </div>
-      {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 size={20} className="animate-spin text-stone-300" /></div>
-      ) : !lines.length ? (
-        <div className="text-center py-14 px-4">
-          <Factory size={24} className="mx-auto mb-3 text-stone-200" />
-          <p className="font-mono text-[12px] text-stone-400">No sections rostered for the {SHIFT_LABEL[shift]} shift</p>
-          <Link href="/production/capture/assign" className="text-[12px] text-brand hover:underline mt-1 inline-block">Assign sections →</Link>
+      {view === 'sections' ? (
+        <div className="no-print"><AssignSectionsTool /></div>
+      ) : loading ? (
+        <div className="flex items-center justify-center py-24"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
+      ) : (!period && !isPrefill && entries.length === 0) ? (
+        <div className="text-center py-16 bg-surface-card border border-surface-rule rounded-2xl">
+          <p className="font-mono text-[12px] text-stone-400">No roster period covers today yet, and no earlier roster to pre-fill from.</p>
+          <Link href="/production/roster" className="text-[12px] text-brand hover:underline mt-1 inline-block">Set one up on the full Shift Roster →</Link>
         </div>
       ) : (
-        <div className="divide-y divide-surface-rule">
-          {lines.map(l => {
-            const m = sectionMeta(l.sectionId)
-            const st = LINE_STATUS[l.status] ?? LINE_STATUS.none
-            const Icon = st.icon
-            const href = `/production/capture/${l.sectionId}?date=${today}&shift=${shift}${l.status === 'submitted' ? '&tab=signoff' : ''}`
-            return (
-              <Link key={l.sectionId} href={href}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-surface transition-colors group">
-                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
-                  <span className="font-mono font-bold text-[10px] text-white">{m.code}</span>
+        <>
+          {/* Pre-fill notice — the grid below is an unsaved suggestion carried
+              over from the last populated roster (day↔night swapped), so the
+              tab is never blank. Saving confirms it for this period. */}
+          {isPrefill && (
+            <div className="no-print flex items-start gap-2.5 px-4 py-3 rounded-xl text-[12px] border bg-brand/5 border-brand/20 text-brand-mid">
+              <Sparkles size={14} className="shrink-0 mt-0.5" />
+              <span>
+                Pre-filled from <strong>{prefillSourceName ?? 'the last roster'}</strong>, day &amp; night swapped — a starting point so this week is never blank.
+                Adjust who&apos;s where, then <strong>Save</strong> to confirm{!period ? ' (this also creates this week&apos;s roster period)' : ''}.
+              </span>
+            </div>
+          )}
+
+          {/* Status + explanation */}
+          <div className={`no-print flex items-start gap-2.5 px-4 py-3 rounded-xl text-[12px] border ${isSubmitted ? 'bg-ok/5 border-ok/20 text-ok' : 'bg-info/5 border-info/20 text-info'}`}>
+            {isSubmitted ? <Lock size={14} className="shrink-0 mt-0.5" /> : <Info size={14} className="shrink-0 mt-0.5" />}
+            <span>
+              {isSubmitted
+                ? `Submitted${status?.submitted_at ? ` ${format(parseISO(status.submitted_at), 'd MMM HH:mm')}` : ''} — locked in for the full roster. Editing and saving again reopens it.`
+                : canSubmit
+                  ? 'Edit who is on each line, Save, then Submit to sign it off.'
+                  : 'Edit who is on each line and Save. A Production Manager submits it to sign it off.'}
+            </span>
+          </div>
+
+          {error && <p className="no-print text-[12px] text-err px-1">{error}</p>}
+
+          {/* Print header (screen shows the HubHeader above instead) */}
+          <div className="print-only mb-4">
+            <h1 className="font-display font-bold text-[18px]">Production Roster{period ? ` · ${period.name}` : ''}</h1>
+            {period && <p className="text-[12px] text-stone-500">{format(parseISO(period.start_date + 'T12:00:00'), 'd MMM')}–{format(parseISO(period.end_date + 'T12:00:00'), 'd MMM yyyy')}</p>}
+          </div>
+
+          {/* Role grid */}
+          <div className="bg-surface-card border border-surface-rule rounded-2xl overflow-hidden">
+            <div className="grid grid-cols-[1fr_1fr_1fr] bg-surface border-b border-surface-rule text-[10px] font-semibold text-text-muted uppercase tracking-wide">
+              <div className="px-4 py-2.5">Role</div>
+              {SHIFTS.map(s => <div key={s.key} className="px-4 py-2.5 border-l border-surface-rule">{s.label} <span className="font-normal normal-case text-stone-400">· {s.window}</span></div>)}
+            </div>
+            <div className="divide-y divide-surface-rule">
+              {PRODUCTION_ROLES.map(role => (
+                <div key={role.key} className="grid grid-cols-[1fr_1fr_1fr]">
+                  <div className="px-4 py-3 font-body font-medium text-[13px] text-text flex items-center">{role.name}</div>
+                  {SHIFTS.map(s => {
+                    const cellKey = `${role.key}:${s.key}`
+                    const list = cellEntries(role.key, s.key)
+                    return (
+                      <div key={s.key} className="px-4 py-3 border-l border-surface-rule space-y-1.5">
+                        {list.map(e => {
+                          const onLeave = !!(e.employee_id && leaveIds.has(e.employee_id))
+                          return (
+                            <span key={e.id} className={`inline-flex items-center gap-1.5 mr-1.5 mb-1.5 px-2.5 py-1 rounded-full text-[12px] ${onLeave ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-stone-100 text-stone-700'}`}>
+                              {e.person_name}{onLeave && <span className="text-[9px] font-semibold uppercase">· leave</span>}
+                              {canEdit && !isSubmitted && (
+                                <button onClick={() => removePerson(e.id)} className="text-stone-400 hover:text-err"><X size={11} /></button>
+                              )}
+                            </span>
+                          )
+                        })}
+                        {canEdit && !isSubmitted && (
+                          addingCell === cellKey ? (
+                            <select autoFocus defaultValue="" onBlur={() => setAddingCell(null)}
+                              onChange={e => addPerson(role.key, s.key, e.target.value)}
+                              className="mt-1 block w-full px-2 py-1.5 rounded-lg border border-brand text-[12px] outline-none">
+                              <option value="" disabled>Search a name…</option>
+                              {availableFor(role.key, s.key).map(e => (
+                                <option key={e.id} value={e.id}>{e.display_name || e.name}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <button onClick={() => setAddingCell(cellKey)}
+                              className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-brand mt-0.5">
+                              <Plus size={12} /> Add
+                            </button>
+                          )
+                        )}
+                        {!canEdit && list.length === 0 && <span className="text-[12px] text-stone-300">—</span>}
+                      </div>
+                    )
+                  })}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-body font-semibold text-[14px] text-text truncate">{m.name}</div>
-                  <div className="flex items-center gap-1.5 text-[11px] text-text-muted font-mono truncate">
-                    <Users size={11} className="shrink-0" /> {l.operators.join(', ') || 'No operators'}
-                  </div>
-                </div>
-                {l.kg > 0 && (
-                  <div className="text-right shrink-0 hidden sm:block">
-                    <div className="font-mono text-[12px] text-text">{l.kg.toLocaleString()}</div>
-                    <div className="font-mono text-[9px] text-text-muted uppercase">kg out</div>
-                  </div>
-                )}
-                <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg shrink-0 ${st.cls}`}>
-                  <Icon size={11} /> {st.label}
-                </span>
-                <ChevronRight size={15} className="text-stone-300 group-hover:text-brand transition-colors shrink-0" />
-              </Link>
-            )
-          })}
-        </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="no-print flex items-center gap-2 text-[11px] text-text-muted px-1">
+            <Users size={12} /> {totalAssigned} {totalAssigned === 1 ? 'person' : 'people'} rostered this period
+          </div>
+
+          {/* Actions */}
+          {(canEdit || canSubmit) && (
+            <div className="no-print flex items-center gap-3">
+              {canEdit && (
+                <button onClick={saveDraft} disabled={saving || isSubmitted}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
+                  {saving ? <Loader2 size={15} className="animate-spin" /> : saved ? <CheckCircle2 size={15} className="text-ok" /> : <Save size={15} />}
+                  {saving ? 'Saving…' : saved ? 'Saved' : 'Save draft'}
+                </button>
+              )}
+              {canSubmit && (
+                <button onClick={submit} disabled={submitting || isSubmitted}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-semibold text-[14px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
+                  {submitting ? <Loader2 size={15} className="animate-spin" /> : isSubmitted ? <Lock size={15} /> : <Send size={15} />}
+                  {isSubmitted ? 'Submitted' : submitting ? 'Submitting…' : 'Submit'}
+                </button>
+              )}
+            </div>
+          )}
+          {!canEdit && !canSubmit && (
+            <p className="no-print text-[12px] text-stone-400 px-1">You have read-only access to the roster.</p>
+          )}
+
+          <Link href="/production/roster" className="no-print flex items-center gap-1 text-[12px] text-brand hover:underline px-1">
+            Full company roster (all departments, periods) <ArrowRight size={12} />
+          </Link>
+        </>
       )}
     </div>
   )
-}
-
-// ── Pending sign-off queue ─────────────────────────────────────────────────────
-function SignOffQueue({ pending, loading }: { pending: Pending[]; loading: boolean }) {
-  if (loading) {
-    return <div className="bg-surface-card border border-surface-rule rounded-2xl p-6 flex items-center justify-center h-full"><Loader2 size={18} className="animate-spin text-stone-300" /></div>
-  }
-  if (!pending.length) {
-    return (
-      <div className="flex flex-col items-center justify-center text-center gap-2 bg-ok/5 border border-ok/25 rounded-2xl p-6 h-full">
-        <CheckCircle2 size={22} className="text-ok" />
-        <div className="font-body font-semibold text-[14px] text-text">All caught up</div>
-        <div className="text-[12px] text-text-muted">Nothing waiting for your sign-off.</div>
-      </div>
-    )
-  }
-  return (
-    <div className="bg-info/5 border border-info/30 rounded-2xl overflow-hidden h-full">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-info/20">
-        <span className="w-6 h-6 rounded-full bg-info text-white flex items-center justify-center font-display font-bold text-[12px] shrink-0">{pending.length}</span>
-        <PenLine size={15} className="text-info" />
-        <span className="font-body font-semibold text-[14px] text-info">Needs your sign-off</span>
-      </div>
-      <div className="divide-y divide-info/15 max-h-[340px] overflow-y-auto">
-        {pending.map(s => {
-          const m = sectionMeta(s.section_id)
-          const href = `/production/capture/${s.section_id}?date=${s.date}&shift=${s.shift}&tab=signoff`
-          return (
-            <Link key={s.id} href={href} className="flex items-center gap-3 px-4 py-3 bg-white/40 hover:bg-white transition-colors group">
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
-                <span className="font-mono font-bold text-[9px] text-white">{m.code}</span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-body font-semibold text-[13px] text-text truncate">{m.name}</div>
-                <div className="font-mono text-[10px] text-text-muted truncate">
-                  {format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · {s.shift}
-                  {s.operators.length ? ` · ${s.operators.join(', ')}` : ''}
-                </div>
-              </div>
-              <ChevronRight size={15} className="text-info shrink-0 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function ChartCard({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-surface-card border border-surface-rule rounded-2xl p-4">
-      <div className="font-display font-semibold text-[13px] text-text">{title}</div>
-      {subtitle && <div className="text-[11px] text-text-muted mb-3">{subtitle}</div>}
-      {children}
-    </div>
-  )
-}
-
-function ChartLoading() {
-  return <div className="flex items-center justify-center" style={{ height: 200 }}><Loader2 size={20} className="animate-spin text-stone-300" /></div>
 }

@@ -83,7 +83,8 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_view_all_sections', label: 'View all sections' },
         ] },
       { key: 'production.orders', label: 'Production orders (session history)',
-        read: 'can_view_live_history', write: 'can_edit_session', delete: 'can_delete_session' },
+        read: 'can_view_live_history', write: 'can_edit_session', delete: 'can_delete_session',
+        manage: [{ key: 'can_approve_reopen_request', label: 'Decide a supervisor’s reopen request (Supervisor Hub)' }] },
       { key: 'production.live', label: 'Live capture',
         read: 'can_view_live_history', write: 'can_start_live_session',
         manage: [
