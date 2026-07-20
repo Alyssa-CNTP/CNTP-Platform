@@ -36,6 +36,62 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (EU MRL: real export parser + upload refresh path, loaded 516 Rooibos MRLs)
+
+**Files changed:** `lib/quality/eu-mrl.ts`, `app/api/eu-mrl-sync/run/route.ts`, `app/api/eu-mrl-sync/upload/route.ts` (new), `app/(app)/quality/raw-material/page.tsx`
+
+- Handled the **real** EU export format. The official "Export_Pesticide_residue_CurrentMRL.xlsx" has 6 preamble rows, a `Selected Product: 0632020 - Rooibos` line, then a 3-column table (`Pesticide Id | Pesticide residue | Maximum residue level (mg/kg)`, values like `0.01*`). Added `parseEuMrlWorkbook()` / `toEuMrlPayload()` that skip the preamble, auto-detect the header row, read the product code from the file, and parse ~516 substances.
+- **Added the reliable refresh mechanism: file upload.** The EU export is a session-based download with no stable auto-download URL, so refreshing = re-export from the EU site and upload. New route `POST /api/eu-mrl-sync/upload` (multipart) parses the file and replaces that commodity's MRL set. New **"⬆️ Upload EU MRL file"** button on the Raw Material → Residue tab.
+- Refactored `POST /api/eu-mrl-sync/run` (URL/cron path) to use the same shared parser, so both paths behave identically.
+- **Loaded the current Rooibos MRLs (516 substances, product 0632020) into the staging `qms.eu_mrl` table** from the supplied EU export, so grading works immediately. Values verified (e.g. Glyphosate 2, Difenoconazole 20, Chlorpyrifos 0.01 mg/kg).
+- **How updates work going forward:** click "⬆️ Upload EU MRL file" with a fresh EU export whenever the EU revises MRLs (a few times a year), then "🔄 Re-enrich MRLs" to re-grade existing records. Production `qms.eu_mrl` needs the same load when promoted.
+
+---
+
+## 2026-07-20 — Gustav (EU MRL sync: residue grades tracked against the live EU database)
+
+**Files changed:** `supabase/migrations/20260720_001_eu_mrl.sql` (new), `lib/quality/eu-mrl.ts` (new), `app/api/eu-mrl-sync/run/route.ts` (new), `.github/workflows/eu-mrl-sync.yml` (new), `app/api/upload/route.ts`, `app/api/admin/re-enrich-residues/route.ts`
+
+- **What this does:** the EU Maximum Residue Level (MRL) for each pesticide is now sourced from the official **EU Pesticides Database** and kept **continuously up to date**, and residue R-grades (R-0…R-3) are computed against those live limits instead of relying solely on the value printed on each lab report.
+- New reference table `qms.eu_mrl` (per pesticide × commodity) plus `qms.eu_mrl_sync_log` (one row per sync run, so you can see when it last ran). Rooibos = EU product code `0632020`.
+- New route `POST /api/eu-mrl-sync/run` downloads the EU's official bulk MRL export, parses it (xlsx/csv), and upserts into `qms.eu_mrl`. It's called by both the **"🌍 EU MRL Sync"** admin button and the weekly cron.
+- New GitHub Actions workflow `eu-mrl-sync.yml` runs the sync **every Monday 05:00 SAST** (continuous updates), same cron pattern as the roster/energy jobs.
+- Grading now overlays the synced EU MRLs before computing grades — applied both on **new uploads** (`upload` route) and on **"🔄 Re-enrich MRLs"** (re-grades all existing residue records against the latest EU limits). Each compound is tagged `mrl_source: 'eu_db' | 'lab_report'`.
+- **⚠️ VPS setup required (I can't reach the EU servers from the build environment, so this must be verified on the VPS):**
+  - Set env var **`EU_MRL_DOWNLOAD_URL`** to the EU MRL export URL for Rooibos (product `0632020`). Optional: `EU_MRL_COMMODITY_CODE` / `EU_MRL_COMMODITY_NAME` to override the default. Until this is set, the sync returns a clear "not configured" message rather than syncing.
+  - Ensure `CRON_SECRET` is set (already used by the roster/energy crons) so the weekly workflow can authenticate.
+  - Migration applied to **staging** Supabase; production needs it when promoted.
+
+---
+
+## 2026-07-20 — Gustav (Raw Material Residue: fix "API_URL is not defined" + wire Re-enrich MRLs)
+
+**Files changed:** `app/(app)/quality/raw-material/page.tsx`, `app/api/admin/re-enrich-residues/route.ts` (new)
+
+- Fixed the runtime error **"✗ API_URL is not defined"** thrown by the residue-tab admin buttons. Two `fetch()` calls used an undefined `${API_URL}` global (a leftover from the old separate-Express-server era). Changed both to relative `/api/...` paths, consistent with the sibling "Recalculate R-Grades" button and the unified Next.js convention.
+- Added the missing backend route `POST /api/admin/re-enrich-residues` that powers the **"🔄 Re-enrich MRLs"** button. It re-runs the same EU MRL → R-grade computation used at upload time over every stored raw-material residue record (`qms.quality_records`, `workflow='residue'`), updates only records whose grades changed, and returns `{ updated, total }`. Gated on `can_save_records`.
+- **Note:** the separate "🌍 EU MRL Sync" button (`/api/eu-mrl-sync/run`, which would scrape the official EU Pesticides Database) still has no backend and will 404 — it needs an EU data source before it can be implemented. The "API_URL is not defined" crash on it is fixed regardless.
+
+---
+
+## 2026-07-20 — Gustav (COA Generator: PDF export — centered columns, header field lines)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- PDF export (`exportPdf`): table column text (headers and cell values, across Microbiological Analyses, Cut Length, and Other Analysis) is now centered within its column instead of left-aligned, matching the on-screen preview.
+- PDF export now draws the same dashed underline beneath each header field value (Date of Issue, Batch Number, Invoice No., Grade, Destination, Quantity of Bags, Order Number, Production Date, Quantity (Kg's), Best Before Date) that already appears in the on-screen COA, so the printed certificate matches the preview layout.
+
+---
+
+## 2026-07-20 — Gustav (COA Generator: align table column widths)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Fixed misaligned vertical column borders across the COA's stacked Microbiological Analyses, Cut Length Guidelines, and Other Analysis tables. Each `<table>` was auto-sizing its own 3 columns based on that table's longest cell content, so the borders drifted from one table to the next.
+- Both `CoaTable` (the live/editable generator preview) and `SampleTable` (the read-only example template at the bottom of the page) now use `table-layout: fixed` with a shared `<colgroup>` (32% / 38% / 30%), so column boundaries line up consistently across all tables. The PDF export (`exportPdf`) already computed matching widths and was unaffected.
+
+---
+
 ## 2026-07-17 — Alyssa (Supervisor Hub Roster: always show an auto pre-filled draft, never blank)
 
 **Files changed:** `app/(app)/supervisor/page.tsx`

@@ -1,0 +1,31 @@
+name: EU MRL sync
+
+# Keeps qms.eu_mrl current with the official EU Pesticides Database bulk MRL
+# export. The residue R-grade logic resolves each compound's Maximum Residue
+# Level from that table, so this is what keeps grading aligned with the live
+# EU limits.
+#
+# Requires:
+#   secrets.CRON_SECRET       — must match the CRON_SECRET env var on the server
+#   vars.EU_MRL_SYNC_URL      — (optional) base URL to hit; defaults to staging
+# The server itself needs EU_MRL_DOWNLOAD_URL set to the EU export URL.
+
+on:
+  schedule:
+    - cron: '0 03 * * 1'  # Mon 05:00 SAST — weekly refresh
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping EU MRL sync endpoint
+        env:
+          BASE_URL: ${{ vars.EU_MRL_SYNC_URL || 'https://cntpplatform-staging.rooibostea.co.za' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"commodities":["rooibos"]}' \
+            "${BASE_URL}/api/eu-mrl-sync/run"

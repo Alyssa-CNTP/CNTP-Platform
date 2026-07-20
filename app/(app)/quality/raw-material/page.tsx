@@ -739,7 +739,21 @@ function ResidueTable({ records, isAdmin, onRefresh, onComment }: {
   const [syncResult,  setSyncResult]  = useState('')
   const [enriching,   setEnriching]   = useState(false)
   const [enrichResult,setEnrichResult]= useState('')
+  const [mrlUploading,setMrlUploading]= useState(false)
+  const mrlFileRef = useRef<HTMLInputElement>(null)
   // Upload goes to Next.js API route — no external service needed
+
+  async function uploadEuMrlFile(file: File) {
+    setMrlUploading(true); setSyncResult('')
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const res = await fetch('/api/eu-mrl-sync/upload', { method: 'POST', body: fd })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setSyncResult(`✓ ${d.message ?? 'EU MRLs imported'}`)
+    } catch (e: any) { setSyncResult('✗ ' + e.message) }
+    finally { setMrlUploading(false); if (mrlFileRef.current) mrlFileRef.current.value = '' }
+  }
 
   async function deleteRecord(id: number) {
     if (!confirm('Delete this record?')) return
@@ -875,7 +889,7 @@ function ResidueTable({ records, isAdmin, onRefresh, onComment }: {
               if (!confirm('Re-enrich MRL data on all residue records? This fetches updated EU MRL values from the database.')) return
               setEnriching(true); setEnrichResult('')
               try {
-                const res = await fetch(`${API_URL}/api/admin/re-enrich-residues`, { method:'POST' })
+                const res = await fetch('/api/admin/re-enrich-residues', { method:'POST' })
                 const d = await res.json()
                 if (!res.ok) throw new Error(d.error)
                 setEnrichResult(`✓ ${d.updated ?? 0} records enriched`)
@@ -894,7 +908,7 @@ function ResidueTable({ records, isAdmin, onRefresh, onComment }: {
               if (!confirm('Sync EU MRL data from the official EU Pesticides Database? This may take a moment.')) return
               setSyncing(true); setSyncResult('')
               try {
-                const res = await fetch(`${API_URL}/api/eu-mrl-sync/run`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({commodities:['rooibos']}) })
+                const res = await fetch('/api/eu-mrl-sync/run', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({commodities:['rooibos']}) })
                 const d = await res.json()
                 if (!res.ok) throw new Error(d.error)
                 setSyncResult(`✓ EU MRL sync started — ${d.message ?? 'check status'}`)
@@ -905,6 +919,24 @@ function ResidueTable({ records, isAdmin, onRefresh, onComment }: {
             className="px-3 py-1.5 rounded-lg text-[11px] font-semibold border border-info/30 bg-info/8 text-info hover:bg-info/15 transition-colors whitespace-nowrap">
             {syncing ? '⏳ Syncing…' : '🌍 EU MRL Sync'}
           </button>
+        )}
+        {isAdmin && (
+          <>
+            <input
+              ref={mrlFileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadEuMrlFile(f) }}
+            />
+            <button
+              disabled={mrlUploading}
+              onClick={() => mrlFileRef.current?.click()}
+              title="Upload the EU 'Current MRL' export (Export_Pesticide_residue_CurrentMRL.xlsx) for Rooibos"
+              className="px-3 py-1.5 rounded-lg text-[11px] font-semibold border border-ok/30 bg-ok/8 text-ok hover:bg-ok/15 transition-colors whitespace-nowrap">
+              {mrlUploading ? '⏳ Importing…' : '⬆️ Upload EU MRL file'}
+            </button>
+          </>
         )}
         <a
           href="https://ec.europa.eu/food/plant/pesticides/eu-pesticides-database/start/screen/mrls"
