@@ -5,6 +5,49 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Alyssa (Supervisor Hub Roster: always show an auto pre-filled draft, never blank)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`
+
+- The Roster tab's Staffing view now **never sits blank**. When the roster period covering today has no production crew yet — or no period covers today at all — it shows an **unsaved pre-filled draft** carried over from the most recent populated period with **day↔night swapped** (the same rule the weekly rotate cron uses). A brand-tinted banner explains it's a starting point; the supervisor adjusts and **Saves** to confirm.
+- **Save now materialises a period if none exists.** `saveDraft()` returns the period it wrote into; a missing "this week" period is created via `nextPeriodConfig()` chained forward from the latest period — the *same cadence the rotate cron uses*, so the dates line up and the cron's idempotency check skips it (no duplicate/overlap). Falls back to a 7-day week from today only when there's no roster history at all.
+- No change to the weekly **auto-swap cron** (`/api/production/roster/cron?task=rotate`), `roster-rotate.ts`, the full `/production/roster` tool, or the capture-section autofill — all untouched. This only makes the Hub's Roster tab self-sufficient so a supervisor always has something to work from.
+- **Verified:** `tsc --noEmit` identical to baseline; `/supervisor` compiles and serves 200 with no console errors. Logged-in flows (pre-fill save when period empty, and save-creates-period when none covers today) still need a click-through on staging — no credentials in this environment.
+
+---
+
+## 2026-07-17 — Alyssa (Supervisor Hub Phase 2: redesign to 5 tabs, Production Manager sign-off role, PO reopen-request flow)
+
+**Files changed:** `components/supervisor/HubTabs.tsx`, `app/(app)/supervisor/page.tsx` (rewritten), `app/(app)/supervisor/signoff/page.tsx` (new), `app/(app)/supervisor/productions/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/auth/departments.ts`, `lib/notifications/recipients.ts`, `app/api/production/orders/[id]/reopen-request/route.ts` (new), `supabase/migrations/20260717_009_po_reopen_requests.sql` (new)
+
+- **Hub restructured to 5 tabs**, matched to what a low-tech-comfort supervisor actually needs day to day: **Roster → Sign-off → Productions → Messages → Timesheets**. The old Overview/Analytics/Calendar/Assign tabs are no longer in the primary nav (pages still exist, just not linked from the hub) — decluttered on purpose.
+- **New "Roster" tab** (`/supervisor`, the hub's landing page) with two sub-views, toggled at the top:
+  - **Staffing** — a focused, Production-only editor over the *same* `roster_entries` / `roster_periods` / `roster_section_status` tables the full company-wide Shift Roster uses — not a data fork. A supervisor edits who's on each line and **Saves** a draft; only a **Production Manager** can **Submit** it (edit/save stays with the supervisor; sign-off moves up a tier). **Print** is open to anyone who can view. Links out to the full multi-department roster tool for period management.
+  - **Today's sections** — the daily section-assignment tool (operators + variant + lot + production order per section, per shift; this is what actually unlocks capture). The existing `/production/capture/assign` component is **embedded unchanged** — its save behaviour and capture-unlock are untouched, no save/submit split added (it's operational/time-sensitive: a saved assignment is live immediately, as before). This restores the entry point the initial Phase 2 nav had dropped.
+- **New "Sign-off" tab** (`/supervisor/signoff`): the "which lines are running, what's waiting on my signature" view, extracted from the old Overview — KPI strip and 7-day trend charts were deliberately cut (analytics, not a daily tool).
+- **New role: Production Manager** (`production_manager`, Production dept) — submits the Roster's Production section and decides "reopen this PO" requests; does not edit capture sessions or the roster directly. New permission `can_approve_reopen_request`. `production_supervisor` no longer holds `can_submit_roster_production` (moved to the new role) but keeps everything else, incl. Maintenance roster submit.
+- **"Productions" tab reopen-request flow**: a supervisor can no longer reopen a submitted/signed-off session directly from the Hub — they **submit a request with a reason**; it notifies Production Managers + IT (in-app + email), who **approve or decline** from a panel right on the same tab. Approval flips the session back to `draft` (same effect as the existing direct "Reopen for edits" action on `/production/orders`, which is untouched and still available to whoever holds `can_edit_session`) and is written to the audit log. New table `production.po_reopen_requests`.
+- **Verification:** `tsc --noEmit` across the whole project — identical error set before/after (30 pre-existing errors, none in touched files). `next build` compiled successfully across the whole app (including every new/changed file); the one build-time failure that followed is in an unrelated, untouched route (`/api/accounts/[id]`, pre-existing env issue). **Could not drive the logged-in Supervisor Hub flows in a browser — no valid login credentials were available in this environment.** Please click through Roster (save + submit as both roles), Sign-off, and the reopen-request flow on staging before treating this as fully verified.
+
+---
+
+## 2026-07-17 — Alyssa (Timesheets: fix worked-minutes — anchor to login → sign-off, stop inferring breaks from gaps, changeover prompt)
+
+**Files changed:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260717_008_timesheet_worked_minutes_recompute.sql` (new, optional/manual)
+
+- **Root cause fixed:** worked-time was `span − inferred_breaks`, and *any* inactivity gap ≥5 min was inferred as a break (>30 min = lunch). Operators do long stretches of physical floor work without touching the tablet, so a full shift collapsed into one giant "lunch" and worked-time came out as minutes (e.g. an 08:24–15:57 shift showing **8m**, several showing **0m**).
+- **`deriveTimesheet` rewritten** to anchor to real clock events, never gaps:
+  - **shift start = the operator's first activity stamp = login / page-open** — fixed, read-only ("can't be changed").
+  - **shift end = when they reach sign-off / submit** (passed in as `endIso`), falling back to the last stamp.
+  - **breaks = the standard tea/lunch schedule for the shift only**, clipped to the worked window so an out-of-window break (e.g. a 13:00 lunch for someone who left at 12:00) can't subtract. No gap-inference.
+  - `workedMinutes` now subtracts only the portion of each break that overlaps `[start, end]`; never negative.
+- **TimesheetConfirm:** the start field is now read-only (login-anchored); the end defaults to sign-off time; copy updated. Removed the dead gap constants.
+- **Changeover-aware submit:** when a **morning** operator submits **before 15h30** having already run **2+ production orders**, a *"Is there a changeover?"* prompt appears. "Yes" logs a structured handover note (shows in Productions history + the next shift's handover banner) and submits; the incoming afternoon/night operator's own login records their shift start on a fresh record. "No" submits as end-of-day.
+- **Verified** against 6 scenarios incl. the exact screenshot case → now **6h 33m** (was 8m), end-anchored-to-submit, and out-of-window break clipping.
+- **Optional historical recompute** (`…_008_…recompute.sql`) — preview-first SELECT then a transaction-wrapped UPDATE to re-approximate existing confirmed rows (morning −60m, afternoon/night −75m). Approximate by design: old rows' end was the last tap, so they can be made sane but not exact. **Not auto-run.**
+
+---
+
 ## 2026-07-17 — Gustav (Sieving: add hourly "By Hour" view to Mesh Trend/Outliers charts)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

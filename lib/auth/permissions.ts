@@ -63,6 +63,7 @@ export type PermissionKey =
   | 'can_approve_session'
   | 'can_edit_session'
   | 'can_delete_session'
+  | 'can_approve_reopen_request'  // decide a supervisor's "request to reopen this PO" (Supervisor Hub)
   | 'can_edit_bag_tag'
   | 'can_delete_bag_tag'
   // Production — Master Inventory & Blends (BOM)
@@ -141,7 +142,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_ops_dashboard',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
-  'can_edit_session','can_delete_session','can_edit_bag_tag','can_delete_bag_tag',
+  'can_edit_session','can_delete_session','can_approve_reopen_request','can_edit_bag_tag','can_delete_bag_tag',
   'can_view_inventory','can_edit_inventory','can_delete_inventory',
   'can_view_blends','can_edit_blends','can_delete_blends',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
@@ -241,6 +242,7 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'production_default',    label: 'Production (Default)',     desc: 'All permissions off' },
     { role: 'floor_operator',        label: 'Floor Operator',           desc: 'PIN-based tablet access only — no system login' },
     { role: 'production_supervisor', label: 'Production Supervisor',    desc: 'Manages production floor, approves sessions, resets PINs' },
+    { role: 'production_manager',    label: 'Production Manager',       desc: 'Submits the Production shift roster and decides supervisor reopen requests — the supervisor edits & saves, the manager signs it off' },
     { role: 'warehouse_supervisor',  label: 'Warehouse Supervisor',     desc: 'Stock counts (warehouse side) + live capture history' },
     { role: 'stock_controller',      label: 'Stock Controller',         desc: 'Stock counts (stock side)' },
   ],
@@ -326,10 +328,24 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_delete_staff: true,
     // Training — can author/assign courses for their own floor sections
     can_author_training: true, can_assign_training: true,
-    // Shift roster — owns Production + Maintenance sections
+    // Shift roster — edits & saves the Production section (submit moved to
+    // production_manager, below — the supervisor's draft is only official once
+    // the manager signs it off); still owns Maintenance's submit.
     can_view_roster: true,
-    can_edit_roster_production: true, can_submit_roster_production: true, can_delete_roster_production: true,
+    can_edit_roster_production: true, can_delete_roster_production: true,
     can_edit_roster_maintenance: true, can_submit_roster_maintenance: true,
+  },
+
+  // ── Production Manager — Supervisor Hub sign-off tier. Sees everything the
+  // supervisor sees (read-only oversight) plus the two decisions that belong
+  // above the floor: submitting the Production roster the supervisor drafted,
+  // and deciding a supervisor's "reopen this PO" request. Does NOT edit
+  // capture sessions or the roster directly — that stays with the supervisor.
+  production_manager: {
+    can_view_all_sections: true, can_view_ops_dashboard: true, can_view_live_history: true,
+    can_export_csv: true,
+    can_view_roster: true, can_submit_roster_production: true,
+    can_approve_reopen_request: true,
   },
 
   // ── Store — owns the Store roster section ──────────────────────────────────
