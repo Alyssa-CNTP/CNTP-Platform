@@ -875,7 +875,7 @@ function ResidueTable({ records, isAdmin, onRefresh, onComment }: {
               if (!confirm('Re-enrich MRL data on all residue records? This fetches updated EU MRL values from the database.')) return
               setEnriching(true); setEnrichResult('')
               try {
-                const res = await fetch(`${API_URL}/api/admin/re-enrich-residues`, { method:'POST' })
+                const res = await fetch('/api/admin/re-enrich-residues', { method:'POST' })
                 const d = await res.json()
                 if (!res.ok) throw new Error(d.error)
                 setEnrichResult(`✓ ${d.updated ?? 0} records enriched`)
@@ -894,7 +894,7 @@ function ResidueTable({ records, isAdmin, onRefresh, onComment }: {
               if (!confirm('Sync EU MRL data from the official EU Pesticides Database? This may take a moment.')) return
               setSyncing(true); setSyncResult('')
               try {
-                const res = await fetch(`${API_URL}/api/eu-mrl-sync/run`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({commodities:['rooibos']}) })
+                const res = await fetch('/api/eu-mrl-sync/run', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({commodities:['rooibos']}) })
                 const d = await res.json()
                 if (!res.ok) throw new Error(d.error)
                 setSyncResult(`✓ EU MRL sync started — ${d.message ?? 'check status'}`)

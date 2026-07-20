@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (Raw Material Residue: fix "API_URL is not defined" + wire Re-enrich MRLs)
+
+**Files changed:** `app/(app)/quality/raw-material/page.tsx`, `app/api/admin/re-enrich-residues/route.ts` (new)
+
+- Fixed the runtime error **"✗ API_URL is not defined"** thrown by the residue-tab admin buttons. Two `fetch()` calls used an undefined `${API_URL}` global (a leftover from the old separate-Express-server era). Changed both to relative `/api/...` paths, consistent with the sibling "Recalculate R-Grades" button and the unified Next.js convention.
+- Added the missing backend route `POST /api/admin/re-enrich-residues` that powers the **"🔄 Re-enrich MRLs"** button. It re-runs the same EU MRL → R-grade computation used at upload time over every stored raw-material residue record (`qms.quality_records`, `workflow='residue'`), updates only records whose grades changed, and returns `{ updated, total }`. Gated on `can_save_records`.
+- **Note:** the separate "🌍 EU MRL Sync" button (`/api/eu-mrl-sync/run`, which would scrape the official EU Pesticides Database) still has no backend and will 404 — it needs an EU data source before it can be implemented. The "API_URL is not defined" crash on it is fixed regardless.
+
+---
+
 ## 2026-07-20 — Gustav (COA Generator: PDF export — centered columns, header field lines)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
