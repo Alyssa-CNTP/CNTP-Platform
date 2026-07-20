@@ -8,8 +8,80 @@
 // EU limit, falling back to the value printed on the lab report when the EU
 // table has no entry for that compound.
 
+import * as XLSX from 'xlsx'
+
 // Rooibos in the EU MRL database (Reg. (EC) 396/2005 Annex I product code).
 export const ROOIBOS_COMMODITY = { code: '0632020', name: 'Rooibos' }
+
+export type ParsedEuMrl = {
+  productCode: string
+  productName: string
+  rows: { pesticide: string; mrl_mg_kg: number | null; mrl_raw: string }[]
+}
+
+// Parse an official EU Pesticides Database "Export_Pesticide_residue_CurrentMRL"
+// workbook. Its real layout is:
+//   row 0..6  preamble ("Selected Product: 0632020 - Rooibos", legend, blanks)
+//   header    | Pesticide Id | Pesticide residue | Maximum residue level (mg/kg) |
+//   data...   one row per active substance; MRL like "0.01*" (* = at LOD)
+export function parseEuMrlWorkbook(buf: ArrayBuffer): ParsedEuMrl {
+  const wb = XLSX.read(buf, { type: 'array' })
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  const aoa = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' })
+
+  // Product code/name from the "Selected Product:" preamble line.
+  let productCode = '', productName = ''
+  for (const r of aoa) {
+    const m = String(r?.[0] ?? '').match(/Selected Product:\s*(\S+)\s*-\s*(.+)/i)
+    if (m) { productCode = m[1]; productName = m[2].trim(); break }
+  }
+
+  // Locate the real header row (needs a distinct name cell AND an MRL cell).
+  let h = -1, nameCol = -1, mrlCol = -1
+  for (let i = 0; i < aoa.length; i++) {
+    const cells = (aoa[i] || []).map((x: any) => String(x).trim())
+    const n = cells.findIndex((c: string) => /^pesticide residue$/i.test(c))
+    const m = cells.findIndex((c: string) => /^maximum residue level/i.test(c))
+    if (n >= 0 && m >= 0) { h = i; nameCol = n; mrlCol = m; break }
+  }
+  if (h < 0) return { productCode, productName, rows: [] }
+
+  const rows: ParsedEuMrl['rows'] = []
+  for (let i = h + 1; i < aoa.length; i++) {
+    const row = aoa[i] || []
+    const pesticide = String(row[nameCol] ?? '').trim()
+    if (!pesticide) continue
+    const raw = String(row[mrlCol] ?? '').trim()
+    rows.push({ pesticide, mrl_mg_kg: parseMrlValue(raw), mrl_raw: raw })
+  }
+  return { productCode, productName, rows }
+}
+
+// Turn parsed rows into qms.eu_mrl upsert payloads (dedup by normalised name).
+export function toEuMrlPayload(
+  parsed: ParsedEuMrl,
+  fallback: { code: string; name: string },
+  syncedAt: string,
+) {
+  const code = parsed.productCode || fallback.code
+  const name = parsed.productName || fallback.name
+  const byPest = new Map<string, any>()
+  for (const r of parsed.rows) {
+    const norm = normPesticide(r.pesticide)
+    if (!norm) continue
+    byPest.set(norm, {
+      pesticide: r.pesticide,
+      pesticide_norm: norm,
+      commodity_code: code,
+      commodity: name,
+      mrl_mg_kg: r.mrl_mg_kg,
+      mrl_raw: r.mrl_raw,
+      source: 'eu_pesticides_db',
+      synced_at: syncedAt,
+    })
+  }
+  return { code, name, payload: [...byPest.values()] }
+}
 
 // Normalise a pesticide / active-substance name so lab-report spellings and EU
 // spellings line up: lowercase, strip accents, drop anything in brackets

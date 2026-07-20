@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (EU MRL: real export parser + upload refresh path, loaded 516 Rooibos MRLs)
+
+**Files changed:** `lib/quality/eu-mrl.ts`, `app/api/eu-mrl-sync/run/route.ts`, `app/api/eu-mrl-sync/upload/route.ts` (new), `app/(app)/quality/raw-material/page.tsx`
+
+- Handled the **real** EU export format. The official "Export_Pesticide_residue_CurrentMRL.xlsx" has 6 preamble rows, a `Selected Product: 0632020 - Rooibos` line, then a 3-column table (`Pesticide Id | Pesticide residue | Maximum residue level (mg/kg)`, values like `0.01*`). Added `parseEuMrlWorkbook()` / `toEuMrlPayload()` that skip the preamble, auto-detect the header row, read the product code from the file, and parse ~516 substances.
+- **Added the reliable refresh mechanism: file upload.** The EU export is a session-based download with no stable auto-download URL, so refreshing = re-export from the EU site and upload. New route `POST /api/eu-mrl-sync/upload` (multipart) parses the file and replaces that commodity's MRL set. New **"⬆️ Upload EU MRL file"** button on the Raw Material → Residue tab.
+- Refactored `POST /api/eu-mrl-sync/run` (URL/cron path) to use the same shared parser, so both paths behave identically.
+- **Loaded the current Rooibos MRLs (516 substances, product 0632020) into the staging `qms.eu_mrl` table** from the supplied EU export, so grading works immediately. Values verified (e.g. Glyphosate 2, Difenoconazole 20, Chlorpyrifos 0.01 mg/kg).
+- **How updates work going forward:** click "⬆️ Upload EU MRL file" with a fresh EU export whenever the EU revises MRLs (a few times a year), then "🔄 Re-enrich MRLs" to re-grade existing records. Production `qms.eu_mrl` needs the same load when promoted.
+
+---
+
 ## 2026-07-20 — Gustav (EU MRL sync: residue grades tracked against the live EU database)
 
 **Files changed:** `supabase/migrations/20260720_001_eu_mrl.sql` (new), `lib/quality/eu-mrl.ts` (new), `app/api/eu-mrl-sync/run/route.ts` (new), `.github/workflows/eu-mrl-sync.yml` (new), `app/api/upload/route.ts`, `app/api/admin/re-enrich-residues/route.ts`

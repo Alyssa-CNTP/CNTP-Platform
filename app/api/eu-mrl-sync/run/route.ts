@@ -20,23 +20,10 @@
 //   EU_MRL_COMMODITY_NAME    — human label (default 'Rooibos')
 
 import { NextRequest, NextResponse } from 'next/server'
-import * as XLSX from 'xlsx'
 import { getAdminClient, getCallerPermissions } from '@/lib/auth/server-helpers'
-import { normPesticide, parseMrlValue, ROOIBOS_COMMODITY } from '@/lib/quality/eu-mrl'
+import { parseEuMrlWorkbook, toEuMrlPayload, ROOIBOS_COMMODITY } from '@/lib/quality/eu-mrl'
 
 export const maxDuration = 60
-
-// Heuristic column detection — the EU export headers vary between views.
-const isPesticideHeader = (h: string) =>
-  /pesticide|substance|residue definition|active/i.test(h) && !/level|mrl|value/i.test(h)
-const isMrlHeader = (h: string) =>
-  /\bmrl\b|residue level|maximum residue|mg\/kg|value/i.test(h)
-
-function rowsFromWorkbook(buf: ArrayBuffer): Record<string, any>[] {
-  const wb = XLSX.read(buf, { type: 'array' })
-  const sheet = wb.Sheets[wb.SheetNames[0]]
-  return XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' })
-}
 
 export async function POST(req: NextRequest) {
   // ── Auth: cron secret OR an authenticated user who can save records ──
@@ -69,11 +56,12 @@ export async function POST(req: NextRequest) {
     logId = (logRow as any)?.id ?? null
   } catch { /* logging is best-effort */ }
 
-  const finish = async (status: string, message: string, rows?: number) => {
+  const finish = async (status: string, message: string, rows?: number, commodity?: string) => {
     if (logId != null) {
       try {
         await db.schema('qms' as any).from('eu_mrl_sync_log')
-          .update({ status, message, rows_upserted: rows ?? null, finished_at: new Date().toISOString() })
+          .update({ status, message, rows_upserted: rows ?? null,
+                    commodity: commodity ?? null, finished_at: new Date().toISOString() })
           .eq('id', logId)
       } catch { /* ignore */ }
     }
@@ -95,42 +83,19 @@ export async function POST(req: NextRequest) {
     }
     const buf = await res.arrayBuffer()
 
-    // ── Parse (xlsx handles both .xlsx and .csv) ──
-    const rows = rowsFromWorkbook(buf)
-    if (!rows.length) {
+    // ── Parse the official EU "Current MRL" export layout ──
+    const parsed = parseEuMrlWorkbook(buf)
+    if (!parsed.rows.length) {
       const msg = 'EU export parsed to zero rows — check EU_MRL_DOWNLOAD_URL / format.'
       await finish('error', msg)
       return NextResponse.json({ error: msg }, { status: 422 })
     }
 
-    const headers = Object.keys(rows[0])
-    const pestCol = headers.find(isPesticideHeader) ?? headers[0]
-    const mrlCol = headers.find(isMrlHeader)
-    if (!mrlCol) {
-      const msg = `Could not find an MRL column in EU export. Headers: ${headers.join(', ')}`
-      await finish('error', msg)
-      return NextResponse.json({ error: msg }, { status: 422 })
-    }
+    const { code: commodityCodeFinal, name: commodityNameFinal, payload } =
+      toEuMrlPayload(parsed, { code: commodityCode, name: commodityName }, new Date().toISOString())
 
-    // ── Build upsert payload (last value wins per pesticide) ──
-    const byPest = new Map<string, any>()
-    for (const r of rows) {
-      const pesticide = String(r[pestCol] ?? '').trim()
-      if (!pesticide) continue
-      const norm = normPesticide(pesticide)
-      if (!norm) continue
-      byPest.set(norm, {
-        pesticide,
-        pesticide_norm: norm,
-        commodity_code: commodityCode,
-        commodity: commodityName,
-        mrl_mg_kg: parseMrlValue(r[mrlCol]),
-        mrl_raw: String(r[mrlCol] ?? ''),
-        source: 'eu_pesticides_db',
-        synced_at: new Date().toISOString(),
-      })
-    }
-    const payload = [...byPest.values()]
+    // Replace this commodity's set so removed substances don't linger.
+    await db.schema('qms' as any).from('eu_mrl').delete().eq('commodity_code', commodityCodeFinal)
 
     // ── Upsert in chunks on the unique (pesticide_norm, commodity_code) key ──
     let upserted = 0
@@ -147,12 +112,12 @@ export async function POST(req: NextRequest) {
       upserted += chunk.length
     }
 
-    await finish('success', `Synced ${upserted} MRLs for ${commodityName}.`, upserted)
+    await finish('success', `Synced ${upserted} MRLs for ${commodityNameFinal}.`, upserted, commodityNameFinal)
     return NextResponse.json({
       success: true,
-      message: `Synced ${upserted} EU MRLs for ${commodityName}`,
+      message: `Synced ${upserted} EU MRLs for ${commodityNameFinal}`,
       updated: upserted,
-      commodity: commodityName,
+      commodity: commodityNameFinal,
     })
   } catch (e: any) {
     const msg = e?.message ?? 'Unexpected error during EU MRL sync'
