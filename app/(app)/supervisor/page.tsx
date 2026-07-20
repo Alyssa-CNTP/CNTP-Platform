@@ -1,15 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, addDays } from 'date-fns'
 import {
   Users, Loader2, Save, Send, Printer, X, Plus, CheckCircle2,
-  Lock, ArrowRight, Info, ClipboardList,
+  Lock, ArrowRight, Info, ClipboardList, Sparkles,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { ROSTER_ROLE_SEED, type RosterRole } from '@/lib/production/roster-config'
+import { nextPeriodConfig } from '@/lib/production/roster-rotate'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 // The daily "Assign sections" tool (operators + variant + lot + PO per section,
 // per shift) is embedded here as a second view of the Roster tab. It is
@@ -70,36 +71,82 @@ export default function SupervisorRoster() {
   // 'staffing' = the fortnightly who-works-which-role grid (this file);
   // 'sections' = the daily Assign-sections tool, embedded unchanged.
   const [view, setView] = useState<'staffing' | 'sections'>('staffing')
+  // The tab is never blank: when the period covering today has no production
+  // crew yet (or no period exists at all), we show an unsaved DRAFT pre-filled
+  // from the most recent populated period, day↔night swapped — the same rule
+  // the weekly rotate cron uses. isPrefill flags that the shown grid isn't saved
+  // yet; latestPeriod is the newest period overall (for cadence chaining when we
+  // have to create today's period on save); prefillSourceName is for the banner.
+  const [isPrefill, setIsPrefill]           = useState(false)
+  const [latestPeriod, setLatestPeriod]     = useState<Period | null>(null)
+  const [prefillSourceName, setPrefillSourceName] = useState<string | null>(null)
+
+  async function loadLeave(start: string, end: string) {
+    const { data: leave } = await db().from('employee_leave_active').select('employee_id')
+      .lte('start_date', end).gte('end_date', start)
+    setLeaveIds(new Set(((leave as any[]) ?? []).map(r => r.employee_id).filter(Boolean)))
+  }
 
   async function load() {
     setLoading(true); setError(null)
     try {
       const today = sastToday()
-      const [{ data: periods }, { data: emps }] = await Promise.all([
+      const roleKeys = PRODUCTION_ROLES.map(r => r.key)
+      // Pull the recent periods (not just today's) so we can both find the one
+      // covering today AND fall back to the last populated one for a pre-fill.
+      const [{ data: periodsData }, { data: emps }] = await Promise.all([
         db().from('roster_periods')
           .select('id,name,start_date,end_date,day_label,night_label,status')
-          .lte('start_date', today).gte('end_date', today)
-          .order('start_date', { ascending: false }).limit(1),
+          .order('start_date', { ascending: false }).limit(8),
         db().from('employees').select('id,name,display_name,operator_id').eq('active', true).order('name'),
       ])
       setEmployees((emps as Employee[]) ?? [])
-      const per = ((periods as Period[]) ?? [])[0] ?? null
-      setPeriod(per)
-      if (!per) { setEntries([]); setStatus(null); setLoading(false); return }
+      const periodsList = (periodsData as Period[]) ?? []
+      setLatestPeriod(periodsList[0] ?? null)
+      const covering = periodsList.find(pp => pp.start_date <= today && today <= pp.end_date) ?? null
 
-      const roleKeys = PRODUCTION_ROLES.map(r => r.key)
-      const [{ data: rows }, { data: st }, { data: leave }] = await Promise.all([
-        db().from('roster_entries')
+      // Production entries for every recent period in one query, grouped by period.
+      const byPeriod = new Map<string, Entry[]>()
+      if (periodsList.length) {
+        const { data: allRows } = await db().from('roster_entries')
           .select('id,period_id,role_key,shift,employee_id,operator_id,person_name')
-          .eq('period_id', per.id).in('role_key', roleKeys),
-        db().from('roster_section_status')
-          .select('status,submitted_by,submitted_at').eq('period_id', per.id).eq('section', 'production').maybeSingle(),
-        db().from('employee_leave_active').select('employee_id')
-          .lte('start_date', per.end_date).gte('end_date', per.start_date),
-      ])
-      setEntries((rows as Entry[]) ?? [])
-      setStatus((st as any) ?? { status: 'draft', submitted_by: null, submitted_at: null })
-      setLeaveIds(new Set(((leave as any[]) ?? []).map(r => r.employee_id).filter(Boolean)))
+          .in('period_id', periodsList.map(pp => pp.id)).in('role_key', roleKeys)
+        ;((allRows as Entry[]) ?? []).forEach(e => {
+          const a = byPeriod.get(e.period_id) ?? []; a.push(e); byPeriod.set(e.period_id, a)
+        })
+      }
+      const coveringEntries = covering ? (byPeriod.get(covering.id) ?? []) : []
+
+      if (covering && coveringEntries.length > 0) {
+        // Normal path — the covering period already has a crew (usually written
+        // by the weekly rotate cron). Show it as-is.
+        setPeriod(covering); setEntries(coveringEntries)
+        setIsPrefill(false); setPrefillSourceName(null)
+        const { data: st } = await db().from('roster_section_status')
+          .select('status,submitted_by,submitted_at').eq('period_id', covering.id).eq('section', 'production').maybeSingle()
+        setStatus((st as any) ?? { status: 'draft', submitted_by: null, submitted_at: null })
+        await loadLeave(covering.start_date, covering.end_date)
+      } else {
+        // Empty or missing covering period → build an unsaved pre-fill draft from
+        // the most recent period that HAS a crew, day↔night swapped, so the tab
+        // is never blank. It saves into the covering period (created on save if
+        // none exists yet).
+        const source = periodsList.find(pp => pp.id !== covering?.id && (byPeriod.get(pp.id)?.length ?? 0) > 0) ?? null
+        setPeriod(covering)  // may be null — saveDraft() will create it
+        if (source) {
+          const src = byPeriod.get(source.id) ?? []
+          setEntries(src.map((e, i) => ({
+            id: `tmp-prefill-${i}`, period_id: covering?.id ?? '',
+            role_key: e.role_key, shift: (e.shift === 'day' ? 'night' : 'day') as RShift,
+            employee_id: e.employee_id, operator_id: e.operator_id, person_name: e.person_name,
+          })))
+          setIsPrefill(true); setPrefillSourceName(source.name)
+        } else {
+          setEntries([]); setIsPrefill(false); setPrefillSourceName(null)
+        }
+        setStatus({ status: 'draft', submitted_by: null, submitted_at: null })
+        await loadLeave(covering?.start_date ?? today, covering?.end_date ?? today)
+      }
     } catch (e: any) {
       setError(e.message)
     }
@@ -112,11 +159,11 @@ export default function SupervisorRoster() {
 
   function addPerson(roleKey: string, shift: RShift, employeeId: string) {
     const emp = employees.find(e => e.id === employeeId)
-    if (!emp || !period) return
+    if (!emp) return
     if (cellEntries(roleKey, shift).some(e => e.employee_id === employeeId)) { setAddingCell(null); return }
     const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
     setEntries(es => [...es, {
-      id: tempId, period_id: period.id, role_key: roleKey, shift,
+      id: tempId, period_id: period?.id ?? '', role_key: roleKey, shift,
       employee_id: emp.id, operator_id: emp.operator_id ?? null,
       person_name: emp.display_name || emp.name,
     }])
@@ -130,14 +177,55 @@ export default function SupervisorRoster() {
 
   const isSubmitted = status?.status === 'submitted'
 
-  async function saveDraft(): Promise<boolean> {
-    if (!period || !canEdit) return false
+  // The period covering today, creating it if none exists. New periods are dated
+  // by chaining nextPeriodConfig() forward from the latest period — the SAME
+  // cadence the rotate cron uses — so a period created here lines up with what
+  // the cron would have made (its idempotency check then skips it, no duplicate).
+  // With no history at all, fall back to a plain 7-day week starting today.
+  async function ensurePeriod(): Promise<Period | null> {
+    if (period) return period
+    const today = sastToday()
+    let cfg: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }
+    if (latestPeriod) {
+      let c = nextPeriodConfig(latestPeriod)
+      let guard = 0
+      while (c.end < today && guard < 104) {
+        c = nextPeriodConfig({ id: '', name: c.name, start_date: c.start, end_date: c.end, day_label: c.dayLabel, night_label: c.nightLabel })
+        guard++
+      }
+      cfg = c
+      // If the newest period is itself in the future, the chain overshoots today;
+      // fall back to a today-anchored week rather than create a wrong-dated one.
+      if (cfg.start > today) {
+        const s = parseISO(today + 'T12:00:00'), e = addDays(s, 6)
+        cfg = { name: `${format(s, 'd')}–${format(e, 'd MMM')}`, start: today, end: format(e, 'yyyy-MM-dd'), dayLabel: latestPeriod.night_label || 'Shift B', nightLabel: latestPeriod.day_label || 'Shift A' }
+      }
+    } else {
+      const s = parseISO(today + 'T12:00:00'), e = addDays(s, 6)
+      cfg = { name: `${format(s, 'd')}–${format(e, 'd MMM')}`, start: today, end: format(e, 'yyyy-MM-dd'), dayLabel: 'Shift A', nightLabel: 'Shift B' }
+    }
+    const { data, error: e } = await db().from('roster_periods').insert({
+      name: cfg.name, start_date: cfg.start, end_date: cfg.end,
+      day_label: cfg.dayLabel, night_label: cfg.nightLabel, created_by: user?.id ?? null,
+    } as any).select('id,name,start_date,end_date,day_label,night_label,status').single()
+    if (e || !data) throw (e ?? new Error('Could not create a roster period'))
+    const created = { ...(data as any), status: (data as any).status ?? 'draft' } as Period
+    setPeriod(created)
+    return created
+  }
+
+  // Returns the period it saved into (null on failure) so the caller (submit)
+  // can act on a period that was created during this same save.
+  async function saveDraft(): Promise<Period | null> {
+    if (!canEdit) return null
     setSaving(true); setError(null)
     try {
+      const per = period ?? await ensurePeriod()
+      if (!per) throw new Error('No roster period')
       const roleKeys = PRODUCTION_ROLES.map(r => r.key)
-      await db().from('roster_entries').delete().eq('period_id', period.id).in('role_key', roleKeys)
+      await db().from('roster_entries').delete().eq('period_id', per.id).in('role_key', roleKeys)
       const toInsert = entries.map((e, i) => ({
-        period_id: period.id, role_key: e.role_key, shift: e.shift,
+        period_id: per.id, role_key: e.role_key, shift: e.shift,
         employee_id: e.employee_id, operator_id: e.operator_id, person_name: e.person_name, sort_order: i,
       }))
       let fresh: Entry[] = []
@@ -148,32 +236,33 @@ export default function SupervisorRoster() {
         fresh = (data as Entry[]) ?? []
       }
       setEntries(fresh)
+      setIsPrefill(false)  // it's now saved, no longer an unsaved pre-fill
       // Editing again un-submits it — matches the full roster tool's rule that a
       // save always drops the section back to draft (submit is a deliberate,
       // separate step over the CURRENT saved state, never stale).
       await db().from('roster_section_status').upsert({
-        period_id: period.id, section: 'production', status: 'draft', submitted_by: null, submitted_at: null,
+        period_id: per.id, section: 'production', status: 'draft', submitted_by: null, submitted_at: null,
       } as any, { onConflict: 'period_id,section' })
       setStatus({ status: 'draft', submitted_by: null, submitted_at: null })
       setSaved(true); setTimeout(() => setSaved(false), 2500)
-      return true
+      return per
     } catch (e: any) {
       setError(e.message)
-      return false
+      return null
     } finally {
       setSaving(false)
     }
   }
 
   async function submit() {
-    if (!period || !canSubmit) return
+    if (!canSubmit) return
     setSubmitting(true); setError(null)
     try {
-      const ok = await saveDraft()
-      if (!ok) { setSubmitting(false); return }
+      const per = await saveDraft()
+      if (!per) { setSubmitting(false); return }
       const submitted_at = new Date().toISOString()
       await db().from('roster_section_status').upsert({
-        period_id: period.id, section: 'production', status: 'submitted',
+        period_id: per.id, section: 'production', status: 'submitted',
         submitted_by: user?.id ?? null, submitted_at,
       } as any, { onConflict: 'period_id,section' })
       setStatus({ status: 'submitted', submitted_by: user?.id ?? null, submitted_at })
@@ -224,13 +313,26 @@ export default function SupervisorRoster() {
         <div className="no-print"><AssignSectionsTool /></div>
       ) : loading ? (
         <div className="flex items-center justify-center py-24"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
-      ) : !period ? (
+      ) : (!period && !isPrefill && entries.length === 0) ? (
         <div className="text-center py-16 bg-surface-card border border-surface-rule rounded-2xl">
-          <p className="font-mono text-[12px] text-stone-400">No roster period covers today yet.</p>
+          <p className="font-mono text-[12px] text-stone-400">No roster period covers today yet, and no earlier roster to pre-fill from.</p>
           <Link href="/production/roster" className="text-[12px] text-brand hover:underline mt-1 inline-block">Set one up on the full Shift Roster →</Link>
         </div>
       ) : (
         <>
+          {/* Pre-fill notice — the grid below is an unsaved suggestion carried
+              over from the last populated roster (day↔night swapped), so the
+              tab is never blank. Saving confirms it for this period. */}
+          {isPrefill && (
+            <div className="no-print flex items-start gap-2.5 px-4 py-3 rounded-xl text-[12px] border bg-brand/5 border-brand/20 text-brand-mid">
+              <Sparkles size={14} className="shrink-0 mt-0.5" />
+              <span>
+                Pre-filled from <strong>{prefillSourceName ?? 'the last roster'}</strong>, day &amp; night swapped — a starting point so this week is never blank.
+                Adjust who&apos;s where, then <strong>Save</strong> to confirm{!period ? ' (this also creates this week&apos;s roster period)' : ''}.
+              </span>
+            </div>
+          )}
+
           {/* Status + explanation */}
           <div className={`no-print flex items-start gap-2.5 px-4 py-3 rounded-xl text-[12px] border ${isSubmitted ? 'bg-ok/5 border-ok/20 text-ok' : 'bg-info/5 border-info/20 text-info'}`}>
             {isSubmitted ? <Lock size={14} className="shrink-0 mt-0.5" /> : <Info size={14} className="shrink-0 mt-0.5" />}
@@ -247,8 +349,8 @@ export default function SupervisorRoster() {
 
           {/* Print header (screen shows the HubHeader above instead) */}
           <div className="print-only mb-4">
-            <h1 className="font-display font-bold text-[18px]">Production Roster · {period.name}</h1>
-            <p className="text-[12px] text-stone-500">{format(parseISO(period.start_date + 'T12:00:00'), 'd MMM')}–{format(parseISO(period.end_date + 'T12:00:00'), 'd MMM yyyy')}</p>
+            <h1 className="font-display font-bold text-[18px]">Production Roster{period ? ` · ${period.name}` : ''}</h1>
+            {period && <p className="text-[12px] text-stone-500">{format(parseISO(period.start_date + 'T12:00:00'), 'd MMM')}–{format(parseISO(period.end_date + 'T12:00:00'), 'd MMM yyyy')}</p>}
           </div>
 
           {/* Role grid */}
