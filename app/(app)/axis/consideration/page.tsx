@@ -846,7 +846,7 @@ export default function ConsiderationBoard() {
                     className="px-2 py-1.5 text-[11px] bg-surface-card border border-surface-rule rounded-lg focus:outline-none focus:border-brand/40">
                     <option value="all">All types</option>
                     <option value="code">Code contributions</option>
-                    <option value="feature">Feature requests</option>
+                    <option value="feature">Major projects</option>
                   </select>
                 </div>
                 <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)}

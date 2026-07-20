@@ -5,6 +5,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { notify } from '@/lib/notifications'
+import { resolveRecipients } from '@/lib/notifications/recipients'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -34,7 +36,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const isIT      = caller.department === 'IT'
   const canAssign = caller.can('can_assign_tickets')
-  if (!isIT && !canAssign)
+
+  const admin = getAdminClient()
+  const axis  = (admin as any).schema('axis')
+
+  // Fetch the current ticket first — needed to know if the caller is the assignee
+  const { data: current } = await axis.from('tickets').select('title,status,assigned_to,assigned_name').eq('id', id).single()
+
+  const isMyTicket = current?.assigned_to === caller.userId
+  if (!isIT && !canAssign && !isMyTicket)
     return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
 
   const body = await req.json()
@@ -43,12 +53,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   for (const key of allowed) {
     if (key in body) update[key] = body[key]
   }
-
-  const admin = getAdminClient()
-  const axis  = (admin as any).schema('axis')
-
-  // Fetch the current ticket to know previous state
-  const { data: current } = await axis.from('tickets').select('title,status,assigned_to,assigned_name').eq('id', id).single()
 
   // Capture resolver when marking resolved
   if (body.status === 'resolved' && current?.status !== 'resolved') {
@@ -74,14 +78,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const { data: callerRow } = await (admin as any)
       .schema('shared').from('app_roles').select('full_name').eq('user_id', caller.userId).single()
     const assignerName = callerRow?.full_name ?? 'IT'
-    await axis.from('notifications').insert({
-      recipient_id:    body.assigned_to,
-      type:            'ticket_assigned',
-      title:           `Ticket assigned to you`,
-      body:            `${assignerName} assigned "${current?.title ?? ''}" to you.`,
-      reference_id:    id,
-      reference_table: 'tickets',
-    }).then(({ error: ne }: any) => { if (ne) console.error('[tickets PATCH] notify assign:', ne) })
+    const [recipient] = await resolveRecipients([body.assigned_to])
+    if (recipient) {
+      await notify({
+        recipients: [recipient],
+        kind:       'ticket_assigned',
+        title:      'Ticket assigned to you',
+        body:       `${assignerName} assigned "${current?.title ?? ''}" to you.`,
+        url:        '/axis/tickets',
+        channels:   ['inApp', 'email'],
+      })
+    }
   }
 
   return NextResponse.json({ ok: true })

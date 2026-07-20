@@ -28,9 +28,17 @@ interface TicketRow {
   resolved_at: string | null
   created_by: string
   created_by_name: string | null
+  submitter_department?: string | null
+  is_anonymous?: boolean
   due_date: string | null
   auto_routed: boolean
   created_at: string
+}
+
+interface TicketManager {
+  id: string
+  name: string
+  department: string | null
 }
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
@@ -234,8 +242,22 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
   const [assignee, setAssignee] = useState({ name: ticket.assigned_name, id: ticket.assigned_to })
   const [saving,   setSaving]   = useState(false)
   const [err,      setErr]      = useState('')
+  const [managers, setManagers] = useState<TicketManager[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
 
-  const canManage = isIT || p('can_assign_tickets')
+  const isMyTicket = assignee.id === userId
+  // True ticket managers (IT / can_assign_tickets) can reassign to anyone;
+  // the current assignee can additionally manage their own ticket's status.
+  const canReassign = isIT || p('can_assign_tickets')
+  const canManage = canReassign || isMyTicket
+
+  useEffect(() => {
+    if (!canReassign) return
+    fetch('/api/axis/users?scope=ticket_managers')
+      .then(r => r.ok ? r.json() : [])
+      .then(setManagers)
+      .catch(() => {})
+  }, [canReassign])
 
   async function patch(body: Record<string, unknown>) {
     setSaving(true); setErr('')
@@ -266,8 +288,12 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
     if (ok) setAssignee({ id: null, name: null })
   }
 
+  async function assignTo(user: TicketManager) {
+    const ok = await patch({ assigned_to: user.id, assigned_name: user.name })
+    if (ok) { setAssignee({ id: user.id, name: user.name }); setPickerOpen(false) }
+  }
+
   const isResolved = status === 'resolved' || status === 'closed'
-  const isMyTicket = assignee.id === userId
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/30 backdrop-blur-sm" onClick={onClose}>
@@ -323,10 +349,37 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
           {/* Assignment */}
           <div>
             <p className="font-mono text-[10px] uppercase tracking-wider text-stone-400 mb-2">Assigned to</p>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap relative">
               <span className="text-[13px] font-medium text-stone-700">
                 {assignee.name ?? <span className="text-stone-400 italic">Unassigned</span>}
               </span>
+              {canReassign && (
+                <div className="relative">
+                  <button
+                    onClick={() => setPickerOpen(o => !o)}
+                    disabled={saving}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-stone-200 text-stone-600 text-[11px] font-semibold hover:bg-stone-50 disabled:opacity-50 transition-colors"
+                  >
+                    Assign to…
+                  </button>
+                  {pickerOpen && (
+                    <div className="absolute left-0 top-full mt-1 z-20 w-56 bg-white border border-stone-200 rounded-lg shadow-lg py-1 max-h-64 overflow-y-auto">
+                      {managers.length === 0 ? (
+                        <p className="px-3 py-2 text-[11px] text-stone-400">No eligible users found</p>
+                      ) : managers.map(m => (
+                        <button
+                          key={m.id}
+                          onClick={() => assignTo(m)}
+                          className="w-full text-left px-3 py-1.5 text-[12px] text-stone-700 hover:bg-stone-50 flex items-center justify-between gap-2"
+                        >
+                          <span>{m.name}</span>
+                          {m.id === assignee.id && <CheckCircle2 size={11} className="text-emerald-600 flex-shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {canManage && !isMyTicket && (
                 <button
                   onClick={assignToMe}
@@ -354,7 +407,9 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
             {[
               { label: 'Category',   value: CATEGORY_LABEL[ticket.category] ?? ticket.category },
               { label: 'Type',       value: ticket.ticket_type },
-              { label: 'Created by', value: ticket.created_by_name ?? '—' },
+              { label: 'Created by', value: ticket.is_anonymous
+                  ? `Anonymous${ticket.submitter_department ? ' · ' + ticket.submitter_department : ''}`
+                  : (ticket.created_by_name ?? '—') },
               { label: 'Due date',   value: fmtDate(ticket.due_date) },
               { label: 'Logged',     value: timeAgo(ticket.created_at) },
               ...(isResolved && ticket.resolved_by_name ? [{ label: 'Resolved by', value: ticket.resolved_by_name + (ticket.resolved_at ? ' · ' + fmtDate(ticket.resolved_at) : '') }] : []),
@@ -371,12 +426,6 @@ function TicketDetail({ ticket, onClose, onUpdate }: {
             <div>
               <p className="font-mono text-[10px] uppercase tracking-wider text-stone-400 mb-2">Description</p>
               <p className="text-[13px] text-stone-600 leading-relaxed whitespace-pre-wrap">{ticket.description}</p>
-            </div>
-          )}
-
-          {ticket.auto_routed && (
-            <div className="px-3 py-2 rounded-lg bg-sky-50 border border-sky-200">
-              <p className="text-[11px] text-sky-600">Auto-routed based on category</p>
             </div>
           )}
 

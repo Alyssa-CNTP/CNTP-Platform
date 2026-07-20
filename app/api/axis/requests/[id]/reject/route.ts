@@ -3,6 +3,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { notify } from '@/lib/notifications'
+import { resolveRecipients } from '@/lib/notifications/recipients'
 
 export async function POST(
   req: NextRequest,
@@ -40,15 +42,19 @@ export async function POST(
     return NextResponse.json({ error: updErr.message }, { status: 500 })
   }
 
-  const { error: notifErr } = await axis.from('notifications').insert({
-    recipient_id:    reqData.submitted_by,
-    type:            'project_rejected',
-    title:           'Project not approved',
-    body:            `Your project "${reqData.title}" was not approved. Reason: ${reason.trim()}`,
-    reference_id:    id,
-    reference_table: 'project_requests',
-  })
-  if (notifErr) console.error('[reject] notification insert', notifErr)
+  if (reqData.submitted_by) {
+    const [recipient] = await resolveRecipients([reqData.submitted_by])
+    if (recipient) {
+      await notify({
+        recipients: [recipient],
+        kind:       'project_rejected',
+        title:      'Project not approved',
+        body:       `Your project "${reqData.title}" was not approved. Reason: ${reason.trim()}`,
+        url:        '/axis/consideration',
+        channels:   ['inApp', 'email'],
+      })
+    }
+  }
 
   return NextResponse.json({ ok: true })
 }
