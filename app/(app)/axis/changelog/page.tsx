@@ -9,7 +9,7 @@ import { CommentThread } from '@/components/axis/CommentThread'
 import {
   Loader2, Plus, Lock, Clock, ChevronDown, ChevronUp,
   X, CornerDownRight, Code2, Cpu, Package, Server,
-  Shield, Activity, Layers, FolderOpen,
+  Shield, Activity, Layers, FolderOpen, GitMerge,
 } from 'lucide-react'
 
 // ─── Category taxonomy — maps to OneDrive folder structure ────────────────────
@@ -130,6 +130,11 @@ interface ChangeLog {
   review_status: string; source: string; created_at: string
   is_locked: boolean; edit_deadline: string
   environment: string | null; affected_systems: string | null
+  github_pr_number?: number | null
+  github_pr_url?: string | null
+  github_author?: string | null
+  github_avatar_url?: string | null
+  github_diff_stat?: { additions: number | null; deletions: number | null; changed_files: number | null } | null
 }
 
 interface Update {
@@ -191,6 +196,8 @@ function LogRow({ log, projects }: { log: ChangeLog; projects: Project[] }) {
   const Icon    = cat.icon
   const env     = ENVS[log.environment as EnvKey] ?? null
   const project = projects.find(p => p.id === log.project_id)
+  const isGithub = log.source === 'github'
+  const diff     = log.github_diff_stat
 
   // Load updates on first expand
   useEffect(() => {
@@ -240,20 +247,40 @@ function LogRow({ log, projects }: { log: ChangeLog; projects: Project[] }) {
         className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-raised transition-colors"
         onClick={() => setOpen(o => !o)}
       >
-        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cat.dot}`} />
-        <Icon size={13} className="text-text-muted flex-shrink-0" />
+        {isGithub && log.github_avatar_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={log.github_avatar_url} alt={log.github_author ?? 'GitHub'} className="w-5 h-5 rounded-full flex-shrink-0" />
+        ) : (
+          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cat.dot}`} />
+        )}
+        {!isGithub && <Icon size={13} className="text-text-muted flex-shrink-0" />}
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-            <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${cat.active}`}>
-              {cat.num} {cat.label}
-            </span>
+            {isGithub ? (
+              <a
+                href={log.github_pr_url ?? '#'}
+                target="_blank"
+                rel="noreferrer"
+                onClick={e => e.stopPropagation()}
+                className="font-mono text-[9px] px-1.5 py-0.5 rounded border bg-info/10 text-info border-info/20 flex items-center gap-1 hover:bg-info/20 transition-colors"
+              >
+                <GitMerge size={9} /> #{log.github_pr_number}
+              </a>
+            ) : (
+              <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${cat.active}`}>
+                {cat.num} {cat.label}
+              </span>
+            )}
             {log.sub_folder && (
               <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${cat.active} opacity-70`}>
                 ↳ {log.sub_folder}
               </span>
             )}
-            <span className="font-mono text-[10px] text-text-muted">{log.change_type}</span>
+            {!isGithub && <span className="font-mono text-[10px] text-text-muted">{log.change_type}</span>}
+            {isGithub && log.github_author && (
+              <span className="font-mono text-[10px] text-text-muted">by {log.github_author}</span>
+            )}
             {env && (
               <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${env.badge}`}>
                 {env.label.toLowerCase()}
@@ -274,14 +301,22 @@ function LogRow({ log, projects }: { log: ChangeLog; projects: Project[] }) {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {diff && (diff.additions !== null || diff.deletions !== null) && (
+            <span className="font-mono text-[10px] flex items-center gap-1">
+              <span className="text-ok">+{diff.additions ?? 0}</span>
+              <span className="text-err">−{diff.deletions ?? 0}</span>
+            </span>
+          )}
           {updates && updates.length > 0 && (
             <span className="font-mono text-[9px] px-1.5 py-0.5 rounded-full bg-surface border border-surface-rule text-text-faint">
               {updates.length}
             </span>
           )}
-          <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${RISK_BADGE[log.risk_level] ?? ''}`}>
-            {log.risk_level}
-          </span>
+          {!isGithub && (
+            <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${RISK_BADGE[log.risk_level] ?? ''}`}>
+              {log.risk_level}
+            </span>
+          )}
           <span className="font-mono text-[10px] text-text-faint hidden md:block">{fmt(log.created_at)}</span>
           {log.is_locked
             ? <Lock size={11} className="text-text-faint" />
@@ -314,12 +349,22 @@ function LogRow({ log, projects }: { log: ChangeLog; projects: Project[] }) {
                 <p className="text-[12px] text-text-muted">{log.affected_systems}</p>
               </div>
             )}
-            <div>
-              <p className="font-mono text-[9px] uppercase tracking-wide text-text-faint mb-0.5">OneDrive folder</p>
-              <p className="font-mono text-[10px] text-text-muted">
-                {cat.folder}{log.sub_folder ? ` / ${log.sub_folder}` : ''}
-              </p>
-            </div>
+            {isGithub ? (
+              <div>
+                <p className="font-mono text-[9px] uppercase tracking-wide text-text-faint mb-0.5">GitHub PR</p>
+                <a href={log.github_pr_url ?? '#'} target="_blank" rel="noreferrer"
+                  className="font-mono text-[10px] text-info hover:underline">
+                  {log.github_pr_url}
+                </a>
+              </div>
+            ) : (
+              <div>
+                <p className="font-mono text-[9px] uppercase tracking-wide text-text-faint mb-0.5">OneDrive folder</p>
+                <p className="font-mono text-[10px] text-text-muted">
+                  {cat.folder}{log.sub_folder ? ` / ${log.sub_folder}` : ''}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Progress timeline */}
@@ -424,8 +469,11 @@ export default function ChangelogPage() {
   }, [showForm])
 
   const load = useCallback(async () => {
+    // Try the GitHub-backed feed first (it syncs new merged PRs into the same
+    // table and returns the unified list). Falls back to the plain manual
+    // list if GitHub isn't configured (503) — degrades gracefully either way.
     const [logsRes, projectsRes] = await Promise.all([
-      fetch('/api/axis/changelog'),
+      fetch('/api/axis/changelog/github').then(r => r.ok ? r : fetch('/api/axis/changelog')),
       fetch('/api/axis/projects'),
     ])
     if (logsRes.ok) {

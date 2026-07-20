@@ -1,19 +1,21 @@
 'use client'
 
 // app/(app)/axis/request/page.tsx
-// Single entry point for everything users want to submit to AXIS.
-// Two tabs:
-//   • Project Request — formal request that goes to the IT consideration board
-//   • Suggestion       — lighter "idea / problem / question / general", routed to any department
+// Single entry point for everything users want to submit to AXIS. Four tabs:
+//   • Changes to current/new feature — small asks about a specific page, routed to Tickets
+//   • Major Project Request          — formal proposal, routed to the IT consideration board
+//   • Code Contribution              — code submission for IT audit, routed to the consideration board
+//   • Suggestion                     — anonymous idea/problem/question, routed to Tickets
 
 import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
+import { NAV } from '@/components/layout/Sidebar'
 import {
   CheckCircle2, Loader2, Send, Clock,
   Lightbulb, AlertTriangle, HelpCircle, MessageSquare,
-  ChevronDown, ChevronUp,
   GitBranch, Link2, Database, Bot, User, CheckSquare, Square,
+  Wrench, FolderKanban,
 } from 'lucide-react'
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
@@ -23,12 +25,23 @@ interface MyRequest {
   urgency: string; created_at: string
   rejection_reason: string | null
   submission_type?: string | null
-  target_department?: string | null
   description?: string
 }
 
-const DEPARTMENTS = ['IT', 'Quality', 'Production', 'Management', 'Sales', 'Marketing'] as const
-type DeptOption = typeof DEPARTMENTS[number]
+// ─── Page/module picker — derived from the real Sidebar nav so it never drifts ─
+
+const PAGE_MODULE_GROUPS: { group: string; items: { href: string; label: string }[] }[] = (() => {
+  const groups: { group: string; items: { href: string; label: string }[] }[] = []
+  for (const item of NAV) {
+    if (item.group === 'Admin') continue
+    let g = groups.find(g => g.group === item.group)
+    if (!g) { g = { group: item.group, items: [] }; groups.push(g) }
+    g.items.push({ href: item.href, label: item.label })
+  }
+  return groups
+})()
+
+const OTHER_PAGE_MODULE = '__other__'
 
 // ─── Suggestion categories ────────────────────────────────────────────────────
 
@@ -48,15 +61,6 @@ const REQUEST_STATUS_CONFIG: Record<string, { label: string; classes: string }> 
   under_review: { label: 'Under review',   classes: 'bg-info/10 text-info border-info/25' },
   approved:     { label: 'Approved',        classes: 'bg-ok/10 text-ok border-ok/25' },
   rejected:     { label: 'Not approved',    classes: 'bg-err/10 text-err border-err/25' },
-}
-
-// ─── Status pills (suggestion style — softer wording) ─────────────────────────
-
-const SUGGESTION_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  pending:      { label: 'Received',          color: '#92400E', bg: '#FEF3C7' },
-  under_review: { label: 'Being looked at',   color: '#1E40AF', bg: '#DBEAFE' },
-  approved:     { label: 'Actioned',          color: '#166534', bg: '#DCFCE7' },
-  rejected:     { label: 'Not actioned',      color: '#6B7280', bg: '#F3F4F6' },
 }
 
 // ─── Urgency picker (project requests) ────────────────────────────────────────
@@ -88,26 +92,29 @@ export default function AxisRequestPage() {
   )
 }
 
+type TabKey = 'feature_change' | 'major_project' | 'code' | 'suggestion'
+
 function RequestPageBody() {
-  const { userId, displayName, department, loading: al } = useAuth()
+  const { userId, department, loading: al } = useAuth()
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
 
   const tabParam = searchParams.get('tab')
-  const initialTab: 'request' | 'code' | 'suggestion' =
-    tabParam === 'suggestion' ? 'suggestion' :
-    tabParam === 'code'       ? 'code'       :
-                                'request'
-  const [tab, setTab] = useState<'request' | 'code' | 'suggestion'>(initialTab)
+  const initialTab: TabKey =
+    tabParam === 'major_project' ? 'major_project' :
+    tabParam === 'code'          ? 'code' :
+    tabParam === 'suggestion'    ? 'suggestion' :
+                                   'feature_change'
+  const [tab, setTab] = useState<TabKey>(initialTab)
 
   // Keep URL ?tab in sync (so deep-links work both ways)
   useEffect(() => {
-    const current = searchParams.get('tab') ?? 'request'
+    const current = searchParams.get('tab') ?? 'feature_change'
     if (current !== tab) {
       const params = new URLSearchParams(searchParams.toString())
-      if (tab === 'request') params.delete('tab')
-      else                   params.set('tab', tab)
+      if (tab === 'feature_change') params.delete('tab')
+      else                          params.set('tab', tab)
       const q = params.toString()
       router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false })
     }
@@ -137,16 +144,17 @@ function RequestPageBody() {
           Submit a request or suggestion
         </h1>
         <p className="text-[12px] text-text-muted mt-1.5">
-          Project requests go to IT for review. Suggestions can be routed to any department.
+          Feature changes and suggestions go to the ticket queue. Major projects and code contributions go to IT for formal review.
         </p>
       </div>
 
       {/* ── Tabs ── */}
       <div className="flex gap-1 p-1 bg-surface rounded-xl border border-surface-rule w-fit flex-wrap">
         {([
-          { key: 'request',    label: 'Project Request',   icon: Send },
-          { key: 'code',       label: 'Code Contribution', icon: GitBranch },
-          { key: 'suggestion', label: 'Suggestion',        icon: Lightbulb },
+          { key: 'feature_change', label: 'Feature Change',    icon: Wrench },
+          { key: 'major_project',  label: 'Major Project',     icon: FolderKanban },
+          { key: 'code',           label: 'Code Contribution', icon: GitBranch },
+          { key: 'suggestion',     label: 'Suggestion',        icon: Lightbulb },
         ] as const).map(t => {
           const Icon = t.icon
           const active = tab === t.key
@@ -167,10 +175,18 @@ function RequestPageBody() {
       </div>
 
       {/* ── Active tab ── */}
-      {tab === 'request' && (
-        <ProjectRequestTab
+      {tab === 'feature_change' && (
+        <FeatureChangeTab
           userDept={department}
-          requests={myAll.filter(r => (r.submission_type ?? 'feature_request') === 'feature_request')}
+          requests={myAll.filter(r => r.submission_type === 'feature_change')}
+          loadingMine={loadingMine}
+          onSubmitted={loadMine}
+        />
+      )}
+      {tab === 'major_project' && (
+        <MajorProjectTab
+          userDept={department}
+          requests={myAll.filter(r => r.submission_type === 'major_project')}
           loadingMine={loadingMine}
           onSubmitted={loadMine}
         />
@@ -184,23 +200,193 @@ function RequestPageBody() {
         />
       )}
       {tab === 'suggestion' && (
-        <SuggestionTab
-          submitterName={displayName}
-          submitterDept={department}
-          suggestions={myAll.filter(r => r.submission_type === 'suggestion')}
-          loadingMine={loadingMine}
-          onSubmitted={loadMine}
-        />
+        <SuggestionTab userDept={department} />
       )}
     </div>
   )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Tab 1 — Project Request (unchanged form, now department-agnostic header)
+// Tab 1 — Changes to current/new feature
 // ═════════════════════════════════════════════════════════════════════════════
 
-function ProjectRequestTab({
+function FeatureChangeTab({
+  userDept, requests, loadingMine, onSubmitted,
+}: {
+  userDept: string | null
+  requests: MyRequest[]
+  loadingMine: boolean
+  onSubmitted: () => Promise<void>
+}) {
+  const [summary,       setSummary]       = useState('')
+  const [pageModule,    setPageModule]    = useState('')
+  const [otherModule,   setOtherModule]   = useState('')
+  const [description,   setDescription]   = useState('')
+  const [justification, setJustification] = useState('')
+  const [urgency,       setUrgency]       = useState<'low' | 'medium' | 'high' | 'critical'>('medium')
+  const [submitting,    setSubmitting]    = useState(false)
+  const [submitted,     setSubmitted]     = useState(false)
+  const [ticketNumber,  setTicketNumber]  = useState<string | null>(null)
+
+  const resolvedModule = pageModule === OTHER_PAGE_MODULE ? otherModule.trim() : pageModule
+
+  async function handleSubmit() {
+    if (!summary.trim())       { alert('Summarise what needs to change.'); return }
+    if (!resolvedModule)       { alert('Select which page/module this relates to.'); return }
+    if (!description.trim())   { alert('Describe the change.'); return }
+    if (!justification.trim()) { alert('Explain why this is necessary.'); return }
+    setSubmitting(true)
+    const res = await fetch('/api/axis/requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title:                  summary.trim(),
+        description:            description.trim(),
+        business_justification: justification.trim(),
+        urgency,
+        submission_type:        'feature_change',
+        page_module:            resolvedModule,
+      }),
+    })
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: 'Unknown error' }))
+      alert(`Error: ${error}`)
+      setSubmitting(false)
+      return
+    }
+    const json = await res.json()
+    setTicketNumber(json.ticket_number ?? null)
+    setSubmitted(true)
+    setSummary(''); setPageModule(''); setOtherModule(''); setDescription(''); setJustification(''); setUrgency('medium')
+    setSubmitting(false)
+    await onSubmitted()
+    setTimeout(() => { setSubmitted(false); setTicketNumber(null) }, 8000)
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="card overflow-hidden">
+        <div className="px-6 py-5 border-b border-surface-rule"
+          style={{ background: 'linear-gradient(135deg, #f5f5f4 0%, #fafaf9 100%)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-brand" />
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
+              Change to a current or new feature
+            </span>
+          </div>
+          <h2 className="font-display font-bold text-[18px] text-text">Something on a specific page needs to change</h2>
+          <p className="text-[12px] text-text-muted mt-1">
+            Goes straight to the ticket queue.
+            {userDept && <> Your department <span className="font-semibold text-text">({userDept})</span> is attached automatically.</>}
+          </p>
+        </div>
+
+        <div className="p-6 space-y-5">
+          {submitted && (
+            <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-ok/8 border border-ok/20">
+              <CheckCircle2 size={15} className="text-ok flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-[13px] font-semibold text-ok">Submitted — a ticket has been raised.</p>
+                {ticketNumber && (
+                  <p className="text-[11px] text-ok/80 mt-0.5">
+                    Ticket <span className="font-mono font-bold">{ticketNumber}</span> created.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted mb-2">
+              What needs to change? <span className="text-err">*</span>
+            </label>
+            <input type="text" value={summary} onChange={e => setSummary(e.target.value)}
+              placeholder="e.g. Sieving capture — add a spec-override warning"
+              className="w-full px-4 py-2.5 rounded-xl border border-surface-rule bg-surface text-[13px] text-text placeholder:text-text-faint focus:outline-none focus:border-brand/40 focus:bg-surface-card transition-colors"
+            />
+          </div>
+
+          <div>
+            <label className="block font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted mb-2">
+              Which page/module? <span className="text-err">*</span>
+            </label>
+            <select value={pageModule} onChange={e => setPageModule(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl border border-surface-rule bg-surface text-[13px] text-text focus:outline-none focus:border-brand/40 focus:bg-surface-card transition-colors">
+              <option value="">Select a page…</option>
+              {PAGE_MODULE_GROUPS.map(g => (
+                <optgroup key={g.group} label={g.group}>
+                  {g.items.map(item => (
+                    <option key={item.href} value={`${g.group} — ${item.label}`}>{item.label}</option>
+                  ))}
+                </optgroup>
+              ))}
+              <option value={OTHER_PAGE_MODULE}>Other / not listed</option>
+            </select>
+            {pageModule === OTHER_PAGE_MODULE && (
+              <input type="text" value={otherModule} onChange={e => setOtherModule(e.target.value)}
+                placeholder="Describe which page or area this relates to"
+                className="w-full mt-2 px-4 py-2.5 rounded-xl border border-surface-rule bg-surface text-[13px] text-text placeholder:text-text-faint focus:outline-none focus:border-brand/40 focus:bg-surface-card transition-colors"
+              />
+            )}
+          </div>
+
+          <div>
+            <label className="block font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted mb-2">
+              Description of the change <span className="text-err">*</span>
+            </label>
+            <textarea rows={3} value={description} onChange={e => setDescription(e.target.value)}
+              placeholder="What should change, and how should it behave?"
+              className="w-full px-4 py-2.5 rounded-xl border border-surface-rule bg-surface text-[13px] text-text placeholder:text-text-faint focus:outline-none focus:border-brand/40 focus:bg-surface-card transition-colors resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted mb-2">
+              Why is this necessary? <span className="text-err">*</span>
+            </label>
+            <textarea rows={2} value={justification} onChange={e => setJustification(e.target.value)}
+              placeholder="What problem does this solve, or what does it unlock?"
+              className="w-full px-4 py-2.5 rounded-xl border border-surface-rule bg-surface text-[13px] text-text placeholder:text-text-faint focus:outline-none focus:border-brand/40 focus:bg-surface-card transition-colors resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted mb-2">
+              Priority
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {URGENCY_CONFIG.map(u => (
+                <button key={u.value} onClick={() => setUrgency(u.value)}
+                  className={`py-2.5 rounded-xl text-[12px] font-semibold border transition-all ${urgency === u.value ? u.active : u.inactive}`}>
+                  {u.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button onClick={handleSubmit} disabled={submitting}
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[13px] font-semibold hover:bg-brand-hover transition-colors disabled:opacity-50">
+            {submitting
+              ? <><Loader2 size={15} className="animate-spin" /> Submitting…</>
+              : <><Send size={14} /> Submit</>}
+          </button>
+        </div>
+      </div>
+
+      <MyRequestsList
+        items={requests}
+        loading={loadingMine}
+        emptyText="Your submitted change requests will appear here"
+      />
+    </div>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Tab 2 — Major Project Request
+// ═════════════════════════════════════════════════════════════════════════════
+
+function MajorProjectTab({
   userDept, requests, loadingMine, onSubmitted,
 }: {
   userDept: string | null
@@ -214,7 +400,6 @@ function ProjectRequestTab({
   const [urgency,       setUrgency]       = useState<'low' | 'medium' | 'high' | 'critical'>('medium')
   const [submitting,    setSubmitting]    = useState(false)
   const [submitted,     setSubmitted]     = useState(false)
-  const [ticketNumber,  setTicketNumber]  = useState<string | null>(null)
 
   async function handleSubmit() {
     if (!title.trim())         { alert('Enter a project title.'); return }
@@ -229,7 +414,7 @@ function ProjectRequestTab({
         description:            description.trim(),
         business_justification: justification.trim(),
         urgency,
-        submission_type:        'feature_request',
+        submission_type:        'major_project',
       }),
     })
     if (!res.ok) {
@@ -238,13 +423,11 @@ function ProjectRequestTab({
       setSubmitting(false)
       return
     }
-    const json = await res.json()
-    setTicketNumber(json.ticket_number ?? null)
     setSubmitted(true)
     setTitle(''); setDescription(''); setJustification(''); setUrgency('medium')
     setSubmitting(false)
     await onSubmitted()
-    setTimeout(() => { setSubmitted(false); setTicketNumber(null) }, 8000)
+    setTimeout(() => setSubmitted(false), 8000)
   }
 
   return (
@@ -255,12 +438,12 @@ function ProjectRequestTab({
           <div className="flex items-center gap-2 mb-1">
             <div className="w-1.5 h-1.5 rounded-full bg-brand" />
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
-              New project request
+              Major project request
             </span>
           </div>
-          <h2 className="font-display font-bold text-[18px] text-text">For something IT will build or change</h2>
+          <h2 className="font-display font-bold text-[18px] text-text">For something IT will build from scratch</h2>
           <p className="text-[12px] text-text-muted mt-1">
-            IT will review, classify, and respond with a timeline.
+            Goes to the Consideration board for formal IT review.
             {userDept && <> Your department <span className="font-semibold text-text">({userDept})</span> is attached automatically.</>}
           </p>
         </div>
@@ -269,14 +452,7 @@ function ProjectRequestTab({
           {submitted && (
             <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-ok/8 border border-ok/20">
               <CheckCircle2 size={15} className="text-ok flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-[13px] font-semibold text-ok">Submitted — IT has been notified.</p>
-                {ticketNumber && (
-                  <p className="text-[11px] text-ok/80 mt-0.5">
-                    Ticket <span className="font-mono font-bold">{ticketNumber}</span> created and assigned.
-                  </p>
-                )}
-              </div>
+              <p className="text-[13px] font-semibold text-ok">Submitted — IT has been notified.</p>
             </div>
           )}
 
@@ -337,14 +513,13 @@ function ProjectRequestTab({
         items={requests}
         loading={loadingMine}
         emptyText="Your submitted requests will appear here"
-        statusVariant="project"
       />
     </div>
   )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Tab 2 — Code Contribution Protocol
+// Tab 3 — Code Contribution Protocol
 //   Submitter declares pre-flight, IT performs an audit checklist on approval.
 //   Fields persisted: submission_type='code_contribution', onedrive_url,
 //   schema_proposal{schema_name,tables_affected}, code_source, ai_tool_used,
@@ -452,7 +627,7 @@ function CodeContributionTab({
           <h2 className="font-display font-bold text-[18px] text-text">Submit code for IT audit</h2>
           <p className="text-[12px] text-text-muted mt-1">
             Use this when you (or an AI agent) have written code that needs to land in the platform.
-            IT will perform a full audit before merging.
+            Goes to the Consideration board — IT will perform a full audit before merging.
             {userDept && <> Your department <span className="font-semibold text-text">({userDept})</span> is attached automatically.</>}
           </p>
         </div>
@@ -661,29 +836,19 @@ function CodeContributionTab({
         items={submissions}
         loading={loadingMine}
         emptyText="Your code submissions will appear here"
-        statusVariant="project"
       />
     </div>
   )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Tab 3 — Suggestion (with target department picker)
+// Tab 4 — Suggestion (anonymous)
 // ═════════════════════════════════════════════════════════════════════════════
 
-function SuggestionTab({
-  submitterName, submitterDept, suggestions, loadingMine, onSubmitted,
-}: {
-  submitterName: string | null
-  submitterDept: string | null
-  suggestions: MyRequest[]
-  loadingMine: boolean
-  onSubmitted: () => Promise<void>
-}) {
+function SuggestionTab({ userDept }: { userDept: string | null }) {
   const [category,     setCategory]     = useState<Category>('improvement')
   const [subject,      setSubject]      = useState('')
   const [description,  setDescription]  = useState('')
-  const [targetDept,   setTargetDept]   = useState<DeptOption | ''>('')
   const [submitting,   setSubmitting]   = useState(false)
   const [submitted,    setSubmitted]    = useState(false)
 
@@ -692,19 +857,16 @@ function SuggestionTab({
   async function handleSubmit() {
     if (!subject.trim())     { alert('Please add a subject.'); return }
     if (!description.trim()) { alert('Please describe your suggestion.'); return }
-    if (!targetDept)         { alert('Please pick the department this should go to.'); return }
     setSubmitting(true)
 
     const res = await fetch('/api/axis/requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title:                  subject.trim(),
-        description:            description.trim(),
-        business_justification: `Category: ${category}. Submitted by ${submitterName || 'staff member'} (${submitterDept || 'unknown dept'}). Routed to ${targetDept}.`,
-        urgency:                category === 'problem' ? 'high' : 'medium',
-        submission_type:        'suggestion',
-        target_department:      targetDept,
+        title:            subject.trim(),
+        description:      description.trim(),
+        submission_type:  'suggestion',
+        category,
       }),
     })
     if (!res.ok) {
@@ -714,9 +876,8 @@ function SuggestionTab({
       return
     }
     setSubmitted(true)
-    setSubject(''); setDescription(''); setCategory('improvement'); setTargetDept('')
+    setSubject(''); setDescription(''); setCategory('improvement')
     setSubmitting(false)
-    await onSubmitted()
     setTimeout(() => setSubmitted(false), 6000)
   }
 
@@ -728,8 +889,8 @@ function SuggestionTab({
           <div className="flex items-center gap-3 px-5 py-4 border-b border-surface-rule bg-ok/5">
             <CheckCircle2 size={16} className="text-ok flex-shrink-0" />
             <div>
-              <p className="font-semibold text-[13px] text-ok">Thanks — we've received your suggestion.</p>
-              <p className="text-[11px] text-text-muted mt-0.5">It's been routed to the department you picked.</p>
+              <p className="font-semibold text-[13px] text-ok">Thanks — we&apos;ve received your suggestion.</p>
+              <p className="text-[11px] text-text-muted mt-0.5">It&apos;s been raised as a ticket, anonymously.</p>
             </div>
           </div>
         )}
@@ -738,11 +899,12 @@ function SuggestionTab({
           style={{ background: 'linear-gradient(135deg, #fffbf0 0%, #fefdf8 100%)' }}>
           <div className="flex items-center gap-2 mb-1">
             <Lightbulb size={11} className="text-amber-600" />
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-amber-700">Share your thoughts</span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-amber-700">Anonymous · share your thoughts</span>
           </div>
           <h2 className="font-display font-bold text-[18px] text-text">Got an idea, problem, or question?</h2>
           <p className="text-[12px] text-text-muted mt-1">
-            Pick the department best placed to handle it. Every submission is read.
+            Your name is never attached — not even IT can see who submitted this.
+            {userDept && <> Your department <span className="font-semibold text-text">({userDept})</span> is attached for context only.</>}
           </p>
         </div>
 
@@ -782,31 +944,6 @@ function SuggestionTab({
                 )
               })}
             </div>
-          </div>
-
-          {/* Target department */}
-          <div>
-            <label className="block font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted mb-2">
-              Send to which department? <span className="text-err">*</span>
-            </label>
-            <div className="grid grid-cols-3 gap-1.5">
-              {DEPARTMENTS.map(d => {
-                const selected = targetDept === d
-                return (
-                  <button key={d} onClick={() => setTargetDept(d)}
-                    className={`py-2 rounded-xl text-[11px] font-semibold border transition-all ${
-                      selected
-                        ? 'bg-brand text-white border-brand'
-                        : 'bg-surface text-text-muted border-surface-rule hover:bg-surface-card'
-                    }`}>
-                    {d}
-                  </button>
-                )
-              })}
-            </div>
-            <p className="text-[10px] text-text-faint mt-1.5">
-              Not sure? Pick the team you'd normally raise this with face-to-face.
-            </p>
           </div>
 
           {/* Subject */}
@@ -850,46 +987,35 @@ function SuggestionTab({
           {/* Submit */}
           <button
             onClick={handleSubmit}
-            disabled={submitting || !subject.trim() || !description.trim() || !targetDept}
+            disabled={submitting || !subject.trim() || !description.trim()}
             className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white text-[13px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ background: selectedCat.color }}
           >
             {submitting
               ? <><Loader2 size={15} className="animate-spin" /> Submitting…</>
-              : <><selectedCat.icon size={14} /> Submit {selectedCat.label}{targetDept ? ` to ${targetDept}` : ''}</>}
+              : <><selectedCat.icon size={14} /> Submit anonymously</>}
           </button>
 
           <p className="text-[11px] text-text-faint text-center">
-            Your name and department are attached automatically so the team can follow up.
+            Anonymous submissions aren&apos;t tracked in a &quot;my submissions&quot; list, since nothing links them back to you.
           </p>
         </div>
       </div>
-
-      <MyRequestsList
-        items={suggestions}
-        loading={loadingMine}
-        emptyText="Your submitted suggestions will appear here"
-        statusVariant="suggestion"
-      />
     </div>
   )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Shared "My submissions" list
+// Shared "My submissions" list (project / feature-change / code variants)
 // ═════════════════════════════════════════════════════════════════════════════
 
 function MyRequestsList({
-  items, loading, emptyText, statusVariant,
+  items, loading, emptyText,
 }: {
   items: MyRequest[]
   loading: boolean
   emptyText: string
-  statusVariant: 'project' | 'suggestion'
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  const title = statusVariant === 'project' ? 'My requests' : 'My submissions'
-
   if (loading) {
     return (
       <div className="card p-8 flex justify-center">
@@ -911,79 +1037,28 @@ function MyRequestsList({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="font-display font-semibold text-[15px] text-text">{title}</h3>
+        <h3 className="font-display font-semibold text-[15px] text-text">My submissions</h3>
         <span className="font-mono text-[10px] text-text-faint">{items.length} total</span>
       </div>
 
       {items.map(r => {
-        const isOpen = expandedId === r.id
-
-        if (statusVariant === 'project') {
-          const s = REQUEST_STATUS_CONFIG[r.status] ?? REQUEST_STATUS_CONFIG.pending
-          return (
-            <div key={r.id} className="card px-5 py-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-semibold text-[13px] text-text">{r.title}</p>
-                  <p className="text-[11px] text-text-faint mt-0.5">{fmt(r.created_at)}</p>
-                  {r.rejection_reason && (
-                    <p className="text-[11px] text-err mt-2 leading-relaxed">
-                      <span className="font-semibold">Reason: </span>{r.rejection_reason}
-                    </p>
-                  )}
-                </div>
-                <span className={`font-mono text-[10px] px-2 py-0.5 rounded border flex-shrink-0 ${s.classes}`}>
-                  {s.label}
-                </span>
-              </div>
-            </div>
-          )
-        }
-
-        // Suggestion variant — expandable
-        const s = SUGGESTION_STATUS_CONFIG[r.status] ?? SUGGESTION_STATUS_CONFIG.pending
+        const s = REQUEST_STATUS_CONFIG[r.status] ?? REQUEST_STATUS_CONFIG.pending
         return (
-          <div key={r.id} className="card overflow-hidden">
-            <button
-              onClick={() => setExpandedId(isOpen ? null : r.id)}
-              className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-surface-raised transition-colors"
-            >
-              <div className="flex-1 min-w-0">
+          <div key={r.id} className="card px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
                 <p className="font-semibold text-[13px] text-text">{r.title}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <p className="text-[11px] text-text-faint">{fmt(r.created_at)}</p>
-                  {r.target_department && (
-                    <>
-                      <span className="text-[11px] text-text-faint">·</span>
-                      <p className="text-[11px] text-text-faint">sent to {r.target_department}</p>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className="font-mono text-[10px] px-2.5 py-1 rounded-full font-semibold"
-                  style={{ color: s.color, background: s.bg }}>
-                  {s.label}
-                </span>
-                {isOpen ? <ChevronUp size={14} className="text-text-faint" /> : <ChevronDown size={14} className="text-text-faint" />}
-              </div>
-            </button>
-
-            {isOpen && (
-              <div className="border-t border-surface-rule px-5 pb-4 pt-3 space-y-2">
-                {r.description && (
-                  <p className="text-[12px] text-text-muted leading-relaxed whitespace-pre-wrap">{r.description}</p>
-                )}
+                <p className="text-[11px] text-text-faint mt-0.5">{fmt(r.created_at)}</p>
                 {r.rejection_reason && (
-                  <div className="mt-2 px-3 py-2 rounded-lg bg-surface border border-surface-rule">
-                    <p className="text-[11px] text-text-muted">
-                      <span className="font-semibold text-text">Response: </span>
-                      {r.rejection_reason}
-                    </p>
-                  </div>
+                  <p className="text-[11px] text-err mt-2 leading-relaxed">
+                    <span className="font-semibold">Reason: </span>{r.rejection_reason}
+                  </p>
                 )}
               </div>
-            )}
+              <span className={`font-mono text-[10px] px-2 py-0.5 rounded border flex-shrink-0 ${s.classes}`}>
+                {s.label}
+              </span>
+            </div>
           </div>
         )
       })}

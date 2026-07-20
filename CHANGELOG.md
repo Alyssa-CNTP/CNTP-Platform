@@ -5,6 +5,37 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Alyssa (VPS ops: fixed staging crash-loop, reclaimed disk, added weekly self-cleaning maintenance cron) — ⚠️ IMPORTANT, DO NOT REMOVE
+
+**Ops change (no application code changed).** Files added on the VPS (`cntpdev@154.65.97.200:2022`), not in the repo: `/home/cntpdev/scripts/vps-maintenance.sh` (new), a new weekly entry in `cntpdev`'s crontab, `/home/cntpdev/logs/maintenance.log` (new).
+
+**Why this matters:** the staging server ran out of disk (`/dev/vda1` hit **85%**), which had already caused a "No space left on device" failure (syslog, Jun 01) and left `cntp-staging` **crash-looping — 2552 PM2 restarts** with `Error: Cannot find module '.next/server/middleware-manifest.json'` (corrupt/incomplete `.next` build). Root cause of the disk pressure: VS Code Remote-SSH downloads a fresh ~590 MB server binary to `~/.vscode-server/cli/servers/` on every client update and **never deletes the old ones** — 5 stale copies had piled up to 2.9 GB.
+
+**What was done (all on the VPS via SSH/PuTTY, nothing merged/deployed):**
+- **Fixed the crash-loop:** `pm2 stop cntp-staging` → `rm -rf .next` → `npm run build` (full clean rebuild) → `pm2 restart cntp-staging` → `pm2 save`. Restart counter froze at 2552 (loop stopped); app confirmed stable — `curl localhost:3000` → **HTTP 200**, public `https://cntpplatform-staging.rooibostea.co.za` → **HTTP/2 200**.
+- **Reclaimed disk 85% → 70%** (5.6 GB free): deleted the 4 stale VS Code server binaries (kept only the in-use hash `Stable-fc3def…5573f`), `npm cache clean --force`, `pm2 flush`.
+- **Added a weekly self-cleaning maintenance job** so this can't recur: `~/scripts/vps-maintenance.sh` prunes stale VS Code servers (identifies live ones via `pgrep` and **never deletes the server currently in use**), clears the npm cache, and flushes PM2 logs. Scheduled in crontab: `0 3 * * 0` (Sundays 03:00), logging to `~/logs/maintenance.log`. Test-run confirmed it keeps the active server and reports disk state.
+
+**If disk pressure returns:** check `df -h /` and `du -h -d1 ~/.vscode-server/cli/servers`; the maintenance script can be run on demand with `~/scripts/vps-maintenance.sh`. Do not delete a VS Code server hash that appears in a running process (the script guards this automatically).
+
+---
+
+## 2026-07-17 — Alyssa (AXIS: ticket assignment bug fix, real assignee routing, Submit Request 4-way redesign, GitHub-backed changelog)
+
+**Files changed:** `app/(app)/axis/tickets/page.tsx`, `app/(app)/axis/request/page.tsx`, `app/(app)/axis/page.tsx`, `app/(app)/axis/consideration/page.tsx`, `app/(app)/axis/changelog/page.tsx`, `app/api/axis/tickets/route.ts`, `app/api/axis/tickets/[id]/route.ts`, `app/api/axis/requests/route.ts`, `app/api/axis/requests/[id]/approve/route.ts`, `app/api/axis/requests/[id]/reject/route.ts`, `app/api/axis/users/route.ts`, `app/api/axis/projects/route.ts`, `app/api/axis/changelog/github/route.ts` (new), `components/layout/Sidebar.tsx`, `lib/notifications/recipients.ts`, `lib/production/it-ticket.ts`, `lib/github/client.ts` (new), `.env.example`, `supabase/migrations/20260717_010_axis_tickets_routing_redesign.sql` (new), `supabase/migrations/20260717_011_axis_projects_backfill_prj001_004.sql` (new), `supabase/migrations/20260717_012_axis_project_requests_redesign.sql` (new), `supabase/migrations/20260717_013_axis_change_logs_github.sql` (new)
+
+- **Fixed ticket status buttons not working**: the permission check never considered whether the viewer was the ticket's own assignee, only IT/`can_assign_tickets` — anyone else's assigned ticket showed a read-only badge with no way to update it. Both the client gate and the server PATCH gate now include an `isMyTicket` check.
+- **Fixed the Tickets nav link being invisible** to eligible non-IT managers (e.g. `maintenance_manager`) — the Sidebar's `itOnly` flag ignored `can_assign_tickets` entirely; that entry now gates on department OR permission like the rest of the app.
+- **Removed all hardcoded ticket auto-routing** (three separate copies of `'Alyssa'/'Jan'/'Gustav'` name-matching). Tickets are now created unassigned; IT/managers pick the assignee from a real picker populated dynamically from whoever currently holds ticket-management rights — no hardcoded names, doesn't break when roles change.
+- **Consolidated AXIS notifications onto the shared `notify()` system** (ticket assignment, request approved, request rejected) instead of raw inserts — gains email delivery and respects each user's notification preferences. Stopped writing to the dead `axis.ticket_notifications` table (written in 3 places, read nowhere).
+- **Fixed the Consideration board missing major projects**: removed the "New Project" dashboard shortcut that bypassed the request→approve flow entirely (projects created there had no linked request and never showed up on the board). All new projects now go through Submit Request → Consideration board → Approve. Backfilled PRJ-001–004 (real historical projects that only ever existed as OneDrive folders) as `status: 'historical'` records so AXIS has a complete project ledger.
+- **Redesigned Submit Request into 4 types**: "Changes to current/new feature" (page/module picker derived from the real Sidebar nav, description, why-necessary, priority) and "Suggestions" (now truly anonymous — submitter identity is never stored, only department for context) both route to Tickets; "Major Project Request" (renamed from the old catch-all) and "Code Contribution" both route to the Consideration board. Removed the duplicate-record pattern where every submission also silently created a ticket.
+- **Added an automatic GitHub-backed feed to the Changelog**: merged PRs into `staging` are ingested into the same `axis.change_logs` table as manual entries (`source: 'github'`), shown with author avatar, a linked PR badge, and a diff-stat chip — one unified timeline instead of a purely hand-typed log.
+- Flagged separately to the user: a live GitHub token found committed in plaintext in `QUALITY_MIGRATION_NOTES.md` needs to be revoked — unrelated to this change, not touched by it.
+- **Migrations must be run manually** (Supabase SQL editor, staging then production) per this repo's established practice — `db-migrate.yml`'s auto-apply is deliberately disabled.
+
+---
+
 ## 2026-07-20 — Gustav (EU MRL: real export parser + upload refresh path, loaded 516 Rooibos MRLs)
 
 **Files changed:** `lib/quality/eu-mrl.ts`, `app/api/eu-mrl-sync/run/route.ts`, `app/api/eu-mrl-sync/upload/route.ts` (new), `app/(app)/quality/raw-material/page.tsx`

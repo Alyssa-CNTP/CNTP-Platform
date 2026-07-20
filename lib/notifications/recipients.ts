@@ -81,6 +81,24 @@ export async function getQualityUserIds(): Promise<string[]> {
   return (data ?? []).filter((r: any) => r.is_active !== false).map((r: any) => r.user_id).filter(Boolean)
 }
 
+/** User ids eligible to manage AXIS tickets — IT department, or anyone holding
+ *  can_assign_tickets (role default or explicit override). Replaces the old
+ *  hardcoded 'Alyssa'/'Jan'/'Gustav' name lookups so this stays correct as
+ *  roles/staff change. Used to notify on new unassigned tickets. */
+export async function getTicketManagerIds(): Promise<string[]> {
+  const session = await getSessionClient()
+  const { data } = await session.schema('shared' as any).from('app_roles')
+    .select('user_id, department, role, permissions, is_active')
+  return (data ?? [])
+    .filter((r: any) => r.is_active !== false)
+    .filter((r: any) =>
+      r.department === 'IT' ||
+      resolvePermission((r.role ?? null) as string | null, (r.permissions ?? {}) as Permissions, 'can_assign_tickets')
+    )
+    .map((r: any) => r.user_id)
+    .filter(Boolean)
+}
+
 /**
  * User ids who may SUBMIT the given roster section — i.e. hold
  * can_submit_roster_<section>, resolved from role defaults + per-user overrides.

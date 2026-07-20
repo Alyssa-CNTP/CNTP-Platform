@@ -7,6 +7,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { notify } from '@/lib/notifications'
+import { resolveRecipients } from '@/lib/notifications/recipients'
 
 const VALID_PRIORITY = ['high', 'mid', 'low']
 const VALID_TERM     = ['short', 'long', 'ongoing']
@@ -92,6 +94,10 @@ export async function POST(
     console.error('[approve] request lookup', reqErr)
     return NextResponse.json({ error: 'Request not found' }, { status: 404 })
   }
+  // Only Consideration-board types can become a project — feature_change and
+  // suggestion route to Tickets and are never approved into axis.projects.
+  if (!['major_project', 'code_contribution'].includes(reqData.submission_type))
+    return NextResponse.json({ error: 'This request type cannot be approved into a project' }, { status: 400 })
 
   // 2. Generate project code
   const projectCode = await nextProjectCode(axis)
@@ -162,15 +168,19 @@ export async function POST(
   if (updErr) console.error('[approve] request update', updErr)
 
   // 7. Notify the submitter
-  const { error: notifErr } = await axis.from('notifications').insert({
-    recipient_id:    reqData.submitted_by,
-    type:            'project_approved',
-    title:           `Project approved — ${projectCode}`,
-    body:            `Your project "${reqData.title}" has been approved as ${projectCode}. IT will begin the integration process.`,
-    reference_id:    project.id,
-    reference_table: 'projects',
-  })
-  if (notifErr) console.error('[approve] notification insert', notifErr)
+  if (reqData.submitted_by) {
+    const [recipient] = await resolveRecipients([reqData.submitted_by])
+    if (recipient) {
+      await notify({
+        recipients: [recipient],
+        kind:       'project_approved',
+        title:      `Project approved — ${projectCode}`,
+        body:       `Your project "${reqData.title}" has been approved as ${projectCode}. IT will begin the integration process.`,
+        url:        '/axis/consideration',
+        channels:   ['inApp', 'email'],
+      })
+    }
+  }
 
   // 8. Fire n8n webhook (non-blocking)
   // n8n will:
@@ -186,7 +196,7 @@ export async function POST(
     project_name: reqData.title,
     // Sanitised folder name: PRJ-005_Quality-Module
     folder_name:  `${projectCode}_${reqData.title.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '-')}`,
-    submission_type: reqData.submission_type || 'feature_request',
+    submission_type: reqData.submission_type || 'major_project',
     onedrive_url:    reqData.onedrive_url || null,
     brief_url:    `${appUrl}/api/axis/projects/${project.id}/brief`,
     approved_at:  new Date().toISOString(),
