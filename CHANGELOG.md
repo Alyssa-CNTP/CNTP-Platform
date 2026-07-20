@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (EU MRL sync: residue grades tracked against the live EU database)
+
+**Files changed:** `supabase/migrations/20260720_001_eu_mrl.sql` (new), `lib/quality/eu-mrl.ts` (new), `app/api/eu-mrl-sync/run/route.ts` (new), `.github/workflows/eu-mrl-sync.yml` (new), `app/api/upload/route.ts`, `app/api/admin/re-enrich-residues/route.ts`
+
+- **What this does:** the EU Maximum Residue Level (MRL) for each pesticide is now sourced from the official **EU Pesticides Database** and kept **continuously up to date**, and residue R-grades (R-0…R-3) are computed against those live limits instead of relying solely on the value printed on each lab report.
+- New reference table `qms.eu_mrl` (per pesticide × commodity) plus `qms.eu_mrl_sync_log` (one row per sync run, so you can see when it last ran). Rooibos = EU product code `0632020`.
+- New route `POST /api/eu-mrl-sync/run` downloads the EU's official bulk MRL export, parses it (xlsx/csv), and upserts into `qms.eu_mrl`. It's called by both the **"🌍 EU MRL Sync"** admin button and the weekly cron.
+- New GitHub Actions workflow `eu-mrl-sync.yml` runs the sync **every Monday 05:00 SAST** (continuous updates), same cron pattern as the roster/energy jobs.
+- Grading now overlays the synced EU MRLs before computing grades — applied both on **new uploads** (`upload` route) and on **"🔄 Re-enrich MRLs"** (re-grades all existing residue records against the latest EU limits). Each compound is tagged `mrl_source: 'eu_db' | 'lab_report'`.
+- **⚠️ VPS setup required (I can't reach the EU servers from the build environment, so this must be verified on the VPS):**
+  - Set env var **`EU_MRL_DOWNLOAD_URL`** to the EU MRL export URL for Rooibos (product `0632020`). Optional: `EU_MRL_COMMODITY_CODE` / `EU_MRL_COMMODITY_NAME` to override the default. Until this is set, the sync returns a clear "not configured" message rather than syncing.
+  - Ensure `CRON_SECRET` is set (already used by the roster/energy crons) so the weekly workflow can authenticate.
+  - Migration applied to **staging** Supabase; production needs it when promoted.
+
+---
+
 ## 2026-07-20 — Gustav (Raw Material Residue: fix "API_URL is not defined" + wire Re-enrich MRLs)
 
 **Files changed:** `app/(app)/quality/raw-material/page.tsx`, `app/api/admin/re-enrich-residues/route.ts` (new)

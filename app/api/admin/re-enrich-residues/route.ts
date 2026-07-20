@@ -10,6 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { loadMrlMap, applyEuMrl } from '@/lib/quality/eu-mrl'
 
 // ─── Residue grade computation ────────────────────────────────────────────────
 // Kept identical to app/api/upload/route.ts so re-enrichment produces the same
@@ -63,6 +64,10 @@ export async function POST() {
 
     const db = getAdminClient()
 
+    // Current EU MRLs (synced into qms.eu_mrl) — overlaid before re-grading so
+    // records pick up the latest EU limits, not just the lab-report values.
+    const mrlMap = await loadMrlMap(db)
+
     const { data: rows, error } = await db
       .schema('qms' as any)
       .from('quality_records')
@@ -75,7 +80,7 @@ export async function POST() {
     let updated = 0
     for (const row of rows ?? []) {
       const before = JSON.stringify((row as any).data ?? null)
-      const enriched = computeResidueGrades((row as any).data)
+      const enriched = computeResidueGrades(applyEuMrl((row as any).data, mrlMap))
       const after = JSON.stringify(enriched)
       if (after === before) continue
 
