@@ -16,6 +16,7 @@ export const DEPARTMENT_META = {
     color: 'bg-orange-500',
     roles: [
       { value: 'production_supervisor', label: 'Production Supervisor', isDefault: true },
+      { value: 'production_manager',    label: 'Production Manager' },
       { value: 'warehouse_supervisor',  label: 'Warehouse Supervisor' },
       { value: 'stock_controller',      label: 'Stock Controller' },
       { value: 'operator',              label: 'Operator' },
@@ -78,7 +79,7 @@ export function isProductionSupervisor(role?: string | null): boolean {
 }
 
 export function getDefaultRoute(department: string, role?: string | null): string {
-  if (department === 'Production' && isProductionSupervisor(role)) return '/supervisor'
+  if (department === 'Production' && (isProductionSupervisor(role) || role === 'production_manager')) return '/supervisor'
   // Warehouse supervisor + stock controller do the counts — land them there until a
   // dedicated warehouse dashboard exists.
   if (department === 'Production' && (role === 'warehouse_supervisor' || role === 'stock_controller')) return '/count'

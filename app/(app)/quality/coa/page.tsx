@@ -25,9 +25,10 @@
 //
 // Wording is centralised in COA_WORDING so every generated COA reads identically.
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { isoDateTime } from '@/lib/utils/formatDate'
 import { jsPDF } from 'jspdf'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
@@ -41,6 +42,18 @@ const COA_WORDING = {
     'As prescribed by EU Commission Regulation (EC) No. 1881/2006 of December 19, 2006, with amendments.',
   sensorical: 'Reddish brown liquid with a characteristic aroma and taste of rooibos',
   company: 'Cape Natural Tea Products (Pty) Ltd',
+  signatories: [
+    { title: 'Laboratory Supervisor', name: 'Monique Gordon' },
+    { title: 'Quality Assurance Manager', name: 'Michelle Brown' },
+  ],
+  companyFooter: [
+    'CAPE NATURAL TEA PRODUCTS (PTY) LTD',
+    'P.O. BOX 30',
+    'BLACKHEATH, 7581',
+    'SOUTH AFRICA',
+    'Reg. no: 1996/018192/07',
+    'Vat no: 4370164420',
+  ],
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -117,6 +130,56 @@ interface CoaModel {
   cutLength: CoaLine[]
   other: CoaLine[]
   sections: { micro: boolean; cutLength: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean }
+  matchedDoc: string          // doc_no of the customer spec applied ('' = none)
+  candidateDocs: { doc_no: string; label: string }[]  // this customer's specs, for the picker
+}
+
+// Map the COA cut-length rows (gt6…dust) to coa_specs mesh keys (">6"…"Dust -60").
+const CUT_TO_MESH: Record<string, string[]> = {
+  gt6: ['>6'], gt10: ['>10'], gt12: ['>12'], gt16: ['>16'], gt20: ['>20'], gt60: ['>60'], dust: ['Dust -60', 'Dust'],
+}
+// Map the COA micro rows to coa_specs.micro keys.
+const MICRO_TO_SPECKEY: Record<string, string> = {
+  tpc: 'tpc', ecoli: 'ecoli', salmonella_25g: 'salmonella', listeria: 'listeria', ecoli_o157: 'ecoli_o157', yeast: 'yeast', mould: 'mould',
+}
+
+function normVariant(v: string): string {
+  const s = (v || '').toLowerCase()
+  const ra = /\bra\b|rainforest/.test(s)
+  const org = /org/.test(s)
+  if (ra && org) return 'ra-organic'
+  if (ra) return 'ra-conventional'
+  if (org) return 'organic'
+  return 'conventional'
+}
+function normText(s: string) { return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() }
+
+// Score how well a coa_specs row matches a batch's customer / grade / variant.
+function scoreSpec(spec: any, customer: string, grade: string, variant: string): number {
+  let score = 0
+  const c = normText(customer), sc = normText(spec.customer || '')
+  if (c && sc && (sc.includes(c) || c.includes(sc))) score += 100
+  if (normVariant(variant) === normVariant(spec.variant || '')) score += 30
+  const g = new Set(normText(grade).split(' ').filter(Boolean))
+  const sg = new Set(normText([spec.grade, spec.product_description].filter(Boolean).join(' ')).split(' ').filter(Boolean))
+  let overlap = 0; g.forEach(t => { if (sg.has(t)) overlap++ })
+  score += overlap * 8
+  return score
+}
+
+// Build the Bulk Density spec string from a coa_specs row's bd_min/bd_max.
+function bdSpec(min: any, max: any): string {
+  const mn = min != null && String(min).trim() !== '' ? String(min) : ''
+  const mx = max != null && String(max).trim() !== '' ? String(max) : ''
+  if (mn && mx) return `${mn} – ${mx}cc/100g`
+  if (mx) return /[a-z%]/i.test(mx) ? mx : `max ${mx}cc/100g`
+  if (mn) return `min ${mn}cc/100g`
+  return ''
+}
+function moistSpec(v: any): string {
+  const s = String(v ?? '').trim()
+  if (!s) return ''
+  return /%/.test(s) ? s : `${s}%`
 }
 
 const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none focus:border-blue-500'
@@ -124,7 +187,7 @@ const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none f
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CoaGeneratorPage() {
-  const { p } = useAuth()
+  const { p, session } = useAuth()
   const canUse = p('can_save_lab_results') || p('can_approve_runs')
   const db = getDb()
 
@@ -132,7 +195,41 @@ export default function CoaGeneratorPage() {
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState('')
   const [model, setModel]           = useState<CoaModel | null>(null)
+  const [sources, setSources]       = useState<any>(null)   // raw inputs, for re-applying a different spec
+  const [allSpecs, setAllSpecs]     = useState<any[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  const [history, setHistory]       = useState<any[]>([])
+  const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; signature: string }[]>([])
+  const [showSigEditor, setShowSigEditor] = useState(false)
+  const [savingSig, setSavingSig]   = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
+  const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
+
+  // Load the shared COA signatories (editable names + drawable signatures).
+  useEffect(() => {
+    db.schema('qms').from('coa_signatories').select('*').order('slot')
+      .then(({ data }: { data: any[] | null }) => {
+        setSignatories((data ?? []).map((r: any) => ({ slot: r.slot, title: r.title || '', name: r.name || '', signature: r.signature || '' })))
+      })
+  }, [db])
+
+  const setSig = (slot: number, field: 'title' | 'name' | 'signature', v: string) =>
+    setSignatories(prev => prev.map(s => s.slot === slot ? { ...s, [field]: v } : s))
+
+  const saveSignatories = async () => {
+    setSavingSig(true)
+    const rows = signatories.map(s => ({ slot: s.slot, title: s.title, name: s.name, signature: s.signature || null, updated_by: whoAmI, updated_at: new Date().toISOString() }))
+    const { error } = await db.schema('qms').from('coa_signatories').upsert(rows, { onConflict: 'slot' })
+    setSavingSig(false)
+    if (error) { alert('Save failed: ' + error.message); return }
+    alert('Signatories saved.')
+  }
+
+  const loadHistory = useCallback(async () => {
+    const { data } = await db.schema('qms').from('coa_generated').select('*').order('generated_at', { ascending: false }).limit(200)
+    setHistory(data ?? [])
+  }, [db])
+  useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
 
   const lookup = useCallback(async (batchRaw: string) => {
     const batch = batchRaw.trim()
@@ -141,11 +238,15 @@ export default function CoaGeneratorPage() {
     const key = normBatch(batch)
 
     // Pull every source in parallel, then match on the normalised batch number.
-    const [pRes, lRes, sRes] = await Promise.all([
+    const [pRes, lRes, csRes, oRes] = await Promise.all([
       db.schema('qms').from('quality_records').select('*').eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run').order('created_at', { ascending: false }).limit(1000),
       db.schema('qms').from('lab_results').select('*').order('created_at', { ascending: false }).limit(2000),
-      db.schema('qms').from('sd_runs').select('*').order('created_at', { ascending: false }).limit(2000),
+      db.schema('qms').from('coa_specs').select('*'),
+      db.schema('qms').from('coa_orders').select('*'),
     ])
+    setAllSpecs(csRes.data ?? [])
+    // Saved logistics order details for this batch (if any)
+    const orderRow = (oRes.data ?? []).find((o: any) => normBatch(o.batch_no) === key)
 
     // ── Pasteuriser batch (header + moisture/BD + sieve/cut-length averages) ──
     const pastRow = (pRes.data ?? []).map((r: any) => ({ ...r, d: parseData(r) }))
@@ -157,11 +258,12 @@ export default function CoaGeneratorPage() {
 
     const moistureAvg = avg(mbSamples.map(s => parseFloat(s.moisture)))
     const bdAvg       = avg(mbSamples.map(s => parseFloat(s.untapped_bd)))
-    const cutLength: CoaLine[] = CUT_LENGTH_ROWS.map(row => {
+    const cutResults: Record<string, string> = {}
+    CUT_LENGTH_ROWS.forEach(row => {
       const a = avg(sieveSamples.map(s => parseFloat(s[row.key])))
-      return { label: row.label, spec: '', result: a != null ? `${a.toFixed(1).replace('.', ',')}%` : '' }
+      cutResults[row.key] = a != null ? `${a.toFixed(1).replace('.', ',')}%` : ''
     })
-    const hasSieve = sieveSamples.length > 0 && cutLength.some(c => c.result !== '')
+    const hasSieve = sieveSamples.length > 0 && Object.values(cutResults).some(v => v !== '')
 
     // ── Lab results for this batch, indexed by test type ──
     const labFor = (t: string) => (lRes.data ?? []).find((r: any) => r.test_type === t && normBatch(r.batch_no) === key)
@@ -170,55 +272,81 @@ export default function CoaGeneratorPage() {
     const paRec     = labFor('pa_final')
     const hmRec     = labFor('heavy_metals')
     const moshRec   = labFor('mosh_moah')
-
-    // ── Microbiology rows ──
     const microData = microRec ? (microRec.results || microRec) : {}
-    const micro: CoaLine[] = MICRO_ROWS
-      .map(r => ({ key: r.key, label: r.label, spec: r.specDefault, result: microDisplay(r.key, microData[r.key]) }))
-      .filter(r => r.result !== '')   // only rows the lab actually reported
-      .map(({ label, spec, result }) => ({ label, spec, result }))
 
-    // ── Other analysis rows ──
-    const isOrganic = !!(past?.is_organic) || /org/i.test(past?.variant || '') || /organic|org/i.test(key)
-    const residueResult = residueRec ? coaComplies(residueRec) : ''
-    const paResult      = paRec ? coaComplies(paRec) : ''
+    const customer = past?.customer || ''
+    const grade    = past?.type_grade || [past?.grade, past?.variant].filter(Boolean).join(' ') || ''
+    const variant  = past?.variant || (past?.is_organic ? 'Organic' : '') || key
 
-    const other: CoaLine[] = []
-    if (moistureAvg != null) other.push({ label: 'Moisture', spec: '<10%', result: `${moistureAvg.toFixed(1).replace('.', ',')}%` })
-    if (bdAvg != null)       other.push({ label: 'Bulk Density', spec: '280 – 340cc/100g', result: `${Math.round(bdAvg)}cc/100g` })
-    other.push({ label: 'Foreign Material', spec: '<1%', result: '0.0%' })
-    if (residueRec) other.push({ label: 'Pesticide residue', spec: COA_WORDING.residueRegulation, result: residueResult })
-    if (paRec)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: '<50 μg', result: paResult })
-    if (hmRec)      other.push({ label: 'Heavy Metals', spec: '', result: coaComplies(hmRec) })
-    if (moshRec)    other.push({ label: 'MOSH/MOAH', spec: '', result: coaComplies(moshRec) })
-    other.push({ label: 'Sensorical Properties', spec: COA_WORDING.sensorical, result: 'Complies' })
+    // ── Candidate customer specs + best match ──
+    const specs = csRes.data ?? []
+    const candidates = specs
+      .map((s: any) => ({ s, score: scoreSpec(s, customer, grade, variant) }))
+      .filter((x: any) => x.score >= 100)   // must at least match the customer
+      .sort((a: any, b: any) => b.score - a.score)
+    const bestSpec = candidates.length ? candidates[0].s : null
 
-    const built: CoaModel = {
-      batch,
-      found: {
-        pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec,
-        heavyMetals: !!hmRec, moshMoah: !!moshRec, sieving: hasSieve,
+    const src = {
+      batch, past, microData, moistureAvg, bdAvg, cutResults, hasSieve,
+      found: { pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec, sieving: hasSieve },
+      results: {
+        residue: residueRec ? coaComplies(residueRec) : '', pa: paRec ? coaComplies(paRec) : '',
+        hm: hmRec ? coaComplies(hmRec) : '', mosh: moshRec ? coaComplies(moshRec) : '',
       },
-      isOrganic,
+      isOrganic: !!(past?.is_organic) || /org/i.test(past?.variant || '') || /organic|org/i.test(key),
       header: {
         date_of_issue: new Date().toLocaleDateString('en-ZA', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'),
         batch_number: past?.batch_number || batch,
-        grade: past?.type_grade || [past?.grade, past?.variant].filter(Boolean).join(' ') || '',
-        destination: past?.customer || '',
+        grade, destination: orderRow?.destination || customer,
         production_date: monthYear(past?.production_date || ''),
         best_before: bestBefore(past?.production_date || ''),
-        invoice_no: '', order_number: '', quantity_kg: '', quantity_bags: '',
+        // Logistics fields — pulled from a saved coa_orders row if present, else blank for later entry
+        invoice_no: orderRow?.invoice_no || '', order_number: orderRow?.order_number || '',
+        quantity_kg: orderRow?.quantity_kg || '', quantity_bags: orderRow?.quantity_bags || '',
       },
-      micro, cutLength, other,
-      sections: {
-        micro: !!microRec, cutLength: hasSieve, residue: !!residueRec,
-        pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec,
-      },
+      candidateDocs: candidates.map((x: any) => ({ doc_no: x.s.doc_no, label: `${x.s.doc_no} — ${x.s.product_description || ''} (${x.s.variant || '—'})` })),
     }
-    setModel(built)
+    setSources(src)
+    setModel(buildModel(src, bestSpec))
     if (!past && !microRec && !residueRec) setError(`No pasteuriser or lab data found for batch "${batch}".`)
     setLoading(false)
   }, [db])
+
+  // Re-apply a different customer spec (from the picker) to the current sources.
+  const applyDoc = (docNo: string) => {
+    if (!sources) return
+    const spec = allSpecs.find(s => s.doc_no === docNo) || null
+    setModel(buildModel(sources, spec))
+  }
+
+  // Log a generated COA to history (on Print / Export).
+  const logGeneration = async (m: CoaModel) => {
+    try {
+      await db.schema('qms').from('coa_generated').insert({
+        batch_no: m.header.batch_number || m.batch, customer: m.header.destination || '',
+        grade: m.header.grade || '', variant: sources?.past?.variant || '',
+        doc_no: m.matchedDoc || null, generated_by: whoAmI,
+        snapshot: { header: m.header, micro: m.micro, cutLength: m.cutLength, other: m.other, sections: m.sections, isOrganic: m.isOrganic },
+      })
+    } catch { /* non-blocking */ }
+  }
+
+  // Save the logistics order fields (invoice, order no, quantities, destination)
+  // against the batch so they persist and pull through on future generations.
+  const [savingOrder, setSavingOrder] = useState(false)
+  const saveOrderDetails = async () => {
+    if (!model) return
+    setSavingOrder(true)
+    const { error } = await db.schema('qms').from('coa_orders').upsert({
+      batch_no: model.header.batch_number || model.batch,
+      invoice_no: model.header.invoice_no || null, order_number: model.header.order_number || null,
+      quantity_kg: model.header.quantity_kg || null, quantity_bags: model.header.quantity_bags || null,
+      destination: model.header.destination || null, updated_by: whoAmI, updated_at: new Date().toISOString(),
+    }, { onConflict: 'batch_no' })
+    setSavingOrder(false)
+    if (error) { alert('Save failed: ' + error.message); return }
+    alert('Order details saved for ' + (model.header.batch_number || model.batch))
+  }
 
   // ── Field mutators ──
   const setHeader = (k: string, v: string) => setModel(m => m ? { ...m, header: { ...m.header, [k]: v } } : m)
@@ -262,13 +390,62 @@ export default function CoaGeneratorPage() {
           className="px-5 py-2 rounded-lg text-white text-[13px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>
           {loading ? 'Loading…' : 'Generate'}
         </button>
+        <button onClick={() => setShowHistory(h => !h)}
+          className="px-4 py-2 rounded-lg border text-[13px] font-semibold" style={{ borderColor: showHistory ? '#d97706' : '#e5e7eb', background: showHistory ? '#fef3c7' : '#fff', color: showHistory ? '#92400e' : '#374151' }}>
+          🕘 History
+        </button>
       </div>
+
+      {/* Generation history */}
+      {showHistory && (
+        <div className="mb-4 no-print border border-amber-200 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-amber-50 text-[11px] font-bold uppercase text-amber-800">🕘 Generated COAs</div>
+          {history.length === 0 ? (
+            <div className="p-4 text-center text-[12px] text-gray-400">No COAs generated yet.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
+                <thead><tr className="bg-gray-100">{['Generated','Batch','Customer','Grade','Spec used','By'].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <tbody>
+                  {history.map((h, i) => (
+                    <tr key={h.id} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
+                      <td className="px-2 py-1 whitespace-nowrap text-gray-500">{isoDateTime(h.generated_at)}</td>
+                      <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{h.batch_no}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{h.customer || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{h.grade || '—'}</td>
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{h.doc_no || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{h.generated_by || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {error && <div className="mb-4 text-[12px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 no-print">{error}</div>}
 
       {model && (
         <>
           {/* Outstanding + section toggles */}
+          {/* Customer spec picker — drives the Specification column + which sections apply */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="text-[11px] font-bold uppercase text-gray-500 mb-1">Customer specification</div>
+            {model.candidateDocs.length === 0 ? (
+              <div className="text-[12px] text-amber-700">No customer spec found for this batch's customer — specs will be blank. Add one under Customer Specs → COA Requirements.</div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <select value={model.matchedDoc} onChange={e => applyDoc(e.target.value)}
+                  className="flex-1 min-w-[280px] px-2 py-1.5 border border-gray-300 rounded-lg text-[12px]">
+                  <option value="">— none (blank specs) —</option>
+                  {model.candidateDocs.map(c => <option key={c.doc_no} value={c.doc_no}>{c.label}</option>)}
+                </select>
+                <span className="text-[11px] text-gray-500">Matched by customer + grade + variant — change if needed.</span>
+              </div>
+            )}
+          </div>
+
           <div className="mb-4 grid grid-cols-2 gap-3 no-print">
             <div className="border border-gray-200 rounded-lg p-3">
               <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">Data sources</div>
@@ -298,14 +475,67 @@ export default function CoaGeneratorPage() {
             </div>
           )}
 
+          {/* Logistics order details — entered later by logistics, saved per batch */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-bold uppercase text-gray-500">🚚 Order details (logistics)</div>
+              <button onClick={saveOrderDetails} disabled={savingOrder}
+                className="px-3 py-1 rounded-lg text-white text-[11px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>
+                {savingOrder ? 'Saving…' : '💾 Save order details'}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {([['invoice_no','Invoice No.'],['order_number','Order Number'],['quantity_kg',"Quantity (Kg's)"],['quantity_bags','Quantity of Bags'],['destination','Destination']] as const).map(([k,l]) => (
+                <div key={k}>
+                  <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">{l}</label>
+                  <input value={model.header[k] || ''} onChange={e => setHeader(k, e.target.value)}
+                    placeholder="—" className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] outline-none focus:border-blue-500" />
+                </div>
+              ))}
+            </div>
+            <div className="text-[10px] text-gray-400 mt-1">These fill in the header and persist against the batch — logistics can enter them later; they'll pull through next time.</div>
+          </div>
+
+          {/* Signatories — editable names + drawable signatures (shared across all COAs) */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <button onClick={() => setShowSigEditor(s => !s)} className="text-[11px] font-bold uppercase text-gray-500 flex items-center gap-1">
+                <span>{showSigEditor ? '▼' : '▶'}</span> ✍ Signatories
+              </button>
+              {showSigEditor && <button onClick={saveSignatories} disabled={savingSig}
+                className="px-3 py-1 rounded-lg text-white text-[11px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>{savingSig ? 'Saving…' : '💾 Save signatories'}</button>}
+            </div>
+            {showSigEditor && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {signatories.map(s => (
+                  <div key={s.slot} className="border border-gray-100 rounded-lg p-2">
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Title</label>
+                    <input value={s.title} onChange={e => setSig(s.slot, 'title', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Name</label>
+                    <input value={s.name} onChange={e => setSig(s.slot, 'name', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Signature (draw below)</label>
+                    <SignaturePad value={s.signature} onChange={v => setSig(s.slot, 'signature', v)} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {!showSigEditor && <div className="text-[10px] text-gray-400">{signatories.map(s => `${s.name} (${s.title})${s.signature ? ' ✍' : ''}`).join('  ·  ') || 'No signatories set'}</div>}
+          </div>
+
           <div className="flex gap-2 mb-4 no-print">
-            <button onClick={() => window.print()} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => exportPdf(model, description)} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatories) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
 
           {/* ── COA preview (editable) ── */}
           <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>
-            <div className="text-center font-bold text-[16px] tracking-wide mb-4 border-b-2 border-gray-800 pb-2">CERTIFICATE OF ANALYSIS</div>
+            {/* Logo + title */}
+            <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo.png" alt="Cape Natural Tea Products" style={{ height: 56, width: 'auto', objectFit: 'contain' }} />
+              <div className="flex-1 text-center font-bold text-[16px] tracking-wide">CERTIFICATE OF ANALYSIS</div>
+              <div style={{ width: 56 }} />
+            </div>
 
             {/* Header grid */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
@@ -365,7 +595,27 @@ export default function CoaGeneratorPage() {
                 if (realIdx >= 0) setLine('other', realIdx, f, v)
               }} />
 
-            <div className="mt-6 text-[10px] text-gray-500">{COA_WORDING.company}</div>
+            {/* Signatures — editable names + drawn signature images */}
+            <div className="flex justify-between gap-8 mt-10">
+              {(signatories.length ? signatories : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))).map((s: any, i: number) => (
+                <div key={i} style={{ flex: 1, maxWidth: 260 }}>
+                  <div style={{ height: 40, display: 'flex', alignItems: 'flex-end' }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {s.signature ? <img src={s.signature} alt="signature" style={{ maxHeight: 40, maxWidth: 200 }} /> : null}
+                  </div>
+                  <div style={{ borderTop: '1px solid #111', paddingTop: 3 }} />
+                  <div className="text-[11px] font-semibold">{s.title}</div>
+                  <div className="text-[11px]">{s.name}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Company footer */}
+            <div className="text-center mt-8">
+              {COA_WORDING.companyFooter.map((line, i) => (
+                <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -415,7 +665,12 @@ function SampleCoa() {
           <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 inline-block">
             Illustrative sample only — batch 26138-CON-SG. Enter a real batch above to generate an editable COA.
           </div>
-          <div className="text-center font-bold text-[16px] tracking-wide mb-4 border-b-2 border-gray-800 pb-2">CERTIFICATE OF ANALYSIS</div>
+          <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="Cape Natural Tea Products" style={{ height: 56, width: 'auto', objectFit: 'contain' }} />
+            <div className="flex-1 text-center font-bold text-[16px] tracking-wide">CERTIFICATE OF ANALYSIS</div>
+            <div style={{ width: 56 }} />
+          </div>
           <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
             {header.map(([l, v]) => (
               <div key={l} className="flex items-center gap-2">
@@ -430,7 +685,20 @@ function SampleCoa() {
           </div>
           <SampleTable title="Microbiological Analyses" cols={['Organism', "Specification (cfu's/g)", "Result (cfu's/g)"]} lines={micro} />
           <SampleTable title="Other Analysis" cols={['Description', 'Specification', 'Result']} lines={other} />
-          <div className="mt-6 text-[10px] text-gray-500">{COA_WORDING.company}</div>
+          <div className="flex justify-between gap-8 mt-10">
+            {COA_WORDING.signatories.map((s, i) => (
+              <div key={i} style={{ flex: 1, maxWidth: 260 }}>
+                <div style={{ borderTop: '1px solid #111', marginTop: 34, paddingTop: 3 }} />
+                <div className="text-[11px] font-semibold">{s.title}</div>
+                <div className="text-[11px]">{s.name}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-center mt-8">
+            {COA_WORDING.companyFooter.map((line, i) => (
+              <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -455,6 +723,100 @@ function SampleTable({ title, cols, lines }: { title: string; cols: string[]; li
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Build the full COA model from raw sources + an optional matched customer spec.
+// When a spec is supplied, the Specification columns and which sections appear
+// are driven by the customer's requirements; results come from the lab/pasteuriser.
+function buildModel(src: any, spec: any): CoaModel {
+  const sp = spec?.specs || {}
+  const req = (v: any) => v != null && String(v).trim() !== '' && String(v).trim().toUpperCase() !== 'NOT REQUIRED'
+
+  // ── Microbiology: rows required by the spec (or, with no spec, whatever the lab reported) ──
+  let micro: CoaLine[]
+  if (spec) {
+    micro = MICRO_ROWS
+      .filter(r => req(sp.micro?.[MICRO_TO_SPECKEY[r.key]]))
+      .map(r => ({ label: r.label, spec: String(sp.micro[MICRO_TO_SPECKEY[r.key]]), result: microDisplay(r.key, src.microData[r.key]) }))
+  } else {
+    micro = MICRO_ROWS
+      .map(r => ({ key: r.key, label: r.label, spec: r.specDefault, result: microDisplay(r.key, src.microData[r.key]) }))
+      .filter(r => r.result !== '').map(({ label, spec, result }) => ({ label, spec, result }))
+  }
+
+  // ── Cut length: spec from the matched customer spec's mesh set ──
+  const cutLength: CoaLine[] = CUT_LENGTH_ROWS.map(row => {
+    let specVal = ''
+    if (spec) { for (const mk of CUT_TO_MESH[row.key]) { const m = sp.mesh?.[mk]; if (m && req(m.spec)) { specVal = String(m.spec); break } } }
+    return { label: row.label, spec: specVal, result: src.cutResults[row.key] || '' }
+  })
+
+  // ── Other analysis ──
+  const other: CoaLine[] = []
+  if (src.moistureAvg != null) other.push({ label: 'Moisture', spec: spec ? moistSpec(spec.moisture_max) || '<10%' : '<10%', result: `${src.moistureAvg.toFixed(1).replace('.', ',')}%` })
+  if (src.bdAvg != null) other.push({ label: 'Bulk Density', spec: spec ? (bdSpec(spec.bd_min, spec.bd_max) || '280 – 340cc/100g') : '280 – 340cc/100g', result: `${Math.round(src.bdAvg)}cc/100g` })
+  other.push({ label: 'Foreign Material', spec: (spec && req(sp.other?.foreign_material)) ? String(sp.other.foreign_material) : '<1%', result: '0.0%' })
+  const wantResidue = spec ? req(sp.other?.residue_reg) : src.found.residue
+  const wantPa      = spec ? req(sp.contaminants?.pyrrolizidine_alkaloids) : src.found.pa
+  const wantHm      = spec ? ['lead','cadmium','mercury','arsenic','copper'].some(k => req(sp.contaminants?.[k])) : src.found.heavyMetals
+  const wantMosh    = spec ? req(sp.contaminants?.mosh_moah) : src.found.moshMoah
+  if (wantResidue) other.push({ label: 'Pesticide residue', spec: (spec && req(sp.other?.residue_reg)) ? String(sp.other.residue_reg) : COA_WORDING.residueRegulation, result: src.results.residue })
+  if (wantPa)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: (spec && req(sp.contaminants?.pyrrolizidine_alkaloids)) ? String(sp.contaminants.pyrrolizidine_alkaloids) : '<50 μg', result: src.results.pa })
+  if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? ['lead','cadmium','mercury','arsenic','copper'].filter(k => req(sp.contaminants?.[k])).map(k => `${k[0].toUpperCase()+k.slice(1)} ${sp.contaminants[k]}`).join('; ') : '', result: src.results.hm })
+  if (wantMosh)    other.push({ label: 'MOSH/MOAH', spec: (spec && req(sp.contaminants?.mosh_moah)) ? String(sp.contaminants.mosh_moah) : '', result: src.results.mosh })
+  other.push({ label: 'Sensorical Properties', spec: (spec && req(sp.other?.sensorial)) ? String(sp.other.sensorial) : COA_WORDING.sensorical, result: 'Complies' })
+
+  const wantMicro = spec ? micro.length > 0 : src.found.micro
+  const wantCut   = spec ? cutLength.some(c => c.spec !== '') : src.found.sieving
+
+  return {
+    batch: src.batch, found: src.found, isOrganic: src.isOrganic, header: { ...src.header },
+    micro, cutLength, other,
+    sections: { micro: wantMicro, cutLength: wantCut, residue: wantResidue, pa: wantPa, heavyMetals: wantHm, moshMoah: wantMosh },
+    matchedDoc: spec?.doc_no || '',
+    candidateDocs: src.candidateDocs || [],
+  }
+}
+
+// ─── Signature pad (draw with mouse or touch) ─────────────────────────────────
+
+function SignaturePad({ value, onChange }: { value: string; onChange: (dataUrl: string) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const drawing = useRef(false)
+  const last = useRef<{ x: number; y: number } | null>(null)
+
+  // Paint an existing signature into the canvas on mount / when value changes externally.
+  useEffect(() => {
+    const c = canvasRef.current; if (!c) return
+    const ctx = c.getContext('2d'); if (!ctx) return
+    ctx.clearRect(0, 0, c.width, c.height)
+    if (value) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, c.width, c.height); img.src = value }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const pos = (e: React.PointerEvent) => {
+    const c = canvasRef.current!; const r = c.getBoundingClientRect()
+    return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) }
+  }
+  const start = (e: React.PointerEvent) => { drawing.current = true; last.current = pos(e); (e.target as Element).setPointerCapture(e.pointerId) }
+  const move = (e: React.PointerEvent) => {
+    if (!drawing.current) return
+    const c = canvasRef.current!; const ctx = c.getContext('2d')!; const p = pos(e)
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+    ctx.beginPath(); ctx.moveTo(last.current!.x, last.current!.y); ctx.lineTo(p.x, p.y); ctx.stroke()
+    last.current = p
+  }
+  const end = () => { if (!drawing.current) return; drawing.current = false; const c = canvasRef.current!; onChange(c.toDataURL('image/png')) }
+  const clear = () => { const c = canvasRef.current!; c.getContext('2d')!.clearRect(0, 0, c.width, c.height); onChange('') }
+
+  return (
+    <div>
+      <canvas ref={canvasRef} width={280} height={70}
+        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end}
+        style={{ border: '1px dashed #9ca3af', borderRadius: 6, background: '#fff', touchAction: 'none', cursor: 'crosshair', width: 280, height: 70 }} />
+      <button onClick={clear} className="text-[10px] text-gray-500 mt-0.5">Clear signature</button>
     </div>
   )
 }
@@ -502,18 +864,38 @@ function CoaTable({ title, cols, lines, onEdit }: {
   )
 }
 
+// Fetch an image URL and return a data URL + natural dimensions (for jsPDF).
+async function loadImage(url: string): Promise<{ dataUrl: string; w: number; h: number } | null> {
+  try {
+    const res = await fetch(url); const blob = await res.blob()
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const r = new FileReader(); r.onload = () => resolve(r.result as string); r.onerror = reject; r.readAsDataURL(blob)
+    })
+    const dim = await new Promise<{ w: number; h: number }>((resolve) => {
+      const img = new Image(); img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight }); img.onerror = () => resolve({ w: 1, h: 1 }); img.src = dataUrl
+    })
+    return { dataUrl, w: dim.w, h: dim.h }
+  } catch { return null }
+}
+
 // ─── PDF export (jsPDF, laid out to mirror the template) ──────────────────────
 
-function exportPdf(model: CoaModel, description: string) {
+async function exportPdf(model: CoaModel, description: string, signatories?: { slot: number; title: string; name: string; signature: string }[]) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const pageW = doc.internal.pageSize.getWidth()
   const margin = 40
   let y = 50
 
+  // Logo (top-left) + centred title
+  const logo = await loadImage('/logo.png')
+  if (logo) {
+    const h = 42, w = logo.w * (h / logo.h)
+    doc.addImage(logo.dataUrl, 'PNG', margin, y - 28, w, h)
+  }
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15)
   doc.text('CERTIFICATE OF ANALYSIS', pageW / 2, y, { align: 'center' })
-  doc.setLineWidth(1.2); doc.line(margin, y + 6, pageW - margin, y + 6)
-  y += 26
+  doc.setLineWidth(1.2); doc.line(margin, y + 18, pageW - margin, y + 18)
+  y += 40
 
   // Header — two columns
   const hdr: [string, string][] = [
@@ -575,6 +957,28 @@ function exportPdf(model: CoaModel, description: string) {
     if (l.label === 'MOSH/MOAH') return model.sections.moshMoah
     return true
   }))
+
+  // Signatures — two blocks with the drawn signature above a ruled line
+  y += 50
+  const sigList = (signatories && signatories.length ? signatories : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))) as any[]
+  const sigW = 170
+  const sigX = [margin + 20, pageW - margin - 20 - sigW]
+  sigList.slice(0, 2).forEach((s: any, i: number) => {
+    const x = sigX[i]
+    if (s.signature) { try { doc.addImage(s.signature, 'PNG', x, y - 32, 120, 30) } catch { /* ignore bad image */ } }
+    doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title || '', x, y + 12)
+    doc.setFont('helvetica', 'normal'); doc.text(s.name || '', x, y + 23)
+  })
+  y += 46
+
+  // Centred company footer
+  COA_WORDING.companyFooter.forEach((line, i) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(i === 0 ? 8 : 7)
+    doc.setTextColor(i === 0 ? 22 : 75, i === 0 ? 101 : 85, i === 0 ? 52 : 99)
+    doc.text(line, pageW / 2, y, { align: 'center' }); y += (i === 0 ? 9 : 8)
+  })
+  doc.setTextColor(0, 0, 0)
 
   doc.save(`COA_${normBatch(model.batch)}.pdf`)
 }

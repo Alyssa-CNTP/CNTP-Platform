@@ -1,18 +1,22 @@
 // Operator timesheet auto-derive.
 //
-// Timesheets are reconstructed from the `capture_activity` heartbeat the capture
-// page writes during a shift. The rule (from the onboarding doc):
-//   first action  = shift start
-//   5–30 min gap  = tea break
-//   >30 min gap   = lunch
-//   last action   = shift end
-// The operator confirms (with light edits) at sign-off; the result is stored in
+// Timesheets are anchored to real clock events, NOT to gaps in capture activity:
+//   shift start = the operator's first activity stamp = login / page-open (fixed)
+//   shift end   = when they submit or log out (passed in explicitly), else the
+//                 last activity stamp as a fallback
+//   breaks      = the standard tea/lunch schedule for the shift, clipped to the
+//                 worked window; the operator can add explicit stoppages at
+//                 sign-off. Inactivity gaps are NOT treated as breaks.
+//   worked      = (end − start) − break time overlapping the window
+//
+// Why not infer breaks from inactivity gaps? Operators spend long stretches doing
+// physical floor work without touching the tablet, so a normal shift produced one
+// giant "lunch" gap and worked-time collapsed to a few minutes. Anchoring to
+// login/submit and applying the fixed break schedule is what the shift actually is.
+// The operator confirms (start is read-only) at sign-off; the result is stored in
 // `prod_timesheets`.
 
 import { getDb } from '@/lib/supabase/db'
-
-export const TEA_MIN_MINUTES = 5
-export const TEA_MAX_MINUTES = 30
 
 export type BreakType = 'tea' | 'lunch' | 'changeover' | 'maintenance' | 'other'
 export interface TimesheetBreak {
@@ -30,7 +34,8 @@ export interface DerivedTimesheet {
 
 const MS_PER_MIN = 60_000
 
-// Standard break schedule per shift — pre-populated when no inactivity gaps are detected.
+// Standard break schedule per shift — always applied (then clipped to the worked
+// window), since breaks are no longer inferred from inactivity gaps.
 // Times are local (SAST) on the session date; ISO conversion happens in the browser.
 const STANDARD_BREAKS: Record<string, { type: BreakType; localTime: string; durationMin: number }[]> = {
   morning: [
@@ -48,14 +53,31 @@ const STANDARD_BREAKS: Record<string, { type: BreakType; localTime: string; dura
   ],
 }
 
+/** The standard tea/lunch breaks for a shift on a date, as concrete ISO windows. */
+export function standardBreaks(shift: string | undefined, date: string | undefined): TimesheetBreak[] {
+  if (!shift || !date) return []
+  return (STANDARD_BREAKS[shift] ?? []).map(({ type, localTime, durationMin }) => {
+    const startMs = new Date(`${date}T${localTime}:00`).getTime()
+    return {
+      type,
+      start: new Date(startMs).toISOString(),
+      end:   new Date(startMs + durationMin * MS_PER_MIN).toISOString(),
+    }
+  })
+}
+
 /**
  * Derive a timesheet from a list of activity timestamps (ISO strings).
  * Pure — no I/O — so it's easy to unit-test against crafted inputs.
- * When no inactivity gaps are found, pre-populate standard breaks for the shift.
+ *
+ * Start is anchored to the FIRST stamp (login / page-open) and is fixed.
+ * End is the explicit `endIso` (submit / logout) when given, else the LAST stamp.
+ * Breaks are the shift's standard schedule (clipped to the worked window at the
+ * `workedMinutes` step) — never inferred from gaps between stamps.
  */
 export function deriveTimesheet(
   timestamps: string[],
-  opts?: { shift?: string; date?: string },
+  opts?: { shift?: string; date?: string; endIso?: string | null },
 ): DerivedTimesheet {
   const sorted = timestamps
     .map(t => new Date(t).getTime())
@@ -66,54 +88,49 @@ export function deriveTimesheet(
     return { shiftStart: null, shiftEnd: null, breaks: [], workedMinutes: 0 }
   }
 
-  const start = sorted[0]
-  const end   = sorted[sorted.length - 1]
-  const breaks: TimesheetBreak[] = []
+  const startIso = new Date(sorted[0]).toISOString()
+  // Prefer the explicit submit/logout end; fall back to the last stamp. Guard
+  // against an end that predates the last stamp (clock skew) by taking the later.
+  const lastStampMs = sorted[sorted.length - 1]
+  const endMsCandidate = opts?.endIso ? new Date(opts.endIso).getTime() : NaN
+  const endMs = Number.isFinite(endMsCandidate) ? Math.max(endMsCandidate, lastStampMs) : lastStampMs
+  const endIso = new Date(endMs).toISOString()
 
-  for (let i = 1; i < sorted.length; i++) {
-    const gapMin = (sorted[i] - sorted[i - 1]) / MS_PER_MIN
-    if (gapMin >= TEA_MIN_MINUTES) {
-      breaks.push({
-        type:  gapMin > TEA_MAX_MINUTES ? 'lunch' : 'tea',
-        start: new Date(sorted[i - 1]).toISOString(),
-        end:   new Date(sorted[i]).toISOString(),
-      })
-    }
-  }
-
-  // No inactivity gaps detected — pre-populate the standard schedule for this shift.
-  if (breaks.length === 0 && opts?.shift && opts?.date) {
-    const schedule = STANDARD_BREAKS[opts.shift] ?? []
-    schedule.forEach(({ type, localTime, durationMin }) => {
-      const startMs = new Date(`${opts.date}T${localTime}:00`).getTime()
-      breaks.push({
-        type,
-        start: new Date(startMs).toISOString(),
-        end:   new Date(startMs + durationMin * MS_PER_MIN).toISOString(),
-      })
-    })
-  }
+  const breaks = standardBreaks(opts?.shift, opts?.date)
 
   return {
-    shiftStart: new Date(start).toISOString(),
-    shiftEnd:   new Date(end).toISOString(),
+    shiftStart: startIso,
+    shiftEnd:   endIso,
     breaks,
-    workedMinutes: workedMinutes(new Date(start).toISOString(), new Date(end).toISOString(), breaks),
+    workedMinutes: workedMinutes(startIso, endIso, breaks),
   }
 }
 
-/** Worked minutes = total span minus the sum of all break durations. Never negative. */
+/** How much of a break overlaps the [shiftStart, shiftEnd] window, in minutes. */
+function breakOverlapMinutes(b: TimesheetBreak, startMs: number, endMs: number): number {
+  const bs = new Date(b.start).getTime()
+  const be = new Date(b.end).getTime()
+  if (!Number.isFinite(bs) || !Number.isFinite(be)) return 0
+  const overlap = Math.min(be, endMs) - Math.max(bs, startMs)
+  return overlap > 0 ? overlap / MS_PER_MIN : 0
+}
+
+/**
+ * Worked minutes = shift span minus the break time that falls INSIDE the shift
+ * window. Clipping to the window means a standard lunch at 13:00 can't subtract
+ * from someone who left at 12:30, and never goes negative.
+ */
 export function workedMinutes(
   shiftStart: string | null,
   shiftEnd: string | null,
   breaks: TimesheetBreak[],
 ): number {
   if (!shiftStart || !shiftEnd) return 0
-  const span = (new Date(shiftEnd).getTime() - new Date(shiftStart).getTime()) / MS_PER_MIN
-  const breakMin = breaks.reduce((sum, b) => {
-    const d = (new Date(b.end).getTime() - new Date(b.start).getTime()) / MS_PER_MIN
-    return sum + (Number.isFinite(d) && d > 0 ? d : 0)
-  }, 0)
+  const startMs = new Date(shiftStart).getTime()
+  const endMs   = new Date(shiftEnd).getTime()
+  const span = (endMs - startMs) / MS_PER_MIN
+  if (!(span > 0)) return 0
+  const breakMin = (breaks ?? []).reduce((sum, b) => sum + breakOverlapMinutes(b, startMs, endMs), 0)
   return Math.max(0, Math.round(span - breakMin))
 }
 

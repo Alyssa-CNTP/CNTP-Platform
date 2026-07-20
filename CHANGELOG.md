@@ -22,7 +22,7 @@ Format: date · developer · files changed · description of code changes.
 
 ## 2026-07-17 — Alyssa (AXIS: ticket assignment bug fix, real assignee routing, Submit Request 4-way redesign, GitHub-backed changelog)
 
-**Files changed:** `app/(app)/axis/tickets/page.tsx`, `app/(app)/axis/request/page.tsx`, `app/(app)/axis/page.tsx`, `app/(app)/axis/consideration/page.tsx`, `app/(app)/axis/changelog/page.tsx`, `app/api/axis/tickets/route.ts`, `app/api/axis/tickets/[id]/route.ts`, `app/api/axis/requests/route.ts`, `app/api/axis/requests/[id]/approve/route.ts`, `app/api/axis/requests/[id]/reject/route.ts`, `app/api/axis/users/route.ts`, `app/api/axis/projects/route.ts`, `app/api/axis/changelog/github/route.ts` (new), `components/layout/Sidebar.tsx`, `lib/notifications/recipients.ts`, `lib/production/it-ticket.ts`, `lib/github/client.ts` (new), `.env.example`, `supabase/migrations/20260717_004_axis_tickets_routing_redesign.sql` (new), `supabase/migrations/20260717_005_axis_projects_backfill_prj001_004.sql` (new), `supabase/migrations/20260717_006_axis_project_requests_redesign.sql` (new), `supabase/migrations/20260717_007_axis_change_logs_github.sql` (new)
+**Files changed:** `app/(app)/axis/tickets/page.tsx`, `app/(app)/axis/request/page.tsx`, `app/(app)/axis/page.tsx`, `app/(app)/axis/consideration/page.tsx`, `app/(app)/axis/changelog/page.tsx`, `app/api/axis/tickets/route.ts`, `app/api/axis/tickets/[id]/route.ts`, `app/api/axis/requests/route.ts`, `app/api/axis/requests/[id]/approve/route.ts`, `app/api/axis/requests/[id]/reject/route.ts`, `app/api/axis/users/route.ts`, `app/api/axis/projects/route.ts`, `app/api/axis/changelog/github/route.ts` (new), `components/layout/Sidebar.tsx`, `lib/notifications/recipients.ts`, `lib/production/it-ticket.ts`, `lib/github/client.ts` (new), `.env.example`, `supabase/migrations/20260717_010_axis_tickets_routing_redesign.sql` (new), `supabase/migrations/20260717_011_axis_projects_backfill_prj001_004.sql` (new), `supabase/migrations/20260717_012_axis_project_requests_redesign.sql` (new), `supabase/migrations/20260717_013_axis_change_logs_github.sql` (new)
 
 - **Fixed ticket status buttons not working**: the permission check never considered whether the viewer was the ticket's own assignee, only IT/`can_assign_tickets` — anyone else's assigned ticket showed a read-only badge with no way to update it. Both the client gate and the server PATCH gate now include an `isMyTicket` check.
 - **Fixed the Tickets nav link being invisible** to eligible non-IT managers (e.g. `maintenance_manager`) — the Sidebar's `itOnly` flag ignored `can_assign_tickets` entirely; that entry now gates on department OR permission like the rest of the app.
@@ -33,6 +33,79 @@ Format: date · developer · files changed · description of code changes.
 - **Added an automatic GitHub-backed feed to the Changelog**: merged PRs into `staging` are ingested into the same `axis.change_logs` table as manual entries (`source: 'github'`), shown with author avatar, a linked PR badge, and a diff-stat chip — one unified timeline instead of a purely hand-typed log.
 - Flagged separately to the user: a live GitHub token found committed in plaintext in `QUALITY_MIGRATION_NOTES.md` needs to be revoked — unrelated to this change, not touched by it.
 - **Migrations must be run manually** (Supabase SQL editor, staging then production) per this repo's established practice — `db-migrate.yml`'s auto-apply is deliberately disabled.
+
+---
+
+## 2026-07-17 — Alyssa (Supervisor Hub Roster: always show an auto pre-filled draft, never blank)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`
+
+- The Roster tab's Staffing view now **never sits blank**. When the roster period covering today has no production crew yet — or no period covers today at all — it shows an **unsaved pre-filled draft** carried over from the most recent populated period with **day↔night swapped** (the same rule the weekly rotate cron uses). A brand-tinted banner explains it's a starting point; the supervisor adjusts and **Saves** to confirm.
+- **Save now materialises a period if none exists.** `saveDraft()` returns the period it wrote into; a missing "this week" period is created via `nextPeriodConfig()` chained forward from the latest period — the *same cadence the rotate cron uses*, so the dates line up and the cron's idempotency check skips it (no duplicate/overlap). Falls back to a 7-day week from today only when there's no roster history at all.
+- No change to the weekly **auto-swap cron** (`/api/production/roster/cron?task=rotate`), `roster-rotate.ts`, the full `/production/roster` tool, or the capture-section autofill — all untouched. This only makes the Hub's Roster tab self-sufficient so a supervisor always has something to work from.
+- **Verified:** `tsc --noEmit` identical to baseline; `/supervisor` compiles and serves 200 with no console errors. Logged-in flows (pre-fill save when period empty, and save-creates-period when none covers today) still need a click-through on staging — no credentials in this environment.
+
+---
+
+## 2026-07-17 — Alyssa (Supervisor Hub Phase 2: redesign to 5 tabs, Production Manager sign-off role, PO reopen-request flow)
+
+**Files changed:** `components/supervisor/HubTabs.tsx`, `app/(app)/supervisor/page.tsx` (rewritten), `app/(app)/supervisor/signoff/page.tsx` (new), `app/(app)/supervisor/productions/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/auth/departments.ts`, `lib/notifications/recipients.ts`, `app/api/production/orders/[id]/reopen-request/route.ts` (new), `supabase/migrations/20260717_009_po_reopen_requests.sql` (new)
+
+- **Hub restructured to 5 tabs**, matched to what a low-tech-comfort supervisor actually needs day to day: **Roster → Sign-off → Productions → Messages → Timesheets**. The old Overview/Analytics/Calendar/Assign tabs are no longer in the primary nav (pages still exist, just not linked from the hub) — decluttered on purpose.
+- **New "Roster" tab** (`/supervisor`, the hub's landing page) with two sub-views, toggled at the top:
+  - **Staffing** — a focused, Production-only editor over the *same* `roster_entries` / `roster_periods` / `roster_section_status` tables the full company-wide Shift Roster uses — not a data fork. A supervisor edits who's on each line and **Saves** a draft; only a **Production Manager** can **Submit** it (edit/save stays with the supervisor; sign-off moves up a tier). **Print** is open to anyone who can view. Links out to the full multi-department roster tool for period management.
+  - **Today's sections** — the daily section-assignment tool (operators + variant + lot + production order per section, per shift; this is what actually unlocks capture). The existing `/production/capture/assign` component is **embedded unchanged** — its save behaviour and capture-unlock are untouched, no save/submit split added (it's operational/time-sensitive: a saved assignment is live immediately, as before). This restores the entry point the initial Phase 2 nav had dropped.
+- **New "Sign-off" tab** (`/supervisor/signoff`): the "which lines are running, what's waiting on my signature" view, extracted from the old Overview — KPI strip and 7-day trend charts were deliberately cut (analytics, not a daily tool).
+- **New role: Production Manager** (`production_manager`, Production dept) — submits the Roster's Production section and decides "reopen this PO" requests; does not edit capture sessions or the roster directly. New permission `can_approve_reopen_request`. `production_supervisor` no longer holds `can_submit_roster_production` (moved to the new role) but keeps everything else, incl. Maintenance roster submit.
+- **"Productions" tab reopen-request flow**: a supervisor can no longer reopen a submitted/signed-off session directly from the Hub — they **submit a request with a reason**; it notifies Production Managers + IT (in-app + email), who **approve or decline** from a panel right on the same tab. Approval flips the session back to `draft` (same effect as the existing direct "Reopen for edits" action on `/production/orders`, which is untouched and still available to whoever holds `can_edit_session`) and is written to the audit log. New table `production.po_reopen_requests`.
+- **Verification:** `tsc --noEmit` across the whole project — identical error set before/after (30 pre-existing errors, none in touched files). `next build` compiled successfully across the whole app (including every new/changed file); the one build-time failure that followed is in an unrelated, untouched route (`/api/accounts/[id]`, pre-existing env issue). **Could not drive the logged-in Supervisor Hub flows in a browser — no valid login credentials were available in this environment.** Please click through Roster (save + submit as both roles), Sign-off, and the reopen-request flow on staging before treating this as fully verified.
+
+---
+
+## 2026-07-17 — Alyssa (Timesheets: fix worked-minutes — anchor to login → sign-off, stop inferring breaks from gaps, changeover prompt)
+
+**Files changed:** `lib/production/timesheet.ts`, `components/production/capture/TimesheetConfirm.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260717_008_timesheet_worked_minutes_recompute.sql` (new, optional/manual)
+
+- **Root cause fixed:** worked-time was `span − inferred_breaks`, and *any* inactivity gap ≥5 min was inferred as a break (>30 min = lunch). Operators do long stretches of physical floor work without touching the tablet, so a full shift collapsed into one giant "lunch" and worked-time came out as minutes (e.g. an 08:24–15:57 shift showing **8m**, several showing **0m**).
+- **`deriveTimesheet` rewritten** to anchor to real clock events, never gaps:
+  - **shift start = the operator's first activity stamp = login / page-open** — fixed, read-only ("can't be changed").
+  - **shift end = when they reach sign-off / submit** (passed in as `endIso`), falling back to the last stamp.
+  - **breaks = the standard tea/lunch schedule for the shift only**, clipped to the worked window so an out-of-window break (e.g. a 13:00 lunch for someone who left at 12:00) can't subtract. No gap-inference.
+  - `workedMinutes` now subtracts only the portion of each break that overlaps `[start, end]`; never negative.
+- **TimesheetConfirm:** the start field is now read-only (login-anchored); the end defaults to sign-off time; copy updated. Removed the dead gap constants.
+- **Changeover-aware submit:** when a **morning** operator submits **before 15h30** having already run **2+ production orders**, a *"Is there a changeover?"* prompt appears. "Yes" logs a structured handover note (shows in Productions history + the next shift's handover banner) and submits; the incoming afternoon/night operator's own login records their shift start on a fresh record. "No" submits as end-of-day.
+- **Verified** against 6 scenarios incl. the exact screenshot case → now **6h 33m** (was 8m), end-anchored-to-submit, and out-of-window break clipping.
+- **Optional historical recompute** (`…_008_…recompute.sql`) — preview-first SELECT then a transaction-wrapped UPDATE to re-approximate existing confirmed rows (morning −60m, afternoon/night −75m). Approximate by design: old rows' end was the last tap, so they can be made sane but not exact. **Not auto-run.**
+
+---
+
+## 2026-07-17 — Gustav (COA Generator: editable signatory names + drawable, persistent signatures)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_006_coa_signatories.sql` (new)
+
+- **Signatory names and titles are now editable** (no longer hard-coded), stored in the new `qms.coa_signatories` table and shared across every COA. Seeded with the current two — Laboratory Supervisor (Monique Gordon) and Quality Assurance Manager (Michelle Brown).
+- **Drawable signatures:** each signatory has a signature pad (draw with mouse or touch) in a new "✍ Signatories" section. Saved signatures persist and render above the signing line on the COA preview, print, and PDF export. Draw once and it's maintained for future COAs; Clear + redraw to change.
+
+---
+
+## 2026-07-17 — Gustav (COA Generator: logo, signatures, company footer + logistics order details)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_005_coa_orders.sql` (new)
+
+- **Cape Natural logo** now appears top-left of the COA (on-screen preview, print, and PDF export), matching the standard certificate design.
+- **Signature blocks** added at the bottom — Laboratory Supervisor (Monique Gordon) and Quality Assurance Manager (Michelle Brown), each with a ruled signing line — plus the centred company footer (CAPE NATURAL TEA PRODUCTS (PTY) LTD, address, Reg/VAT no.).
+- **Logistics order details:** invoice no., order number, quantities and destination are now a dedicated "🚚 Order details (logistics)" section with a **Save** button. They persist per batch in the new `qms.coa_orders` table, so logistics can fill them in later when ready and they pull through automatically on the next generation. (The header fields remain inline-editable too.)
+
+---
+
+## 2026-07-17 — Gustav (COA Generator: pull specifications from customer specs by grade+customer+variant, + generation history)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_004_coa_generated.sql` (new)
+
+- **Specification column now auto-fills from the customer COA specs.** When a batch is generated, the generator matches a `qms.coa_specs` row by **customer + grade + variant** (derived from the pasteuriser batch) and fills every Specification cell — micro limits, cut-length mesh specs, moisture/BD, residue regulation wording, PA limit, heavy-metal limits, sensorial wording. Which sections appear is now driven by what that customer's spec requires (not just what data exists), so e.g. a customer that needs heavy metals shows that block even before the lab report lands (flagged outstanding).
+- **Customer-spec picker:** a dropdown lists all of that customer's specs, auto-selecting the best match; the lab manager can switch to a different product spec and every Specification cell re-fills instantly.
+- **Variant-aware matching:** Conventional / Organic / RA-Organic / RA-Conventional (and Fairtrade variants) are normalised on both sides so the right spec is chosen.
+- **Generation history:** new `qms.coa_generated` table logs every Print/Export with a full JSON snapshot; a 🕘 History panel shows past generations (date, batch, customer, grade, spec used, by whom).
 
 ---
 

@@ -54,6 +54,24 @@ export async function getProductionSupervisorIds(): Promise<string[]> {
   return (data ?? []).filter((r: any) => r.is_active !== false).map((r: any) => r.user_id).filter(Boolean)
 }
 
+/** User ids of production managers — decide a supervisor's "reopen this PO"
+ *  request from the Supervisor Hub. */
+export async function getProductionManagerIds(): Promise<string[]> {
+  const session = await getSessionClient()
+  const { data } = await session.schema('shared' as any).from('app_roles')
+    .select('user_id, is_active').eq('role', 'production_manager')
+  return (data ?? []).filter((r: any) => r.is_active !== false).map((r: any) => r.user_id).filter(Boolean)
+}
+
+/** User ids of active IT staff — the other approver of a reopen request
+ *  alongside the production manager. */
+export async function getITUserIds(): Promise<string[]> {
+  const session = await getSessionClient()
+  const { data } = await session.schema('shared' as any).from('app_roles')
+    .select('user_id, is_active').eq('department', 'IT')
+  return (data ?? []).filter((r: any) => r.is_active !== false).map((r: any) => r.user_id).filter(Boolean)
+}
+
 /** User ids of Quality staff — notified to run a post-maintenance QC check.
  *  Used by the maintenance → quality QC hand-off (the Quality dashboard surfaces it). */
 export async function getQualityUserIds(): Promise<string[]> {
