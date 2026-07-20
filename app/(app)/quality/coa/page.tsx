@@ -912,12 +912,18 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
   ]
   doc.setFontSize(8)
   const colX = [margin, pageW / 2 + 10]
+  const colEnd = [pageW / 2 - 10, pageW - margin]
   for (let i = 0; i < hdr.length; i += 2) {
     for (let c = 0; c < 2; c++) {
       const item = hdr[i + c]; if (!item) continue
       const x = colX[c]
+      const valX = x + 95
       doc.setFont('helvetica', 'bold'); doc.text(item[0], x, y)
-      doc.setFont('helvetica', 'normal'); doc.text(String(item[1] || ''), x + 95, y)
+      doc.setFont('helvetica', 'normal'); doc.text(String(item[1] || ''), valX, y)
+      doc.setDrawColor(180); doc.setLineWidth(0.5)
+      doc.setLineDashPattern([1.5, 1.5], 0)
+      doc.line(valX, y + 2, colEnd[c], y + 2)
+      doc.setLineDashPattern([], 0)
     }
     y += 15
   }
@@ -938,7 +944,7 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
     doc.setFillColor(230, 230, 230); doc.rect(margin, y - 9, w, 14, 'F')
     doc.setFont('helvetica', 'bold')
     let cx = margin
-    cols.forEach((c, i) => { doc.text(c, cx + 4, y); cx += cw[i] })
+    cols.forEach((c, i) => { doc.text(c, cx + cw[i] / 2, y, { align: 'center' }); cx += cw[i] })
     y += 6
     doc.setFont('helvetica', 'normal')
     lines.forEach(l => {
@@ -947,7 +953,11 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
       const rowH = Math.max(...cellLines.map(cl => cl.length)) * 9 + 4
       cx = margin
       doc.setDrawColor(200); doc.rect(margin, y - 2, w, rowH)
-      vals.forEach((_, i) => { doc.text(cellLines[i], cx + 4, y + 7); if (i > 0) doc.line(cx, y - 2, cx, y - 2 + rowH); cx += cw[i] })
+      vals.forEach((_, i) => {
+        doc.text(cellLines[i], cx + cw[i] / 2, y + 7, { align: 'center' })
+        if (i > 0) doc.line(cx, y - 2, cx, y - 2 + rowH)
+        cx += cw[i]
+      })
       y += rowH
     })
     y += 10

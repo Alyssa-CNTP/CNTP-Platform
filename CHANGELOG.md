@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (COA Generator: PDF export — centered columns, header field lines)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- PDF export (`exportPdf`): table column text (headers and cell values, across Microbiological Analyses, Cut Length, and Other Analysis) is now centered within its column instead of left-aligned, matching the on-screen preview.
+- PDF export now draws the same dashed underline beneath each header field value (Date of Issue, Batch Number, Invoice No., Grade, Destination, Quantity of Bags, Order Number, Production Date, Quantity (Kg's), Best Before Date) that already appears in the on-screen COA, so the printed certificate matches the preview layout.
+
+---
+
 ## 2026-07-20 — Gustav (COA Generator: align table column widths)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
