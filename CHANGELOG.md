@@ -48,6 +48,156 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-17 — Gustav (COA Generator: editable signatory names + drawable, persistent signatures)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_006_coa_signatories.sql` (new)
+
+- **Signatory names and titles are now editable** (no longer hard-coded), stored in the new `qms.coa_signatories` table and shared across every COA. Seeded with the current two — Laboratory Supervisor (Monique Gordon) and Quality Assurance Manager (Michelle Brown).
+- **Drawable signatures:** each signatory has a signature pad (draw with mouse or touch) in a new "✍ Signatories" section. Saved signatures persist and render above the signing line on the COA preview, print, and PDF export. Draw once and it's maintained for future COAs; Clear + redraw to change.
+
+---
+
+## 2026-07-17 — Gustav (COA Generator: logo, signatures, company footer + logistics order details)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_005_coa_orders.sql` (new)
+
+- **Cape Natural logo** now appears top-left of the COA (on-screen preview, print, and PDF export), matching the standard certificate design.
+- **Signature blocks** added at the bottom — Laboratory Supervisor (Monique Gordon) and Quality Assurance Manager (Michelle Brown), each with a ruled signing line — plus the centred company footer (CAPE NATURAL TEA PRODUCTS (PTY) LTD, address, Reg/VAT no.).
+- **Logistics order details:** invoice no., order number, quantities and destination are now a dedicated "🚚 Order details (logistics)" section with a **Save** button. They persist per batch in the new `qms.coa_orders` table, so logistics can fill them in later when ready and they pull through automatically on the next generation. (The header fields remain inline-editable too.)
+
+---
+
+## 2026-07-17 — Gustav (COA Generator: pull specifications from customer specs by grade+customer+variant, + generation history)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260717_004_coa_generated.sql` (new)
+
+- **Specification column now auto-fills from the customer COA specs.** When a batch is generated, the generator matches a `qms.coa_specs` row by **customer + grade + variant** (derived from the pasteuriser batch) and fills every Specification cell — micro limits, cut-length mesh specs, moisture/BD, residue regulation wording, PA limit, heavy-metal limits, sensorial wording. Which sections appear is now driven by what that customer's spec requires (not just what data exists), so e.g. a customer that needs heavy metals shows that block even before the lab report lands (flagged outstanding).
+- **Customer-spec picker:** a dropdown lists all of that customer's specs, auto-selecting the best match; the lab manager can switch to a different product spec and every Specification cell re-fills instantly.
+- **Variant-aware matching:** Conventional / Organic / RA-Organic / RA-Conventional (and Fairtrade variants) are normalised on both sides so the right spec is chosen.
+- **Generation history:** new `qms.coa_generated` table logs every Print/Export with a full JSON snapshot; a 🕘 History panel shows past generations (date, batch, customer, grade, spec used, by whom).
+
+---
+
+## 2026-07-17 — Gustav (Customer Specs: import Client_Specs.xlsx as an editable per-customer COA requirements matrix)
+
+**Files changed:** `components/quality/CoaSpecsTab.tsx` (new), `app/(app)/quality/customer-specs/page.tsx`, `supabase/migrations/20260717_003_coa_specs.sql` (new), `supabase/seeds/coa_specs_seed.sql` (new)
+
+- **New `qms.coa_specs` table** holding the full per-customer COA specification matrix imported from `Client_Specs.xlsx` (67 customer product specs across 30 customers). Identity + physical fields are columns; the ~70 analysis fields (mesh, micro, contaminants, residue/foreign/sensorial) live in a `specs` jsonb. A field is stored only when it carries a real spec — an absent field means **NOT REQUIRED** on that customer's COA (this is how "what requires specs vs not" is represented). All 67 rows seeded into the staging DB.
+- **New "📄 COA Requirements" tab** on the Customer Specs page (default tab; the old sieve-spec table moves under a "🧪 Sieve Specs" tab). Lists every customer spec with search, a required-analysis count, and at-a-glance badges (Micro / Sieve / Metals / PA / Residue) showing which COA blocks each customer needs.
+- **Fully editable and saved back to the database:** an Edit modal groups every field (Identity, Physical, Sieve/mesh with spec+min+max, Microbiology, Contaminants, Other) — blank = NOT REQUIRED, a value = required with that spec. Add / edit / delete rows, gated on `can_edit_customer_specs`.
+- This is the per-customer template the COA Generator will read from to decide which sections a batch's certificate requires and the spec-column values (wiring the generator to it is the next step).
+
+---
+
+## 2026-07-17 — Gustav (COA Generator: add filled-in example template at the bottom)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added a collapsible, read-only **example template** at the bottom of the COA Generator, populated with the real 26138-CON-SG sample values, so anyone can see exactly how a completed certificate looks (header, description, microbiology, other analysis) before generating a real one. Clearly labelled as illustrative and hidden from print.
+
+---
+
+## 2026-07-17 — Gustav (COA Generator — v1: type a batch number, auto-populate a customer COA from linked sources)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx` (new), `components/layout/Sidebar.tsx`
+
+- **New "📋 COA Generator" tab** (Quality → COA Generator, gated on `can_save_lab_results`). Type a batch number — the single join key across every source — and it builds a standard Certificate of Analysis:
+  - **Header** (grade, production date, destination/customer) ← pasteuriser batch; invoice/order/quantities typed on the form; **Best Before auto-computed** = production + 3 years.
+  - **Microbiology** ← Final Product Lab Results (`micro`) — TPC, E.coli, Salmonella, Yeast, Mould, Listeria, E.coli O157, with COA-standard result wording (E.coli/Listeria "Not detected", Salmonella "Absent").
+  - **Cut length / sieving** ← pasteuriser sieve samples, averaged across the batch (the pasteuriser >6/>10/>12/>16/>20/>60/Dust mesh set matches the COA exactly). Optional.
+  - **Moisture / Bulk Density** ← pasteuriser samples, averaged. Plus Foreign Material.
+  - **Pesticide residue** ← Lab Results (`residue`); **Pyrrolizidine Alkaloids** ← Lab Results (`pa_final`); **Heavy metals / MOSH-MOAH** ← Lab Results (optional) — all rendered as "Complies" / "None detected".
+  - **Description of goods** (organic vs conventional) + **Sensorical properties** ← centralised standard wording (`COA_WORDING`) so every COA reads identically.
+- **Outstanding-data panel** flags any included section that has no source data yet. **Section toggles** let the lab manager include/exclude blocks (some customers need heavy metals/residue/PA, some don't).
+- Every header field, spec and result is **editable inline** before generating (specs blank/default for now — they'll be driven by a per-customer template under Customer Specs later, per the plan).
+- **Output: both** — on-screen preview, browser **Print**, and **PDF export** (jsPDF) laid out to mirror the template.
+- Batch matching is separator/case-insensitive (`normBatch`) so "26138-CON-SG" / "26138 CON SG" / "26138/CON/SG" all resolve to the same batch across pasteuriser and lab results.
+
+---
+
+## 2026-07-17 — Gustav (Lab Results: fix duplicate ≤ in spec column, edit-after-extraction for every tab, heavy metals/PA extraction no longer collapses detection-limit values)
+
+**Files changed:** `app/(app)/quality/lab-results/page.tsx`, `app/api/upload/route.ts`
+
+- **Fixed duplicate "≤≤" in the Spec column.** `expandRecord()` was prefixing "≤" onto values that had already been extracted with their own "≤" (or another comparison operator), producing "≤≤1.0". Added a `formatSpec()` helper that only prefixes "≤" when the value doesn't already start with a comparison operator.
+- **Added edit-after-extraction to every non-Micro tab** (Residue, Heavy Metals, EtO, Aflatoxins, MOSH/MOAH, PAs, Glyphosate) — Micro already had this via `MicroEditCell`. New `RecordEditModal` handles the three result shapes: `compounds_detected[]` (Residue), `analytes[]` (everything else), and a flat-field fallback for any older records with neither. An ✏️ Edit button now sits next to the existing 🗑 Delete on every record.
+- **Fixed heavy metals (and PA) extraction dropping the lab's actual reported value.** The Gemini prompt explicitly told the model to collapse any below-detection-limit result (e.g. a printed "<0.010") into the generic string "None detected" — discarding the real reported threshold. Reworded both prompts to keep the value exactly as printed (e.g. "<0.010"), only falling back to "None detected" when the document truly has no value/threshold printed.
+
+---
+
+## 2026-07-17 — Alyssa (Shift Roster: wire WhatsApp into reminders, real delivery counts, self-test tool)
+
+**Files:** `app/api/production/roster/cron/route.ts`, `app/api/production/roster/notify-test/route.ts` (new),
+`app/(app)/production/roster/page.tsx`
+
+- **Root cause found for "submitted the roster but never got the reminder
+  email"** (real reports from Monique Gordon and Shaun De Beer): email is sent
+  via Office365 SMTP (`lib/notifications/email.ts`, `SMTP_USER`/`SMTP_PASS`) —
+  if those env vars aren't set on the server, `sendEmail()` silently skips and
+  reports `ok:true, skipped:true`. The cron's `reminded: 15` figure from the
+  Jul 15 run counted **attempts**, not deliveries, so the outage was invisible
+  from the app's own numbers. `doRemind()` now tracks real `emailSent` /
+  `whatsappSent` counts (from `notify()`'s actual per-channel result) alongside
+  the attempt count, visible in the Backend status panel's cron history.
+- **Wired WhatsApp into roster reminders.** The `urgent` channel
+  (`lib/notifications/urgent.ts`, Meta WhatsApp Cloud API or Twilio) was
+  already fully built and used for maintenance breakdowns / Axis tickets, but
+  never included in the roster reminder's `channels` array, and the cron
+  didn't resolve recipients' phone numbers at all (built emails inline instead
+  of via `resolveRecipients()`). Fixed both — reminders now attempt in-app +
+  email + WhatsApp for anyone with a phone number on file
+  (`shared.app_roles.phone`), same "one template serves everything" setup as
+  breakdowns (see `docs/whatsapp-setup.md`).
+- **New self-test tool** in the Backend status panel ("Send test to me") — an
+  admin-only button that sends a real test notification to the calling
+  admin's own email/phone right now (no waiting for the Mon/Wed cron, no
+  effect on real roster data) and reports exactly what happened per channel:
+  configured or not, sent or skipped or failed, with the raw provider error if
+  one occurred.
+- **Still needed (ops, not code):** confirm `SMTP_USER`/`SMTP_PASS` are
+  actually set in the VPS `.env` for both `cntp-staging` and
+  `cntp-production` — Office365/Microsoft 365 tenants increasingly block
+  legacy SMTP AUTH by default, so if the account password doesn't work, check
+  Exchange Admin Center → that mailbox → "Authenticated SMTP" is enabled, and
+  use an app password if MFA is on. WhatsApp needs `WHATSAPP_PROVIDER=meta`
+  (or `twilio`) plus the corresponding credentials — full setup in
+  `docs/whatsapp-setup.md`. Neither can be checked or set from this session
+  (no VPS SSH access).
+
+---
+
+## 2026-07-17 — Alyssa (Shift Roster: admin-only "Backend status" panel)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/api/production/roster/insights/route.ts` (new),
+`app/api/production/roster/cron/route.ts`, `supabase/migrations/20260717_002_roster_cron_log.sql` (new)
+
+- **New admin-only "Backend status" panel** on the roster page (collapsed by
+  default) so real backend state is visible in the UI instead of requiring a
+  manual DB check — this is the same class of check that caught the false
+  "Published" bug earlier today. Shows three things, fetched from a new
+  admin-gated `/api/production/roster/insights` route:
+  - **Real per-section submission state** — the literal `roster_section_status`
+    rows for the period (section, status, submitter's actual name, exact
+    timestamp), not the derived checkmark shown in the regular confirmation
+    tracker.
+  - **Cron history** — when rotate/remind last ran and what happened
+    (reminded count + pending sections, or rotate/skip reason). The
+    rotate/remind cron previously left no trace inside the app — the Jul
+    8/12/13 `CRON_SECRET` 401 outage was only visible in GitHub Actions logs.
+  - **Recent activity** — the audit trail (added earlier today) for this
+    specific period: who edited/submitted/published/reopened what, and when.
+- New table `production.roster_cron_log` (migration `20260717_002`) records
+  each rotate/remind run; the cron route now writes a best-effort log row
+  after every run. RLS denies `authenticated` entirely — only the service-role
+  cron route and the admin-gated insights route touch it.
+- Gated to full admins only (`role === 'senior_developer'`), matching the
+  Reopen action added earlier today.
+- **Needs migration `20260717_002_roster_cron_log.sql` run in Supabase SQL
+  editor (staging, then production)** before the "Cron history" section will
+  show data — it degrades gracefully (shows "No runs logged yet") until then.
+
+---
+
 ## 2026-07-17 — Gustav (Sieving: add hourly "By Hour" view to Mesh Trend/Outliers charts)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

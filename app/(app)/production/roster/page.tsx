@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { addDays, format, parseISO } from 'date-fns'
+import { addDays, format, parseISO, formatDistanceToNow } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
   RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Unlock, Download, Printer,
-  Info, Eye, Edit3, ShieldCheck,
+  Info, Eye, Edit3, ShieldCheck, Database,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -690,6 +690,12 @@ export default function RosterPage() {
         </div>
       )}
 
+      {/* Backend status — admin-only. Real DB state (not the derived UI badge
+          above): who actually submitted each section and when, the audit
+          trail for this period, and the last rotate/remind cron runs — the
+          same checks used to catch the "published with 0 submissions" bug. */}
+      {period && isFullAdmin && <BackendStatusPanel periodId={period.id} />}
+
       {loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
       ) : !period ? (
@@ -753,6 +759,206 @@ export default function RosterPage() {
           onClose={() => setShowGenerate(false)}
           onGenerate={generateNextPeriod}
         />
+      )}
+    </div>
+  )
+}
+
+// ── Backend status (admin-only): real DB state for this period, not the
+// derived UI badge — who actually submitted each section, the audit trail,
+// and the last rotate/remind cron runs. Collapsed by default; fetches lazily
+// on first expand and refetches on demand or when the period changes.
+interface BackendSection { section: string; status: string; submittedById: string | null; submittedByName: string | null; submittedAt: string | null }
+interface BackendActivity { id: string; action: string; table: string; actorId: string | null; actorName: string; detail: any; createdAt: string }
+interface BackendCronRun { task: string; ran_at: string; result: any }
+interface BackendInsights { sections: BackendSection[]; activity: BackendActivity[]; cron: { remind: BackendCronRun | null; rotate: BackendCronRun | null } }
+
+const ACTIVITY_LABEL: Record<string, string> = {
+  roster_edit: 'Saved', roster_submit: 'Submitted', roster_publish: 'Published',
+  roster_unpublish: 'Reopened', roster_generate: 'Generated', roster_delete: 'Deleted',
+}
+
+function BackendStatusPanel({ periodId }: { periodId: string }) {
+  const [open, setOpen]       = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [data, setData]       = useState<BackendInsights | null>(null)
+  const [error, setError]     = useState<string | null>(null)
+
+  useEffect(() => { setData(null); setError(null) }, [periodId])
+
+  async function load() {
+    setLoading(true); setError(null)
+    try {
+      const res = await fetch(`/api/production/roster/insights?periodId=${periodId}`)
+      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || `Error ${res.status}`)
+      setData(await res.json())
+    } catch (err: any) {
+      setError(err?.message ?? 'Failed to load')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && !data && !loading) load()
+  }
+
+  // Self-test: sends a real email + WhatsApp (+ in-app) to the calling admin's
+  // own contact info, right now — the fast way to check whether a channel is
+  // actually configured on this server, without waiting for the Mon/Wed cron.
+  const [testing, setTesting]         = useState(false)
+  const [testResult, setTestResult]   = useState<any>(null)
+  const [testError, setTestError]     = useState<string | null>(null)
+  async function runTest() {
+    setTesting(true); setTestError(null); setTestResult(null)
+    try {
+      const res = await fetch('/api/production/roster/notify-test', { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || `Error ${res.status}`)
+      setTestResult(json)
+    } catch (err: any) {
+      setTestError(err?.message ?? 'Failed to send test')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const fmtAgo = (iso: string) => {
+    try { return formatDistanceToNow(parseISO(iso), { addSuffix: true }) } catch { return iso }
+  }
+  const fmtAt = (iso: string) => {
+    try { return format(parseISO(iso), 'd MMM HH:mm') } catch { return iso }
+  }
+
+  return (
+    <div className="no-print rounded-2xl border border-dashed border-stone-300 bg-stone-50/60">
+      <button onClick={toggle} className="w-full flex items-center gap-2 px-4 py-3 text-left">
+        <Database size={14} className="text-stone-400 shrink-0" />
+        <span className="font-mono text-[11px] uppercase tracking-wide text-stone-500">Backend status</span>
+        <span className="text-[10px] text-stone-400">(admin only — real DB state)</span>
+        <ChevronDown size={14} className={`ml-auto text-stone-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-4 border-t border-stone-200 pt-3">
+          <div className="flex justify-end gap-3">
+            <button onClick={runTest} disabled={testing}
+              className="flex items-center gap-1.5 text-[11px] font-medium text-stone-500 hover:text-brand disabled:opacity-40">
+              {testing ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />} Send test to me
+            </button>
+            <button onClick={load} disabled={loading}
+              className="flex items-center gap-1.5 text-[11px] font-medium text-stone-500 hover:text-brand disabled:opacity-40">
+              {loading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Refresh
+            </button>
+          </div>
+
+          {testError && <p className="text-[12px] text-err">{testError}</p>}
+
+          {testResult && (
+            <div className="rounded-xl border border-stone-200 bg-white p-3 space-y-1.5 text-[12px]">
+              <p className="font-mono text-[10px] uppercase tracking-wide text-stone-400">
+                Test sent to {testResult.recipient?.name ?? 'you'} ({testResult.recipient?.email ?? 'no email on file'}{testResult.recipient?.phone ? `, ${testResult.recipient.phone}` : ', no phone on file'})
+              </p>
+              <p>
+                <strong className="text-text">In-app:</strong>{' '}
+                <span className={testResult.inApp?.ok ? 'text-ok' : 'text-err'}>{testResult.inApp?.ok ? 'delivered — check the bell' : 'failed'}</span>
+              </p>
+              <p>
+                <strong className="text-text">Email</strong> (SMTP {testResult.config?.smtpConfigured ? 'configured' : 'NOT configured'}):{' '}
+                <span className={testResult.email?.ok && !testResult.email?.skipped ? 'text-ok' : 'text-err'}>
+                  {testResult.email?.skipped ? `skipped — ${testResult.email?.error ?? 'SMTP_USER / SMTP_PASS not set'}`
+                    : testResult.email?.ok ? 'sent — check your inbox (and spam)'
+                    : `failed — ${testResult.email?.error ?? 'unknown error'}`}
+                </span>
+              </p>
+              <p>
+                <strong className="text-text">WhatsApp</strong> (provider: {testResult.config?.whatsappProvider ?? 'not set'}):{' '}
+                <span className={testResult.whatsapp?.ok && !testResult.whatsapp?.skipped ? 'text-ok' : 'text-err'}>
+                  {testResult.whatsapp?.skipped ? `skipped — ${testResult.whatsapp?.error ?? 'not configured'}`
+                    : testResult.whatsapp?.ok ? 'sent — check WhatsApp'
+                    : `failed — ${testResult.whatsapp?.error ?? 'unknown error'}`}
+                </span>
+              </p>
+            </div>
+          )}
+
+          {error && <p className="text-[12px] text-err">{error}</p>}
+
+          {data && (
+            <>
+              {/* Real per-section submission state */}
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-wide text-stone-400 mb-1.5">Section status (raw)</p>
+                {data.sections.length === 0 ? (
+                  <p className="text-[12px] text-stone-500">No roster_section_status rows for this period — nothing has been saved or submitted yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {data.sections.map(s => (
+                      <div key={s.section} className="flex items-center gap-2 text-[12px] text-text-muted">
+                        <span className={`w-16 shrink-0 font-medium ${s.status === 'submitted' ? 'text-ok' : 'text-amber-600'}`}>{s.status}</span>
+                        <span className="font-medium text-text">{ROSTER_SECTION_LABEL[s.section as RosterSectionKey] ?? s.section}</span>
+                        {s.submittedByName && s.submittedAt && (
+                          <span className="text-stone-400">— {s.submittedByName}, {fmtAt(s.submittedAt)}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Reminder / rotation cron history */}
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-wide text-stone-400 mb-1.5">Cron history</p>
+                <div className="space-y-1 text-[12px] text-text-muted">
+                  {data.cron.remind ? (
+                    <p>
+                      <strong className="text-text">Last remind</strong> — {fmtAgo(data.cron.remind.ran_at)} ({fmtAt(data.cron.remind.ran_at)}):{' '}
+                      {data.cron.remind.result?.reminded != null
+                        ? `attempted ${data.cron.remind.result.reminded}` +
+                          (data.cron.remind.result?.emailSent != null ? `, email sent ${data.cron.remind.result.emailSent}` : '') +
+                          (data.cron.remind.result?.whatsappSent != null ? `, WhatsApp sent ${data.cron.remind.result.whatsappSent}` : '') +
+                          `, pending [${(data.cron.remind.result.pending ?? []).join(', ') || 'none'}]`
+                        : (data.cron.remind.result?.reason ?? 'no result')}
+                    </p>
+                  ) : <p className="text-stone-400">No remind runs logged yet.</p>}
+                  {data.cron.rotate ? (
+                    <p>
+                      <strong className="text-text">Last rotate</strong> — {fmtAgo(data.cron.rotate.ran_at)} ({fmtAt(data.cron.rotate.ran_at)}):{' '}
+                      {data.cron.rotate.result?.rotated != null
+                        ? (data.cron.rotate.result.rotated ? `created "${data.cron.rotate.result.period}"` : `skipped — ${data.cron.rotate.result.reason}`)
+                        : (data.cron.rotate.result?.reason ?? 'no result')}
+                    </p>
+                  ) : <p className="text-stone-400">No rotate runs logged yet.</p>}
+                </div>
+              </div>
+
+              {/* Recent activity (audit trail) for this period */}
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-wide text-stone-400 mb-1.5">Recent activity</p>
+                {data.activity.length === 0 ? (
+                  <p className="text-[12px] text-stone-500">No audit entries for this period yet.</p>
+                ) : (
+                  <div className="space-y-1 max-h-[220px] overflow-y-auto">
+                    {data.activity.map(a => {
+                      const label = ACTIVITY_LABEL[a.action] ?? a.action
+                      const section = a.detail?.section ? (ROSTER_SECTION_LABEL[a.detail.section as RosterSectionKey] ?? a.detail.section) : null
+                      return (
+                        <div key={a.id} className="text-[12px] text-text-muted">
+                          <span className="text-stone-400 font-mono text-[10px]">{fmtAt(a.createdAt)}</span>{' '}
+                          <strong className="text-text">{a.actorName}</strong> {label.toLowerCase()}
+                          {section ? ` · ${section}` : ''}
+                          {a.detail?.detail ? ` — ${a.detail.detail}` : ''}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   )

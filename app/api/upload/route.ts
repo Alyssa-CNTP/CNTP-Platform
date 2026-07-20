@@ -286,7 +286,7 @@ Keep values like "<10" as strings. null if not tested. overall_status: "Pass" un
 
   heavy_metals: `INSTRUCTIONS: Extract ALL heavy metals data from this COA. Output ONLY raw JSON. No markdown.
 Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status for EVERY metal listed in the document, including Lead, Cadmium, Mercury, Arsenic, Aluminum, Copper and any others present), overall_status.
-For each analyte: if result is "ND", "Not detected", "<LOQ", or below detection limit, set result to "None detected". Extract spec/limit from the document if present.
+For each analyte: keep the result exactly as printed in the RESULT column, including the comparison operator — e.g. a printed "<0.010" (below the lab's reporting/detection limit for that sample) MUST be kept as the string "<0.010", NOT collapsed to "None detected". Only use "None detected" if the document truly has no value or threshold printed for that analyte (a genuinely blank cell). Extract spec/limit from the document if present.
 EU limits (mg/kg): Lead ≤3.0, Cadmium ≤1.0, Mercury ≤0.02, Arsenic ≤1.0. Include all metals found — do NOT skip any.`,
 
   eto: `INSTRUCTIONS: Extract Ethylene Oxide data. Output ONLY raw JSON. No markdown.
@@ -304,7 +304,7 @@ Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (ar
 Extract top-level fields: batch_no, report_reference, lab, sample_description, date_issued, date_received, overall_status.
 Extract an "analytes" array — one entry per SUMMARY PA/TA measurement row (e.g. Total PA by EU regulation, Total PA by BfR 28, Scopolamine, Total TA, etc.). Each entry: { analyte, result, unit, spec, status }.
 Rules:
-- result: the numeric value as a string (e.g. "18.5") OR "None detected" if the value is null, ND, not detected, or below LOD/LOQ.
+- result: keep the value exactly as printed, including any comparison operator — e.g. a printed "<10" (below the lab's reporting/detection limit) MUST be kept as the string "<10", NOT collapsed to "None detected". Only use "None detected" if the document truly has no value or threshold printed for that analyte.
 - unit: typically "µg/kg".
 - spec: the EU/regulatory limit for that analyte (e.g. "400" for PA, "1000" for TA) or "—" if not set.
 - status: "Pass" or "Fail" based on whether result exceeds the limit.

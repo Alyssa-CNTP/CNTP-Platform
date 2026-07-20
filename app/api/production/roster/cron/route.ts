@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAdminClient, getCallerPermissions } from '@/lib/auth/server-helpers'
 import { notify } from '@/lib/notifications'
-import { getRosterSubmitterIds } from '@/lib/notifications/recipients'
+import { getRosterSubmitterIds, resolveRecipients } from '@/lib/notifications/recipients'
 import { createRotatedPeriod, nextPeriodConfig, type RotatePeriod } from '@/lib/production/roster-rotate'
 import { ROSTER_SECTION_KEYS, ROSTER_SECTION_LABEL, rosterPerm, type RosterSectionKey } from '@/lib/auth/permissions'
 
@@ -58,39 +58,41 @@ async function doRemind(prod: any) {
   const pending = ROSTER_SECTION_KEYS.filter(s => !submitted.has(s)) as RosterSectionKey[]
   if (pending.length === 0) return { reminded: 0, reason: 'all sections submitted' }
 
-  // Resolve emails/names from auth.users (service-role admin API).
-  const admin = getAdminClient()
-  const { data: list } = await admin.auth.admin.listUsers({ perPage: 1000 })
-  const authMap = new Map((list?.users ?? []).map(u => [u.id, u]))
-
   // One notification per (user, section) — not aggregated — so each reminder
   // maps to exactly one section and can be auto-dismissed the moment that
   // section is submitted (see production.dismiss_roster_reminders trigger).
-  let reminded = 0
+  // "reminded" below counts ATTEMPTS (a notify() call was made); emailSent /
+  // whatsappSent count what notify() actually reports as delivered — these can
+  // differ a lot if SMTP_USER/SMTP_PASS or WHATSAPP_PROVIDER aren't configured
+  // on the server, in which case the channel silently skips (never errors).
+  let attempted = 0, emailSent = 0, whatsappSent = 0
   const remindedUsers = new Set<string>()
   for (const section of pending) {
     const ids = await getRosterSubmitterIds(section)
+    const recipients = await resolveRecipients(ids)
     const label = ROSTER_SECTION_LABEL[section]
-    for (const userId of ids) {
-      const au = authMap.get(userId)
-      const email = au?.email ?? null
-      if (!email) continue
-      await notify({
-        recipients: [{ userId, email, name: (au?.user_metadata as any)?.full_name ?? null }],
+    for (const r of recipients) {
+      if (!r.email && !r.phone) continue
+      const res = await notify({
+        recipients: [r],
         kind:  'roster_reminder',
         title: `Shift roster — submit ${label} for "${period.name}"`,
         body:  `The roster for ${period.name} is awaiting your submission for: ${label}. Please review and submit before Wednesday.`,
         url:   '/production/roster',
-        channels: ['inApp', 'email'],
+        // 'urgent' is the WhatsApp/SMS channel (see lib/notifications/urgent.ts)
+        // — named for its original breakdown-alert use, reused here as-is.
+        channels: ['inApp', 'email', 'urgent'],
         rosterPeriodId: period.id,
         rosterSection:  section,
       })
-      reminded++
-      remindedUsers.add(userId)
+      attempted++
+      emailSent    += res.email
+      whatsappSent += res.urgent
+      remindedUsers.add(r.userId)
     }
   }
   if (remindedUsers.size === 0) return { reminded: 0, reason: 'no submitters hold pending sections' }
-  return { reminded, period: period.name, pending }
+  return { reminded: attempted, emailSent, whatsappSent, period: period.name, pending }
 }
 
 async function handle(req: NextRequest) {
@@ -115,6 +117,9 @@ async function handle(req: NextRequest) {
   try {
     const prod = getAdminClient().schema('production' as any)
     const result = task === 'rotate' ? await doRotate(prod) : await doRemind(prod)
+    // Best-effort: record that this run happened + what it did, so the admin
+    // "backend status" panel can show real cron history instead of nothing.
+    try { await prod.from('roster_cron_log').insert({ task, result }) } catch { /* logging is best-effort */ }
     return NextResponse.json({ ok: true, task, ...result })
   } catch (err: any) {
     console.error('[api/production/roster/cron]', err)
