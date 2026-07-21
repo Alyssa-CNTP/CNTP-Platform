@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Scheduled: technician-only checklist view, monthly audit filter, Readings tab removed)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
+
+- **Technicians now see only the checklists allocated to them** for the period (managers still see all); an empty-state prompts them when nothing is allocated yet.
+- **Monthly audit filter:** a month picker on the Monthly tab lets you view any past month's checklists read-only ("Audit view") for audits.
+- **Readings tab removed** from Scheduled (readings are captured via the weekly checklist); trend graphs already live on the dashboard. The Overview "services due" tile/links that pointed at it were removed.
+
 ## 2026-07-02 — Gustav (Maintenance: comment/QC pop-ups, header filters, staff dedupe)
 
 **Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `lib/maintenance/useMaintenanceData.ts`

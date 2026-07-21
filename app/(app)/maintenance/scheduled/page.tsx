@@ -49,6 +49,8 @@ export default function ScheduledPage() {
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
+  // Monthly audit filter — view a past month's checklists (empty = current month).
+  const [monthView, setMonthView] = useState('')
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
   const eqOrdered = [...eqLatest].sort((a, b) => {
     const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
@@ -88,7 +90,7 @@ export default function ScheduledPage() {
 
       {/* Light segmented control */}
       <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit flex-wrap">
-        {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration', 'Readings'].map((t, i) => (
+        {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration'].map((t, i) => (
           <button key={t} onClick={() => setSub(i)}
             className={`px-3.5 py-1.5 rounded-md text-[12px] font-semibold whitespace-nowrap transition ${sub === i ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{t}</button>
         ))}
@@ -97,13 +99,12 @@ export default function ScheduledPage() {
       {/* ── OVERVIEW: everything needing action, in one place ── */}
       {sub === 0 && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
               { v: outstandingChecklists.filter(x => x.t.frequency === 'weekly').length, l: `Weekly outstanding — ${weekKey}`, warn: true, to: 1 },
               { v: outstandingChecklists.filter(x => x.t.frequency === 'monthly').length, l: `Monthly outstanding — ${moKey}`, warn: true, to: 2 },
               { v: calRows.filter(c => c.days <= 0).length, l: 'Calibrations overdue', warn: true, to: 3 },
               { v: calRows.filter(c => c.days > 0 && c.days <= 30).length, l: 'Calibrations due ≤30d', warn: false, to: 3 },
-              { v: eqLatest.filter(e => e.days <= 14).length, l: 'Services due ≤14d (run-hrs)', warn: false, to: 4 },
             ].map((t, i) => (
               <button key={i} onClick={() => setSub(t.to)} title="Open"
                 className="card p-3 text-center transition cursor-pointer hover:border-text/30 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand/30">
@@ -129,7 +130,6 @@ export default function ScheduledPage() {
                 <div key={'eq' + e.cfg.id} className="rounded-lg border border-surface-rule bg-surface-card px-3 py-2.5 flex items-center gap-2 text-[13px] flex-wrap">
                   <span className={`badge shrink-0 ${calClass(e.days)}`}>{e.days <= 0 ? 'SERVICE OVERDUE' : 'SERVICE DUE'}</span>
                   <span className="flex-1 min-w-[220px]"><strong className="text-text">{e.cfg.equipment}</strong> <span className="text-text-muted">— {Math.round(e.latest!.hours_since_service!)} / {e.cfg.service_interval_hours} run-hrs since service · projected due {fmtD(e.due!.toISOString())}</span></span>
-                  <button className={BTN_SM} onClick={() => setSub(4)} title="Record the service against its run-hours">Record service →</button>
                   <button className={BTN_SM} onClick={() => raiseFromChecklist(e.cfg.equipment, 'Run-hours service', `Service due — ${Math.round(e.latest!.hours_since_service!)} run-hours since last service`, '')}>Raise job card</button>
                 </div>
               ))}
@@ -166,25 +166,42 @@ export default function ScheduledPage() {
 
       {(sub === 1 || sub === 2) && (() => {
         const freq = sub === 1 ? 'weekly' : 'monthly'
-        const period = freq === 'weekly' ? weekKey : moKey
+        // Monthly can be pointed at a past month (audit view); weekly is current week.
+        const period = freq === 'weekly' ? weekKey : (monthView || moKey)
+        const auditView = freq === 'monthly' && !!monthView && monthView !== moKey
+        // Technicians only see the checklists allocated to them; managers see all.
         const list = templates.filter(t => t.frequency === freq)
+          .filter(cl => canManage || (getComp(cl.id, period)?.assigned_to ?? '') === actor)
         return (
           <div>
             <div className="mb-3 flex items-start justify-between gap-2 flex-wrap">
               <div>
-              <h2 className="text-sm font-semibold text-text">{freq === 'weekly' ? 'Weekly checklists (WC) — ' + weekKey : 'Monthly checklists (MC) — ' + moKey}</h2>
+              <h2 className="text-sm font-semibold text-text">{freq === 'weekly' ? 'Weekly checklists (WC) — ' + weekKey : 'Monthly checklists (MC) — ' + period}</h2>
               <p className="text-[12px] text-text-muted mt-0.5">
-                {freq === 'weekly'
-                  ? 'Complete every week. Tap an area to expand the checklist. Every tick records who checked it and when.'
-                  : 'Full inspections per area, per the QM-FM checklist. Each task has a fault selector and action notes — a fault can raise a job card directly.'}
+                {!canManage
+                  ? 'The checklists allocated to you for this period. Complete each item; a fault can raise a job card.'
+                  : freq === 'weekly'
+                    ? 'Complete every week. Tap an area to expand the checklist. Every tick records who checked it and when.'
+                    : 'Full inspections per area, per the QM-FM checklist. Each task has a fault selector and action notes — a fault can raise a job card directly.'}
               </p>
               </div>
-              <button onClick={() => printChecklists(freq, period)}
-                className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition shrink-0">
-                <Printer size={14} /> Print / export {freq === 'weekly' ? 'weekly' : 'monthly'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {freq === 'monthly' && (
+                  <label className="text-[11px] text-text-muted flex items-center gap-1">Month
+                    <input type="month" className={`${INP} w-auto`} value={monthView || moKey} onChange={e => setMonthView(e.target.value === moKey ? '' : e.target.value)} />
+                  </label>
+                )}
+                {auditView && <span className="badge badge-gray">Audit view</span>}
+                <button onClick={() => printChecklists(freq, period)}
+                  className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition">
+                  <Printer size={14} /> Print / export
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {!canManage && list.length === 0 && (
+              <div className="card p-4 text-center text-[12px] text-text-faint">Nothing allocated to you for this period yet — the maintenance manager assigns checklists.</div>
+            )}
+            <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 ${auditView ? 'pointer-events-none opacity-75' : ''}`}>
               {list.map(cl => {
                 const comp = getComp(cl.id, period)
                 const st = comp?.task_states ?? {}
