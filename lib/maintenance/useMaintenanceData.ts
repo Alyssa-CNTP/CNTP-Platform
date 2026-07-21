@@ -139,10 +139,17 @@ export function useMaintenanceData() {
       if (!r.ok) return // keep fallback (e.g. raiser without directory permission)
       const rows = await r.json()
       if (Array.isArray(rows) && rows.length) {
-        setStaff(rows.map((s: any) => ({
-          id: s.id ?? null, name: s.name, initials: s.initials,
-          email: s.email ?? null, phone: s.phone ?? null, role: s.role,
-        })))
+        // De-duplicate by name (some people appear twice in the directory, e.g. a
+        // double "John") — keep the first, preferring an entry that has a user id.
+        const byName = new Map<string, Staff>()
+        for (const s of rows) {
+          const key = (s.name ?? '').trim().toLowerCase()
+          if (!key) continue
+          const entry: Staff = { id: s.id ?? null, name: s.name, initials: s.initials, email: s.email ?? null, phone: s.phone ?? null, role: s.role }
+          const existing = byName.get(key)
+          if (!existing || (!existing.id && entry.id)) byName.set(key, entry)
+        }
+        setStaff(Array.from(byName.values()))
       }
     } catch { /* keep fallback */ }
   }, [])

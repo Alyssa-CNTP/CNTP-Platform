@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Maintenance: comment/QC pop-ups, header filters, staff dedupe)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `lib/maintenance/useMaintenanceData.ts`
+
+- **Technician comment → manager pop-up:** the manager now gets a toast when a technician posts a comment on any job card.
+- **QC pop-up:** QC users get a corner pop-up listing job cards awaiting the post-maintenance check, with a link to open them.
+- **History header filters:** the historical-job-card table's Type / Area / Technician column **headers are now the filter dropdowns** (no separate filter row); search + status + closed-date range stay in the bar.
+- **Staff de-duplicated by name** (removes the double "John").
+- (Part of a larger maintenance-workflow overhaul; verification chain, QC Quality tab, checklist auto-allocation/rotation and annual-calibration rework to follow.)
+
 ## 2026-07-02 — Gustav (Pop-up targeting, job-card history search/filters, boiler startup schedule)
 
 **Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/planner/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `supabase/migrations/20260702_010_maintenance_boiler_schedule.sql` (new)

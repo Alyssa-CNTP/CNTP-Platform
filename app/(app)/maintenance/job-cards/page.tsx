@@ -401,14 +401,19 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
       <div className="overflow-x-auto">
         <table className="data-table w-full">
           <thead>
-            <tr>{['#', 'Type', 'Area', 'Machine', 'Description', 'Tech', 'By', 'Raised', 'Closed', 'Days'].map(h => <th key={h}>{h}</th>)}</tr>
+            {/* Column headers ARE the filters — the Type / Area / Technician headers
+                are dropdowns; the rest are plain labels. */}
             <tr>
-              <th />
-              <th><select className={colSel} value={typeF} onChange={e => setTypeF(e.target.value)}><option value="all">All</option><option value="breakdown">BD</option><option value="planned">PL</option></select></th>
-              <th><select className={colSel} value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></th>
-              <th /><th />
-              <th><select className={colSel} value={techF} onChange={e => setTechF(e.target.value)}><option value="all">All techs</option>{techs.map(t => <option key={t} value={t}>{t}</option>)}</select></th>
-              <th /><th /><th /><th />
+              <th>#</th>
+              <th><select className={`${colSel} font-semibold ${typeF !== 'all' ? 'text-brand' : ''}`} value={typeF} onChange={e => setTypeF(e.target.value)}><option value="all">Type ▾</option><option value="breakdown">Breakdown</option><option value="planned">Planned</option></select></th>
+              <th><select className={`${colSel} font-semibold ${areaF !== 'all' ? 'text-brand' : ''}`} value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">Area ▾</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></th>
+              <th>Machine</th>
+              <th>Description</th>
+              <th><select className={`${colSel} font-semibold ${techF !== 'all' ? 'text-brand' : ''}`} value={techF} onChange={e => setTechF(e.target.value)}><option value="all">Technician ▾</option>{techs.map(t => <option key={t} value={t}>{t}</option>)}</select></th>
+              <th>By</th>
+              <th>Raised</th>
+              <th>Closed</th>
+              <th>Days</th>
             </tr>
           </thead>
           <tbody>{rows.slice(0, 200).map(j => {
