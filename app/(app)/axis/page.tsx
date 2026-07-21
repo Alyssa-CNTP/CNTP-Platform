@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import {
-  Plus, Loader2, AlertTriangle, Inbox, Send, X,
+  Plus, Loader2, AlertTriangle, Inbox, Send,
   ArrowUpRight, ArrowDownRight, ChevronUp, ChevronDown,
   Code2, Cpu, Package, Server, Shield, Activity, Layers,
   FolderKanban, GitPullRequest, Clock, CheckCircle2, Lock,
@@ -208,136 +208,6 @@ function SortHeader<T extends string>({ label, k, sortKey, dir, onClick, align }
   )
 }
 
-// ─── New Project Modal ────────────────────────────────────────────────────────
-
-function NewProjectModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [name,        setName]        = useState('')
-  const [description, setDescription] = useState('')
-  const [priority,    setPriority]    = useState('mid')
-  const [term,        setTerm]        = useState('medium')
-  const [effortSize,  setEffortSize]  = useState('M')
-  const [targetStart, setTargetStart] = useState('')
-  const [targetEnd,   setTargetEnd]   = useState('')
-  const [hardDeadline,setHardDeadline]= useState(false)
-  const [saving,      setSaving]      = useState(false)
-  const [err,         setErr]         = useState('')
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) { setErr('Name is required'); return }
-    setSaving(true); setErr('')
-    const res = await fetch('/api/axis/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name, description, priority, term,
-        effort_size: effortSize,
-        target_start: targetStart || null,
-        target_end:   targetEnd   || null,
-        hard_deadline: hardDeadline,
-      }),
-    })
-    const json = await res.json()
-    setSaving(false)
-    if (!res.ok) { setErr(json.error ?? 'Failed'); return }
-    onCreated()
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-rule sticky top-0 bg-white z-10">
-          <div>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-text-muted">AXIS · Projects</p>
-            <h2 className="font-semibold text-text mt-0.5">New project</h2>
-          </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-raised transition-colors">
-            <X size={16} className="text-text-muted" />
-          </button>
-        </div>
-
-        <form onSubmit={submit} className="p-6 space-y-4">
-          <div>
-            <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Project name *</label>
-            <input value={name} onChange={e => setName(e.target.value)}
-              placeholder="e.g. Barcode Scanning System v2"
-              className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] focus:outline-none focus:border-text-faint bg-surface-card text-text" />
-          </div>
-
-          <div>
-            <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Description</label>
-            <textarea value={description} onChange={e => setDescription(e.target.value)}
-              rows={3} placeholder="What does this project aim to achieve?"
-              className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] focus:outline-none resize-none bg-surface-card text-text" />
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Priority</label>
-              <select value={priority} onChange={e => setPriority(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] bg-surface-card text-text focus:outline-none">
-                <option value="high">High</option>
-                <option value="mid">Mid</option>
-                <option value="low">Low</option>
-              </select>
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Term</label>
-              <select value={term} onChange={e => setTerm(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] bg-surface-card text-text focus:outline-none">
-                <option value="short">Short</option>
-                <option value="medium">Medium</option>
-                <option value="long">Long</option>
-                <option value="ongoing">Ongoing</option>
-              </select>
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Effort</label>
-              <select value={effortSize} onChange={e => setEffortSize(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] bg-surface-card text-text focus:outline-none">
-                {['XS','S','M','L','XL'].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Start date</label>
-              <input type="date" value={targetStart} onChange={e => setTargetStart(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] bg-surface-card text-text focus:outline-none" />
-            </div>
-            <div>
-              <label className="block font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">Target end</label>
-              <input type="date" value={targetEnd} onChange={e => setTargetEnd(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-surface-rule text-[13px] bg-surface-card text-text focus:outline-none" />
-            </div>
-          </div>
-
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" checked={hardDeadline} onChange={e => setHardDeadline(e.target.checked)}
-              className="w-4 h-4 rounded accent-err" />
-            <span className="text-[12px] text-text-muted">Hard deadline — mark as non-negotiable</span>
-          </label>
-
-          {err && <p className="text-[12px] text-err">{err}</p>}
-
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose}
-              className="px-4 py-2 rounded-lg text-[13px] font-medium text-text-muted hover:text-text transition-colors">
-              Cancel
-            </button>
-            <button type="submit" disabled={saving}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-brand text-white text-[13px] font-semibold hover:bg-brand-hover transition-colors disabled:opacity-60">
-              {saving ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
-              Create project
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
 // ═════════════════════════════════════════════════════════════════════════════
 // Main page
 // ═════════════════════════════════════════════════════════════════════════════
@@ -350,7 +220,6 @@ export default function AxisDashboard() {
   const [changes,        setChanges]        = useState<ChangeLog[]>([])
   const [allReqs,        setAllReqs]        = useState<ProjectRequest[]>([])
   const [loading,        setLoading]        = useState(true)
-  const [showNewProject, setShowNewProject] = useState(false)
 
   // Project grid sorting
   type ProjectSortKey = 'name' | 'priority' | 'progress' | 'due'
@@ -581,29 +450,8 @@ export default function AxisDashboard() {
     </div>
   )
 
-  function reloadDashboard() {
-    setLoading(true)
-    fetch('/api/axis/dashboard')
-      .then(r => r.ok ? r.json() : { projects: [], tracks: [], changes: [], requests: [] })
-      .catch(() => ({ projects: [], tracks: [], changes: [], requests: [] }))
-      .then((d: { projects: Project[]; tracks: Track[]; changes: ChangeLog[]; requests: ProjectRequest[] }) => {
-        setProjects(d.projects ?? [])
-        setTracks(d.tracks ?? [])
-        setChanges(d.changes ?? [])
-        setAllReqs(d.requests ?? [])
-        setLoading(false)
-      })
-  }
-
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6">
-
-      {showNewProject && (
-        <NewProjectModal
-          onClose={() => setShowNewProject(false)}
-          onCreated={() => { setShowNewProject(false); reloadDashboard() }}
-        />
-      )}
 
       {/* ── Header ── */}
       <div className="flex items-end justify-between flex-wrap gap-3">
@@ -612,10 +460,6 @@ export default function AxisDashboard() {
           <h1 className="font-display font-bold text-[24px] text-text leading-tight mt-0.5">Overview</h1>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowNewProject(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-surface-rule bg-surface-card text-[12px] font-semibold text-text-muted hover:text-text transition-colors">
-            <FolderKanban size={13} /> New project
-          </button>
           <button onClick={() => router.push('/axis/consideration')}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-surface-rule bg-surface-card text-[12px] font-semibold text-text-muted hover:text-text transition-colors">
             <Inbox size={13} /> Triage requests

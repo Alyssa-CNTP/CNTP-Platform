@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
-interface NavItem {
+export interface NavItem {
   href:         string
   label:        string
   icon:         React.ElementType
@@ -36,7 +36,7 @@ interface NavItem {
 // Production → Operations → HR → Quality → Maintenance → Sales → Marketing →
 // Logistics → Management → Workspace → AXIS → Admin.
 // Home is rendered as a standalone item above the groups (see render).
-const NAV: NavItem[] = [
+export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
@@ -109,7 +109,7 @@ const NAV: NavItem[] = [
   { href: '/axis/consideration',        label: 'Consideration',              icon: Inbox,           group: 'AXIS', itOnly: true },
   { href: '/axis/standards',            label: 'Dev Standards',              icon: Shield,          group: 'AXIS', itOnly: true },
   { href: '/axis/request',              label: 'Submit Request',             icon: Send,            group: 'AXIS' },
-  { href: '/axis/tickets',              label: 'Tickets',                    icon: Ticket,          group: 'AXIS', itOnly: true },
+  { href: '/axis/tickets',              label: 'Tickets',                    icon: Ticket,          group: 'AXIS', departments: ['IT'], permission: 'can_assign_tickets', orPermission: true },
 
   // ── Admin — always last ──
   { href: '/settings',                  label: 'Settings',                   icon: Settings,        group: 'Admin' },

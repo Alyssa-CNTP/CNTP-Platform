@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient }              from '@supabase/supabase-js'
 import { cookies }                   from 'next/headers'
 import { createServerClient }        from '@supabase/ssr'
+import { loadMrlMap, applyEuMrl }    from '@/lib/quality/eu-mrl'
 
 // ─── Gemini config ────────────────────────────────────────────────────────────
 
@@ -496,7 +497,13 @@ export async function POST(req: NextRequest) {
         })
       }
     } else {
-      const enriched = workflow === 'residue' ? computeResidueGrades(extracted) : extracted
+      let enriched = extracted
+      if (workflow === 'residue') {
+        // Overlay the current EU MRLs (synced into qms.eu_mrl) before grading,
+        // so R-grades track the live EU limits rather than only the lab report.
+        const mrlMap = await loadMrlMap(getServiceClient())
+        enriched = computeResidueGrades(applyEuMrl(extracted, mrlMap))
+      }
       recordsToSave.push({
         batch_number: enriched.batch_no || enriched.report_reference || 'UNKNOWN',
         data:         enriched,
