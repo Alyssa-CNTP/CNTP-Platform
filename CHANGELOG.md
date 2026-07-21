@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Annual calibration: search + Category header filter, bidirectional cycle↔next-due, External calibrator)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
+
+- **Filterable table:** search box + a Category header-filter on the annual/calibration register.
+- **Bidirectional cycle ↔ next-due:** a cycle (days) recomputes the next-due date; a next-due date recomputes the cycle days (anchored on last-done, else today).
+- **External calibrator:** the "calibrated by" picker adds an External / supplier option.
+
 ## 2026-07-02 — Gustav (Scheduled: technician-only checklist view, monthly audit filter, Readings tab removed)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
