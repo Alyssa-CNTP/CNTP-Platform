@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { buildLabelPplb } from '@/lib/production/label-pplb'
 import { buildLabelZpl } from '@/lib/production/label-zpl'
 import { sendToPrinter } from '@/lib/production/print-socket'
+import { isRelayMode, enqueuePrintJob } from '@/lib/production/print-queue'
 import type { OutputBag } from '@/lib/production/live-types'
 import type { PrinterLang } from '@/lib/production/capture-config'
 
@@ -42,6 +43,18 @@ export async function POST(req: NextRequest) {
   }
 
   const payload = lang === 'pplb' ? buildLabelPplb(sampleBag) : buildLabelZpl(sampleBag)
+
+  // Relay mode (prod): enqueue the test label for the factory-LAN agent.
+  if (isRelayMode()) {
+    try {
+      await enqueuePrintJob({ sectionId: 'test', printerIp: ip, printerPort: port, lang, payload })
+      return NextResponse.json({ queued: true })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[print/test] enqueue', message)
+      return NextResponse.json({ error: message }, { status: 502 })
+    }
+  }
 
   try {
     await sendToPrinter(payload, ip, port)
