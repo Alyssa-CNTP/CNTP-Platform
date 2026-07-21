@@ -31,6 +31,11 @@ export default function LoginPage() {
         redirectTo: `${window.location.origin}/auth/callback`,
         scopes: 'email openid profile',
         skipBrowserRedirect: false,
+        // Force Azure to show the account picker every time. Without this,
+        // Azure silently re-uses its cached SSO session on a shared browser and
+        // signs the previous person straight back in ("auto-login from cache").
+        // 'select_account' makes the next user choose/confirm their own account.
+        queryParams: { prompt: 'select_account' },
       },
     })
     if (error) { setError(error.message); setMsLoading(false) }
