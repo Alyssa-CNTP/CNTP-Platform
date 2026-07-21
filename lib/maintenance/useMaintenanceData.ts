@@ -521,6 +521,10 @@ export function useMaintenanceData() {
       assigned_to: patch.assigned_to !== undefined ? patch.assigned_to : (existing?.assigned_to ?? null),
       assigned_by: patch.assigned_by !== undefined ? patch.assigned_by : (existing?.assigned_by ?? null),
       assigned_at: patch.assigned_at !== undefined ? patch.assigned_at : (existing?.assigned_at ?? null),
+      submitted_at: patch.submitted_at !== undefined ? patch.submitted_at : (existing?.submitted_at ?? null),
+      submitted_by: patch.submitted_by !== undefined ? patch.submitted_by : (existing?.submitted_by ?? null),
+      verified_at: patch.verified_at !== undefined ? patch.verified_at : (existing?.verified_at ?? null),
+      verified_by: patch.verified_by !== undefined ? patch.verified_by : (existing?.verified_by ?? null),
       updated_at: new Date().toISOString(),
     }
     setCompletions(p => {
@@ -537,6 +541,15 @@ export function useMaintenanceData() {
   // Manager allocates a checklist (template + current period) to a technician.
   const allocateChecklist = async (tpl: Template, techName: string) => {
     await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
+  }
+
+  // Technician sends a completed checklist to the maintenance manager to verify.
+  const submitChecklist = async (tpl: Template) => {
+    await saveComp(tpl, { submitted_at: new Date().toISOString(), submitted_by: actor || displayName || '', verified_at: null, verified_by: null })
+  }
+  // Maintenance manager marks a submitted checklist as verified. (Techs cannot.)
+  const verifyChecklist = async (tpl: Template) => {
+    await saveComp(tpl, { verified_at: new Date().toISOString(), verified_by: actor || displayName || '' })
   }
 
   const toggleTask = (tpl: Template, ti: number) => {
@@ -837,7 +850,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
       qcSubmit, verifyCard, postComment,
-      getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
+      getComp, saveComp, toggleTask, setTaskField, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,

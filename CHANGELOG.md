@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Checklist auto-allocation from shift roster + JoJo checklist + monthly verify) — ⚠️ REVIEW BRANCH `gustav/maintenance-autoalloc` — NOT merged to staging; connects to the shift-roster domain, for Alyssa to review
+
+**Branch:** `gustav/maintenance-autoalloc` (do not merge until reviewed — reads the Operations shift roster).
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `lib/maintenance/allocation.ts` (new), `supabase/migrations/20260702_020_maintenance_jojo_and_checklist_verify.sql` (new — **NOT yet applied to the DB**)
+
+- **No server-side changes and no shift-roster logic changes.** The shift roster (`production.roster_*`) is only **read** (client-side) to find who is on shift; nothing about how it works is touched.
+- **Maintenance UX button — "Auto-allocate from roster"** (manager-only, on the Weekly and Monthly tabs). Documented here + in code comments in `scheduled/page.tsx` and `allocation.ts`:
+  - **Weekly** → allocates the weekly checklists to the **morning (day) shift** maintenance technicians, **rotating by ISO week** so nobody does the same checklist every week. Due before 10:00 Monday (shown).
+  - **Monthly** → allocates across **all** maintenance techs on the roster; the **granule / sieving / pasteurizer** heavy lines **rotate month-to-month**, and the remaining checklists are distributed **greedily to the least-loaded** tech so totals stay even (the tech without a heavy line picks up more). Allocated ~5th, due by the 15th (shown).
+  - Rotation is **stateless/deterministic** (offset by ISO-week / month index) — no extra state table; same inputs → same split. See `lib/maintenance/allocation.ts`.
+  - Writes allocations via the existing **client-side** `allocateChecklist` (`checklist_completions.assigned_to`). Lazy alternative to a server cron.
+- **JoJo Tanks water checklist** (new **weekly** checklist template, migration): two percentage readings (Tank 1 / Tank 2) with a **computed average** and a "Save readings" action. (Template row is in the migration — apply it to see the checklist.)
+- **Monthly tech → manager verification:** a completed monthly checklist gets a **"Send to manager to verify"** button (technician); the **maintenance manager** (only) sees **"Mark verified"**; technicians see the verified / awaiting status. Uses new `submitted_*/verified_*` columns on `checklist_completions` (in the migration).
+- **Apply before use:** run `supabase/migrations/20260702_020_maintenance_jojo_and_checklist_verify.sql` (JoJo template + the four verify columns) when the branch is reviewed/merged.
+
 ## 2026-07-02 — Gustav (Annual calibration: search + Category header filter, bidirectional cycle↔next-due, External calibrator)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
