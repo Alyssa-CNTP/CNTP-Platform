@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Maintenance: comment/QC pop-ups, history header filters, staff dedupe)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `lib/maintenance/useMaintenanceData.ts`
+
+- **Technician comment → manager pop-up:** the manager gets a toast when a technician posts a comment on any job card.
+- **QC pop-up:** QC users get a corner pop-up listing job cards awaiting the post-maintenance check.
+- **History header filters:** the historical-job-card table's Type / Area / Technician column headers are now the filter dropdowns (no separate filter row).
+- **Staff de-duplicated by name** (removes the double "John").
+- (Part of a larger maintenance-workflow overhaul; verification chain, QC Quality tab, checklist auto-allocation/rotation and annual-calibration rework to follow.)
+
+---
+
 ## 2026-07-20 — Alyssa (VPS ops: fixed staging crash-loop, reclaimed disk, added weekly self-cleaning maintenance cron) — ⚠️ IMPORTANT, DO NOT REMOVE
 
 **Ops change (no application code changed).** Files added on the VPS (`cntpdev@154.65.97.200:2022`), not in the repo: `/home/cntpdev/scripts/vps-maintenance.sh` (new), a new weekly entry in `cntpdev`'s crontab, `/home/cntpdev/logs/maintenance.log` (new).
