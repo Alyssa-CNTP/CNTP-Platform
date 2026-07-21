@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-21 — Alyssa (PRODUCTION: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
+
+**Promoted to production from staging PR [#416](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/416) — login fix only, cherry-picked onto `main` (the other 8 commits ahead on `staging` at this time — print-relay agent, maintenance pop-ups/filters, calibration work — were intentionally left off this promotion; they'll go to prod separately once their DB migrations are confirmed on the production Supabase project).**
+
+**Files changed:** `app/api/floor/operators/route.ts`, `app/login/page.tsx`
+
+- **Fixed operators not showing "On shift" correctly on the floor login.** The `/api/floor/operators` route resolved today's date and the current day/night shift from `new Date().getHours()` / `.toISOString()` — i.e. the **server's** timezone. The VPS runs in UTC (no `TZ` set for the app process), so the shift boundary — and the date around midnight — landed two hours off SAST, making the on-shift list disagree with the published roster (day-shift people showing before 09:00, etc.). Replaced with a SAST-aware `sastNow()` helper (`Intl.DateTimeFormat` with `timeZone: 'Africa/Johannesburg'`), mirroring the roster page's own `sastNow()` / "On duty" logic so both read the roster identically.
+- **Stopped Microsoft silently auto-logging the previous person back in on a shared browser.** The Azure OAuth call had no `prompt` param, so Azure re-used its cached SSO session and signed the last user straight back in ("storing cache and logging people in automatically"). Added `queryParams: { prompt: 'select_account' }` to `signInWithOAuth`, forcing the account picker every time so the next user must choose/confirm their own account. (Inactivity auto-logout — 60 min, in `app/(app)/layout.tsx` — left unchanged, as intended.)
+- **No database migration required** — pure application code change.
+
+---
+
 ## 2026-07-20 — Alyssa (VPS ops: fixed staging crash-loop, reclaimed disk, added weekly self-cleaning maintenance cron) — ⚠️ IMPORTANT, DO NOT REMOVE
 
 **Ops change (no application code changed).** Files added on the VPS (`cntpdev@154.65.97.200:2022`), not in the repo: `/home/cntpdev/scripts/vps-maintenance.sh` (new), a new weekly entry in `cntpdev`'s crontab, `/home/cntpdev/logs/maintenance.log` (new).

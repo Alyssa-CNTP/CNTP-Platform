@@ -6,20 +6,28 @@
 import { NextResponse } from 'next/server'
 import { getAdminClient } from '@/lib/auth/server-helpers'
 
-function currentShift() {
-  const h = new Date().getHours()
-  return h >= 7 && h < 16 ? 'day' : 'night'
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+// Resolve "today" + the current shift in SAST (Africa/Johannesburg), independent
+// of the server's timezone. The VPS runs in UTC, so new Date().getHours() /
+// toISOString() placed the day/night boundary — and the date, around midnight —
+// two hours off, which is what made this on-shift list disagree with the roster.
+// Mirrors sastNow() in app/(app)/production/roster/page.tsx (the roster's own
+// "On duty" logic), so both read the roster the same way.
+function sastNow() {
+  const now = new Date()
+  const date = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now)
+  const hour = Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Johannesburg', hour: '2-digit', hour12: false,
+  }).format(now))
+  const shift = hour >= 7 && hour < 16 ? 'day' : 'night'
+  return { date, shift }
 }
 
 export async function GET() {
   try {
     const admin = getAdminClient()
-    const today = todayISO()
-    const shift = currentShift()
+    const { date: today, shift } = sastNow()
 
     const [{ data, error }, { data: rosterRows }] = await Promise.all([
       admin.schema('production').from('operators')
