@@ -4,6 +4,7 @@ import { buildLabelZpl } from '@/lib/production/label-zpl'
 import type { OutputBag } from '@/lib/production/live-types'
 import { getPrinterForSection } from '@/lib/production/printer-registry'
 import { sendToPrinter } from '@/lib/production/print-socket'
+import { isRelayMode, enqueuePrintJob } from '@/lib/production/print-queue'
 
 interface PrintRequest {
   bag: OutputBag
@@ -37,10 +38,24 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  const port = printer.port ?? 9100
   const payload = printer.lang === 'pplb' ? buildLabelPplb(bag) : buildLabelZpl(bag)
 
+  // Relay mode (prod): enqueue for the factory-LAN agent to print.
+  if (isRelayMode()) {
+    try {
+      await enqueuePrintJob({ sectionId, printerIp: printer.ip, printerPort: port, lang: printer.lang, payload })
+      return NextResponse.json({ queued: true })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[print/label] enqueue', message)
+      return NextResponse.json({ error: message }, { status: 502 })
+    }
+  }
+
+  // Direct mode (local on the factory network): open the socket ourselves.
   try {
-    await sendToPrinter(payload, printer.ip, printer.port ?? 9100)
+    await sendToPrinter(payload, printer.ip, port)
     return NextResponse.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
