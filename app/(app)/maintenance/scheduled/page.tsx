@@ -11,7 +11,7 @@ import { Printer } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { useAuth } from '@/lib/auth/context'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
-import { calClass, calBadge, fmtD, fmtT } from '@/lib/maintenance/helpers'
+import { calClass, calBadge, fmtD, fmtT, addDays, diffDays } from '@/lib/maintenance/helpers'
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
@@ -51,6 +51,9 @@ export default function ScheduledPage() {
   const [calWho, setCalWho] = useState<Record<number, string>>({})
   // Monthly audit filter — view a past month's checklists (empty = current month).
   const [monthView, setMonthView] = useState('')
+  // Annual register header filters.
+  const [annualSearch, setAnnualSearch] = useState('')
+  const [annualCat, setAnnualCat] = useState('all')
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
   const eqOrdered = [...eqLatest].sort((a, b) => {
     const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
@@ -311,18 +314,29 @@ export default function ScheduledPage() {
             <p className="text-[12px] text-text-muted mt-0.5">Every field is editable. Mark an item calibrated with the date, cycle (days) and who did it — the next-due date recomputes automatically. Boiler: 180-day warning; others: 60 / 30 / 7 / 1-day alerts.</p>
           </div>
 
-          {/* At-a-glance counts (overdue items also sort to the top of the table below). */}
-          <div className="flex gap-2 flex-wrap text-[12px]">
+          {/* At-a-glance counts + search (overdue items sort to the top of the table). */}
+          <div className="flex gap-2 flex-wrap items-center text-[12px]">
             <span className="badge badge-err">{annualRows.filter(a => a.days <= 0).length} overdue</span>
             <span className="badge badge-warn">{annualRows.filter(a => a.days > 0 && a.days <= 30).length} due ≤30d</span>
             <span className="badge badge-info">{annualRows.filter(a => a.days > 30 && a.days <= 60).length} due ≤60d</span>
+            <input className={`${INP} w-[220px] ml-auto`} placeholder="Search asset / serial / supplier…" value={annualSearch} onChange={e => setAnnualSearch(e.target.value)} />
           </div>
 
           <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
             <div className="overflow-x-auto">
               <table className="data-table">
-                <thead><tr>{['Status', 'Category', 'Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}</tr></thead>
-                <tbody>{annualRows.map(a => {
+                <thead><tr>
+                  <th>Status</th>
+                  <th><select className={`${INP} text-[11px] py-1 min-h-0 font-semibold ${annualCat !== 'all' ? 'text-brand' : ''}`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
+                    <option value="all">Category ▾</option>
+                    {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                  </select></th>
+                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}
+                </tr></thead>
+                <tbody>{annualRows
+                  .filter(a => (annualCat === 'all' || a.category === annualCat)
+                    && (!annualSearch || `${a.asset} ${a.serial_no} ${a.category} ${a.supplier}`.toLowerCase().includes(annualSearch.toLowerCase())))
+                  .map(a => {
                   const cf = calForm[a.id] ?? {}
                   return (
                   <tr key={a.id}>
@@ -342,29 +356,48 @@ export default function ScheduledPage() {
                     <td className="text-[11px] whitespace-nowrap">{a.last_done
                       ? <span className="text-ok">✓ {fmtD(a.last_done)}{a.last_done_by ? <span className="text-text-faint"> · {a.last_done_by}</span> : ''}</span>
                       : <span className="text-text-faint">not yet</span>}</td>
+                    {/* Cycle (days) → recomputes Next due from the anchor (last done, else today). */}
                     <td><input className={`${INP} w-16 text-[11px] py-1 min-h-0`} type="number" inputMode="numeric" placeholder="—"
                       value={drafts['ai' + a.id] ?? (a.interval_days != null ? String(a.interval_days) : '')}
                       onChange={e => setDrafts(p => ({ ...p, ['ai' + a.id]: e.target.value }))}
-                      onBlur={e => { const v = e.target.value ? parseInt(e.target.value, 10) : null; if (v !== a.interval_days) updateAnnual(a.id, { interval_days: v }) }} /></td>
+                      onBlur={e => {
+                        const v = e.target.value ? parseInt(e.target.value, 10) : null
+                        if (v === a.interval_days) return
+                        const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
+                        const patch: any = { interval_days: v }
+                        if (v && anchor) patch.next_due = addDays(anchor, v).toISOString().slice(0, 10)
+                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n }) // let the recomputed date show
+                        updateAnnual(a.id, patch)
+                      }} /></td>
+                    {/* Next due → recomputes Cycle (days) from the anchor. Bidirectional. */}
                     <td><input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date"
                       value={drafts['an' + a.id] ?? (a.next_due ?? '').slice(0, 10)}
                       onChange={e => setDrafts(p => ({ ...p, ['an' + a.id]: e.target.value }))}
-                      onBlur={e => e.target.value !== (a.next_due ?? '').slice(0, 10) && updateAnnual(a.id, { next_due: e.target.value || null })} /></td>
+                      onBlur={e => {
+                        const nd = e.target.value || null
+                        if (nd === (a.next_due ?? '').slice(0, 10)) return
+                        const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
+                        const patch: any = { next_due: nd }
+                        if (nd) patch.interval_days = Math.max(0, diffDays(anchor, nd))
+                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n }) // let the recomputed cycle show
+                        updateAnnual(a.id, patch)
+                      }} /></td>
                     <td>
                       <div className="flex gap-1 items-center">
                         <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
                           value={cf.date ?? new Date().toISOString().slice(0, 10)}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
-                        <select className={`${INP} w-24 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
+                        <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
                           value={cf.by ?? ''}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
                           <option value="">Who?…</option>
                           {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                          <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
                         </select>
                         <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when, then recompute next due from the cycle"
                           onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
                             (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days) ?? null,
-                            cf.by!)}>✓ Calibrated</button>
+                            cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
                       </div>
                     </td>
                     <td>{a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>Email</button>}</td>
