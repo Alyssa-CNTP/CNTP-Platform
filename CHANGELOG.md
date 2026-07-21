@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-21 — Alyssa (Login: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
+
+**Files changed:** `app/api/floor/operators/route.ts`, `app/login/page.tsx`
+
+- **Fixed operators not showing "On shift" correctly on the floor login.** The `/api/floor/operators` route resolved today's date and the current day/night shift from `new Date().getHours()` / `.toISOString()` — i.e. the **server's** timezone. The VPS runs in UTC (no `TZ` set for the app process), so the shift boundary — and the date around midnight — landed two hours off SAST, making the on-shift list disagree with the published roster (day-shift people showing before 09:00, etc.). Replaced with a SAST-aware `sastNow()` helper (`Intl.DateTimeFormat` with `timeZone: 'Africa/Johannesburg'`), mirroring the roster page's own `sastNow()` / "On duty" logic so both read the roster identically.
+- **Stopped Microsoft silently auto-logging the previous person back in on a shared browser.** The Azure OAuth call had no `prompt` param, so Azure re-used its cached SSO session and signed the last user straight back in ("storing cache and logging people in automatically"). Added `queryParams: { prompt: 'select_account' }` to `signInWithOAuth`, forcing the account picker every time so the next user must choose/confirm their own account. (Inactivity auto-logout — 60 min, in `app/(app)/layout.tsx` — left unchanged, as intended.)
+
+---
+
 ## 2026-07-02 — Gustav (Annual calibration: search + Category header filter, bidirectional cycle↔next-due, External calibrator)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
