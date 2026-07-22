@@ -256,7 +256,37 @@ export default function StaffProfilePage() {
         </div>
       </div>
 
-      {/* Identity hub — PIN operator (Capture) + login account (Users & Roles) linked to this person */}
+      {/* How they sign in — PIN operator (Capture) + login account (Users & Roles)
+          linked to this person. Summary badges up top match the same PIN/EMAIL
+          language used on the Directory list; a prompt appears when neither is
+          set up yet, so allocating a sign-in method is never a dead end. */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2 className="font-display font-semibold text-[15px] text-text">How they sign in</h2>
+          <SignInBadge kind="PIN" set={!!identities?.operator} active={!!identities?.operator?.active} />
+          <SignInBadge kind="EMAIL" set={!!identities?.login} active={!!identities?.login?.is_active} />
+        </div>
+
+        {!identities?.operator && !identities?.login && (canAssignPin || isIT || !requestSent) && (
+          <div className="flex items-center gap-2 flex-wrap px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="flex-1 min-w-[160px]">No sign-in method set up yet — this person can&rsquo;t sign in to Capture or the app.</span>
+            {canAssignPin && (
+              <button onClick={() => setAssigningPin(true)} className="font-medium underline underline-offset-2 shrink-0">Assign a PIN</button>
+            )}
+            {isIT ? (
+              <Link href={`/users?newFor=${employee.id}&name=${encodeURIComponent(employee.display_name || employee.name)}${employee.email ? `&email=${encodeURIComponent(employee.email)}` : ''}`}
+                className="font-medium underline underline-offset-2 shrink-0">Set up EMAIL login →</Link>
+            ) : requestSent ? (
+              <span className="font-medium shrink-0">EMAIL login requested</span>
+            ) : (
+              <button onClick={requestLogin} disabled={requestingLogin} className="font-medium underline underline-offset-2 shrink-0 disabled:opacity-40">
+                {requestingLogin ? 'Sending…' : 'Request EMAIL login'}
+              </button>
+            )}
+          </div>
+        )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {/* PIN operator */}
         <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
@@ -322,6 +352,7 @@ export default function StaffProfilePage() {
           )}
           {identityError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {identityError}</p>}
         </div>
+      </div>
       </div>
 
       {/* Training portfolio — courses assigned/completed, feeding the competency matrix below.
@@ -781,3 +812,16 @@ function CompetencyEditModal({ sopId, sop, current, saving, onClose, onSave }: {
 
 const INP = 'w-full px-3 py-2 rounded-lg border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand'
 const LBL = 'block text-[10px] font-semibold text-stone-500 uppercase tracking-widest mb-1'
+
+// Same PIN/EMAIL badge language as the Directory list (components handle
+// their own list separately — kept local rather than a shared import, same
+// pattern this file already follows for its other small subcomponents).
+function SignInBadge({ kind, set, active }: { kind: 'PIN' | 'EMAIL'; set: boolean; active: boolean }) {
+  const Icon = kind === 'PIN' ? IdCard : KeyRound
+  const cls = !set ? 'bg-stone-100 text-stone-400' : active ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${cls}`}>
+      <Icon size={10} /> {kind}
+    </span>
+  )
+}

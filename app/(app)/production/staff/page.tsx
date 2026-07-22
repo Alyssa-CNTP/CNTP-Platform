@@ -53,23 +53,28 @@ const todaySAST = () =>
 
 const fmtD = (d: string) => format(parseISO(d + 'T12:00:00'), 'd MMM')
 
-// PIN + login status inline on the list row, so a supervisor can see who's
-// signed-in-capable without opening each profile. Login email is only ever
-// present when the API decided the caller may see it (IT / can_manage_users).
-function IdentityBadges({ operator, login }: { operator?: OperatorBadge; login?: LoginBadge }) {
-  if (!operator && !login) return null
+// Explicit PIN / EMAIL badges on every row, so a supervisor can see how each
+// person signs in — and who has neither — without opening each profile.
+// Login email is only ever present when the API decided the caller may see
+// it (IT / can_manage_users); the badge itself still renders either way.
+function SignInBadge({ kind, set, active, detail }: { kind: 'PIN' | 'EMAIL'; set: boolean; active: boolean; detail?: string | null }) {
+  const Icon = kind === 'PIN' ? IdCard : KeyRound
+  const cls = !set ? 'bg-stone-100 text-stone-400' : active ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'
+  const title = !set
+    ? `No ${kind === 'PIN' ? 'PIN operator' : 'login account'} set up`
+    : `${kind === 'PIN' ? 'PIN operator (Capture)' : 'Login account (Users & Roles)'}${active ? '' : ' — inactive'}${detail ? ` · ${detail}` : ''}`
   return (
-    <div className="flex items-center gap-2 mt-0.5 text-[11px] flex-wrap">
-      {operator && (
-        <span className={`inline-flex items-center gap-1 font-mono ${operator.active ? 'text-brand' : 'text-stone-400'}`} title="PIN operator (Capture)">
-          <IdCard size={10} /> {operator.operator_code || 'PIN'}{!operator.active && ' (inactive)'}
-        </span>
-      )}
-      {login && (
-        <span className={`inline-flex items-center gap-1 ${login.is_active ? 'text-brand' : 'text-stone-400'}`} title="Login account (Users & Roles)">
-          <KeyRound size={10} /> {login.email || 'Login'}{!login.is_active && ' (inactive)'}
-        </span>
-      )}
+    <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${cls}`} title={title}>
+      <Icon size={9} /> {kind}
+    </span>
+  )
+}
+
+function IdentityBadges({ operator, login }: { operator?: OperatorBadge; login?: LoginBadge }) {
+  return (
+    <div className="flex items-center gap-1.5 mt-0.5">
+      <SignInBadge kind="PIN" set={!!operator} active={!!operator?.active} detail={operator?.operator_code} />
+      <SignInBadge kind="EMAIL" set={!!login} active={!!login?.is_active} detail={login?.email} />
     </div>
   )
 }
