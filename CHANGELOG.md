@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (Refining 1 & 2 capture: added Coarse Leaf + Cut Heavy Stick Fine/Coarse as scannable/pickable inputs)
+
+**Files changed:** `lib/production/live-types.ts`, `components/production/capture/RefiningCapture.tsx`
+
+Added three upstream input products to the Refining 1 and Refining 2 debagging inputs so operators can scan, manually enter, or search stock for them. These all originate upstream (Coarse Leaf from the sieving tower; Cut Heavy Stick Fine/Coarse from refining), and their batch number + serial trace back to the origin bag via the existing scan/system-pick lookup against `bag_tags`. No existing logic changed — purely additive.
+
+- **`SECTION_CONFIG.inputTypes`** — `refining1` gained `Coarse Leaf`, `Cut Heavy Stick Fine`, `Cut Heavy Stick Coarse` (previously only Indent Sticks / Sticks / Blocks: Clean / 1st Cut). `refining2` gained `Cut Heavy Stick Fine` (it already listed Cut Heavy Stick Coarse and Coarse Leaf).
+- **System-pick aliases** (`useSystemBags`) — added explicit `bag_tags.product_type` alias entries for `Coarse Leaf` and `Cut Heavy Stick Fine` (Cut Heavy Stick Coarse was already present) so the in-stock origin bag (serial + batch) surfaces when picking from stock.
+- **Coarse Leaf batch-number requirement** was already enforced by the existing `needsLot = productType === 'Coarse Leaf'` gate in `RefiningCapture` (required Batch number field, blocks locking the bag until filled) — left unchanged; it now applies on Refining 1 as well now that Coarse Leaf is selectable there.
+
+---
+
 ## 2026-07-21 — Alyssa (Login: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
 
 **Files changed:** `app/api/floor/operators/route.ts`, `app/login/page.tsx`

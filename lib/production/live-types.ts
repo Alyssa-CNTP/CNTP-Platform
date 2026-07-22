@@ -80,14 +80,17 @@ export const SECTION_CONFIG: Record<string, {
     name: 'Refining 1', code: 'R1',
     colorHex: '#1d4ed8', colorClass: 'bg-blue-700',
     inputMode: 'scan',
-    inputTypes: ['Indent Sticks', 'Sticks', 'Blocks: Clean', '1st Cut'],
+    // Coarse Leaf + Cut Heavy Stick Fine/Coarse are additional inputs that
+    // originate upstream (sieving tower / refining) — their batch number and
+    // serial trace back to the origin bag on scan / system pick.
+    inputTypes: ['Indent Sticks', 'Sticks', 'Blocks: Clean', '1st Cut', 'Coarse Leaf', 'Cut Heavy Stick Fine', 'Cut Heavy Stick Coarse'],
     outputTypes: ['Indent Dust', 'White Dust'],
   },
   refining2: {
     name: 'Refining 2', code: 'R2',
     colorHex: '#3b82f6', colorClass: 'bg-blue-500',
     inputMode: 'scan',
-    inputTypes: ['Sticks', 'Cut Heavy Stick Coarse', 'Coarse Leaf'],
+    inputTypes: ['Sticks', 'Cut Heavy Stick Coarse', 'Cut Heavy Stick Fine', 'Coarse Leaf'],
     outputTypes: ['Cut Heavy Stick Fine', 'Cut Heavy Stick Coarse', 'White Dust', 'Powder Dust'],
   },
   granule: {
