@@ -141,6 +141,10 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
       'Indent Sticks': ['Indent Sticks'],
       'Blocks: Clean': ['RB Blocks', 'Blocks: Clean'],
       '1st Cut': ['1st Cut'],
+      // Origin: sieving tower / refining outputs — matched by their bag_tags
+      // product_type so system pick surfaces the in-stock origin bag (serial + batch).
+      'Coarse Leaf': ['Coarse Leaf'],
+      'Cut Heavy Stick Fine': ['Cut Heavy Stick Fine'],
       'Cut Heavy Stick Coarse': ['Cut Heavy Stick Coarse'],
     }
     const expanded = types.flatMap(t => aliases[t] ?? [t])
