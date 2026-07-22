@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (PRODUCTION: Shift Roster — automatic weekly rotation to prod, week-number labels, one rotation path)
+
+**Hotfix cherry-picked directly onto `main`** (roster files are identical on `main` and `staging`, so this touches nothing else on prod). Fixes real users' report that "nothing saves / next week never appears" on production.
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `lib/production/roster-rotate.ts`, `.github/workflows/roster-rotate-production.yml` (new)
+
+Root cause: the `roster-rotate.yml` cron only ever pinged the **staging** URL, so **production never auto-rotated** — prod had no period past the current week and supervisors had nothing to fill in. Manual "New period" produced a blank sheet and swallowed any write error, which read as "nothing saves."
+
+- **Production now auto-rotates.** Added `roster-rotate-production.yml` (mirror of the staging cron and of `energy-capture-production.yml`) that hits `PROD_APP_URL/api/production/roster/cron` with `PROD_CRON_SECRET` — Sun 22:00 rotate, Mon/Wed 06:00 reminders. **Requires the `PROD_APP_URL` + `PROD_CRON_SECRET` repo secrets (already used by energy prod cron) and `CRON_SECRET` set on the production VPS.**
+- **One rotation path, system-driven.** "Generate next week" and "New period" are now **admin-only** overrides; normal users (supervisors) only edit → save → submit. Weekly rotation is the cron's job. Empty-state copy now explains rotation is automatic.
+- **Week-number labels.** Auto-generated periods are named by ISO week (e.g. "Week 31") via `nextPeriodConfig`. Day/night columns are fixed clock ranges (07h00–16h00 / 16h00–01h00) and no longer swap — only the people rotate (`rotateEntries`). Dropped the "Shift A/B" toggle.
+- **No more silent write failures.** `createPeriod`/`generateNextPeriod` now check every insert and surface a dismissible error banner; the admin "New period" carries the current roster over (pre-fill) instead of starting blank.
+- **Data (prod, applied directly):** created the missing next week ("Week 31", 27–31 Jul, rotated from 20–24 Jul); removed Shuaib Sentso from the current week. Two past-week Shuaib entries left as history.
+
+---
+
 ## 2026-07-21 — Alyssa (PRODUCTION: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
 
 **Promoted to production from staging PR [#416](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/416) — login fix only, cherry-picked onto `main` (the other 8 commits ahead on `staging` at this time — print-relay agent, maintenance pop-ups/filters, calibration work — were intentionally left off this promotion; they'll go to prod separately once their DB migrations are confirmed on the production Supabase project).**

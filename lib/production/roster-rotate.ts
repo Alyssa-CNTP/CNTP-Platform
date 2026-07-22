@@ -12,7 +12,7 @@
 // `production` schema (getDb().schema('production') or the service-role admin
 // client). Both expose the same PostgREST chain.
 
-import { addDays, format, parseISO } from 'date-fns'
+import { addDays, format, parseISO, getISOWeek } from 'date-fns'
 
 export const ROSTER_PERIOD_DAYS = 7  // weekly cadence
 
@@ -26,17 +26,20 @@ export interface RotateEntry {
   person_name: string; tags: string[]; sort_order: number
 }
 
-/** Dates + swapped A/B labels for the period that follows `source`. */
+/** Dates + label for the period that follows `source`. */
 export function nextPeriodConfig(source: RotatePeriod, periodDays = ROSTER_PERIOD_DAYS) {
   const start = addDays(parseISO(source.start_date + 'T12:00:00'), periodDays)
   const end   = addDays(parseISO(source.end_date   + 'T12:00:00'), periodDays)
   return {
-    name:       `${format(start, 'd')}–${format(end, 'd MMM')}`,
+    // One consistent naming scheme: the ISO week number of the year, e.g. "Week 31".
+    name:       `Week ${getISOWeek(start)}`,
     start:      format(start, 'yyyy-MM-dd'),
     end:        format(end,   'yyyy-MM-dd'),
-    // Labels follow the people: last period's night crew is this period's day crew.
-    dayLabel:   source.night_label || 'Shift B',
-    nightLabel: source.day_label   || 'Shift A',
+    // The day/night columns are fixed clock ranges (07h00–16h00 / 16h00–01h00),
+    // so they carry through unchanged. Only the PEOPLE rotate — their entries
+    // flip day↔night in rotateEntries(); the column headers stay put.
+    dayLabel:   source.day_label   || '07h00 till 16h00',
+    nightLabel: source.night_label || '16h00 till 01h00',
   }
 }
 
