@@ -107,8 +107,8 @@ export type PermissionKey =
   | 'can_qc_jobs'
   | 'can_verify_jobs'
   // Staff & Competency
-  | 'can_access_hr'            // gate for the whole HR section (Staff & Skills, SOP, Skills Matrix)
-  | 'can_view_staff'           // directory + profiles + matrix (read-only)
+  | 'can_access_hr'            // gate for the Staff Directory (people + how they sign in)
+  | 'can_view_staff'           // directory + profiles + Skills Matrix (read-only)
   | 'can_edit_staff_profiles'  // edit profile fields, leave, skills
   | 'can_manage_competencies'  // record / assess employee × SOP competencies
   | 'can_manage_sop_catalog'   // add / edit / retire SOPs in the catalogue
@@ -693,8 +693,8 @@ export const PERMISSION_GROUPS: {
     group: 'Staff & Competency',
     // No single department — visible across all roles (grayed if not applicable)
     permissions: [
-      { key: 'can_access_hr',           label: 'Access the HR section (Staff & Skills, SOP, Skills Matrix)' },
-      { key: 'can_view_staff',          label: 'View staff directory, profiles & competency matrix' },
+      { key: 'can_access_hr',           label: 'Access the Staff Directory (people + how they sign in)' },
+      { key: 'can_view_staff',          label: 'View staff directory, profiles & Skills Matrix' },
       { key: 'can_edit_staff_profiles', label: 'Edit staff profiles, leave & skills/certifications' },
       { key: 'can_manage_competencies', label: 'Record, update & assess staff competencies against SOPs' },
       { key: 'can_manage_sop_catalog',  label: 'Add, edit & retire SOPs in the catalogue' },

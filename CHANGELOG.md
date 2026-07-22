@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (HR/Training reorganisation: decluttered nav, merged Skills Matrix, SOP supersession, split sign-off, PIN/EMAIL sign-in badges)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`, `lib/auth/permissions.ts`, `app/(app)/training/page.tsx`, `app/(app)/training/skills/page.tsx` (new), `app/(app)/training/sops/page.tsx` (new), `app/(app)/training/signoff/page.tsx`, `app/(app)/production/staff/matrix/page.tsx` (now a redirect), `app/(app)/production/staff/sops/page.tsx` (now a redirect), `app/(app)/training/competency/page.tsx` (now a redirect), `components/training/TrainingRecordsTabs.tsx` (new), `components/production/StaffTabs.tsx`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`, `supabase/migrations/20260722_003_sop_supersession.sql` (new)
+
+Reported as "too many buttons" and confusing — the HR area had grown feature-by-feature into duplicate sidebar entries and two separate competency views. Reorganised around a clear split: **Staff Directory = people + how they sign in; Training = the whole qualification home** (courses, assignments, sign-offs, Skills Matrix, SOP Catalogue).
+
+- **Sidebar HR group is now 2 links** (was 4): *Staff Directory* and *Training* — the SOP Catalogue and Skills Matrix links (which duplicated tabs already inside Staff & Skills) are gone; both moved under Training instead.
+- **Training landing page reorganised as a process**, not a flat 6-card grid: *My learning* (My Training) → *Run training* (Courses, Assign training, Review queue, Sign-offs) → *Records & standards* (Skills Matrix, SOP Catalogue).
+- **Skills Matrix + Competency Dashboard merged into one page** (`/training/skills`): the four views are now Overview (the former separate dashboard's org rollup — by-department coverage, overdue reviews, not-competent list; only shown to `can_view_all_competency`) | By Person | By Section | SOP Gaps. `/production/staff/matrix` and `/training/competency` now redirect here. Route stays gated at `can_access_hr` (same as it always was) so nobody who could already see Skills Matrix loses access — only the stricter Overview tab is feature-gated internally.
+- **SOP Catalogue moved to `/training/sops`** with two new capabilities: **supersession** (new `production.sops.superseded_by` column — the SOP editor's "Supersedes" picker retires an older revision and links it as collapsible history under the current one, so old vs current is explicit) and a **"Digital course" badge** on any SOP with an active course mapped to it (links straight to the course). `/production/staff/sops` now redirects here.
+- **Sign-off split into two tabs** (`/training/signoff`, still gated `can_manage_competencies`): *Awaiting sign-off* (the existing supervisor queue, unchanged) and a new *Qualification tracker* — per floor section, who still needs qualifying, split into **New** (never started) vs **Existing** (in progress, or competent but past `next_review`).
+- **Staff Directory decluttered to just people + sign-in.** `StaffTabs` dropped the Matrix/SOP tab bar (nothing left to tab between) down to a slim Training/Shift Roster cross-link row. Directory rows and the profile page both now show explicit **PIN** / **EMAIL** badges (green = active, amber = set but inactive, grey = not set) instead of the old "only shows if present" inline text, so how someone signs in is visible at a glance everywhere. The profile's "How they sign in" block prompts to allocate a PIN inline or set up an EMAIL login (via Users & Roles, or a request to IT) whenever neither is set.
+- Permission registry reorganised to match: the `Staff & Competency` module split into `Staff Directory` (directory only) and `Training` (courses, assignments, Skills Matrix, SOPs) — same underlying permission keys throughout, no access changes beyond what's noted above.
+
+**Before this shows on staging:** run `supabase/migrations/20260722_003_sop_supersession.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
 ## 2026-07-22 — Alyssa (HR training: Sieving Tower — Digital Capture course + assessment, and inline course allocation from the staff profile)
 
 **Files changed:** `supabase/migrations/20260722_002_sieving_tower_course.sql` (new), `public/training/sieving/raw-material-label.png` (new asset), `app/(app)/production/staff/[id]/page.tsx`
