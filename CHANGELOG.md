@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (HR training: Sieving Tower — Digital Capture course + assessment, and inline course allocation from the staff profile)
+
+**Files changed:** `supabase/migrations/20260722_002_sieving_tower_course.sql` (new), `public/training/sieving/raw-material-label.png` (new asset), `app/(app)/production/staff/[id]/page.tsx`
+
+First real course seeded into the HR/LMS layer, built around the **digital tablet capture flow** (`components/production/capture/SievingCapture.tsx`) rather than the legacy paper test — plus a way to assign training straight from a person's profile.
+
+- **New course "Sieving Tower — Digital Capture"** (`hr.training_courses` slug `sieving-tower-capture`, status `active`, pass mark 0.75). One embedded YouTube lesson (screen-recorded walkthrough, video id `mqxjTn5-iTA`) + a **21-question / 23-mark assessment** covering the capture app: Debagging (material in, required fields before a bag locks, the dash lot/serial format, comma decimals, auto-lock), the bucket elevator (morning = input / afternoon = output) and machine spillage, Bagging (auto-generated serial, Code128/handwritten tag, output lot must trace to a debagged lot), mass balance, plus retained domain/safety knowledge (standard bag weights, no mixing grades, breakdown → stop & inform, indent-stick check). One question reads the incoming raw-material label image (`/training/sieving/raw-material-label.png`).
+- **Course → competency mapping.** `hr.course_sops` maps the course to SOP **PROD-WI-004 "Sieving Tower (Rooibos)"**, and the migration sets `production.sops.requires_practical_signoff = true` on it. Per the agreed model, a pass sets the competency to `assessed`; a supervisor practical sign-off (`/training/signoff`) advances it to `competent` — which is what `role_required_sops` requires to be "equipped to capture at the sieving tower". Migration is idempotent: it skips the content seed if the course already exists, so re-running never clobbers recorded assignments/attempts.
+- **Inline "Assign course" on the staff profile.** The Training portfolio card on `/production/staff/[id]` now lets anyone with `can_assign_training` allocate a course with a **training due date** (and optional reason) via a modal, posting to the existing `/api/training/assignments`. The card now also shows the due date per assignment (with an overdue flag) and renders even when a person has no courses yet.
+
+**Prerequisites before this shows on staging:** migrations `20260702_001_competency_matrix.sql` and `20260710_001_hr_training.sql` must already be applied, the `hr` schema must be in the project's Exposed schemas (Supabase → API settings), then run `20260722_002_sieving_tower_course.sql`. Promote to production separately.
+
+---
+
 ## 2026-07-22 — Alyssa (Refining 1 & 2 capture: added Coarse Leaf + Cut Heavy Stick Fine/Coarse as scannable/pickable inputs)
 
 **Files changed:** `lib/production/live-types.ts`, `components/production/capture/RefiningCapture.tsx`
