@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { addDays, format, parseISO, formatDistanceToNow } from 'date-fns'
+import { addDays, format, parseISO, formatDistanceToNow, getISOWeek } from 'date-fns'
 import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
@@ -18,6 +18,12 @@ import {
 } from '@/lib/production/roster-config'
 import { rosterPerm, ROSTER_SECTION_LABEL, type RosterSectionKey } from '@/lib/auth/permissions'
 import { exportRosterPeriod } from '@/lib/utils/exportExcel'
+import { rotateEntries } from '@/lib/production/roster-rotate'
+
+// Columns selected for a Period everywhere in this page.
+const PERIOD_SELECT = 'id,name,start_date,end_date,day_label,night_label,notes,status,published_at'
+// Columns selected for a roster Entry everywhere in this page.
+const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
 
 interface Period {
   id: string; name: string; start_date: string; end_date: string
@@ -95,6 +101,10 @@ export default function RosterPage() {
   const [showHelp,     setShowHelp]     = useState(false)
   const [generating,   setGenerating]   = useState(false)
   const [reopening,    setReopening]    = useState(false)
+  // Surfaced failure from a create/generate/prefill write — so a blocked or
+  // failed insert is never silent (previously these swallowed errors and left
+  // an empty period, which read as "it didn't work for other users").
+  const [actionError,  setActionError]  = useState<string | null>(null)
   // which cell editor is open: `add:${roleKey}:${shift}` for an add, entry id for edit
   const [editing, setEditing] = useState<string | null>(null)
   // drag-and-drop state
@@ -314,47 +324,77 @@ export default function RosterPage() {
   }
 
   // ── New period ──────────────────────────────────────────────────────────────
-  async function createPeriod(p: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) {
-    const { data } = await db().from('roster_periods').insert({
-      name: p.name, start_date: p.start, end_date: p.end,
-      day_label: p.dayLabel, night_label: p.nightLabel,
+  // Creates the period and — unless the user opts out — pre-fills it by carrying
+  // the currently-selected roster over as-is (same people, same shifts, NO
+  // rotation; use "Generate next week" for the day↔night swap). Every failure is
+  // surfaced instead of leaving a silent empty period.
+  async function createPeriod(cfg: { name: string; start: string; end: string; dayLabel: string; nightLabel: string; prefill: boolean }) {
+    setActionError(null)
+    const { data, error } = await db().from('roster_periods').insert({
+      name: cfg.name, start_date: cfg.start, end_date: cfg.end,
+      day_label: cfg.dayLabel, night_label: cfg.nightLabel,
       created_by: user?.id ?? null,
-    } as any).select('id,name,start_date,end_date,day_label,night_label,notes,status,published_at').single()
-    if (data) {
-      const mapped = { ...(data as any), status: (data as any).status ?? 'draft', published_at: (data as any).published_at ?? null }
-      setPeriods(ps => [mapped as Period, ...ps])
-      setPeriodId(mapped.id)
+    } as any).select(PERIOD_SELECT).single()
+    if (error || !data) {
+      setActionError(`Couldn't create the period: ${error?.message ?? 'unknown error'}. Nothing was saved.`)
+      return
     }
+    const mapped = { ...(data as any), status: (data as any).status ?? 'draft', published_at: (data as any).published_at ?? null }
+
+    // Carry the current roster over as the starting point (same shifts).
+    const source = cfg.prefill ? entries : []
+    if (source.length > 0) {
+      const toInsert = source.map(e => ({
+        period_id: mapped.id, role_key: e.role_key, shift: e.shift,
+        employee_id: e.employee_id, operator_id: e.operator_id ?? null,
+        person_name: e.person_name, tags: e.tags, sort_order: e.sort_order,
+      }))
+      const { error: insErr } = await db().from('roster_entries').insert(toInsert as any)
+      if (insErr) {
+        setActionError(`Period created, but pre-fill failed: ${insErr.message}. The period is empty — add people manually, or delete it and try again.`)
+      }
+    }
+
+    setPeriods(ps => [mapped as Period, ...ps])
+    setPeriodId(mapped.id)               // the periodId effect reloads entries from the DB
+    setSectionStatus({})
+    logRosterAudit('roster_generate', {
+      periodId: mapped.id, periodName: mapped.name,
+      detail: source.length > 0 ? `New period pre-filled from "${period?.name ?? 'previous period'}" (${source.length} people)` : 'New blank period',
+    })
     setShowNew(false)
   }
 
   // ── Generate next period from current (rotated day↔night) ─────────────────
   async function generateNextPeriod(config: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) {
     setGenerating(true)
+    setActionError(null)
     try {
-      const { data: newPeriod } = await db().from('roster_periods').insert({
+      const { data: newPeriod, error: perr } = await db().from('roster_periods').insert({
         name: config.name, start_date: config.start, end_date: config.end,
         day_label: config.dayLabel, night_label: config.nightLabel,
         created_by: user?.id ?? null,
-      } as any).select('id,name,start_date,end_date,day_label,night_label,notes,status,published_at').single()
-      if (!newPeriod) return
+      } as any).select(PERIOD_SELECT).single()
+      if (perr || !newPeriod) {
+        setActionError(`Couldn't create the next period: ${perr?.message ?? 'unknown error'}. Nothing was saved.`)
+        return
+      }
       const np = { ...(newPeriod as any), status: (newPeriod as any).status ?? 'draft', published_at: null }
 
-      // Rotate every entry: day ↔ night
-      const rotated = entries.map(e => ({
-        period_id: np.id,
-        role_key:  e.role_key,
-        shift:     e.shift === 'day' ? 'night' : 'day',
-        employee_id: e.employee_id,
-        operator_id: e.operator_id ?? null,
-        person_name: e.person_name,
-        tags:        e.tags,
-        sort_order:  e.sort_order,
-      }))
-      if (rotated.length > 0) await db().from('roster_entries').insert(rotated as any)
+      // Rotate every entry day ↔ night (shared helper — same logic the cron uses,
+      // so the button and the unattended Sunday rotation can never diverge).
+      const rotated = rotateEntries(entries, np.id)
+      if (rotated.length > 0) {
+        const { error: insErr } = await db().from('roster_entries').insert(rotated as any)
+        if (insErr) {
+          // The period exists but the people didn't land — say so plainly rather
+          // than leaving an empty roster that looks like it "just didn't work".
+          setActionError(`Next period created, but rotating people into it failed: ${insErr.message}. Open it and add people manually, or delete it and try again.`)
+        }
+      }
 
       const { data: newEntries } = await db().from('roster_entries')
-        .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
+        .select(ENTRY_SELECT)
         .eq('period_id', np.id).order('sort_order')
 
       setPeriods(ps => [np as Period, ...ps])
@@ -527,6 +567,14 @@ export default function RosterPage() {
 
       <div className="no-print"><WorkforceTabs /></div>
 
+      {actionError && (
+        <div className="no-print flex items-start gap-2.5 px-4 py-3 bg-err/8 border border-err/30 rounded-xl text-[12px] text-err">
+          <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+          <span className="flex-1">{actionError}</span>
+          <button onClick={() => setActionError(null)} className="shrink-0 text-err/60 hover:text-err"><X size={14} /></button>
+        </div>
+      )}
+
       {!dbReady && (
         <div className="no-print flex items-start gap-2.5 px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
           <AlertTriangle size={15} className="shrink-0 mt-0.5" />
@@ -590,20 +638,25 @@ export default function RosterPage() {
               <Printer size={13} /> Print
             </button>
           )}
-          {/* Generate next week — needs edit rights somewhere */}
-          {period && !isPublished && canEditAny && (
+          {/* Generate next week + New period are ADMIN-ONLY overrides for
+              corrections. Normal weekly rotation is fully automatic (the cron
+              creates next week with day↔night swapped) — supervisors only edit,
+              save and submit. Exposing manual creation to everyone was the source
+              of blank/duplicate periods, so it's now gated to full admins. */}
+          {period && !isPublished && isFullAdmin && (
             <button
               onClick={() => setShowGenerate(true)} disabled={!dbReady || generating}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40 transition-colors"
+              title="Admin override — weekly rotation is automatic"
             >
               <RefreshCw size={13} /> Generate next week
             </button>
           )}
-          {/* New period — needs edit rights somewhere */}
-          {canEditAny && (
+          {isFullAdmin && (
             <button
               onClick={() => setShowNew(true)} disabled={!dbReady}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
+              title="Admin override — weekly rotation is automatic"
             >
               <Plus size={14} /> New period
             </button>
@@ -699,7 +752,7 @@ export default function RosterPage() {
       {loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
       ) : !period ? (
-        <EmptyState canCreate={dbReady} onCreate={() => setShowNew(true)} />
+        <EmptyState canCreate={dbReady && isFullAdmin} onCreate={() => setShowNew(true)} />
       ) : (
         <div className="no-print space-y-5">
           <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} leaveEmpIds={leaveEmpIds} />
@@ -749,7 +802,7 @@ export default function RosterPage() {
       {period && <PrintRoster period={period} rolesByCategory={rolesByCategory} cellEntries={cellEntries} />}
 
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
-      {showNew && <NewPeriodModal onClose={() => setShowNew(false)} onCreate={createPeriod} prevPeriod={period} />}
+      {showNew && <NewPeriodModal onClose={() => setShowNew(false)} onCreate={createPeriod} prevPeriod={period} prevEntryCount={entries.length} />}
       {showGenerate && period && (
         <GenerateModal
           currentPeriod={period}
@@ -1565,7 +1618,11 @@ function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () 
     <div className="flex flex-col items-center justify-center py-16 text-center bg-surface-card border border-dashed border-surface-rule rounded-2xl">
       <CalendarRange size={28} className="text-stone-300 mb-3" />
       <p className="font-display font-semibold text-[15px] text-text">No roster period yet</p>
-      <p className="text-[12px] text-text-muted mt-1 max-w-[320px]">Create a date-range period, then roster people onto each role and shift.</p>
+      <p className="text-[12px] text-text-muted mt-1 max-w-[360px]">
+        {canCreate
+          ? 'Create the first date-range period, then roster people onto each role and shift. After that, each new week is generated automatically.'
+          : 'Weekly rosters are generated automatically — next week appears here on Sunday night with day and night shifts rotated. If a week is missing, ask an administrator.'}
+      </p>
       {canCreate && (
         <button onClick={onCreate} className="mt-4 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid transition-colors">
           <Plus size={14} /> Create first period
@@ -1575,32 +1632,30 @@ function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () 
   )
 }
 
-function NewPeriodModal({ onClose, onCreate, prevPeriod }: {
+function NewPeriodModal({ onClose, onCreate, prevPeriod, prevEntryCount = 0 }: {
   onClose: () => void
-  onCreate: (p: { name: string; start: string; end: string; dayLabel: string; nightLabel: string }) => void
+  onCreate: (p: { name: string; start: string; end: string; dayLabel: string; nightLabel: string; prefill: boolean }) => void
   prevPeriod?: Period | null
+  prevEntryCount?: number
 }) {
   const [name, setName]   = useState('')
   const [start, setStart] = useState('')
   const [end, setEnd]     = useState('')
-  // Infer the default shift A/B assignment from the previous period (swap it)
-  const defaultDayIsA = prevPeriod
-    ? prevPeriod.day_label === 'Shift B'   // last week day=B → this week day=A
-    : true                                  // first ever period: day = A
-  const [dayIsA, setDayIsA] = useState(defaultDayIsA)
+  // Carry the current roster over by default so a new period isn't a blank sheet.
+  const canPrefill = prevEntryCount > 0
+  const [prefill, setPrefill] = useState(canPrefill)
 
-  const dayLabel   = dayIsA ? 'Shift A' : 'Shift B'
-  const nightLabel = dayIsA ? 'Shift B' : 'Shift A'
+  // Day/night columns are fixed clock ranges (never "Shift A/B") — inherit the
+  // previous period's headers so the whole site stays on one labelling scheme.
+  const dayLabel   = prevPeriod?.day_label   || '07h00 till 16h00'
+  const nightLabel = prevPeriod?.night_label || '16h00 till 01h00'
 
   const valid = name.trim() && start && end && start <= end
 
   const suggested = useMemo(() => {
-    if (!start || !end) return ''
-    try {
-      const s = parseISO(start + 'T12:00:00'), e = parseISO(end + 'T12:00:00')
-      return `${format(s, 'd')}–${format(e, 'd MMM')}`
-    } catch { return '' }
-  }, [start, end])
+    if (!start) return ''
+    try { return `Week ${getISOWeek(parseISO(start + 'T12:00:00'))}` } catch { return '' }
+  }, [start])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
@@ -1626,24 +1681,28 @@ function NewPeriodModal({ onClose, onCreate, prevPeriod }: {
           <input value={name} onChange={e => setName(e.target.value)} placeholder={suggested || 'e.g. July wk 1'}
             className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] text-text outline-none focus:border-brand" />
         </div>
-        {/* Shift A/B assignment */}
-        <div className="space-y-2">
-          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Shift letters this week</label>
-          <div className="inline-flex rounded-lg border border-stone-200 overflow-hidden">
-            <button type="button" onClick={() => setDayIsA(true)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium transition-colors ${dayIsA ? 'bg-brand text-white' : 'bg-white text-stone-500 hover:text-text'}`}>
-              <Sun size={13} /> Day = Shift A
-            </button>
-            <button type="button" onClick={() => setDayIsA(false)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium transition-colors ${!dayIsA ? 'bg-brand text-white' : 'bg-white text-stone-500 hover:text-text'}`}>
-              <Moon size={13} /> Day = Shift B
-            </button>
-          </div>
-          <p className="text-[11px] text-stone-400">Morning (07:00–16:00) = <strong>{dayLabel}</strong> · Night (16:00–01:00) = <strong>{nightLabel}</strong></p>
+        <div className="flex items-center gap-4 rounded-lg bg-stone-50 border border-stone-200 px-3 py-2 text-[11px] text-stone-500">
+          <span className="inline-flex items-center gap-1.5"><Sun size={13} className="text-amber-500" /> Morning · {dayLabel}</span>
+          <span className="inline-flex items-center gap-1.5"><Moon size={13} className="text-indigo-400" /> Night · {nightLabel}</span>
         </div>
+        {/* Pre-fill — carry the current roster over so the new period isn't blank.
+            (Same shifts, no rotation — use "Generate next week" for the swap.) */}
+        <label className={`flex items-start gap-2.5 rounded-xl border p-3 ${canPrefill ? 'border-stone-200 cursor-pointer hover:border-brand/40' : 'border-stone-100 opacity-60'}`}>
+          <input type="checkbox" checked={prefill} disabled={!canPrefill}
+            onChange={e => setPrefill(e.target.checked)}
+            className="mt-0.5 accent-brand" />
+          <span className="text-[12px] text-text">
+            <span className="font-medium">Pre-fill from the current roster</span>
+            <span className="block text-[11px] text-stone-400 mt-0.5">
+              {canPrefill
+                ? `Copies all ${prevEntryCount} people into the new period (same shifts). Uncheck to start blank.`
+                : 'No roster is loaded to copy from — this period will start blank.'}
+            </span>
+          </span>
+        </label>
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50">Cancel</button>
-          <button onClick={() => valid && onCreate({ name: name.trim() || suggested, start, end, dayLabel, nightLabel })} disabled={!valid}
+          <button onClick={() => valid && onCreate({ name: name.trim() || suggested, start, end, dayLabel, nightLabel, prefill: prefill && canPrefill })} disabled={!valid}
             className="flex-1 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
             Create
           </button>
@@ -1666,11 +1725,12 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
   const nextEnd   = addDays(parseISO(currentPeriod.end_date   + 'T12:00:00'), 7)
   const [start, setStart] = useState(format(nextStart, 'yyyy-MM-dd'))
   const [end,   setEnd]   = useState(format(nextEnd,   'yyyy-MM-dd'))
-  const [name,  setName]  = useState(`${format(nextStart, 'd')}–${format(nextEnd, 'd MMM')}`)
+  const [name,  setName]  = useState(`Week ${getISOWeek(nextStart)}`)
 
-  // Shift labels swap each week (Shift A ↔ Shift B follow the people, not the clock)
-  const nextDayLabel   = currentPeriod.night_label || 'Shift B'
-  const nextNightLabel = currentPeriod.day_label   || 'Shift A'
+  // Day/night columns are fixed clock ranges — they carry through unchanged.
+  // Only the people rotate (each person's shift flips day↔night below).
+  const nextDayLabel   = currentPeriod.day_label   || '07h00 till 16h00'
+  const nextNightLabel = currentPeriod.night_label || '16h00 till 01h00'
 
   const valid = name.trim() && start && end && start <= end
 
@@ -1714,12 +1774,12 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Start date</label>
-            <input type="date" value={start} onChange={e => { setStart(e.target.value); setName(`${format(parseISO(e.target.value + 'T12:00:00'), 'd')}–${format(parseISO(end + 'T12:00:00'), 'd MMM')}`) }}
+            <input type="date" value={start} onChange={e => { setStart(e.target.value); setName(`Week ${getISOWeek(parseISO(e.target.value + 'T12:00:00'))}`) }}
               className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-brand" />
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">End date</label>
-            <input type="date" value={end} onChange={e => { setEnd(e.target.value); setName(`${format(parseISO(start + 'T12:00:00'), 'd')}–${format(parseISO(e.target.value + 'T12:00:00'), 'd MMM')}`) }}
+            <input type="date" value={end} onChange={e => { setEnd(e.target.value); setName(`Week ${getISOWeek(parseISO(start + 'T12:00:00'))}`) }}
               className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-brand" />
           </div>
         </div>

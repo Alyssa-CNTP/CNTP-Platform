@@ -1,0 +1,65 @@
+name: Shift roster — rotate & remind (Production)
+
+# Mirror of roster-rotate.yml, pointed at the PRODUCTION app. The staging
+# workflow defaults to the staging URL, so without this prod never auto-rotated
+# and next week was never created there — supervisors were left with no week to
+# fill in. This drives the real users' database.
+#
+#   • rotate — Sunday 22:00 SAST: create next week's period, day↔night swapped,
+#              labelled by ISO week number (e.g. "Week 31"). Idempotent — the
+#              endpoint skips if a future period already exists.
+#   • remind — Mon & Wed 06:00 SAST: nudge each section's responsible submitter
+#              about sections not yet submitted.
+#
+# Required GitHub repo secrets (already used by energy-capture-production.yml):
+#   PROD_APP_URL       e.g. https://cntpplatform.rooibostea.co.za  (no trailing slash)
+#   PROD_CRON_SECRET   must match the CRON_SECRET env var on the production VPS
+
+on:
+  schedule:
+    - cron: '0 20 * * 0'  # Sun 22:00 SAST — rotate to next week
+    - cron: '0 04 * * 1'  # Mon 06:00 SAST — first reminder
+    - cron: '0 04 * * 3'  # Wed 06:00 SAST — final reminder (deadline day)
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to run'
+        required: true
+        default: remind
+        type: choice
+        options: [rotate, remind]
+
+concurrency:
+  group: roster-rotate-production
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide task from schedule
+        id: task
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "task=${{ github.event.inputs.task }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 20 * * 0" ]; then
+            echo "task=rotate" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=remind" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ping production roster cron endpoint
+        env:
+          PROD_APP_URL: ${{ secrets.PROD_APP_URL }}
+          PROD_CRON_SECRET: ${{ secrets.PROD_CRON_SECRET }}
+        run: |
+          HTTP=$(curl -s -o /tmp/body.json -w "%{http_code}" \
+            --retry 3 --retry-delay 10 -X POST \
+            -H "Authorization: Bearer $PROD_CRON_SECRET" \
+            "$PROD_APP_URL/api/production/roster/cron?task=${{ steps.task.outputs.task }}")
+          cat /tmp/body.json
+          if [ "$HTTP" != "200" ]; then
+            echo "❌ Roster ${{ steps.task.outputs.task }} failed with HTTP $HTTP"
+            exit 1
+          fi
+          echo "✅ Roster ${{ steps.task.outputs.task }} ok (HTTP $HTTP)"
