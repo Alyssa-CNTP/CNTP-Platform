@@ -64,6 +64,7 @@ export const NAV: NavItem[] = [
 
   // ── Quality ──
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
+  { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
   { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
   { href: '/quality/coa',               label: 'COA Generator',              icon: FileSpreadsheet, group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
