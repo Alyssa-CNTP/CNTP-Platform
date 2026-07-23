@@ -55,6 +55,7 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
   { prefix: '/production/operations',departments: ['Management'] },
   { prefix: '/production/dashboard', departments: ['Production','Management'] },
+  { prefix: '/production/analytics', departments: ['Production','Management'] },
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
@@ -91,17 +92,23 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/users',      permission: 'can_manage_users' },
   { prefix: '/tags',       departments: ['Production'] },
 
-  // HR — Staff & Skills, SOP, Skills Matrix view OTHER people's HR data, so they
-  // require can_access_hr. Training (/training core) stays universal — see below.
+  // HR — Staff Directory views OTHER people's records, so it requires
+  // can_access_hr. Training (/training core) stays universal — see below.
   { prefix: '/production/staff', permission: 'can_access_hr' },
 
   // Training — the learner entry (/training) is always-open (see below);
   // these are the HR/training-officer authoring & oversight sub-routes.
+  // Skills Matrix and the SOP Catalogue live here too (moved out of Staff),
+  // gated the same as they always were (can_access_hr) so nobody who could
+  // already see them loses access — the merged Skills Matrix's stricter
+  // "Overview" tab (formerly the separate Competency Dashboard) is instead
+  // feature-gated inside the page on can_view_all_competency.
   { prefix: '/training/manage/assignments', permission: 'can_assign_training' },
   { prefix: '/training/manage/review',      permission: 'can_manage_competencies' },
   { prefix: '/training/manage',             permission: 'can_author_training' },
   { prefix: '/training/signoff',            permission: 'can_manage_competencies' },
-  { prefix: '/training/competency',         permission: 'can_view_all_competency' },
+  { prefix: '/training/skills',             permission: 'can_access_hr' },
+  { prefix: '/training/sops',               permission: 'can_access_hr' },
 ]
 
 // ─── Route metadata ────────────────────────────────────────────────────────────
@@ -119,6 +126,7 @@ const ROUTE_META: Record<string, {
   '/production/live/capture':{ title: 'Capture Session',        variant: 'default' },
   '/production/capture':     { title: 'Production Capture',      variant: 'default' },
   '/production/dashboard':   { title: 'Production Dashboard',    variant: 'default' },
+  '/production/analytics':   { title: 'Yield & Batch Analytics', variant: 'default' },
   '/production/floor-plan':  { title: 'Factory Floor Plan',      variant: 'default' },
   '/production/roster':      { title: 'Shift Rosters',           variant: 'default' },
   '/production/staff':       { title: 'Staff Directory',         variant: 'default', chips: [{ label: 'Operations', color: 'green' }] },
@@ -132,7 +140,9 @@ const ROUTE_META: Record<string, {
   '/training/manage':        { title: 'Manage Courses',          variant: 'default' },
   '/training/manage/assignments': { title: 'Training Assignments', variant: 'default' },
   '/training/manage/review': { title: 'Review Queue',            variant: 'default' },
-  '/training/signoff':       { title: 'Practical Sign-off',       variant: 'default' },
+  '/training/signoff':       { title: 'Sign-off',                 variant: 'default' },
+  '/training/skills':        { title: 'Skills Matrix',            variant: 'default', chips: [{ label: 'Operations', color: 'green' }] },
+  '/training/sops':          { title: 'SOP Catalogue',            variant: 'default', chips: [{ label: 'Operations', color: 'green' }] },
   '/training/competency':    { title: 'Competency Dashboard',     variant: 'default' },
   '/status':                 { title: 'Platform Analytics',     variant: 'default',    chips: [{ label: 'v3.0', color: 'gray' }] },
   '/users':                  { title: 'Users & Roles',          variant: 'default' },

@@ -5,6 +5,78 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-23 — Alyssa (Pasteuriser live capture built + central lot/batch capitalisation)
+
+**Files changed:** `components/production/capture/PasteuriserCapture.tsx` (new), `lib/production/normalize-code.ts` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `lib/production/capture-config.ts`
+
+Built the Pasteuriser section's live tablet capture — the final-product line — modelled on the proven Blender/Refining components and plugged into the existing shared shell (`[section]/page.tsx`), so it inherits production runs, cross-shift carry-over (07h00→01h00), the 16h00 PIN changeover, checks/cleaning/overview/sign-off, autosave and offline recovery with no new plumbing. Additive only — no change to the Sieving/Refining/Granule/Blender capture components.
+
+- **New `PasteuriserCapture.tsx`.** Debagging consumes Blender output bags across two streams — main (**D**) and post-sieve blending (**E**) — via scan / pick-from-system / manual-register, the same three-mode pattern as Refining/Blender. Because the pasteuriser deliberately consumes *finished blend* product, its scan lookup passes `blockFinishedProducts: false` (the one setting that would otherwise reject every legitimate blend bag). Bagging captures final-product pallet lines (**A**): kind (Final Product / High Moisture / Refill), item + Acumatica code, lot, bag-number range and kg/bag — total auto-calculated. Also by-products (**B** — Brown Dust / First Cut / Alt / Extraction Dust / Purge), packaging reconciliation (boxes/foils/quad-seal, qty, damaged), product-label summary (received/discarded/handed-over), scale verification (std vs actual), floor waste (**C**), and the paper's mass balance `(A+B+C) − (D+E)`.
+- **Output codes prefill from the Job Card, with a Master-Inventory override.** A picker over `job_cards_pasteuriser` prefills batch no, blend code, final-product item + `30FP…` code, weight/bag and packaging; an `ItemPicker` over `production.inventory_items` lets the operator confirm/correct the exact item. Per-bag **Print label / Write on tag** choice (prints via the existing pipeline to the pasteuriser's Argox printer).
+- **Smart, non-blocking traceability.** `PasteuriserCapture` flags — but never blocks — the two mistakes the paper is prone to: bagging final product before anything was debagged, and an output batch number that wasn't debagged this session (the classic typing error). Centralised in one place so it can be tightened to a hard-block later.
+- **Central lot/batch capitalisation.** New `lib/production/normalize-code.ts` `upperCode()`, applied at the one write-layer chokepoint in `persist()` to every stored `lot_number` (debagging + bagging, all sections) so "gs-0271" and "GS-0271" can never read as two different lots in traceability checks. Only `lot_number` is normalised — never `bag_serial_no`, which is a `bag_tags` FK whose exact case must be preserved.
+- **Shell wiring.** `[section]/page.tsx`: registered the pasteuriser in the production factory, component switch, `prodTotals`, run discriminator (keyed on the final-product batch number for carry-over), `hasCaptureData`, and `buildDebag`/`buildBag` (writes `prod_debagging`/`prod_bagging`). `CaptureOverview.tsx`: added a pasteuriser discriminator so its debag/output shapes aren't misread as Sieving. `capture-config.ts`: marked pasteuriser `built`.
+
+Verified via full-repo `tsc --noEmit` (clean for all touched files) and a dev-server compile of `/production/capture/pasteuriser` (200, no console errors). Not yet exercised end-to-end on the floor — needs a rostered pasteuriser assignment and operator login. No migration required (rich state lives in `prod_sessions.draft_data`; `bag_tags`/`prod_debagging`/`prod_bagging` already permit `section_id = 'pasteuriser'`).
+
+**Deferred to follow-up (agreed this session):** barcode label redesign (Type/Variant layout across HTML/ZPL/PPLB) and the phone-scanner camera fix (`BagScanner.tsx` null-video-ref race + swallowed `play()` + iOS `BarcodeDetector` fallback).
+
+---
+
+## 2026-07-22 — Alyssa (HR training: Sieving Tower — Digital Capture course + assessment, and inline course allocation from the staff profile)
+
+**Files changed:** `supabase/migrations/20260722_002_sieving_tower_course.sql` (new), `public/training/sieving/raw-material-label.png` (new asset), `app/(app)/production/staff/[id]/page.tsx`
+
+First real course seeded into the HR/LMS layer, built around the **digital tablet capture flow** (`components/production/capture/SievingCapture.tsx`) rather than the legacy paper test — plus a way to assign training straight from a person's profile.
+
+- **New course "Sieving Tower — Digital Capture"** (`hr.training_courses` slug `sieving-tower-capture`, status `active`, pass mark 0.75). One embedded YouTube lesson (screen-recorded walkthrough, video id `mqxjTn5-iTA`) + a **21-question / 23-mark assessment** covering the capture app: Debagging (material in, required fields before a bag locks, the dash lot/serial format, comma decimals, auto-lock), the bucket elevator (morning = input / afternoon = output) and machine spillage, Bagging (auto-generated serial, Code128/handwritten tag, output lot must trace to a debagged lot), mass balance, plus retained domain/safety knowledge (standard bag weights, no mixing grades, breakdown → stop & inform, indent-stick check). One question reads the incoming raw-material label image (`/training/sieving/raw-material-label.png`).
+- **Course → competency mapping.** `hr.course_sops` maps the course to SOP **PROD-WI-004 "Sieving Tower (Rooibos)"**, and the migration sets `production.sops.requires_practical_signoff = true` on it. Per the agreed model, a pass sets the competency to `assessed`; a supervisor practical sign-off (`/training/signoff`) advances it to `competent` — which is what `role_required_sops` requires to be "equipped to capture at the sieving tower". Migration is idempotent: it skips the content seed if the course already exists, so re-running never clobbers recorded assignments/attempts.
+- **Inline "Assign course" on the staff profile.** The Training portfolio card on `/production/staff/[id]` now lets anyone with `can_assign_training` allocate a course with a **training due date** (and optional reason) via a modal, posting to the existing `/api/training/assignments`. The card now also shows the due date per assignment (with an overdue flag) and renders even when a person has no courses yet.
+
+**Prerequisites before this shows on staging:** migrations `20260702_001_competency_matrix.sql` and `20260710_001_hr_training.sql` must already be applied, the `hr` schema must be in the project's Exposed schemas (Supabase → API settings), then run `20260722_002_sieving_tower_course.sql`. Promote to production separately.
+
+---
+
+## 2026-07-22 — Alyssa (Refining 1 & 2 capture: added Coarse Leaf + Cut Heavy Stick Fine/Coarse as scannable/pickable inputs)
+
+**Files changed:** `lib/production/live-types.ts`, `components/production/capture/RefiningCapture.tsx`
+
+Added three upstream input products to the Refining 1 and Refining 2 debagging inputs so operators can scan, manually enter, or search stock for them. These all originate upstream (Coarse Leaf from the sieving tower; Cut Heavy Stick Fine/Coarse from refining), and their batch number + serial trace back to the origin bag via the existing scan/system-pick lookup against `bag_tags`. No existing logic changed — purely additive.
+
+- **`SECTION_CONFIG.inputTypes`** — `refining1` gained `Coarse Leaf`, `Cut Heavy Stick Fine`, `Cut Heavy Stick Coarse` (previously only Indent Sticks / Sticks / Blocks: Clean / 1st Cut). `refining2` gained `Cut Heavy Stick Fine` (it already listed Cut Heavy Stick Coarse and Coarse Leaf).
+- **System-pick aliases** (`useSystemBags`) — added explicit `bag_tags.product_type` alias entries for `Coarse Leaf` and `Cut Heavy Stick Fine` (Cut Heavy Stick Coarse was already present) so the in-stock origin bag (serial + batch) surfaces when picking from stock.
+- **Coarse Leaf batch-number requirement** was already enforced by the existing `needsLot = productType === 'Coarse Leaf'` gate in `RefiningCapture` (required Batch number field, blocks locking the bag until filled) — left unchanged; it now applies on Refining 1 as well now that Coarse Leaf is selectable there.
+
+---
+
+## 2026-07-22 — Alyssa (Shift Roster: new periods now pre-fill, silent write failures surfaced; removed Shuaib from live roster)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+Fixes the report that "auto-rotate / pre-fill worked for my user but not for others, and a new period comes up blank." Root cause was not permissions/RLS — on staging any authenticated user can write the roster (anon is blocked, `authenticated` is open). The real gaps were in the client:
+
+- **"New period" now pre-fills from the current roster.** `createPeriod` previously created a completely blank period for everyone — only "Generate next week" carried people over (with rotation). Supervisors who used "New period" got an empty sheet. `NewPeriodModal` now has a "Pre-fill from the current roster" checkbox (default on when a roster is loaded) that copies all current people into the new period as-is (same shifts, no rotation); unchecking starts blank.
+- **Write failures are no longer silent.** `createPeriod` and `generateNextPeriod` did not check insert errors — a blocked/failed `roster_entries` insert left an empty period with no feedback, which read as "it didn't work / didn't show." Added a dismissible error banner and error checks on every period/entry write, with actionable messages.
+- **De-duplicated rotation logic.** `generateNextPeriod` now uses the shared `rotateEntries` helper (`lib/production/roster-rotate.ts`) — the same logic the unattended Sunday cron uses — so the button and the cron can't diverge. Added `PERIOD_SELECT`/`ENTRY_SELECT` column constants.
+- **Data (staging):** removed Shuaib Sentso (maintenance_manager) from the current (20–24 Jul) and upcoming (27–31 Jul) roster periods — 2 entries deleted. Two past-period entries (6–10 Jul, 13–17 Jul) left intact as history. **Production DB not touched from this session — Shuaib likely needs the same removal on prod.**
+
+---
+
+## 2026-07-22 — Alyssa (Production data consolidation: canonical batch spine + yield/batch analytics report)
+
+**Files changed:** `supabase/migrations/20260721_002_batch_spine.sql` (new), `supabase/migrations/20260721_003_yield_views.sql` (new), `supabase/migrations/20260721_004_order_reconciliation.sql` (new), `lib/production/batch-key.ts` (new), `app/(app)/production/capture/[section]/page.tsx`, `app/api/production/yield-analytics/route.ts` (new), `app/api/production/batch/[key]/route.ts` (new), `app/api/production/reconciliation/route.ts` (new), `components/production/YieldAnalytics.tsx` (new), `components/production/BatchConsolidation.tsx` (new), `app/(app)/production/analytics/page.tsx` (new), `app/(app)/traceability/page.tsx`, `app/(app)/tags/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ProductionTabs.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`
+
+Consolidation foundation so capture, bags, quality and (next) Acumatica orders join on one identity, plus the first interactive yield report on top. Requires the two new migrations to be applied to the **staging** Supabase project via the SQL editor before the report shows data (run each migration's PART 1 then PART 2 separately).
+
+- **Phase 1 — canonical batch spine.** Added `production.normalize_batch(text)` (single source of truth for the canonical form of a lot/batch string; collapses `"GS - 0098"` → `"GS-0098"`) and a `production.batches` dimension keyed on the normalized `batch_key`, backfilled from existing lots. Added a nullable `batch_id` FK to `prod_sessions`, `bag_tags`, `prod_debagging`, `prod_bagging`, `production_runs` (backfilled by match). Mirrored the normalizer in TS (`lib/production/batch-key.ts`) and wired the capture `persist()` to upsert batches and stamp `batch_id` on the session, its input/output rows and the run on every save. Fixes the root cause of cross-domain joins being fragile string-equality across four schemas.
+- **Phase 2 — reporting query layer.** Added owner-privileged views in the `production` schema (previously there were none): `v_session_yield`, `v_output_stream` (per-product output share — the Fine Leaf/total ratio), `v_machine_params` (pivots the checks engine's VSD / indent speed·angle / screen config per session), `v_batch_quality` (normalize-joins `qms.sd_runs` + `qms.quality_records` — bulk density, leaf shade, PA, residue), and `v_batch_360` (consolidated per batch). Quality values surfaced as latest-value text (qms column types unverified); granule moisture left as a TODO pending qms schema confirmation.
+- **Phase 4 — interactive report.** New `/production/analytics` page + `/api/production/yield-analytics` route reading the views: KPI row, output mix, daily yield trend (70% target line), yield by section/variant, machine-setting-vs-yield scatter, a batch table linking output to quality, and a data-completeness banner. Added an "Analytics" tab to the Production hub, a sidebar entry, a route guard (`Production`/`Management`), and a `production.analytics` permission resource.
+- **Phase 3 (part 1) — consolidated batch view + three-way reconciliation.** New `production.order_reconciliation` table (`20260721_004`) stores the manual sides of the accuracy check as an auditable record. `/api/production/batch/[key]` returns the full "batch 360" (per-shift yield, output streams with share, machine params incl. sieving config, quality, input/output bags) and `/api/production/reconciliation` reads/writes the paperwork & Acumatica figures. New reusable `BatchConsolidation` component surfaces all the new KPIs per batch (sieving config, grade/variant, quality, output mix, yield) plus a **paperwork · system · Acumatica** comparison table with ±15 kg variance flags. Turned the empty `/traceability` roadmap shell into the real batch search + consolidation surface (with `?batch=` deep-link so bag/order pages can link straight in); the build roadmap is kept, collapsed, below.
+- **Bag-tracking entry points.** Added a "View batch KPIs" link from the bag detail modal on `/tags` and from each order card on `/production/orders`, both deep-linking to `/traceability?batch=<lot>` — so from any bag or order you jump straight to the consolidated batch view.
+- **Phase 3 (part 2) — automatic Acumatica production-order ingest is still pending** the production-order Generic Inquiry name in Acumatica. Once built, the reconciliation table's manual "Acumatica" column auto-fills from the sync (`acumatica_source` flips `manual`→`gi_sync`); layout and variance logic are unchanged.
+
+---
+
 ## 2026-07-21 — Alyssa (Login: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
 
 **Files changed:** `app/api/floor/operators/route.ts`, `app/login/page.tsx`

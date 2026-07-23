@@ -14,7 +14,7 @@ import { NextResponse } from 'next/server'
 import { getCallerPermissions } from '@/lib/auth/server-helpers'
 import { resolveRecipients } from '@/lib/notifications/recipients'
 import { notify } from '@/lib/notifications'
-import { sendEmail, ctaEmail } from '@/lib/notifications/email'
+import { sendEmail, ctaEmail, activeEmailTransport } from '@/lib/notifications/email'
 import { sendUrgent } from '@/lib/notifications/urgent'
 
 export async function POST() {
@@ -34,7 +34,7 @@ export async function POST() {
 
   // Email + WhatsApp — call the senders directly (bypassing notify()'s count-only
   // aggregation) so the real skipped/ok/error detail reaches the response.
-  const smtpConfigured     = !!process.env.SMTP_USER && !!process.env.SMTP_PASS
+  const emailTransport     = activeEmailTransport()   // 'graph' | 'smtp' | 'none'
   const whatsappProvider   = (process.env.WHATSAPP_PROVIDER ?? '').toLowerCase() || null
   const whatsappConfigured = whatsappProvider === 'meta'
     ? !!process.env.WHATSAPP_TOKEN && !!process.env.WHATSAPP_PHONE_ID
@@ -52,7 +52,7 @@ export async function POST() {
 
   return NextResponse.json({
     recipient: { name: me.name, email: me.email, phone: me.phone },
-    config: { smtpConfigured, whatsappProvider, whatsappConfigured },
+    config: { emailTransport, emailConfigured: emailTransport !== 'none', whatsappProvider, whatsappConfigured },
     inApp:    { ok: inAppResult.inApp > 0 },
     email:    emailResult,
     whatsapp: whatsappResult,
