@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Quality: Maintenance QC tab — post-maintenance check queue)
+
+**Files changed:** `app/(app)/quality/maintenance-qc/page.tsx` (new), `components/layout/Sidebar.tsx`
+
+- New **Maintenance QC** tab in the Quality module (`/quality/maintenance-qc`): a live queue of maintenance job cards finished and awaiting the post-maintenance QC check (status `qc_check`). Read-only list (client-side, no server change) with search, waiting-days, and an **"QC check →"** link that opens the card in the existing job-card workflow to answer YES / NO / N/A. Polls every 20s. Complements the existing corner pop-up that notifies the on-duty QC. Sidebar entry gated to Quality / Maintenance / Management.
+
 ## 2026-07-23 — Alyssa (Pasteuriser live capture built + central lot/batch capitalisation)
 
 **Files changed:** `components/production/capture/PasteuriserCapture.tsx` (new), `lib/production/normalize-code.ts` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `lib/production/capture-config.ts`
