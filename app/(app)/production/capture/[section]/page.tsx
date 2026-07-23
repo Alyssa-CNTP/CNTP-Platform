@@ -626,7 +626,10 @@ function CaptureScreen() {
     // silently forking to …/2-01 even though the operator just said this is
     // the same continuing blend, not a new one.
     if (isBlenderRun && cr.grade) {
-      const existingRunNo = await resolveExistingBlendRunNo(cr.grade)
+      // The run being continued was necessarily opened on this same
+      // production_day (findOpenRun matches on it), so dateParam is the
+      // correct scope for "today's runs" here too.
+      const existingRunNo = await resolveExistingBlendRunNo(cr.grade, dateParam)
       if (existingRunNo) {
         const idx = activeIdx
         const p = productionsRef.current[idx]
@@ -1621,6 +1624,7 @@ function CaptureScreen() {
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                        date={dateParam}
                       />
                     : sectionId === 'granule'
                     ? <GranuleCapture

@@ -5,6 +5,42 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-23 — Alyssa (Blender daily serial reset, empty-record false positive, Granule mandatory item + auto dust)
+
+**Files:** `components/production/capture/BlenderCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`,
+`app/(app)/production/orders/page.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+- **Blender output-serial run number now resets per production day.**
+  `resolveExistingBlendRunNo()`/`genBlendSerial()` scanned ALL of `bag_tags`
+  history for a blend code, so a blend that had run on an earlier day (even
+  weeks back) pushed today's first run past 1 — e.g. run "6" instead of run
+  "1" for the day's first blend. Both now scope the scan to the current
+  production day (calendar date + the post-midnight tail of an overnight
+  shift, matching `production_runs.production_day`'s convention).
+- **Fixed a real data-loss risk in last round's "Empty record" flag.**
+  A Blender batch with genuinely real captured data was being flagged empty
+  and offered for Discard — the flag relied only on `prod_debagging`/
+  `prod_bagging` row counts, which can fall out of sync with what the capture
+  screen actually wrote to `draft_data.productions` (the real source of
+  truth). Added a fallback check against the raw draft JSON so a record is
+  only ever flagged empty when every signal agrees, not just the normalized
+  copy.
+- **Granule Line's SG/SF/Export item choice is now mandatory, same footing as
+  variant.** It silently defaulted to "SG Granules" — a whole SF or Export
+  shift could get captured under the wrong item if no one touched the
+  dropdown. Now gates the capture screen the same way Blender gates on
+  picking a blend code.
+- **Granule Line's dust by-product weight is now system-calculated, not
+  hand-typed.** SG/SF Dust happens every shift without exception — its
+  weight is the mass-balance residual (raw material in, minus everything
+  already accounted for: bagged granules, D, E, waste, dust already logged),
+  not a number the operator weighs and types in themselves. The bag is still
+  real and still gets a tagged serial — only the manual Bags/Qty entry is
+  gone, replaced by a "Log {dust type} bag — N kg" action showing the
+  system's own computed figure.
+
+---
+
 ## 2026-07-02 — Gustav (Checklist fault-select UX + manager verification; maintenance QC sign-off access)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/layout/Sidebar.tsx`, `supabase/migrations/20260702_030_maintenance_checklist_verify.sql` (new, applied to staging DB)

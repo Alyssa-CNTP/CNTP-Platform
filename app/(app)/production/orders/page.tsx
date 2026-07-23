@@ -35,6 +35,31 @@ interface SessionRow {
   balance_kg: number | null
   debag_count: number
   bag_count: number
+  has_raw_data: boolean
+}
+
+// Same predicate as the capture page's hasCaptureData() — checked here too as
+// a fallback, not just prod_debagging/prod_bagging row counts. Those tables
+// are a normalized COPY written by persistCore(); draft_data.productions is
+// what the capture screen itself wrote directly and is the source of truth.
+// Relying on the copy alone risked a sync gap flagging a genuinely-captured
+// record as "empty" — which, with a Discard action right next to it, is a
+// real data-loss risk, not just a cosmetic one.
+function hasRawCaptureData(productions: any[] | undefined): boolean {
+  const num = (v: any) => parseFloat(String(v ?? '').replace(',', '.')) || 0
+  return (productions ?? []).some((p: any) => {
+    const d = p?.data ?? {}
+    if (Array.isArray(d.debag)   && d.debag.some((r: any) => num(r.nett) > 0 || num(r.weight) > 0)) return true
+    if (Array.isArray(d.outputs) && d.outputs.some((b: any) => num(b.weight) > 0 || num(b.bagCount) > 0)) return true
+    if (Array.isArray(d.spillage)&& d.spillage.some((r: any) => num(r.kg) > 0)) return true
+    if (Array.isArray(d.inputs)  && d.inputs.some((r: any) => num(r.weight) > 0)) return true
+    for (const g of [d.outputA, d.outputB, d.outputC, d.outputD]) {
+      if (g && Array.isArray(g.bags) && g.bags.some((b: any) => num(b.weight) > 0)) return true
+    }
+    if (Array.isArray(d.blends) && d.blends.some((bl: any) => Array.isArray(bl.rows) && bl.rows.some((r: any) => num(r.weight) > 0))) return true
+    if (Array.isArray(d.dustOutputs) && d.dustOutputs.some((r: any) => num(r.weight) > 0)) return true
+    return false
+  })
 }
 
 const STATUS: Record<string, { label: string; cls: string; icon: any }> = {
@@ -89,6 +114,13 @@ export default function ProductionOrdersPage() {
         .select('id,record_no,deleted_at,edited_at').in('id', ids)
       if (!exErr && ex) (ex as any[]).forEach(r => extra.set(r.id, r))
 
+      // Fetched separately (not in the main select) since it's the largest
+      // column on this table and only needed as the empty-record fallback below.
+      const rawData = new Map<string, boolean>()
+      const { data: drafts } = await db.schema('production').from('prod_sessions')
+        .select('id,draft_data').in('id', ids)
+      ;(drafts as any[] ?? []).forEach(r => rawData.set(r.id, hasRawCaptureData(r.draft_data?.productions)))
+
       // Mass balance
       const { data: mb } = await db.schema('production').from('prod_mass_balance')
         .select('session_id,total_input_kg,total_output_b_kg,balance_kg').in('session_id', ids)
@@ -118,6 +150,7 @@ export default function ProductionOrdersPage() {
           balance_kg:        m ? parseFloat(m.balance_kg)       : null,
           debag_count: debagCount.get(s.id) ?? 0,
           bag_count:   bagCount.get(s.id)   ?? 0,
+          has_raw_data: rawData.get(s.id) ?? false,
         }
       })
 
@@ -132,7 +165,7 @@ export default function ProductionOrdersPage() {
     // and no mass balance is an abandoned "No data" row (e.g. an opened-then-left
     // section). Submitted/approved records always show. New captures create a row
     // only once real weights are entered, so a real in-progress shift still appears.
-    const isEmpty = s.debag_count === 0 && s.bag_count === 0 && !s.total_input_kg && !s.total_output_b_kg
+    const isEmpty = s.debag_count === 0 && s.bag_count === 0 && !s.total_input_kg && !s.total_output_b_kg && !s.has_raw_data
     if (isEmpty && (s.status === 'draft' || s.status === 'new')) return false
     // Archived (soft-deleted) records are hidden unless the toggle is on.
     if (s.deleted_at && !showArchived) return false
@@ -303,7 +336,7 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
   const StatusIcon = st.icon
   const variance   = s.total_input_kg - s.total_output_b_kg
   const withinTol  = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
-  const hasData    = s.bag_count > 0 || s.debag_count > 0
+  const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
   const archived   = !!s.deleted_at
   const canManage  = canEdit || canDelete
 
