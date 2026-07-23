@@ -184,6 +184,11 @@ function CaptureScreen() {
   const creatingSessionRef = useRef<Promise<string> | null>(null)  // in-flight guard: never double-insert a session
   const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
+  // Serialises persist() calls: the 20s autosave/flush and a manual save (or
+  // submit) could otherwise run concurrently, and persist does delete-then-insert
+  // on prod_bagging — interleaved, that doubled every output row. Chaining every
+  // call guarantees one finishes before the next starts.
+  const persistChain = useRef<Promise<unknown>>(Promise.resolve())
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
@@ -1009,7 +1014,8 @@ function CaptureScreen() {
   // Core persistence — writes draft_data + structured rows + mass balance.
   // Used by the explicit Save, the 30s autosave, and submit, so prod_debagging /
   // prod_bagging are always current and nothing is lost on the inactivity sign-out.
-  async function persist(prods: Production[], sid: string) {
+  // Always invoked via persist() (below), which serialises calls.
+  async function persistCore(prods: Production[], sid: string) {
     const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
@@ -1121,6 +1127,14 @@ function CaptureScreen() {
         }
       }
     } catch { /* run linking/rollup is best-effort — never blocks the core save */ }
+  }
+  // Serialised entry point — every caller (autosave flush, manual save, submit)
+  // goes through here so two persistCore runs can never interleave their
+  // delete-then-insert on prod_bagging/prod_debagging.
+  async function persist(prods: Production[], sid: string): Promise<void> {
+    const run = persistChain.current.catch(() => {}).then(() => persistCore(prods, sid))
+    persistChain.current = run.catch(() => {})
+    return run
   }
   persistRef.current = persist
 

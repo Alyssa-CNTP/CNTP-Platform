@@ -55,6 +55,12 @@ export function BatchKeypadField({ value, onChange, label, options = [], placeho
 
   const matches = uniqueOptions.filter(o => o !== value).slice(0, 6)
 
+  // Soft data-quality nudge: real batch codes are prefixed and dashed (GS-0270,
+  // MAT-0231, SFC-KUN25-C). A value with no dash is almost always a dropped
+  // prefix (e.g. "0270", "O324"). Never blocks — just flags the likely typo.
+  const trimmed = value.trim()
+  const looksUnprefixed = trimmed.length > 0 && !trimmed.includes('-')
+
   return (
     <div className="space-y-1.5">
       <input
@@ -69,8 +75,18 @@ export function BatchKeypadField({ value, onChange, label, options = [], placeho
         disabled={disabled}
         placeholder={placeholder ?? 'Tap to enter'}
         onChange={e => onChange(e.target.value.toUpperCase())}
+        // Strip stray leading/trailing spaces when the operator leaves the field
+        // (a trailing space made "MAT-0310 " read as a different lot).
+        onBlur={e => { const v = e.target.value.trim().toUpperCase(); if (v !== value) onChange(v) }}
         className={`${className ?? ''} uppercase placeholder:normal-case placeholder:text-stone-300`}
       />
+
+      {looksUnprefixed && !disabled && (
+        <p className="text-[11px] text-amber-600 flex items-start gap-1">
+          <span aria-hidden>⚠</span>
+          <span>This looks like it's missing a prefix — batch numbers usually read like <span className="font-mono">GS-{trimmed}</span>. Double-check before saving.</span>
+        </p>
+      )}
 
       {/* Reuse a previous value — only while empty, to keep it tidy */}
       {!value && !disabled && matches.length > 0 && (
