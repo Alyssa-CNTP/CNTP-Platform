@@ -5,6 +5,56 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-23 — Alyssa (Sanitize scanned/typed serial-number input across capture)
+
+**Files:** `lib/production/scan-utils.ts`, `components/production/capture/BlenderCapture.tsx`,
+`components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`,
+`components/production/capture/PasteuriserCapture.tsx`
+
+Every "scan or type serial" field now runs through a new shared `sanitizeSerial()`
+(`scan-utils.ts`) on every keystroke: uppercases, strips **all** whitespace (not just
+leading/trailing — a scanner double-fire or a fat-fingered tap can inject a space
+anywhere in the string), and drops anything that isn't a letter, digit, dash, or slash.
+A stray space breaks an exact-match `bag_tags.serial_number` lookup silently — it just
+reads as "not found in system" with no clue why. Blender and Pasteuriser already
+uppercased on input; Refining and Granule's dust-input serial field did no cleanup at
+all. All four now go through the same helper.
+
+Kept letters allowed (not strictly digits-and-dashes) because Blender's own output
+serial is blend-code-prefixed (e.g. `SFC-KUN25-C/1-01`) and Pasteuriser's debagging
+routinely scans *that* serial back in as an input — a digits-only filter would have
+silently broken scanning a blend bag into Pasteuriser. If the intent is for the
+underlying serial *format* itself to be numeric-only (not just the input sanitized to
+be lookup-safe), that's a separate, larger change to `genBlendSerial()` and needs a
+call on the actual blend-serial convention first — flag it and we can scope that
+properly.
+
+---
+
+## 2026-07-21 — Alyssa (Print-relay agent so production can print to factory printers) — changelog entry added retroactively
+
+**Files:** `app/api/print/agent/next/route.ts` (new), `app/api/print/agent/result/route.ts` (new),
+`app/api/print/label/route.ts`, `app/api/print/test/route.ts`, `lib/production/print-queue.ts` (new),
+`supabase/migrations/20260721_001_print_jobs.sql` (new), `tools/print-agent/` (new)
+
+The production VPS is off-site and can't reach the factory LAN's label printers
+directly. Rather than a fragile VPN/subnet-router, added a reverse relay: production
+enqueues print jobs (`production.print_jobs`) and an always-on agent on the factory
+LAN polls for pending jobs over HTTPS and sends each to its printer over TCP 9100 —
+only outbound HTTPS from the agent is needed, nothing inbound to the factory network.
+`/api/print/label` and `/api/print/test` enqueue when `PRINT_RELAY` is set (production)
+or print directly over TCP as before (local dev, already on the factory network).
+New authenticated endpoints `/api/print/agent/next` (claim pending jobs) and
+`/api/print/agent/result` (report outcome), gated by `PRINT_AGENT_SECRET`.
+`tools/print-agent/print-agent.ps1` is a zero-dependency PowerShell agent for the
+office PC, with a README covering env setup, Scheduled Task registration, and
+troubleshooting. Per-section printer routing is unchanged — the agent only executes
+the socket send on the LAN. Requires the migration plus `PRINT_RELAY=1` and
+`PRINT_AGENT_SECRET` set on production. (Originally shipped in PR #415 — this entry
+was missing from the changelog at the time.)
+
+---
+
 ## 2026-07-23 — Alyssa (Blender daily serial reset, empty-record false positive, Granule mandatory item + auto dust)
 
 **Files:** `components/production/capture/BlenderCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`,

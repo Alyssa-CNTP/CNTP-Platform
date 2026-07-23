@@ -5,7 +5,7 @@ import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, Al
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import { markBagConsumed } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan } from '@/lib/production/validate-scan'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -375,7 +375,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
                 <div className="flex gap-2">
                   <input autoFocus type="text" value={serial}
                     placeholder="Scan or type — press Enter to look up"
-                    onChange={e => { setSerial(e.target.value.toUpperCase()); setScanMsg(null) }}
+                    onChange={e => { setSerial(sanitizeSerial(e.target.value)); setScanMsg(null) }}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); triggerLookup() } }}
                     className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />
                   <button onClick={triggerLookup} disabled={!serial.trim() || looking}
