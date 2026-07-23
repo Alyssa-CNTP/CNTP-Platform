@@ -29,12 +29,18 @@ import {
   BlenderCapture, emptyBlenderData, blenderTotals, blenderCapturedCodes, resolveExistingBlendRunNo,
   type BlenderData, type CapturedCode,
 } from '@/components/production/capture/BlenderCapture'
+import {
+  PasteuriserCapture, emptyPasteuriserData, pasteuriserTotals,
+  type PasteuriserData,
+} from '@/components/production/capture/PasteuriserCapture'
+import { upperCode } from '@/lib/production/normalize-code'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
 import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt'
 import { CaptureOverview, type BlenderRatioGroup } from '@/components/production/capture/CaptureOverview'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
+import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
@@ -60,9 +66,10 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 // they just run different work centres' blends (lib/production/bom.ts's
 // WORK_CENTRE_FOR_SECTION keys off this same pair).
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
+const isPasteuriser = (id: string) => id === 'pasteuriser'
 
 // A shift can contain several productions, each its own variant/destination/lot.
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
@@ -71,6 +78,7 @@ const emptyProduction = (sectionId: string, variant?: string | null, lot?: strin
      data: sectionId.startsWith('refining') ? emptyRefiningData()
        : sectionId === 'granule' ? emptyGranuleData()
        : isBlenderSection(sectionId) ? emptyBlenderData()
+       : isPasteuriser(sectionId) ? emptyPasteuriserData()
        : emptySievingData() })
 
 // True only when a production actually has weighed capture (any section type).
@@ -91,6 +99,10 @@ function hasCaptureData(prods: Production[]): boolean {
     if (Array.isArray(d.dustOutputs) && d.dustOutputs.some((r: any) => num(r.weight) > 0)) return true // granule dust out
     // Blender's { inputs, outputs } shape is already covered by the refining `d.inputs`
     // check and the sieving/granule `d.outputs` check above — no extra branch needed.
+    // Pasteuriser: debag rows carry `weight` (not `nett`) and output lines carry a
+    // bag count (not a single `weight`), so neither is caught above — check both.
+    if (Array.isArray(d.debag)   && d.debag.some((r: any) => num(r.weight) > 0))    return true   // pasteuriser in
+    if (Array.isArray(d.outputs) && d.outputs.some((l: any) => num(l.bagCount) > 0)) return true   // pasteuriser out
     return false
   })
 }
@@ -106,7 +118,10 @@ function CaptureScreen() {
   // Granule are variant-only — traceability there comes from the system serials.
   // Blender's Export/Export Blend/Domestic field lives per input row (matching the
   // paper form), not as one whole-production Grade like Sieving — so it's gradeless too.
-  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || isBlenderSection(sectionId)
+  // Pasteuriser is gradeless in the per-batch UI: the grade is baked into the
+  // finished-product item code (30FP…) picked from the job card, not chosen as a
+  // separate A/B/C dropdown.
+  const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || isBlenderSection(sectionId) || isPasteuriser(sectionId)
   const shift     = sp.get('shift') ?? 'morning'
   const sessionParam = sp.get('session')   // edit a specific record opened from Production Orders
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
@@ -172,7 +187,7 @@ function CaptureScreen() {
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
 
   const active = productions[activeIdx]
-  const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData) =>
+  const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
   // ── Load assignment + operators + existing session ───────────────────────
@@ -548,6 +563,7 @@ function CaptureScreen() {
   const needsGrade = !gradeless
   const isGranule = sectionId === 'granule'
   const isBlenderRun = isBlenderSection(sectionId)
+  const isPasteuriserRun = isPasteuriser(sectionId)
   // The run discriminator stored in the run's `grade` column: the chosen grade on
   // grade-driven sections, the product item (SG / SF / Export) for Granule, or the
   // blend code for Blender/Small Blender (BlenderData.bomId — owned by the
@@ -557,16 +573,20 @@ function CaptureScreen() {
   // what lets an operator pick a *different* blend mid-shift and get a genuinely
   // separate, separately-tracked production run instead of silently merging into
   // whatever run happened to be open.
+  // Pasteuriser: the run discriminator is the final-product batch number — a run
+  // continues across shifts while the same batch is produced (matching the paper's
+  // carry-over), and forks when the operator starts a different batch/blend.
   const runGrade = (p?: Production) =>
     isGranule ? ((p?.data as GranuleData)?.item || '')
     : isBlenderRun ? ((p?.data as BlenderData)?.bomId || '')
+    : isPasteuriserRun ? ((p?.data as PasteuriserData)?.batchNo || (p?.data as PasteuriserData)?.blendCode || '')
     : (p?.grade || '')
   // The PO anchor: the assignment's planned production orders, joined so it
   // compares identically across shifts (supervisor sets the same POs each shift).
   const poKey = (assignment?.production_orders ?? []).join(',') || null
 
   async function findOpenRun(po: string | null, variant: string, grade: string) {
-    const gradeKey = (needsGrade || isGranule || isBlenderRun) ? (grade || null) : null
+    const gradeKey = (needsGrade || isGranule || isBlenderRun || isPasteuriserRun) ? (grade || null) : null
     const { data } = await getDb().schema('production').from('production_runs')
       .select('*').eq('section_id', sectionId).eq('production_day', dateParam)
       .eq('status', 'open').order('opened_at', { ascending: false })
@@ -580,7 +600,7 @@ function CaptureScreen() {
     const { data: row } = await getDb().schema('production').from('production_runs').insert({
       section_id: sectionId, production_day: dateParam,
       production_order: po, variant: (variant || null) as any,
-      grade: (needsGrade || isGranule || isBlenderRun) ? (grade || null) : null,
+      grade: (needsGrade || isGranule || isBlenderRun || isPasteuriserRun) ? (grade || null) : null,
       lot_number: assignment?.lot_number ?? null,
       status: 'open', created_by: user?.id ?? null,
     } as any).select('id').maybeSingle()
@@ -606,7 +626,10 @@ function CaptureScreen() {
     // silently forking to …/2-01 even though the operator just said this is
     // the same continuing blend, not a new one.
     if (isBlenderRun && cr.grade) {
-      const existingRunNo = await resolveExistingBlendRunNo(cr.grade)
+      // The run being continued was necessarily opened on this same
+      // production_day (findOpenRun matches on it), so dateParam is the
+      // correct scope for "today's runs" here too.
+      const existingRunNo = await resolveExistingBlendRunNo(cr.grade, dateParam)
       if (existingRunNo) {
         const idx = activeIdx
         const p = productionsRef.current[idx]
@@ -797,6 +820,22 @@ function CaptureScreen() {
             kg_nett: n(r.weight), is_spillage: false,
           })
         })
+      } else if (isPasteuriser(sectionId)) {
+        const pd = prod.data as PasteuriserData
+        ;(pd.debag ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++,
+            // bag_serial_no is a FK to bag_tags — only set for scan/system bags
+            // guaranteed to be there; a manual serial goes in notes to avoid an FK failure.
+            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+            production_ref: pd.blendCode || null,
+            notes: [r.stream === 'postsieve' ? 'post-sieve' : null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            lot_number: r.lot || pd.batchNo || prod.lot || null,
+            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            kg_nett: n(r.weight), is_spillage: false,
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.spillage.forEach(r => {
@@ -873,6 +912,30 @@ function CaptureScreen() {
             kg: n(b.weight), bagging_time: b.time || null,
           })
         })
+      } else if (isPasteuriser(sectionId)) {
+        const pd = prod.data as PasteuriserData
+        const perBag = n(pd.weightPerBag) || 0
+        // Final-product pallet lines (A): one bagging row per line, kg = bags × kg/bag.
+        ;(pd.outputs ?? []).forEach(l => {
+          const kg = n(l.bagCount) * (n(l.bagWeight) || perBag)
+          if (kg === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
+            production_ref: pd.blendCode || null,
+            product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: prod.variant,
+            kg, bagging_time: l.time || null,
+          })
+        })
+        // By-products (B) — recorded as bagging rows so they count in the output total.
+        ;(pd.byProducts ?? []).forEach(r => {
+          if (n(r.weight) === 0) return
+          rows.push({
+            session_id: sid, bag_no: bagNo++, output_group: null,
+            bag_serial_no: r.serial || null, lot_number: pd.batchNo || prod.lot || null,
+            product_type: r.type || null, variant: prod.variant, kg: n(r.weight),
+          })
+        })
       } else {
         const sd = prod.data as SievingData
         sd.outputs.forEach(b => {
@@ -905,6 +968,11 @@ function CaptureScreen() {
       const b = blenderTotals(p.data as BlenderData)
       return { totalIn: b.totalIn, totalOut: b.totalOut }
     }
+    if (isPasteuriser(sectionId)) {
+      const pt = pasteuriserTotals(p.data as PasteuriserData)
+      // Raw material used (D+E) vs everything produced (A+B+C) — the paper's balance.
+      return { totalIn: pt.rawUsed, totalOut: pt.produced }
+    }
     return sievingTotals(p.data as SievingData, sh)
   }
   // Session totals — summed across all productions on one shift.
@@ -915,6 +983,32 @@ function CaptureScreen() {
     }, { totalIn: 0, totalOut: 0 })
   }
 
+  // Resolve canonical batch ids for a set of raw lot strings: upsert any new
+  // batches into production.batches (keyed on the normalized batch_key) and
+  // return a batch_key -> id map. Best-effort — a failure returns an empty map
+  // so batch_id is simply left null rather than blocking the core save.
+  async function resolveBatchIds(
+    db: any,
+    lots: Array<{ lot: string | null | undefined; variant?: string | null }>,
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>()
+    const byKey = new Map<string, { batch_key: string; display_lot: string; variant: string | null; first_section: string }>()
+    for (const { lot, variant } of lots) {
+      const key = normalizeBatch(lot)
+      if (!key || byKey.has(key)) continue
+      byKey.set(key, { batch_key: key, display_lot: String(lot), variant: variant ?? null, first_section: sectionId })
+    }
+    if (byKey.size === 0) return map
+    const keys = [...byKey.keys()]
+    try {
+      await db.schema('production').from('batches')
+        .upsert([...byKey.values()] as any, { onConflict: 'batch_key', ignoreDuplicates: true })
+      const { data } = await db.schema('production').from('batches').select('id,batch_key').in('batch_key', keys)
+      for (const row of ((data as any[]) ?? [])) map.set(row.batch_key, row.id)
+    } catch { /* leave map partial/empty — batch_id stays null */ }
+    return map
+  }
+
   // Core persistence — writes draft_data + structured rows + mass balance.
   // Used by the explicit Save, the 30s autosave, and submit, so prod_debagging /
   // prod_bagging are always current and nothing is lost on the inactivity sign-out.
@@ -922,15 +1016,39 @@ function CaptureScreen() {
     const { totalIn } = sessionTotals(prods, shiftBal)
     const db = getDb()
 
+    const debag = buildDebag(prods, sid)
+    const bag = buildBag(prods, sid)
+
+    // Central lot/batch capitalisation — the one write-layer chokepoint that
+    // guarantees every stored lot number is upper-cased regardless of which
+    // capture UI (or none) produced it, so "gs-0271" and "GS-0271" never read as
+    // two different lots in traceability/consumed-before-output checks. Only
+    // lot_number is touched (never bag_serial_no — that's a bag_tags FK whose
+    // exact stored case must be preserved to match).
+    for (const r of debag) r.lot_number = upperCode(r.lot_number)
+    for (const r of bag)   r.lot_number = upperCode(r.lot_number)
+
+    // Canonical batch identity — one batch_id shared across the session, its
+    // input/output rows and the run, so quality/bags/orders all join on it.
+    const sessionLot = prods[0]?.lot || assignment?.lot_number || null
+    const sessionVariant = prods[0]?.variant || assignment?.variant || null
+    const batchIds = await resolveBatchIds(db, [
+      { lot: sessionLot, variant: sessionVariant },
+      ...debag.map(r => ({ lot: r.lot_number, variant: r.variant })),
+      ...bag.map(r => ({ lot: r.lot_number, variant: r.variant })),
+    ])
+    const bidFor = (lot: any) => batchIds.get(normalizeBatch(lot) ?? '') ?? null
+    const sessionBatchId = bidFor(sessionLot)
+    debag.forEach(r => { r.batch_id = bidFor(r.lot_number) })
+    bag.forEach(r => { r.batch_id = bidFor(r.lot_number) })
+
     await db.schema('production').from('prod_sessions').update({
-      draft_data: { productions: prods } as any, updated_at: new Date().toISOString(),
+      draft_data: { productions: prods } as any, batch_id: sessionBatchId, updated_at: new Date().toISOString(),
     } as any).eq('id', sid)
 
-    const debag = buildDebag(prods, sid)
     await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
     if (debag.length) await db.schema('production').from('prod_debagging').insert(debag as any)
 
-    const bag = buildBag(prods, sid)
     await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
     if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
 
@@ -943,6 +1061,9 @@ function CaptureScreen() {
     } else if (sectionId === 'granule') {
       // Total produced (G) is the single output figure — balance = A − G matches PR-FM-026/7.
       prods.forEach(p => { mbB += granuleTotals(p.data as GranuleData).G })
+    } else if (isPasteuriser(sectionId)) {
+      // Produced (A+B+C) is the single output figure — balance = (D+E) − produced.
+      prods.forEach(p => { mbB += pasteuriserTotals(p.data as PasteuriserData).produced })
     } else {
       prods.forEach(p => { mbB += sievingTotals(p.data as SievingData, shiftBal).totalOut })
     }
@@ -972,7 +1093,7 @@ function CaptureScreen() {
         // Blender is gradeless for the UI's per-batch Grade dropdown, but its run
         // discriminator (the blend code, via runGrade) is just as real as Sieving's
         // grade — a run must not open before a blend is actually chosen.
-        if (hasData && variant && (gradeless && !isBlenderRun ? true : !!grade)) {
+        if (hasData && variant && (gradeless && !isBlenderRun && !isPasteuriserRun ? true : !!grade)) {
           const found = await findOpenRun(poKey, variant, grade)
           const newRid = found?.id ?? await openRun(poKey, variant, grade)
           if (newRid) {
@@ -999,7 +1120,7 @@ function CaptureScreen() {
             tout += (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
           })
           await db.schema('production').from('production_runs')
-            .update({ total_input_kg: tin, total_output_kg: tout, updated_at: new Date().toISOString() } as any).eq('id', rid)
+            .update({ total_input_kg: tin, total_output_kg: tout, batch_id: sessionBatchId, updated_at: new Date().toISOString() } as any).eq('id', rid)
         }
       }
     } catch { /* run linking/rollup is best-effort — never blocks the core save */ }
@@ -1503,6 +1624,7 @@ function CaptureScreen() {
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                        date={dateParam}
                       />
                     : sectionId === 'granule'
                     ? <GranuleCapture
@@ -1512,6 +1634,18 @@ function CaptureScreen() {
                         variantWord={active.variant}
                         locked={locked}
                         value={active.data as GranuleData}
+                        onChange={updateActiveData}
+                        genSerial={genSerial}
+                        operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                      />
+                    : isPasteuriser(sectionId)
+                    ? <PasteuriserCapture
+                        key={active.id}
+                        sectionId={sectionId}
+                        assignment={assignment}
+                        variantWord={active.variant}
+                        locked={locked}
+                        value={active.data as PasteuriserData}
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}

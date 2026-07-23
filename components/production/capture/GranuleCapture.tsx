@@ -35,7 +35,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
-import { markBagConsumed } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
@@ -136,7 +136,10 @@ export interface GranuleData {
 
 export function emptyGranuleData(): GranuleData {
   return {
-    item: GRANULE_OUTPUT_ITEMS[0],
+    // No default — silently defaulting to "SG Granules" let a whole SF/Export
+    // shift get captured under the wrong item if the operator never touched
+    // the dropdown. Must be a deliberate choice, same as variant.
+    item: '',
     blends: [{ id: crypto.randomUUID(), blendNo: '1', rows: [], water: '', done: false }],
     outputs: [], dustOutputs: [], waste: [],
     dustNotRefed: '', coarseNotFed: '', meterStart: '', meterStop: '',
@@ -330,9 +333,9 @@ function DustInputRow({
         <div className="flex gap-2">
           <input ref={inputRef} data-serial="true" type="text" value={row.serial} disabled={locked}
             placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
-            onChange={e => onUpdate('serial', e.target.value)}
+            onChange={e => onUpdate('serial', sanitizeSerial(e.target.value))}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); triggerLookup() } }}
-            className={INP + ' flex-1'} />
+            className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />
           {!locked && (
             <button onClick={triggerLookup} disabled={!row.serial.trim() || looking}
               className="px-3 rounded-xl border border-stone-200 text-stone-500 hover:border-brand hover:text-brand text-[12px] font-medium disabled:opacity-40 shrink-0">
@@ -623,28 +626,36 @@ export function GranuleCapture({
   function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
 
   // ── Dust by-product (end of shift) ─────────────────────────────────────────────
-  const [dustBags, setDustBags] = useState('')
-  const [dustWeight, setDustWeight] = useState('')
+  // Weight is no longer typed in by the operator — it's the plant's own mass
+  // balance residual (raw material in, minus everything already accounted for:
+  // bagged granules, D, E, waste, and any dust already logged this shift). This
+  // dust happens every single shift without exception, so it's exactly the
+  // kind of factor that should be system-derived, not hand-weighed and typed —
+  // the bag itself is still real and still gets tagged/serialled.
+  function computedDustWeight(): number {
+    const t2 = granuleTotals(value)
+    return Math.max(0, t2.balance - t2.dustOut)
+  }
   async function addDustOutput() {
-    if (n(dustWeight) <= 0) return
+    const weight = computedDustWeight()
+    if (weight <= 0) return
     const serial = await nextGranuleSerial(lot, [...value.outputs.map(o => o.serial), ...value.dustOutputs.map(o => o.serial)])
     const now = nowISO()
     const acCode = getAcumaticaCode(dustType, variantShort, 'A')
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: dustType,
-        variant: variantWord || null, weight_kg: n(dustWeight), lot_number: lot || null,
+        variant: variantWord || null, weight_kg: weight, lot_number: lot || null,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
-        serial_number: serial, action: 'bagging_out', section_id: 'granule', weight_kg: n(dustWeight), operator_id: operatorId ?? null,
+        serial_number: serial, action: 'bagging_out', section_id: 'granule', weight_kg: weight, operator_id: operatorId ?? null,
       } as any)
     } catch { /* retries on save */ }
     patch({ dustOutputs: [...value.dustOutputs, {
-      id: crypto.randomUUID(), dustType, bags: dustBags || '1', weight: dustWeight,
+      id: crypto.randomUUID(), dustType, bags: '1', weight: String(weight),
       serial, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, secured: true, logged_at: now,
     }] })
-    setDustBags(''); setDustWeight('')
   }
   function removeDustOutput(id: string) { patch({ dustOutputs: value.dustOutputs.filter(r => r.id !== id) }) }
 
@@ -678,10 +689,28 @@ export function GranuleCapture({
     g.bags += 1; g.kg += n(b.weight); acc.set(key, g); return acc
   }, new Map<string, { item: string; lot: string; bags: number; kg: number }>())
   const summaryRows = Array.from(summaryByLot.values())
-  const dustMissing = value.outputs.length > 0 && t.dustOut === 0
 
   return (
     <div className="space-y-4">
+      {/* Mandatory, same footing as variant — no default, so a whole shift can
+          never get silently recorded under the wrong item because no one
+          touched the dropdown. */}
+      {!value.item ? (
+        <div className="flex flex-col items-center gap-3 py-10 text-center px-4 rounded-2xl border-2 border-dashed border-stone-300">
+          <AlertTriangle size={22} className="text-amber-500" />
+          <p className="text-[14px] font-medium text-text">Choose what this session is producing</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {GRANULE_OUTPUT_ITEMS.map(it => (
+              <button key={it} onClick={() => patch({ item: it })}
+                className="px-4 py-2.5 rounded-xl border-2 border-stone-200 text-[13px] font-semibold text-text hover:border-brand hover:text-brand transition-colors">
+                {it}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-text-muted max-w-sm">Capture opens once you choose SG, SF, or Export Granules — the by-product dust and Acumatica codes follow this choice.</p>
+        </div>
+      ) : (
+      <>
       {/* Session item + lot banner */}
       <div className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-stone-200 bg-stone-50">
         <PackageCheck size={16} className="shrink-0" style={{ color: BAG_COLOR }} />
@@ -843,44 +872,45 @@ export function GranuleCapture({
             </div>
           )}
 
-          {/* Dust from granule line — bucket-elevator-style, warned about */}
-          <div className={`border rounded-2xl overflow-hidden ${dustMissing ? 'border-amber-300' : 'border-stone-200'}`}>
-            <div className={`px-4 py-3 border-b flex items-center gap-2 ${dustMissing ? 'bg-amber-50 border-amber-200' : 'bg-stone-50 border-stone-100'}`}>
-              <span className="font-semibold text-[14px] text-text flex-1">Dust from granule line · {dustType}</span>
-              {t.dustOut > 0 && <span className="font-mono font-semibold text-[13px] text-text">{t.dustOut.toFixed(1)} kg</span>}
-            </div>
-            {dustMissing && (
-              <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100 flex items-start gap-2 text-[12px] text-amber-800">
-                <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                <span>Record the <strong>{dustType}</strong> output before finishing — it's guaranteed to be consumed in the next production, so it must be tracked (like the sieving tower's bucket elevator).</span>
+          {/* Dust from granule line — weight is the mass-balance residual,
+              computed by the system, not hand-weighed and typed in (this dust
+              happens every shift without exception). The bag itself is still
+              real, so logging it still creates a tagged bag_tags row. */}
+          {(() => {
+            const pending = computedDustWeight()
+            const pendingWarn = pending > 0
+            return (
+              <div className={`border rounded-2xl overflow-hidden ${pendingWarn ? 'border-amber-300' : 'border-stone-200'}`}>
+                <div className={`px-4 py-3 border-b flex items-center gap-2 ${pendingWarn ? 'bg-amber-50 border-amber-200' : 'bg-stone-50 border-stone-100'}`}>
+                  <span className="font-semibold text-[14px] text-text flex-1">Dust from granule line · {dustType}</span>
+                  {t.dustOut > 0 && <span className="font-mono font-semibold text-[13px] text-text">{t.dustOut.toFixed(1)} kg</span>}
+                </div>
+                {pendingWarn && (
+                  <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100 flex items-start gap-2 text-[12px] text-amber-800">
+                    <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                    <span><strong>{pending.toFixed(1)} kg</strong> of {dustType} is unaccounted for by the mass balance so far — log the bag once it's been swept up and weighed off the line.</span>
+                  </div>
+                )}
+                <div className="p-3 space-y-2">
+                  {value.dustOutputs.map(r => (
+                    <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-stone-200">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] font-medium text-text">{r.dustType} · {n(r.weight).toFixed(1)} kg</div>
+                        {!LABEL_PRINTING_ENABLED && <div className="mt-1 inline-flex items-center gap-2 font-mono text-[12px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2 py-0.5">{r.serial}<span className="text-[9px] font-sans font-normal text-stone-400 uppercase">write on bag</span></div>}
+                      </div>
+                      {!locked && <button onClick={() => removeDustOutput(r.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
+                    </div>
+                  ))}
+                  {!locked && (
+                    <button onClick={addDustOutput} disabled={pending <= 0}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-stone-200 text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40 transition-colors">
+                      <Plus size={16} /> {pending > 0 ? `Log ${dustType} bag — ${pending.toFixed(1)} kg` : `No ${dustType} outstanding`}
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
-            <div className="p-3 space-y-2">
-              {value.dustOutputs.map(r => (
-                <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-stone-200">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-text">{r.dustType} · {n(r.weight).toFixed(1)} kg · {r.bags} bag{r.bags !== '1' ? 's' : ''}</div>
-                    {!LABEL_PRINTING_ENABLED && <div className="mt-1 inline-flex items-center gap-2 font-mono text-[12px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2 py-0.5">{r.serial}<span className="text-[9px] font-sans font-normal text-stone-400 uppercase">write on bag</span></div>}
-                  </div>
-                  {!locked && <button onClick={() => removeDustOutput(r.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
-                </div>
-              ))}
-              {!locked && (
-                <div className="grid grid-cols-[auto_auto_1fr] gap-2 items-end pt-1">
-                  <div className="space-y-1 w-16">
-                    <label className={LBL}>Bags</label>
-                    <input type="text" inputMode="numeric" value={dustBags} onChange={e => setDustBags(e.target.value)} className={INP} placeholder="1" />
-                  </div>
-                  <div className="space-y-1 w-24">
-                    <label className={LBL}>Qty (kg)</label>
-                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={dustWeight} onChange={e => setDustWeight(e.target.value)} className={INP} />
-                  </div>
-                  <button onClick={addDustOutput} disabled={n(dustWeight) <= 0}
-                    className="flex items-center justify-center gap-1.5 px-3 min-h-[42px] rounded-xl border border-stone-200 text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40"><Plus size={16} /> Add {dustType}</button>
-                </div>
-              )}
-            </div>
-          </div>
+            )
+          })()}
 
           {/* Waste */}
           <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
@@ -960,6 +990,8 @@ export function GranuleCapture({
             </div>
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   )

@@ -21,7 +21,7 @@ import { exportRosterPeriod } from '@/lib/utils/exportExcel'
 import { rotateEntries } from '@/lib/production/roster-rotate'
 
 // Columns selected for a Period everywhere in this page.
-const PERIOD_SELECT = 'id,name,start_date,end_date,day_label,night_label,notes,status,published_at'
+const PERIOD_SELECT = 'id,name,start_date,end_date,day_label,night_label,notes,status,published_at,kind'
 // Columns selected for a roster Entry everywhere in this page.
 const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
 
@@ -29,6 +29,7 @@ interface Period {
   id: string; name: string; start_date: string; end_date: string
   day_label: string; night_label: string; notes: string | null
   status: string; published_at: string | null
+  kind: 'week' | 'saturday'
 }
 interface Entry {
   id: string; period_id: string; role_key: string; shift: RosterShift
@@ -98,7 +99,12 @@ export default function RosterPage() {
   const [dbReady, setDbReady]   = useState(true)
   const [showNew,      setShowNew]      = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
+  const [showNewSat,   setShowNewSat]   = useState(false)
   const [showHelp,     setShowHelp]     = useState(false)
+  // Which roster we're looking at: the auto-rotated weekly grid, or the manual
+  // single-shift Saturday sheet. Saturday periods (kind='saturday') are kept in
+  // their own list and never touched by rotation.
+  const [rosterKind,   setRosterKind]   = useState<'week' | 'saturday'>('week')
   const [generating,   setGenerating]   = useState(false)
   const [reopening,    setReopening]    = useState(false)
   // Surfaced failure from a create/generate/prefill write — so a blocked or
@@ -113,6 +119,24 @@ export default function RosterPage() {
 
   const period = periods.find(p => p.id === periodId) ?? null
   const isPublished = period?.status === 'published'
+  const isSaturday = rosterKind === 'saturday'
+  // Only periods of the active kind appear in the selector.
+  const visiblePeriods = periods.filter(pd => (pd.kind ?? 'week') === rosterKind)
+
+  // Switch between the weekly grid and the manual Saturday sheet, re-selecting a
+  // sensible period for that kind (current week by date; latest Saturday).
+  function switchKind(k: 'week' | 'saturday') {
+    if (k === rosterKind) return
+    setRosterKind(k)
+    const list = periods.filter(pd => (pd.kind ?? 'week') === k)
+    if (k === 'week') {
+      const { date } = sastNow()
+      const cur = list.find(pd => pd.start_date <= date && date <= pd.end_date)
+      setPeriodId((cur ?? list[0])?.id ?? null)
+    } else {
+      setPeriodId(list[0]?.id ?? null)
+    }
+  }
 
   // ── Load roles + employees + periods once ───────────────────────────────────
   useEffect(() => {
@@ -134,17 +158,27 @@ export default function RosterPage() {
         setDbReady(false)
       }
       try {
-        const { data, error } = await db().from('roster_periods')
-          .select('id,name,start_date,end_date,day_label,night_label,notes,status,published_at')
-          .order('start_date', { ascending: false })
-        if (error) throw error
-        const rows = (data as any[]) ?? []
-        // Graceful: if status column doesn't exist yet, back-fill default
-        const mapped: Period[] = rows.map(r => ({ ...r, status: r.status ?? 'draft', published_at: r.published_at ?? null }))
+        // Select kind if the column exists; fall back gracefully if not migrated.
+        let rows: any[] = []
+        try {
+          const { data, error } = await db().from('roster_periods')
+            .select(PERIOD_SELECT).order('start_date', { ascending: false })
+          if (error) throw error
+          rows = (data as any[]) ?? []
+        } catch {
+          const { data } = await db().from('roster_periods')
+            .select('id,name,start_date,end_date,day_label,night_label,notes,status,published_at')
+            .order('start_date', { ascending: false })
+          rows = (data as any[]) ?? []
+        }
+        // Graceful defaults for pre-migration columns (status, kind).
+        const mapped: Period[] = rows.map(r => ({ ...r, status: r.status ?? 'draft', published_at: r.published_at ?? null, kind: r.kind ?? 'week' }))
         setPeriods(mapped)
+        // Land on the current WEEK period (Saturday is opt-in via its tab).
         const { date } = sastNow()
-        const current = mapped.find(p => p.start_date <= date && date <= p.end_date)
-        setPeriodId((current ?? mapped[0])?.id ?? null)
+        const weekPeriods = mapped.filter(p => p.kind === 'week')
+        const current = weekPeriods.find(p => p.start_date <= date && date <= p.end_date)
+        setPeriodId((current ?? weekPeriods[0])?.id ?? null)
       } catch {
         setDbReady(false)
       }
@@ -415,6 +449,35 @@ export default function RosterPage() {
     }
   }
 
+  // ── Manual Saturday sheet ─────────────────────────────────────────────────
+  // Fully manual: the user picks the Saturday date + shift time; there is no
+  // rotation and the cron never touches it. The single shift is stored on the
+  // 'day' column (day_label holds the chosen time). People are added by hand
+  // and saved/submitted per section, reusing all the weekday plumbing.
+  async function createSaturday(cfg: { date: string; startTime: string; endTime: string }) {
+    setActionError(null)
+    const label = `${cfg.startTime} – ${cfg.endTime}`
+    const name  = `Sat ${format(parseISO(cfg.date + 'T12:00:00'), 'd MMM yyyy')}`
+    const { data, error } = await db().from('roster_periods').insert({
+      name, start_date: cfg.date, end_date: cfg.date,
+      day_label: label, night_label: label, kind: 'saturday',
+      created_by: user?.id ?? null,
+    } as any).select(PERIOD_SELECT).single()
+    if (error || !data) {
+      setActionError(`Couldn't create the Saturday sheet: ${error?.message ?? 'unknown error'}. Nothing was saved.`)
+      return
+    }
+    const mapped = { ...(data as any), status: (data as any).status ?? 'draft', published_at: null, kind: 'saturday' as const }
+    setPeriods(ps => [mapped as Period, ...ps])
+    setRosterKind('saturday')
+    setPeriodId(mapped.id)
+    setSectionStatus({})
+    logRosterAudit('roster_generate', {
+      periodId: mapped.id, periodName: mapped.name, detail: `Manual Saturday sheet created (${label})`,
+    })
+    setShowNewSat(false)
+  }
+
   // ── Publish period + sync maintenance duty_roster ─────────────────────────
   async function publishPeriod() {
     if (!periodId || !period) return
@@ -427,9 +490,11 @@ export default function RosterPage() {
         : p))
       logRosterAudit('roster_publish', { periodId, periodName: period.name, detail: 'Roster published' })
 
-      // Sync maintenance entries to maintenance.duty_roster
+      // Sync maintenance entries to maintenance.duty_roster — WEEK periods only.
+      // The manual Saturday sheet has its own bespoke hours and must not overwrite
+      // the weekly breakdown-routing duty roster.
       const maintRoleKeys = ['maintenance_tech', 'maintenance_asst']
-      const maintEntries = entries.filter(e => maintRoleKeys.includes(e.role_key))
+      const maintEntries = period.kind === 'saturday' ? [] : entries.filter(e => maintRoleKeys.includes(e.role_key))
       if (maintEntries.length > 0) {
         // Delete any existing duty_roster rows that OVERLAP this period
         // (overlap = start_at < periodEnd AND end_at > periodStart)
@@ -506,7 +571,14 @@ export default function RosterPage() {
   // ── Confirmation progress ──────────────────────────────────────────────────
   // Every department shown in the grid must be submitted before the period is
   // considered confirmed. These drive the outstanding tracker + auto-publish.
-  const requiredSections  = useMemo(() => rolesByCategory.map(g => g.cat), [rolesByCategory])
+  const requiredSections  = useMemo(() => {
+    const cats = rolesByCategory.map(g => g.cat)
+    if (rosterKind !== 'saturday') return cats
+    // Saturday is manual — only sections that actually have people rostered need
+    // to confirm (so a half-used Saturday sheet can still publish sensibly).
+    const used = new Set(entries.map(e => roleCategory.get(e.role_key)))
+    return cats.filter(c => used.has(c.key))
+  }, [rolesByCategory, rosterKind, entries, roleCategory])
   const outstandingSections = requiredSections.filter(c => sectionStatus[c.key]?.status !== 'submitted')
   const submittedCount    = requiredSections.length - outstandingSections.length
   const allSubmitted      = requiredSections.length > 0 && outstandingSections.length === 0
@@ -582,25 +654,37 @@ export default function RosterPage() {
         </div>
       )}
 
+      {/* Week vs manual Saturday sheet */}
+      <div className="no-print inline-flex rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
+        <button onClick={() => switchKind('week')}
+          className={`flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-medium transition-colors ${!isSaturday ? 'bg-brand text-white' : 'bg-transparent text-stone-500 hover:text-text'}`}>
+          <CalendarRange size={13} /> Weekly roster
+        </button>
+        <button onClick={() => switchKind('saturday')}
+          className={`flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-medium transition-colors ${isSaturday ? 'bg-brand text-white' : 'bg-transparent text-stone-500 hover:text-text'}`}>
+          <Sun size={13} /> Saturday
+        </button>
+      </div>
+
       {/* Period bar */}
       <div className="no-print flex flex-wrap items-center gap-3 bg-surface-card border border-surface-rule rounded-2xl p-4">
         <CalendarRange size={16} className="text-text-muted shrink-0" />
-        {periods.length > 0 ? (
+        {visiblePeriods.length > 0 ? (
           <div className="relative">
             <select
               value={periodId ?? ''} onChange={e => setPeriodId(e.target.value)}
               className="appearance-none pl-3 pr-9 py-2 rounded-lg border border-stone-200 bg-white text-[13px] font-medium text-text outline-none focus:border-brand cursor-pointer"
             >
-              {periods.map(p => (
+              {visiblePeriods.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.status === 'published' ? '✓ ' : ''}{p.name}{p.name !== fmtRange(p) ? ` · ${fmtRange(p)}` : ''}
+                  {p.status === 'published' ? '✓ ' : ''}{p.name}{p.kind === 'saturday' ? ` · ${p.day_label}` : p.name !== fmtRange(p) ? ` · ${fmtRange(p)}` : ''}
                 </option>
               ))}
             </select>
             <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
           </div>
         ) : (
-          <span className="text-[13px] text-text-muted">No roster periods yet.</span>
+          <span className="text-[13px] text-text-muted">{isSaturday ? 'No Saturday sheets yet.' : 'No roster periods yet.'}</span>
         )}
 
         {/* Status badge */}
@@ -643,7 +727,7 @@ export default function RosterPage() {
               creates next week with day↔night swapped) — supervisors only edit,
               save and submit. Exposing manual creation to everyone was the source
               of blank/duplicate periods, so it's now gated to full admins. */}
-          {period && !isPublished && isFullAdmin && (
+          {!isSaturday && period && !isPublished && isFullAdmin && (
             <button
               onClick={() => setShowGenerate(true)} disabled={!dbReady || generating}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand disabled:opacity-40 transition-colors"
@@ -652,13 +736,23 @@ export default function RosterPage() {
               <RefreshCw size={13} /> Generate next week
             </button>
           )}
-          {isFullAdmin && (
+          {!isSaturday && isFullAdmin && (
             <button
               onClick={() => setShowNew(true)} disabled={!dbReady}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
               title="Admin override — weekly rotation is automatic"
             >
               <Plus size={14} /> New period
+            </button>
+          )}
+          {/* New Saturday — the manual sheet is created by hand, so anyone with
+              edit rights on a section can start one (unlike the auto-only week). */}
+          {isSaturday && canEditAny && (
+            <button
+              onClick={() => setShowNewSat(true)} disabled={!dbReady}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid disabled:opacity-40 transition-colors"
+            >
+              <Plus size={14} /> New Saturday
             </button>
           )}
           {/* Reopen — admin-only. Publish is now automatic-only (fires once every
@@ -752,12 +846,15 @@ export default function RosterPage() {
       {loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
       ) : !period ? (
-        <EmptyState canCreate={dbReady && isFullAdmin} onCreate={() => setShowNew(true)} />
+        isSaturday
+          ? <SaturdayEmptyState canCreate={dbReady && canEditAny} onCreate={() => setShowNewSat(true)} />
+          : <EmptyState canCreate={dbReady && isFullAdmin} onCreate={() => setShowNew(true)} />
       ) : (
         <div className="no-print space-y-5">
-          <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} leaveEmpIds={leaveEmpIds} />
+          {!isSaturday && <OnDutyCard period={period} entries={entries} roleCategory={roleCategory} leaveEmpIds={leaveEmpIds} />}
           <RosterGrid
             period={period}
+            shifts={isSaturday ? [{ key: 'day', label: period.day_label, time: '' }] : ROSTER_SHIFTS}
             rolesByCategory={rolesByCategory}
             employees={employees}
             leaveEmpIds={leaveEmpIds}
@@ -813,6 +910,7 @@ export default function RosterPage() {
           onGenerate={generateNextPeriod}
         />
       )}
+      {showNewSat && <NewSaturdayModal onClose={() => setShowNewSat(false)} onCreate={createSaturday} />}
     </div>
   )
 }
@@ -919,9 +1017,9 @@ function BackendStatusPanel({ periodId }: { periodId: string }) {
                 <span className={testResult.inApp?.ok ? 'text-ok' : 'text-err'}>{testResult.inApp?.ok ? 'delivered — check the bell' : 'failed'}</span>
               </p>
               <p>
-                <strong className="text-text">Email</strong> (SMTP {testResult.config?.smtpConfigured ? 'configured' : 'NOT configured'}):{' '}
+                <strong className="text-text">Email</strong> (transport: {testResult.config?.emailTransport ?? 'none'}):{' '}
                 <span className={testResult.email?.ok && !testResult.email?.skipped ? 'text-ok' : 'text-err'}>
-                  {testResult.email?.skipped ? `skipped — ${testResult.email?.error ?? 'SMTP_USER / SMTP_PASS not set'}`
+                  {testResult.email?.skipped ? `skipped — ${testResult.email?.error ?? 'no email transport configured (Graph or SMTP)'}`
                     : testResult.email?.ok ? 'sent — check your inbox (and spam)'
                     : `failed — ${testResult.email?.error ?? 'unknown error'}`}
                 </span>
@@ -1264,12 +1362,13 @@ function OnDutyCard({ period, entries, roleCategory, leaveEmpIds }: {
 
 // ── The grid: categories → role rows × Day/Night columns ──────────────────────
 function RosterGrid({
-  period, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing,
+  period, shifts = ROSTER_SHIFTS, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing,
   onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove,
   dirtyCategories, savingCategory, onSaveDept,
   canEdit, canSubmit, sectionStatus, submittingSection, onSubmitSection, currentUserId,
 }: {
   period: Period
+  shifts?: { key: RosterShift; label: string; time: string }[]
   rolesByCategory: { cat: typeof ROSTER_CATEGORIES[number]; items: RosterRole[] }[]
   employees: Employee[]
   leaveEmpIds: Set<string>
@@ -1295,13 +1394,14 @@ function RosterGrid({
   currentUserId: string | null
 }) {
   const shiftLabel = (s: RosterShift) => s === 'day' ? period.day_label : period.night_label
+  const minW = shifts.length <= 1 ? 'min-w-[420px]' : 'min-w-[760px]'
   return (
     <div className="bg-surface-card border border-surface-rule rounded-2xl overflow-x-auto">
-      <table className="w-full border-collapse min-w-[760px]">
+      <table className={`w-full border-collapse ${minW}`}>
         <thead>
           <tr className="border-b border-surface-rule bg-surface">
             <th className="px-4 py-3 text-left font-mono text-[10px] text-text-muted uppercase tracking-wide w-[200px] sticky left-0 bg-surface z-10">Role</th>
-            {ROSTER_SHIFTS.map(s => {
+            {shifts.map(s => {
               const label = shiftLabel(s.key)
               return (
                 <th key={s.key} className="px-4 py-3 text-left">
@@ -1309,7 +1409,7 @@ function RosterGrid({
                     {s.key === 'day' ? <Sun size={13} className="text-amber-500" /> : <Moon size={13} className="text-indigo-400" />}
                     <span className="font-display font-bold text-[13px] text-text">{label || s.label}</span>
                   </div>
-                  <div className="font-mono text-[10px] text-text-muted mt-0.5">{s.time}</div>
+                  {s.time && <div className="font-mono text-[10px] text-text-muted mt-0.5">{s.time}</div>}
                 </th>
               )
             })}
@@ -1317,7 +1417,7 @@ function RosterGrid({
         </thead>
         <tbody>
           {rolesByCategory.map(({ cat, items }) => (
-            <CategoryGroup key={cat.key} cat={cat} items={items} employees={employees} leaveEmpIds={leaveEmpIds}
+            <CategoryGroup key={cat.key} cat={cat} items={items} shifts={shifts} employees={employees} leaveEmpIds={leaveEmpIds}
               cellEntries={cellEntries} editing={editing} setEditing={setEditing}
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
               dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
@@ -1338,13 +1438,13 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave, canEdit, canSubmit, status, isSubmitting, onSubmit, currentUserId }: any) {
+function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave, canEdit, canSubmit, status, isSubmitting, onSubmit, currentUserId }: any) {
   const isSubmitted = status?.status === 'submitted'
   const submittedByYou = isSubmitted && status?.submitted_by && status.submitted_by === currentUserId
   return (
     <>
       <tr>
-        <td colSpan={3} className="px-3 py-1.5 border-y border-surface-rule"
+        <td colSpan={1 + shifts.length} className="px-3 py-1.5 border-y border-surface-rule"
           style={{ background: cat.colorHex + '14', borderLeft: `3px solid ${cat.colorHex}` }}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide font-semibold" style={{ color: cat.colorHex }}>
@@ -1394,7 +1494,7 @@ function CategoryGroup({ cat, items, employees, leaveEmpIds, cellEntries, editin
             style={{ borderLeft: `3px solid ${cat.colorHex}` }}>
             <span className="font-body font-medium text-[13px] text-text leading-tight">{role.name}</span>
           </td>
-          {ROSTER_SHIFTS.map((s: { key: RosterShift }) => (
+          {shifts.map((s: { key: RosterShift }) => (
             <RosterCell key={s.key} roleKey={role.key} shift={s.key} employees={employees} leaveEmpIds={leaveEmpIds}
               entries={cellEntries(role.key, s.key)}
               editing={editing} setEditing={setEditing}
@@ -1628,6 +1728,82 @@ function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () 
           <Plus size={14} /> Create first period
         </button>
       )}
+    </div>
+  )
+}
+
+function SaturdayEmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center bg-surface-card border border-dashed border-surface-rule rounded-2xl">
+      <Sun size={28} className="text-amber-400 mb-3" />
+      <p className="font-display font-semibold text-[15px] text-text">No Saturday sheet yet</p>
+      <p className="text-[12px] text-text-muted mt-1 max-w-[360px]">
+        The Saturday roster is created by hand — pick the date and shift time, then add whoever is working. It doesn&apos;t rotate and isn&apos;t generated automatically.
+      </p>
+      {canCreate && (
+        <button onClick={onCreate} className="mt-4 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand-mid transition-colors">
+          <Plus size={14} /> New Saturday
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Manual Saturday sheet: pick the date + a single shift time. No rotation.
+function NewSaturdayModal({ onClose, onCreate }: {
+  onClose: () => void
+  onCreate: (cfg: { date: string; startTime: string; endTime: string }) => void
+}) {
+  // Default to the coming Saturday.
+  const defaultSat = (() => {
+    const now = new Date()
+    const dow = now.getDay() // 0=Sun … 6=Sat
+    const add = (6 - dow + 7) % 7 || 7
+    return format(addDays(now, add), 'yyyy-MM-dd')
+  })()
+  const [date, setDate]   = useState(defaultSat)
+  const [start, setStart] = useState('07h00')
+  const [end, setEnd]     = useState('13h00')
+  const valid = !!date && !!start.trim() && !!end.trim()
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[400px] p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-display font-bold text-[16px] text-text">New Saturday sheet</h3>
+            <p className="text-[12px] text-text-muted mt-0.5">Manual — pick the day and time, then add names. No rotation.</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={16} /></button>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Saturday date</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] text-text outline-none focus:border-brand" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Start time</label>
+            <input value={start} onChange={e => setStart(e.target.value)} placeholder="07h00"
+              className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] text-text outline-none focus:border-brand" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">End time</label>
+            <input value={end} onChange={e => setEnd(e.target.value)} placeholder="13h00"
+              className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] text-text outline-none focus:border-brand" />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 rounded-lg bg-stone-50 border border-stone-200 px-3 py-2 text-[11px] text-stone-500">
+          <Sun size={13} className="text-amber-500" /> One shift · {start || '—'} – {end || '—'}
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50">Cancel</button>
+          <button onClick={() => valid && onCreate({ date, startTime: start.trim(), endTime: end.trim() })} disabled={!valid}
+            className="flex-1 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
+            Create
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

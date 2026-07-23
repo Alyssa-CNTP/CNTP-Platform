@@ -4,6 +4,19 @@ import * as React from 'react'
 import { getDb } from '@/lib/supabase/db'
 import { normaliseVariant } from '@/lib/constants/manufacturing'
 
+// ── sanitizeSerial — keystroke-level cleanup for every "scan or type serial"
+// input across capture. Real serials in this app are digits/dashes (section
+// outputs, DD-MM-NN) or a blend-code-prefixed digits/dash/slash string
+// (Blender/Pasteuriser, e.g. SFC-KUN25-C/1-01) — never spaces. A stray space
+// from a scanner double-fire or a fat-fingered tap breaks an exact-match
+// bag_tags lookup silently (looks "not found" with no clue why), so it's
+// stripped outright rather than just trimmed at the ends. Letters stay
+// allowed (blend codes need them) but anything else typed by mistake — stray
+// punctuation, control characters — is dropped too.
+export function sanitizeSerial(v: string): string {
+  return v.toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9\-/]/g, '')
+}
+
 // ── variantFamily — maps a variant code/name to its blending family ──────────
 // CON + RA-CON  → 'conventional'  (can be blended together)
 // ORG + RA-ORG + FT-ORG → 'organic'  (can be blended together)

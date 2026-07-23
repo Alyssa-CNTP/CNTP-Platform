@@ -95,6 +95,9 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_bag_tag', label: 'Edit bag tag records' },
           { key: 'can_delete_bag_tag', label: 'Delete bag tag records' },
         ] },
+      { key: 'production.analytics', label: 'Yield & batch analytics',
+        read: 'can_view_ops_dashboard',
+        manage: [{ key: 'can_export_reports', label: 'Export analytics reports' }] },
       { key: 'production.inventory', label: 'Master Inventory',
         read: 'can_view_inventory', write: 'can_edit_inventory', delete: 'can_delete_inventory' },
       { key: 'production.blends', label: 'Blends (BOM)',
@@ -159,34 +162,37 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    // Cross-department — no single department owns this.
-    module: 'Staff & Competency',
+    // Cross-department — no single department owns this. Staff Directory is
+    // just people + how they sign in — competency/SOP records live under
+    // Training below (that's the qualification home).
+    module: 'Staff Directory',
     resources: [
-      { key: 'staff.access', label: 'HR section (Staff & Skills, SOP, Skills Matrix)',
+      { key: 'staff.access', label: 'Staff Directory section',
         read: 'can_access_hr',
-        note: 'Grant Read to give someone the HR module at all — the resources below control what they see once inside.' },
+        note: 'Grant Read to give someone the Staff Directory at all — the resources below control what they see once inside.' },
       { key: 'staff.directory', label: 'Staff directory & profiles',
         read: 'can_view_staff', write: 'can_edit_staff_profiles',
         manage: [{ key: 'can_delete_staff', label: 'Delete staff records' }] },
-      { key: 'staff.competency', label: 'Competency matrix & assessments',
-        read: 'can_view_staff', write: 'can_manage_competencies',
-        manage: [
-          { key: 'can_allocate_staff', label: 'Allocate staff to sections & override competency warnings (Phase 2)' },
-        ] },
-      { key: 'staff.sops', label: 'SOP / Work-Instruction catalogue',
-        read: 'can_view_staff', write: 'can_manage_sop_catalog' },
     ],
   },
   {
     // Cross-department — HR owns authoring org-wide; Production/Quality can author their own courses.
+    // This is the qualification home: courses, assignments, sign-offs, the
+    // Skills Matrix and the SOP Catalogue all live here.
     module: 'Training',
     resources: [
       { key: 'training.content', label: 'Courses, lessons & assessments',
         read: 'dept', write: 'can_author_training' },
       { key: 'training.assignments', label: 'Course assignments',
         read: 'dept', write: 'can_assign_training' },
-      { key: 'training.competency', label: 'Cross-department competency dashboard',
-        read: 'can_view_all_competency' },
+      { key: 'training.competency', label: 'Skills Matrix & assessments',
+        read: 'can_view_staff', write: 'can_manage_competencies',
+        manage: [
+          { key: 'can_allocate_staff', label: 'Allocate staff to sections & override competency warnings (Phase 2)' },
+          { key: 'can_view_all_competency', label: 'Cross-department competency overview (Skills Matrix "Overview" tab)' },
+        ] },
+      { key: 'training.sops', label: 'SOP / Work-Instruction catalogue',
+        read: 'can_view_staff', write: 'can_manage_sop_catalog' },
     ],
   },
   {

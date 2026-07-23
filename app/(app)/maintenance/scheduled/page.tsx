@@ -11,7 +11,7 @@ import { Printer } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { useAuth } from '@/lib/auth/context'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
-import { calClass, calBadge, fmtD, fmtT } from '@/lib/maintenance/helpers'
+import { calClass, calBadge, fmtD, fmtT, addDays, diffDays } from '@/lib/maintenance/helpers'
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
@@ -30,7 +30,7 @@ const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md 
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const auth = useAuth()
   const canManage = deriveMaintRole(auth).canManage
   // On-duty technicians (auto-suggested for checklist allocation) + the full
@@ -49,6 +49,11 @@ export default function ScheduledPage() {
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
+  // Monthly audit filter — view a past month's checklists (empty = current month).
+  const [monthView, setMonthView] = useState('')
+  // Annual register header filters.
+  const [annualSearch, setAnnualSearch] = useState('')
+  const [annualCat, setAnnualCat] = useState('all')
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
   const eqOrdered = [...eqLatest].sort((a, b) => {
     const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
@@ -88,7 +93,7 @@ export default function ScheduledPage() {
 
       {/* Light segmented control */}
       <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit flex-wrap">
-        {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration', 'Readings'].map((t, i) => (
+        {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration'].map((t, i) => (
           <button key={t} onClick={() => setSub(i)}
             className={`px-3.5 py-1.5 rounded-md text-[12px] font-semibold whitespace-nowrap transition ${sub === i ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{t}</button>
         ))}
@@ -97,13 +102,12 @@ export default function ScheduledPage() {
       {/* ── OVERVIEW: everything needing action, in one place ── */}
       {sub === 0 && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
               { v: outstandingChecklists.filter(x => x.t.frequency === 'weekly').length, l: `Weekly outstanding — ${weekKey}`, warn: true, to: 1 },
               { v: outstandingChecklists.filter(x => x.t.frequency === 'monthly').length, l: `Monthly outstanding — ${moKey}`, warn: true, to: 2 },
               { v: calRows.filter(c => c.days <= 0).length, l: 'Calibrations overdue', warn: true, to: 3 },
               { v: calRows.filter(c => c.days > 0 && c.days <= 30).length, l: 'Calibrations due ≤30d', warn: false, to: 3 },
-              { v: eqLatest.filter(e => e.days <= 14).length, l: 'Services due ≤14d (run-hrs)', warn: false, to: 4 },
             ].map((t, i) => (
               <button key={i} onClick={() => setSub(t.to)} title="Open"
                 className="card p-3 text-center transition cursor-pointer hover:border-text/30 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand/30">
@@ -129,7 +133,6 @@ export default function ScheduledPage() {
                 <div key={'eq' + e.cfg.id} className="rounded-lg border border-surface-rule bg-surface-card px-3 py-2.5 flex items-center gap-2 text-[13px] flex-wrap">
                   <span className={`badge shrink-0 ${calClass(e.days)}`}>{e.days <= 0 ? 'SERVICE OVERDUE' : 'SERVICE DUE'}</span>
                   <span className="flex-1 min-w-[220px]"><strong className="text-text">{e.cfg.equipment}</strong> <span className="text-text-muted">— {Math.round(e.latest!.hours_since_service!)} / {e.cfg.service_interval_hours} run-hrs since service · projected due {fmtD(e.due!.toISOString())}</span></span>
-                  <button className={BTN_SM} onClick={() => setSub(4)} title="Record the service against its run-hours">Record service →</button>
                   <button className={BTN_SM} onClick={() => raiseFromChecklist(e.cfg.equipment, 'Run-hours service', `Service due — ${Math.round(e.latest!.hours_since_service!)} run-hours since last service`, '')}>Raise job card</button>
                 </div>
               ))}
@@ -166,25 +169,42 @@ export default function ScheduledPage() {
 
       {(sub === 1 || sub === 2) && (() => {
         const freq = sub === 1 ? 'weekly' : 'monthly'
-        const period = freq === 'weekly' ? weekKey : moKey
+        // Monthly can be pointed at a past month (audit view); weekly is current week.
+        const period = freq === 'weekly' ? weekKey : (monthView || moKey)
+        const auditView = freq === 'monthly' && !!monthView && monthView !== moKey
+        // Technicians only see the checklists allocated to them; managers see all.
         const list = templates.filter(t => t.frequency === freq)
+          .filter(cl => canManage || (getComp(cl.id, period)?.assigned_to ?? '') === actor)
         return (
           <div>
             <div className="mb-3 flex items-start justify-between gap-2 flex-wrap">
               <div>
-              <h2 className="text-sm font-semibold text-text">{freq === 'weekly' ? 'Weekly checklists (WC) — ' + weekKey : 'Monthly checklists (MC) — ' + moKey}</h2>
+              <h2 className="text-sm font-semibold text-text">{freq === 'weekly' ? 'Weekly checklists (WC) — ' + weekKey : 'Monthly checklists (MC) — ' + period}</h2>
               <p className="text-[12px] text-text-muted mt-0.5">
-                {freq === 'weekly'
-                  ? 'Complete every week. Tap an area to expand the checklist. Every tick records who checked it and when.'
-                  : 'Full inspections per area, per the QM-FM checklist. Each task has a fault selector and action notes — a fault can raise a job card directly.'}
+                {!canManage
+                  ? 'The checklists allocated to you for this period. Complete each item; a fault can raise a job card.'
+                  : freq === 'weekly'
+                    ? 'Complete every week. Tap an area to expand the checklist. Every tick records who checked it and when.'
+                    : 'Full inspections per area, per the QM-FM checklist. Each task has a fault selector and action notes — a fault can raise a job card directly.'}
               </p>
               </div>
-              <button onClick={() => printChecklists(freq, period)}
-                className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition shrink-0">
-                <Printer size={14} /> Print / export {freq === 'weekly' ? 'weekly' : 'monthly'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {freq === 'monthly' && (
+                  <label className="text-[11px] text-text-muted flex items-center gap-1">Month
+                    <input type="month" className={`${INP} w-auto`} value={monthView || moKey} onChange={e => setMonthView(e.target.value === moKey ? '' : e.target.value)} />
+                  </label>
+                )}
+                {auditView && <span className="badge badge-gray">Audit view</span>}
+                <button onClick={() => printChecklists(freq, period)}
+                  className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition">
+                  <Printer size={14} /> Print / export
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {!canManage && list.length === 0 && (
+              <div className="card p-4 text-center text-[12px] text-text-faint">Nothing allocated to you for this period yet — the maintenance manager assigns checklists.</div>
+            )}
+            <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 ${auditView ? 'pointer-events-none opacity-75' : ''}`}>
               {list.map(cl => {
                 const comp = getComp(cl.id, period)
                 const st = comp?.task_states ?? {}
@@ -233,37 +253,34 @@ export default function ScheduledPage() {
                       <div className="px-3 pb-3 border-t border-surface-rule pt-2.5 max-h-[400px] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         {cl.tasks.map((task, ti) => {
                           const s = st[ti] ?? {}
+                          // The Fault / No-fault SELECT is the check itself — choosing a
+                          // value records the answer AND marks the item done (no tick box).
                           return (
                             <div key={ti} className="mb-2">
                               <div className="flex items-center gap-2">
-                                <div className={`w-5 h-5 rounded-md border flex-shrink-0 flex items-center justify-center text-[11px] text-white cursor-pointer transition ${s.done ? 'bg-ok border-ok' : 'bg-transparent border-surface-rule hover:border-text/30'}`}
-                                  onClick={() => {
-                                    // Monthly tasks must record Fault / No Fault before they can be ticked done.
-                                    if (freq === 'monthly' && !s.done && s.fault === undefined) { setPopup('Select “Fault” or “No Fault” for this item before marking it done.'); return }
-                                    toggleTask(cl, ti)
-                                  }}>
-                                  {s.done && '✓'}
-                                </div>
-                                <span className={`text-[12px] flex-1 ${s.done ? 'text-text-muted line-through' : 'text-text'}`}>{task}</span>
+                                <span className={`w-5 h-5 rounded-md border flex-shrink-0 flex items-center justify-center text-[11px] font-bold ${s.done ? (s.fault ? 'bg-err border-err text-white' : 'bg-ok border-ok text-white') : 'border-surface-rule text-transparent'}`}
+                                  title={s.done ? (s.fault ? 'Fault recorded' : 'No fault') : 'Not checked yet'}>
+                                  {s.done ? (s.fault ? '!' : '✓') : ''}
+                                </span>
+                                <span className={`text-[12px] flex-1 ${s.done && !s.fault ? 'text-text-muted' : 'text-text'}`}>{task}</span>
                                 {s.done && s.by && <span className="text-[10px] text-text-faint whitespace-nowrap shrink-0">{s.by} {fmtT(s.at ?? null)}</span>}
                               </div>
                               <div className="flex gap-1.5 mt-1" style={{ marginLeft: 28 }}>
-                                {freq === 'monthly' && (
-                                  <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${s.fault === undefined ? 'border-warn text-warn' : ''}`}
-                                    value={s.fault === true ? 'YES' : s.fault === false ? 'NO' : ''}
-                                    onChange={e => { if (e.target.value) setTaskField(cl, ti, 'fault', e.target.value === 'YES') }}>
-                                    <option value="" disabled>Fault? …</option>
-                                    <option value="NO">No Fault</option><option value="YES">Fault</option>
-                                  </select>
-                                )}
-                                <input className={`${INP} flex-1 text-[11px] py-1 min-h-0`} placeholder="Action needed / notes…"
+                                <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${!s.done ? 'border-warn text-warn' : s.fault ? 'border-err text-err' : ''}`}
+                                  value={!s.done ? '' : s.fault ? 'YES' : 'NO'}
+                                  onChange={e => { if (e.target.value) answerTask(cl, ti, e.target.value === 'YES') }}>
+                                  <option value="" disabled>Select…</option>
+                                  <option value="NO">No fault ✓</option>
+                                  <option value="YES">Fault</option>
+                                </select>
+                                <input className={`${INP} flex-1 text-[11px] py-1 min-h-0`} placeholder={s.fault ? 'Describe the issue…' : 'Notes…'}
                                   value={drafts['t' + cl.id + '-' + ti] ?? s.notes ?? ''}
                                   onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
                                   onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
-                                {(s.fault || (drafts['t' + cl.id + '-' + ti] ?? s.notes)) && (
+                                {s.fault && (
                                   <button className="shrink-0 border border-err/40 text-err bg-err/5 rounded-md px-2 py-1 text-[10px] font-semibold hover:bg-err/10 transition whitespace-nowrap"
-                                    title="Raise a job card for this fault"
-                                    onClick={() => raiseFromChecklist(cl.area, cl.doc_ref, task, drafts['t' + cl.id + '-' + ti] ?? s.notes ?? '')}>→ Job card</button>
+                                    title="Raise a job card for this fault — the card number is added to the checklist notes"
+                                    onClick={() => raiseFromChecklist(cl.area, cl.doc_ref, task, drafts['t' + cl.id + '-' + ti] ?? s.notes ?? '', cl, ti)}>→ Job card</button>
                                 )}
                               </div>
                             </div>
@@ -276,7 +293,26 @@ export default function ScheduledPage() {
                             onBlur={e => saveComp(cl, { comments: e.target.value })}
                             placeholder="General comments…" />
                         </div>
-                        {!done && <button className="mt-2 border border-warn/40 text-warn bg-warn/5 rounded-lg px-3 py-2 min-h-[40px] text-[12px] font-semibold hover:bg-warn/10 transition" onClick={() => setPopup(cl.area + ': ' + (cl.tasks.length - doneN) + ' task(s) still outstanding! Please finish the remaining items.')}>Check missing items</button>}
+                        {!done && <button className="mt-2 border border-warn/40 text-warn bg-warn/5 rounded-lg px-3 py-2 min-h-[40px] text-[12px] font-semibold hover:bg-warn/10 transition" onClick={() => setPopup(cl.area + ': ' + (cl.tasks.length - doneN) + ' task(s) still outstanding! Please answer the remaining items.')}>Check missing items</button>}
+
+                        {/* Checklist verification — the technician sends the completed
+                            checklist to the maintenance manager, who (only) verifies it.
+                            Technicians see the status but cannot verify. */}
+                        {done && (
+                          <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                            {comp?.verified_at ? (
+                              <span className="badge badge-ok">✓ Verified by {comp.verified_by || 'manager'} ({fmtD(comp.verified_at)})</span>
+                            ) : comp?.submitted_at ? (
+                              <>
+                                <span className="badge badge-info">Sent to manager to verify{comp.submitted_by ? ` · by ${comp.submitted_by}` : ''}</span>
+                                {canManage && <button className={BTN_OK} onClick={() => verifyChecklist(cl)}>✓ Verified</button>}
+                              </>
+                            ) : (
+                              <button className="border border-brand/40 text-brand bg-brand/5 rounded-lg px-3 py-2 min-h-[40px] text-[12px] font-semibold hover:bg-brand/10 transition"
+                                onClick={() => submitChecklist(cl)}>Send to manager for verification →</button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -294,18 +330,29 @@ export default function ScheduledPage() {
             <p className="text-[12px] text-text-muted mt-0.5">Every field is editable. Mark an item calibrated with the date, cycle (days) and who did it — the next-due date recomputes automatically. Boiler: 180-day warning; others: 60 / 30 / 7 / 1-day alerts.</p>
           </div>
 
-          {/* At-a-glance counts (overdue items also sort to the top of the table below). */}
-          <div className="flex gap-2 flex-wrap text-[12px]">
+          {/* At-a-glance counts + search (overdue items sort to the top of the table). */}
+          <div className="flex gap-2 flex-wrap items-center text-[12px]">
             <span className="badge badge-err">{annualRows.filter(a => a.days <= 0).length} overdue</span>
             <span className="badge badge-warn">{annualRows.filter(a => a.days > 0 && a.days <= 30).length} due ≤30d</span>
             <span className="badge badge-info">{annualRows.filter(a => a.days > 30 && a.days <= 60).length} due ≤60d</span>
+            <input className={`${INP} w-[220px] ml-auto`} placeholder="Search asset / serial / supplier…" value={annualSearch} onChange={e => setAnnualSearch(e.target.value)} />
           </div>
 
           <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
             <div className="overflow-x-auto">
               <table className="data-table">
-                <thead><tr>{['Status', 'Category', 'Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}</tr></thead>
-                <tbody>{annualRows.map(a => {
+                <thead><tr>
+                  <th>Status</th>
+                  <th><select className={`${INP} text-[11px] py-1 min-h-0 font-semibold ${annualCat !== 'all' ? 'text-brand' : ''}`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
+                    <option value="all">Category ▾</option>
+                    {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                  </select></th>
+                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}
+                </tr></thead>
+                <tbody>{annualRows
+                  .filter(a => (annualCat === 'all' || a.category === annualCat)
+                    && (!annualSearch || `${a.asset} ${a.serial_no} ${a.category} ${a.supplier}`.toLowerCase().includes(annualSearch.toLowerCase())))
+                  .map(a => {
                   const cf = calForm[a.id] ?? {}
                   return (
                   <tr key={a.id}>
@@ -325,29 +372,48 @@ export default function ScheduledPage() {
                     <td className="text-[11px] whitespace-nowrap">{a.last_done
                       ? <span className="text-ok">✓ {fmtD(a.last_done)}{a.last_done_by ? <span className="text-text-faint"> · {a.last_done_by}</span> : ''}</span>
                       : <span className="text-text-faint">not yet</span>}</td>
+                    {/* Cycle (days) → recomputes Next due from the anchor (last done, else today). */}
                     <td><input className={`${INP} w-16 text-[11px] py-1 min-h-0`} type="number" inputMode="numeric" placeholder="—"
                       value={drafts['ai' + a.id] ?? (a.interval_days != null ? String(a.interval_days) : '')}
                       onChange={e => setDrafts(p => ({ ...p, ['ai' + a.id]: e.target.value }))}
-                      onBlur={e => { const v = e.target.value ? parseInt(e.target.value, 10) : null; if (v !== a.interval_days) updateAnnual(a.id, { interval_days: v }) }} /></td>
+                      onBlur={e => {
+                        const v = e.target.value ? parseInt(e.target.value, 10) : null
+                        if (v === a.interval_days) return
+                        const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
+                        const patch: any = { interval_days: v }
+                        if (v && anchor) patch.next_due = addDays(anchor, v).toISOString().slice(0, 10)
+                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n }) // let the recomputed date show
+                        updateAnnual(a.id, patch)
+                      }} /></td>
+                    {/* Next due → recomputes Cycle (days) from the anchor. Bidirectional. */}
                     <td><input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date"
                       value={drafts['an' + a.id] ?? (a.next_due ?? '').slice(0, 10)}
                       onChange={e => setDrafts(p => ({ ...p, ['an' + a.id]: e.target.value }))}
-                      onBlur={e => e.target.value !== (a.next_due ?? '').slice(0, 10) && updateAnnual(a.id, { next_due: e.target.value || null })} /></td>
+                      onBlur={e => {
+                        const nd = e.target.value || null
+                        if (nd === (a.next_due ?? '').slice(0, 10)) return
+                        const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
+                        const patch: any = { next_due: nd }
+                        if (nd) patch.interval_days = Math.max(0, diffDays(anchor, nd))
+                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n }) // let the recomputed cycle show
+                        updateAnnual(a.id, patch)
+                      }} /></td>
                     <td>
                       <div className="flex gap-1 items-center">
                         <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
                           value={cf.date ?? new Date().toISOString().slice(0, 10)}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
-                        <select className={`${INP} w-24 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
+                        <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
                           value={cf.by ?? ''}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
                           <option value="">Who?…</option>
                           {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                          <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
                         </select>
                         <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when, then recompute next due from the cycle"
                           onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
                             (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days) ?? null,
-                            cf.by!)}>✓ Calibrated</button>
+                            cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
                       </div>
                     </td>
                     <td>{a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>Email</button>}</td>

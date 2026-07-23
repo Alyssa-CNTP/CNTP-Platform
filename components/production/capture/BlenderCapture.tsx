@@ -5,7 +5,7 @@ import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, Al
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import { markBagConsumed } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan } from '@/lib/production/validate-scan'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -113,10 +113,26 @@ export interface CapturedCode { label: string; code: string; resolved: boolean }
  * (max existing + 1) and silently fork bag numbering to a new run the moment
  * the shift changed, even though the operator explicitly said to continue.
  */
-export async function resolveExistingBlendRunNo(bomId: string): Promise<number | null> {
+// The run number resets to 1 for the first blend of each production day —
+// it is NOT a lifetime-cumulative count of every time this blend code has
+// ever run. So any "existing runs" scan for a blend code must be scoped to
+// that one production day, not all of bag_tags history. The window covers
+// the full calendar date plus an overnight (afternoon/night) shift's
+// post-midnight tail, up to 07:00 the next morning when the next day's
+// morning shift starts — matching this app's "production day" convention
+// (production_runs.production_day) elsewhere.
+function productionDayRange(date: string): { start: string; end: string } {
+  const [y, m, d] = date.split('-').map(Number)
+  const next = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)
+  return { start: `${date}T00:00:00+02:00`, end: `${next}T07:00:00+02:00` }
+}
+
+export async function resolveExistingBlendRunNo(bomId: string, date: string): Promise<number | null> {
   const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const { start, end } = productionDayRange(date)
   const { data } = await getDb().schema('production').from('bag_tags')
     .select('serial_number').ilike('serial_number', `${bomId}/%`)
+    .gte('created_at', start).lt('created_at', end)
   const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
   const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)
   const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
@@ -258,7 +274,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
   const [lot, setLot] = useState(editingRow?.lot ?? '')
   const [productCode, setProductCode] = useState(editingRow?.productCode ?? '')
   const [variant, setVariant] = useState(editingRow?.variant ?? variantWord)
-  const [notInSystem, setNotInSystem] = useState(editingRow?.notInSystem ?? '')
+  const [notInSystem, setNotInSystem] = useState(editingRow?.notInSystem ?? false)
   const [inputMode, setInputMode] = useState<BlenderInputBag['inputMode']>(editingRow?.inputMode ?? 'scan')
   const [browsing, setBrowsing] = useState(false)
   const [looking, setLooking] = useState(false)
@@ -303,10 +319,10 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
       setWeight(result.tag.weight_kg != null ? String(result.tag.weight_kg) : '')
       setVariant(result.tag.variant || variantWord || '')
       if (group.hasLot && result.tag.lot_number && result.tag.lot_number !== 'NOT TRACKED') setLot(result.tag.lot_number)
-      setNotInSystem(''); setInputMode('scan')
+      setNotInSystem(false); setInputMode('scan')
       setScanMsg({ kind: 'ok', text: result.message })
     } else if (result.status === 'not_found') {
-      setNotInSystem('true'); setInputMode('manual')
+      setNotInSystem(true); setInputMode('manual')
       setScanMsg({ kind: 'error', text: result.message })
     } else {
       setScanMsg({ kind: 'error', text: result.message })
@@ -316,7 +332,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
   function pickSystemBag(b: SystemBag) {
     setSerial(b.serial_number); setProductCode(b.acumatica_id || '')
     setWeight(b.weight_kg ? String(b.weight_kg) : ''); setVariant(b.variant || variantWord || '')
-    setLot(b.lot_number || ''); setInputMode('system'); setNotInSystem(''); setBrowsing(false)
+    setLot(b.lot_number || ''); setInputMode('system'); setNotInSystem(false); setBrowsing(false)
   }
 
   // Fine/Coarse Leaf batch numbers are always a Sieving Tower lot — letter/
@@ -359,7 +375,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
                 <div className="flex gap-2">
                   <input autoFocus type="text" value={serial}
                     placeholder="Scan or type — press Enter to look up"
-                    onChange={e => { setSerial(e.target.value.toUpperCase()); setScanMsg(null) }}
+                    onChange={e => { setSerial(sanitizeSerial(e.target.value)); setScanMsg(null) }}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); triggerLookup() } }}
                     className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />
                   <button onClick={triggerLookup} disabled={!serial.trim() || looking}
@@ -471,7 +487,7 @@ function OutputRow({ b, locked, onSetSecured, onRemove, onTag }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function BlenderCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId,
+  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -481,6 +497,7 @@ export function BlenderCapture({
   onChange: (d: BlenderData) => void
   genSerial: () => string
   operatorId?: string | null
+  date: string
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   // One "+ Add debagging bag" action opens this instead of each group having
@@ -519,9 +536,14 @@ export function BlenderCapture({
     if (!bomId) return genSerial()
     if (bagSeqRef.current === null || runNoRef.current === null) {
       const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const { data } = await getDb().schema('production').from('bag_tags')
+      // Scoped to this production day — see resolveExistingBlendRunNo's
+      // comment. Without this, a blend code that ran on an earlier day (even
+      // weeks ago) would push today's first run past 1.
+      const { start, end } = productionDayRange(date)
+      const { data: bagRows } = await getDb().schema('production').from('bag_tags')
         .select('serial_number').ilike('serial_number', `${bomId}/%`)
-      const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
+        .gte('created_at', start).lt('created_at', end)
+      const serials = ((bagRows as any[]) ?? []).map(r => r.serial_number as string)
       let runNo = value.outputRunNo
       if (!runNo) {
         const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)

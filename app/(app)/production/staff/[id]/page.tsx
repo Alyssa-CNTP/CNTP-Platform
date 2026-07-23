@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { format, parseISO, differenceInYears } from 'date-fns'
+import { format, parseISO, differenceInYears, isPast } from 'date-fns'
 import {
   ArrowLeft, Loader2, User, Phone, Plane, Calendar, Award,
   ClipboardList, ChevronDown, ChevronUp, History, AlertTriangle,
-  Check, X, Edit2, KeyRound, IdCard, GraduationCap,
+  Check, X, Edit2, KeyRound, IdCard, GraduationCap, Plus, CalendarClock,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -77,9 +77,11 @@ export default function StaffProfilePage() {
   const [requestSent, setRequestSent] = useState<string | null>(null)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [trainingCourses, setTrainingCourses] = useState<any[]>([])
+  const [assigningTraining, setAssigningTraining] = useState(false)
 
   const canEdit = p('can_manage_competencies')
   const canAssignPin = p('can_reset_operator_pin')
+  const canAssignTraining = p('can_assign_training')
 
   async function loadIdentities() {
     const res = await fetch(`/api/staff/${id}/identities`)
@@ -104,10 +106,12 @@ export default function StaffProfilePage() {
     if (id) { load(); loadIdentities() }
   }, [id, router])
 
-  useEffect(() => {
+  const loadTraining = useCallback(() => {
     if (!id) return
     fetch(`/api/training/courses?employeeId=${id}`).then(r => r.json()).then(d => setTrainingCourses(d.courses ?? [])).catch(() => {})
   }, [id])
+
+  useEffect(() => { loadTraining() }, [loadTraining])
 
   const compBySop = useMemo(() => {
     const m = new Map<string, Competency>()
@@ -252,7 +256,37 @@ export default function StaffProfilePage() {
         </div>
       </div>
 
-      {/* Identity hub — PIN operator (Capture) + login account (Users & Roles) linked to this person */}
+      {/* How they sign in — PIN operator (Capture) + login account (Users & Roles)
+          linked to this person. Summary badges up top match the same PIN/EMAIL
+          language used on the Directory list; a prompt appears when neither is
+          set up yet, so allocating a sign-in method is never a dead end. */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2 className="font-display font-semibold text-[15px] text-text">How they sign in</h2>
+          <SignInBadge kind="PIN" set={!!identities?.operator} active={!!identities?.operator?.active} />
+          <SignInBadge kind="EMAIL" set={!!identities?.login} active={!!identities?.login?.is_active} />
+        </div>
+
+        {!identities?.operator && !identities?.login && (canAssignPin || isIT || !requestSent) && (
+          <div className="flex items-center gap-2 flex-wrap px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="flex-1 min-w-[160px]">No sign-in method set up yet — this person can&rsquo;t sign in to Capture or the app.</span>
+            {canAssignPin && (
+              <button onClick={() => setAssigningPin(true)} className="font-medium underline underline-offset-2 shrink-0">Assign a PIN</button>
+            )}
+            {isIT ? (
+              <Link href={`/users?newFor=${employee.id}&name=${encodeURIComponent(employee.display_name || employee.name)}${employee.email ? `&email=${encodeURIComponent(employee.email)}` : ''}`}
+                className="font-medium underline underline-offset-2 shrink-0">Set up EMAIL login →</Link>
+            ) : requestSent ? (
+              <span className="font-medium shrink-0">EMAIL login requested</span>
+            ) : (
+              <button onClick={requestLogin} disabled={requestingLogin} className="font-medium underline underline-offset-2 shrink-0 disabled:opacity-40">
+                {requestingLogin ? 'Sending…' : 'Request EMAIL login'}
+              </button>
+            )}
+          </div>
+        )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {/* PIN operator */}
         <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
@@ -319,30 +353,52 @@ export default function StaffProfilePage() {
           {identityError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {identityError}</p>}
         </div>
       </div>
+      </div>
 
-      {/* Training portfolio — courses assigned/completed, feeding the competency matrix below */}
-      {trainingCourses.length > 0 && (
+      {/* Training portfolio — courses assigned/completed, feeding the competency matrix below.
+          Shows for anyone who can assign training (so a course can be allocated straight from
+          the profile) or whenever this person already has courses on record. */}
+      {(canAssignTraining || trainingCourses.some(c => c.assignment || c.latest_attempt)) && (
         <div className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="font-display font-semibold text-[15px] text-text flex items-center gap-2">
               <GraduationCap size={15} /> Training portfolio
             </h2>
-            <Link href="/training/manage/assignments" className="text-[11px] text-brand font-medium hover:underline">Assign training →</Link>
+            {canAssignTraining && (
+              <button onClick={() => setAssigningTraining(true)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline">
+                <Plus size={12} /> Assign course
+              </button>
+            )}
           </div>
           <div className="space-y-1.5">
-            {trainingCourses.filter(c => c.assignment || c.latest_attempt).map(c => (
-              <Link key={c.id} href={`/training/course/${c.slug}?as=${id}`}
-                className="flex items-center justify-between gap-2 text-[12px] px-3 py-2 rounded-xl hover:bg-surface transition-colors">
-                <span className="text-text">{c.title}</span>
-                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
-                  c.latest_attempt?.passed ? 'bg-ok/15 text-ok'
-                  : c.latest_attempt?.needs_review ? 'bg-warn/15 text-warn'
-                  : c.assignment ? 'bg-azure/15 text-azure' : 'bg-stone-100 text-stone-400'
-                }`}>
-                  {c.latest_attempt?.passed ? 'Completed' : c.latest_attempt?.needs_review ? 'Pending review' : c.assignment ? 'Assigned' : 'Available'}
-                </span>
-              </Link>
-            ))}
+            {trainingCourses.filter(c => c.assignment || c.latest_attempt).map(c => {
+              const due = c.assignment?.due_date as string | undefined
+              const overdue = due && !c.latest_attempt?.passed && isPast(parseISO(due))
+              return (
+                <Link key={c.id} href={`/training/course/${c.slug}?as=${id}`}
+                  className="flex items-center justify-between gap-2 text-[12px] px-3 py-2 rounded-xl hover:bg-surface transition-colors">
+                  <span className="min-w-0">
+                    <span className="text-text">{c.title}</span>
+                    {due && (
+                      <span className={`ml-2 inline-flex items-center gap-1 text-[10px] ${overdue ? 'text-err font-medium' : 'text-text-muted'}`}>
+                        <CalendarClock size={10} /> Due {fmtDate(due)}{overdue ? ' · overdue' : ''}
+                      </span>
+                    )}
+                  </span>
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                    c.latest_attempt?.passed ? 'bg-ok/15 text-ok'
+                    : c.latest_attempt?.needs_review ? 'bg-warn/15 text-warn'
+                    : c.assignment ? 'bg-azure/15 text-azure' : 'bg-stone-100 text-stone-400'
+                  }`}>
+                    {c.latest_attempt?.passed ? 'Completed' : c.latest_attempt?.needs_review ? 'Pending review' : c.assignment ? 'Assigned' : 'Available'}
+                  </span>
+                </Link>
+              )
+            })}
+            {canAssignTraining && !trainingCourses.some(c => c.assignment || c.latest_attempt) && (
+              <p className="text-[12px] text-text-muted px-1 py-1">No courses assigned yet — assign one to schedule training with a due date.</p>
+            )}
           </div>
         </div>
       )}
@@ -475,6 +531,16 @@ export default function StaffProfilePage() {
         />
       )}
 
+      {/* Assign a training course + due date straight from the profile */}
+      {assigningTraining && employee && (
+        <AssignTrainingModal
+          employeeId={employee.id}
+          personName={employee.display_name || employee.name}
+          onClose={() => setAssigningTraining(false)}
+          onDone={() => { setAssigningTraining(false); loadTraining() }}
+        />
+      )}
+
       {/* Assign PIN + sections — creates a linked operator via /api/production/operators */}
       {assigningPin && employee && (
         <AssignPinModal
@@ -484,6 +550,88 @@ export default function StaffProfilePage() {
           onDone={() => { setAssigningPin(false); loadIdentities() }}
         />
       )}
+    </div>
+  )
+}
+
+function AssignTrainingModal({ employeeId, personName, onClose, onDone }: {
+  employeeId: string; personName: string
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [courses, setCourses] = useState<{ id: string; title: string; slug: string }[]>([])
+  const [loadingCourses, setLoadingCourses] = useState(true)
+  const [courseId, setCourseId] = useState('')
+  const [dueDate, setDueDate] = useState('')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Active courses only — the picker offers what someone can actually be assigned.
+    fetch('/api/training/courses')
+      .then(r => r.json())
+      .then(d => setCourses(d.courses ?? []))
+      .catch(() => setError('Could not load courses'))
+      .finally(() => setLoadingCourses(false))
+  }, [])
+
+  async function assign() {
+    if (!courseId) { setError('Pick a course'); return }
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch('/api/training/assignments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ course_id: courseId, employee_ids: [employeeId], due_date: dueDate || null, reason: reason || null }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Could not assign the course')
+      onDone()
+    } catch (e: any) {
+      setError(e?.message || 'Could not assign the course')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[400px] p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-display font-bold text-[15px] text-text">Assign training</h3>
+            <p className="text-[11px] text-text-muted mt-0.5">{personName}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={15} /></button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className={LBL}>Course</label>
+            <select value={courseId} onChange={e => setCourseId(e.target.value)} disabled={loadingCourses} className={INP + ' cursor-pointer'}>
+              <option value="">{loadingCourses ? 'Loading…' : 'Select a course…'}</option>
+              {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={LBL}>Training due date</label>
+            <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className={INP} />
+          </div>
+          <div>
+            <label className={LBL}>Reason (optional)</label>
+            <input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Assigned to Sieving Tower line" className={INP} />
+          </div>
+        </div>
+
+        {error && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} /> {error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} disabled={saving} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-[13px] font-medium text-stone-500 hover:bg-stone-50 disabled:opacity-40">Cancel</button>
+          <button onClick={assign} disabled={saving || loadingCourses}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Assign
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -664,3 +812,16 @@ function CompetencyEditModal({ sopId, sop, current, saving, onClose, onSave }: {
 
 const INP = 'w-full px-3 py-2 rounded-lg border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand'
 const LBL = 'block text-[10px] font-semibold text-stone-500 uppercase tracking-widest mb-1'
+
+// Same PIN/EMAIL badge language as the Directory list (components handle
+// their own list separately — kept local rather than a shared import, same
+// pattern this file already follows for its other small subcomponents).
+function SignInBadge({ kind, set, active }: { kind: 'PIN' | 'EMAIL'; set: boolean; active: boolean }) {
+  const Icon = kind === 'PIN' ? IdCard : KeyRound
+  const cls = !set ? 'bg-stone-100 text-stone-400' : active ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${cls}`}>
+      <Icon size={10} /> {kind}
+    </span>
+  )
+}

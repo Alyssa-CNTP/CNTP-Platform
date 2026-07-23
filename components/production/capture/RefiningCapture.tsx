@@ -5,7 +5,7 @@ import { Plus, Trash2, Printer, Package, PackageCheck, Lock, Pencil, Check, Sear
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import { markBagConsumed } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
@@ -244,9 +244,10 @@ function ScanRow({
             value={row.serial}
             disabled={locked}
             placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
-            onChange={e => onUpdate('serial', e.target.value)}
+            onChange={e => onUpdate('serial', sanitizeSerial(e.target.value))}
             onKeyDown={handleKeyDown}
             className={INP + ' flex-1'}
+            autoCapitalize="characters" spellCheck={false}
           />
           {!locked && (
             <button onClick={triggerLookup} disabled={!row.serial.trim() || looking}

@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import Link from 'next/link'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { format, parseISO, formatDistanceToNow } from 'date-fns'
@@ -334,6 +335,12 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
                 </div>
               ))}
             </div>
+            {tag.lot_number && (
+              <Link href={`/traceability?batch=${encodeURIComponent(tag.lot_number)}`}
+                className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/5 px-3 py-1.5 text-[12px] font-medium text-brand hover:bg-brand/10 transition">
+                <BarChart3 size={13} /> View batch KPIs (yield · quality · reconciliation)
+              </Link>
+            )}
           </div>
 
           {/* ── Genealogy chain ── */}

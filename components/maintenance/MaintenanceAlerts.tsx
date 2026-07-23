@@ -18,7 +18,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, X } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
@@ -37,7 +37,9 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
 }) {
   const auth = useAuth()
   const userId = auth.userId
-  const canManage = deriveMaintRole(auth).canManage
+  const role = deriveMaintRole(auth)
+  const canManage = role.canManage
+  const isQc = role.isQc
   const toast = useToast()
   const db = getDb()
 
@@ -46,9 +48,12 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
   const seen = useRef<Map<number, { status: string; accepted: boolean }>>(new Map())
   const inited = useRef(false)
 
+  const seenLog = useRef<number>(0) // max job_card_logs id seen (for comment pop-ups)
+
   // Per-session dismissals so we don't re-nag once acknowledged.
   const [techDismissed, setTechDismissed] = useState<number[]>([])
   const [allocDismissed, setAllocDismissed] = useState<number[]>([])
+  const [qcDismissed, setQcDismissed] = useState<number[]>([])
 
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
@@ -80,6 +85,26 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
       setCards(rows)
       // Pull the shared board/context up to date when something new landed.
       if (!firstRun && sawNew) reload()
+
+      // Manager: pop a toast when a technician posts a NEW comment (directed to
+      // the manager) on any job card.
+      if (canManage) {
+        const { data: logs } = await db.schema('maintenance').from('job_card_logs')
+          .select('id, card_id, kind, author, body').eq('kind', 'comment')
+          .order('id', { ascending: false }).limit(40)
+        if (alive && logs) {
+          const prevMax = seenLog.current
+          const maxId = (logs as any[]).reduce((mx, l) => Math.max(mx, l.id), prevMax)
+          if (prevMax > 0) {
+            const cardNo = (id: number) => rows.find(c => c.id === id)?.card_no ?? '#' + id
+            for (const l of (logs as any[]).filter(l => l.id > prevMax && (l.author ?? '') !== actor).reverse()) {
+              const body = String(l.body ?? '')
+              toast(`💬 ${l.author} on ${cardNo(l.card_id)}: ${body.slice(0, 60)}${body.length > 60 ? '…' : ''}`, 'info')
+            }
+          }
+          seenLog.current = maxId
+        }
+      }
     }
     poll()
     const id = setInterval(poll, POLL_MS)
@@ -97,6 +122,11 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
   // Manager: job cards awaiting allocation (freshly raised, undismissed).
   const pendingAlloc = canManage
     ? cards.filter(c => c.status === 'raised' && !allocDismissed.includes(c.id))
+    : []
+
+  // QC: job cards finished and awaiting the post-maintenance QC check.
+  const pendingQc = isQc
+    ? cards.filter(c => c.status === 'qc_check' && !qcDismissed.includes(c.id))
     : []
 
   async function acceptFromModal(card: JobCard) {
@@ -188,6 +218,34 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
             <Link href="/maintenance/job-cards" onClick={() => setAllocDismissed(d => [...d, ...pendingAlloc.map(c => c.id)])}
               className="block bg-brand text-white text-center text-sm font-semibold py-2.5 hover:brightness-110 transition">
               Allocate now →
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* ── QC: job cards awaiting the post-maintenance check ── */}
+      {!myCard && pendingQc.length > 0 && (
+        <div className="fixed bottom-5 left-5 z-[1000] w-[360px] max-w-[92vw]">
+          <div className="card overflow-hidden shadow-menu border border-info/30">
+            <div className="bg-info/10 text-text px-4 py-2.5 flex items-center gap-2">
+              <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-info/20 text-info shrink-0">
+                <CheckCircle2 className="w-4 h-4" />
+              </span>
+              <div className="flex-1 text-sm font-semibold">{pendingQc.length} job card{pendingQc.length > 1 ? 's' : ''} to QC-check</div>
+              <button onClick={() => setQcDismissed(d => [...d, ...pendingQc.map(c => c.id)])}
+                className="text-text-muted hover:text-text transition" title="Dismiss"><X size={16} /></button>
+            </div>
+            <div className="p-3 space-y-1.5 max-h-[180px] overflow-y-auto">
+              {pendingQc.slice(0, 5).map(c => (
+                <div key={c.id} className="text-[12px] text-text-muted">
+                  <strong className="text-text">{c.card_no}</strong> · {c.area}{c.machine ? ' · ' + c.machine : ''} — {c.description}
+                </div>
+              ))}
+              {pendingQc.length > 5 && <div className="text-[11px] text-text-faint">+{pendingQc.length - 5} more</div>}
+            </div>
+            <Link href="/maintenance/job-cards" onClick={() => setQcDismissed(d => [...d, ...pendingQc.map(c => c.id)])}
+              className="block bg-info text-white text-center text-sm font-semibold py-2.5 hover:brightness-110 transition">
+              Open QC checks →
             </Link>
           </div>
         </div>

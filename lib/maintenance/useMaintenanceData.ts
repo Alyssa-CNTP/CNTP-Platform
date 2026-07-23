@@ -139,10 +139,17 @@ export function useMaintenanceData() {
       if (!r.ok) return // keep fallback (e.g. raiser without directory permission)
       const rows = await r.json()
       if (Array.isArray(rows) && rows.length) {
-        setStaff(rows.map((s: any) => ({
-          id: s.id ?? null, name: s.name, initials: s.initials,
-          email: s.email ?? null, phone: s.phone ?? null, role: s.role,
-        })))
+        // De-duplicate by name (some people appear twice in the directory, e.g. a
+        // double "John") — keep the first, preferring an entry that has a user id.
+        const byName = new Map<string, Staff>()
+        for (const s of rows) {
+          const key = (s.name ?? '').trim().toLowerCase()
+          if (!key) continue
+          const entry: Staff = { id: s.id ?? null, name: s.name, initials: s.initials, email: s.email ?? null, phone: s.phone ?? null, role: s.role }
+          const existing = byName.get(key)
+          if (!existing || (!existing.id && entry.id)) byName.set(key, entry)
+        }
+        setStaff(Array.from(byName.values()))
       }
     } catch { /* keep fallback */ }
   }, [])
@@ -514,6 +521,10 @@ export function useMaintenanceData() {
       assigned_to: patch.assigned_to !== undefined ? patch.assigned_to : (existing?.assigned_to ?? null),
       assigned_by: patch.assigned_by !== undefined ? patch.assigned_by : (existing?.assigned_by ?? null),
       assigned_at: patch.assigned_at !== undefined ? patch.assigned_at : (existing?.assigned_at ?? null),
+      submitted_at: patch.submitted_at !== undefined ? patch.submitted_at : (existing?.submitted_at ?? null),
+      submitted_by: patch.submitted_by !== undefined ? patch.submitted_by : (existing?.submitted_by ?? null),
+      verified_at: patch.verified_at !== undefined ? patch.verified_at : (existing?.verified_at ?? null),
+      verified_by: patch.verified_by !== undefined ? patch.verified_by : (existing?.verified_by ?? null),
       updated_at: new Date().toISOString(),
     }
     setCompletions(p => {
@@ -532,6 +543,15 @@ export function useMaintenanceData() {
     await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
   }
 
+  // Technician submits a completed checklist to the maintenance manager to verify;
+  // resets any prior verification. Manager (only) marks it verified.
+  const submitChecklist = async (tpl: Template) => {
+    await saveComp(tpl, { submitted_at: new Date().toISOString(), submitted_by: actor || displayName || '', verified_at: null, verified_by: null })
+  }
+  const verifyChecklist = async (tpl: Template) => {
+    await saveComp(tpl, { verified_at: new Date().toISOString(), verified_by: actor || displayName || '' })
+  }
+
   const toggleTask = (tpl: Template, ti: number) => {
     const period = tpl.frequency === 'weekly' ? weekKey : moKey
     const states = { ...(getComp(tpl.id, period)?.task_states ?? {}) }
@@ -544,6 +564,14 @@ export function useMaintenanceData() {
     const period = tpl.frequency === 'weekly' ? weekKey : moKey
     const states = { ...(getComp(tpl.id, period)?.task_states ?? {}) }
     states[ti] = { ...(states[ti] ?? {}), [field]: value }
+    saveComp(tpl, { task_states: states })
+  }
+  // Answer a checklist item with Fault / No-fault — this SELECT replaces the tick:
+  // choosing either value records the fault flag AND marks the item done (who+when).
+  const answerTask = (tpl: Template, ti: number, fault: boolean) => {
+    const period = tpl.frequency === 'weekly' ? weekKey : moKey
+    const states = { ...(getComp(tpl.id, period)?.task_states ?? {}) }
+    states[ti] = { ...(states[ti] ?? {}), fault, done: true, by: actor || displayName || '', at: new Date().toISOString() }
     saveComp(tpl, { task_states: states })
   }
 
@@ -575,7 +603,7 @@ export function useMaintenanceData() {
   }
 
   // ── Checklist fault → job card (goes into the normal allocation workflow) ──
-  const raiseFromChecklist = async (area: string, docRef: string, task: string, notes: string) => {
+  const raiseFromChecklist = async (area: string, docRef: string, task: string, notes: string, tpl?: Template, ti?: number) => {
     const { data, error: err } = await db.schema('maintenance').from('job_cards').insert({
       workflow: 'planned', area, maint_types: ['Repair'],
       description: `Checklist fault: ${task}`,
@@ -585,6 +613,19 @@ export function useMaintenanceData() {
     if (err) { setPopup('Could not raise job card: ' + err.message); return }
     setJcs(p => [data, ...p])
     await addLog(data.id, 'event', 'raised', actor || displayName || 'Checklist', `Raised automatically from ${area} checklist (${docRef}).`)
+    // Record the job-card number on the checklist itself — into the task note (so it
+    // prints in the Notes column) and the checklist comments — so the fault is
+    // traceable to its job card on-screen and on the printout.
+    if (tpl && ti != null) {
+      const period = tpl.frequency === 'weekly' ? weekKey : moKey
+      const comp = getComp(tpl.id, period)
+      const states = { ...(comp?.task_states ?? {}) }
+      const prevNote = states[ti]?.notes ?? notes ?? ''
+      states[ti] = { ...(states[ti] ?? {}), notes: `${prevNote}${prevNote ? ' ' : ''}[Job card ${data.card_no}]` }
+      const prevComments = comp?.comments ?? ''
+      const line = `Job card ${data.card_no} raised for "${task}"${notes ? ' — ' + notes : ''}`
+      await saveComp(tpl, { task_states: states, comments: prevComments ? `${prevComments}\n${line}` : line })
+    }
     setPopup(`Job card ${data.card_no} raised for "${task}" (${area}).\nIt is now with the maintenance manager for allocation.`)
   }
 
@@ -830,7 +871,7 @@ export function useMaintenanceData() {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
       qcSubmit, verifyCard, postComment,
-      getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
+      getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
       raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,

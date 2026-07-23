@@ -39,6 +39,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/analytics',      label: 'Yield & Batch Analytics',    icon: BarChart2,       group: 'Production', departments: ['Production','Management'], permission: 'can_view_ops_dashboard', orPermission: true },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/inventory',      label: 'Master Inventory',           icon: PackageOpen,     group: 'Production', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
@@ -52,17 +53,18 @@ export const NAV: NavItem[] = [
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
   { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'] },
 
-  // ── HR — direct links, no intermediate hub page ──
-  // Staff & Skills / SOP / Skills Matrix view OTHER people's HR data, so they're
-  // gated behind can_access_hr. Training & Courses stays open to everyone — it's
-  // how every employee reaches their own assigned training.
-  { href: '/production/staff',          label: 'Staff & Skills',             icon: Users,           group: 'HR', permission: 'can_access_hr' },
-  { href: '/training',                  label: 'Training & Courses',         icon: GraduationCap,   group: 'HR' },
-  { href: '/production/staff/sops',     label: 'SOP',                        icon: BookOpen,        group: 'HR', permission: 'can_access_hr' },
-  { href: '/production/staff/matrix',   label: 'Skills Matrix',              icon: BarChart2,       group: 'HR', permission: 'can_access_hr' },
+  // ── HR — just two doors in. Staff Directory is people + how they sign in
+  // (gated — it's OTHER people's data); Training is the whole qualification
+  // home (courses, assignments, sign-offs, Skills Matrix, SOP Catalogue) and
+  // stays open to everyone since it's also how every employee reaches their
+  // own assigned training — the sub-pages that view others' records gate
+  // themselves via ROUTE_GUARDS in app/(app)/layout.tsx.
+  { href: '/production/staff',          label: 'Staff Directory',            icon: Users,           group: 'HR', permission: 'can_access_hr' },
+  { href: '/training',                  label: 'Training',                   icon: GraduationCap,   group: 'HR' },
 
   // ── Quality ──
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
+  { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
   { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
   { href: '/quality/coa',               label: 'COA Generator',              icon: FileSpreadsheet, group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
@@ -74,6 +76,7 @@ export const NAV: NavItem[] = [
   // ── Maintenance — full module is Maintenance + Management; Production sees only Job Cards ──
   { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/job-cards',     label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/quality/maintenance-qc',    label: 'QC Sign-off',                icon: ClipboardCheck,  group: 'Maintenance', departments: ['Maintenance','Quality','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/scheduled',     label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/planner',       label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/stock',         label: 'Stock & Spares',             icon: Boxes,           group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },

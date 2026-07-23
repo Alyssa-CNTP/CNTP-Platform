@@ -14,8 +14,13 @@
 -- Additive + idempotent (guarded by NOT EXISTS).
 -- ============================================================
 
-INSERT INTO axis.projects (project_code, name, description, status, priority, term, effort_size, approved_at)
-SELECT v.code, v.name, v.description, 'historical', 'mid', 'ongoing', 'M', now()
+-- approved_by is NOT NULL on production's axis.projects (staging allows null —
+-- schema drift between the two, per this repo's known lack of a baseline
+-- migration for the axis schema). Backfilled with an IT staff member's id
+-- rather than hardcoding a specific person, so this runs on either DB.
+INSERT INTO axis.projects (project_code, name, description, status, priority, term, effort_size, approved_at, approved_by)
+SELECT v.code, v.name, v.description, 'historical', 'mid', 'ongoing', 'M', now(),
+  (SELECT user_id FROM shared.app_roles WHERE department = 'IT' LIMIT 1)
 FROM (VALUES
   ('PRJ-001', 'PRJ-001 (historical — detail pending)', 'Pre-AXIS project. Existed only as a OneDrive folder before this system. Alyssa to fill in real name/description/dates.'),
   ('PRJ-002', 'PRJ-002 (historical — detail pending)', 'Pre-AXIS project. Existed only as a OneDrive folder before this system. Alyssa to fill in real name/description/dates.'),
