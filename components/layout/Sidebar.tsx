@@ -39,6 +39,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/analytics',      label: 'Yield & Batch Analytics',    icon: BarChart2,       group: 'Production', departments: ['Production','Management'], permission: 'can_view_ops_dashboard', orPermission: true },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/inventory',      label: 'Master Inventory',           icon: PackageOpen,     group: 'Production', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },

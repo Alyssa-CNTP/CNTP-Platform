@@ -7,7 +7,7 @@ import {
   Loader2, CheckCircle2, Clock, Pen, Play, Lock, ChevronRight,
   Filter, X, AlertTriangle, Package, PackageCheck, Scale, Users,
   CalendarRange, ArrowRight, MoreHorizontal, Pencil, Trash2, RotateCcw,
-  Save, Unlock, Archive,
+  Save, Unlock, Archive, BarChart3,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -383,6 +383,13 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
         <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full shrink-0 ${st.cls}`}>
           <StatusIcon size={11} /> {st.label}
         </span>
+
+        {s.lot_number && (
+          <Link href={`/traceability?batch=${encodeURIComponent(s.lot_number)}`} title="View batch KPIs — yield, quality, reconciliation"
+            className="p-1.5 rounded-lg text-stone-400 hover:text-brand hover:bg-stone-50 shrink-0">
+            <BarChart3 size={16} />
+          </Link>
+        )}
 
         {canManage ? (
           <div className="relative shrink-0">

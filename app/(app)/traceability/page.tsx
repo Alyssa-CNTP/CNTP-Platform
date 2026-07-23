@@ -14,13 +14,14 @@
  * Phase 4 — Full chain: scan any bag → see full history from field to dispatch.
  */
 
-import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import {
   QrCode, Truck, PackageCheck, GitBranch,
-  CheckCircle2, Clock, Lock, ArrowRight, Scan,
-  Package, ClipboardList, Zap,
+  CheckCircle2, Clock, Lock, Scan, Search,
+  Package, Zap, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import clsx from 'clsx'
+import BatchConsolidation from '@/components/production/BatchConsolidation'
 
 // ── ROADMAP DATA ───────────────────────────────────────────────────────────────
 
@@ -102,11 +103,33 @@ const STATUS_CONFIG = {
 
 // ── COMPONENT ──────────────────────────────────────────────────────────────────
 
+interface RecentBatch { batchKey: string; displayLot: string; variant: string | null; yieldPct: number | null; totalOutputKg: number; hasQuality: boolean }
+
 export default function TraceabilityPage() {
-  const router = useRouter()
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState<string | null>(null)
+  const [recent, setRecent] = useState<RecentBatch[]>([])
+  const [showRoadmap, setShowRoadmap] = useState(false)
+
+  // Recent batches for quick pick (reuses the analytics endpoint's batch list).
+  useEffect(() => {
+    fetch('/api/production/yield-analytics?days=90')
+      .then(r => r.json())
+      .then(j => setRecent((j.batches || []).slice(0, 24)))
+      .catch(() => {})
+  }, [])
+
+  // Deep-link: /traceability?batch=<lot> opens straight into that batch, so bag
+  // and order surfaces can link here. Read from the URL client-side (no Suspense).
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('batch')
+    if (p) { setSelected(p); setQuery(p) }
+  }, [])
+
+  const open = (key: string) => { const k = key.trim(); if (k) setSelected(k) }
 
   return (
-    <div className="p-4 lg:p-6 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 lg:p-6 max-w-5xl mx-auto space-y-6">
 
       {/* ── HEADER ── */}
       <div className="flex items-start gap-4">
@@ -137,29 +160,50 @@ export default function TraceabilityPage() {
         ))}
       </div>
 
-      {/* ── QR SCAN ENTRY POINT (placeholder for when scanning is built) ── */}
-      <div className="card p-5 border-2 border-dashed border-surface-rule">
-        <div className="flex items-center gap-3 mb-3">
-          <Scan size={18} className="text-text-muted" />
-          <p className="font-semibold text-base text-text">Scan a bag QR code</p>
-          <span className="badge badge-warn ml-auto">Coming soon</span>
+      {/* ── BATCH LOOKUP + CONSOLIDATION ── */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Search size={16} className="text-text-muted" />
+          <p className="font-semibold text-base text-text">Look up a batch</p>
+          <span className="text-[11px] text-text-muted ml-2">Type a lot / batch number, or pick a recent one</span>
         </div>
-        <p className="text-sm text-text-muted mb-4">
-          Once bag QR printing is live, tap here to open your camera and scan any bag
-          to instantly pull up its production record, batch details, and full trace history.
-        </p>
-        <button
-          disabled
-          className="w-full py-3 bg-surface border border-surface-rule rounded-xl text-sm font-semibold text-text-faint cursor-not-allowed flex items-center justify-center gap-2"
-        >
-          <QrCode size={16} /> Open scanner
-        </button>
+        <form onSubmit={(e) => { e.preventDefault(); open(query) }} className="flex gap-2 mb-3">
+          <input
+            value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder="e.g. GS-0098"
+            className="flex-1 rounded-lg border border-surface-rule bg-surface px-3 py-2 text-sm text-text"
+          />
+          <button type="submit" className="rounded-lg bg-brand text-white px-4 py-2 text-sm font-medium">Open</button>
+        </form>
+        {recent.length > 0 && !selected && (
+          <div className="flex flex-wrap gap-1.5">
+            {recent.map(b => (
+              <button key={b.batchKey} onClick={() => open(b.batchKey)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-surface-rule bg-surface px-2.5 py-1 text-[12px] text-text hover:border-brand/40 hover:text-brand transition">
+                {b.displayLot || b.batchKey}
+                {b.yieldPct != null && <span className="text-text-faint">· {b.yieldPct}%</span>}
+                {b.hasQuality && <CheckCircle2 size={11} className="text-ok" />}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* ── ROADMAP ── */}
+      {selected && (
+        <div className="card p-5">
+          <button onClick={() => setSelected(null)} className="text-[12px] text-text-muted hover:text-text mb-3 inline-flex items-center gap-1">
+            <ChevronRight size={13} className="rotate-180" /> Back to lookup
+          </button>
+          <BatchConsolidation batchKey={selected} />
+        </div>
+      )}
+
+      {/* ── ROADMAP (remaining phases: dispatch, receiving, chain, Acumatica) ── */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-4">Build roadmap</p>
-        <div className="space-y-3">
+        <button onClick={() => setShowRoadmap(s => !s)} className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-4">
+          {showRoadmap ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Build roadmap
+        </button>
+        <div className={clsx('space-y-3', !showRoadmap && 'hidden')}>
           {ROADMAP.map((item, i) => {
             const sc = STATUS_CONFIG[item.status]
             return (

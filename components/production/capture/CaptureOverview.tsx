@@ -14,10 +14,11 @@ import { type SievingData } from '@/components/production/capture/SievingCapture
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
+import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData }
+interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
@@ -95,6 +96,18 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
           else map.set(label, { lot: label, rows: [row], totalKg: num(r.weight) })
         })
       })
+    } else if ('byProducts' in d) {
+      // PasteuriserData: debagged blend bags (both streams) grouped by lot,
+      // falling back to serial then a positional placeholder — merged, not
+      // overwritten, for the same cross-shift reason as the branches above.
+      ;(d.debag ?? []).forEach((r: any, i: number) => {
+        if (num(r.weight) === 0) return
+        const lot = (r.lot || r.serial || `Input bag ${i + 1}`).trim()
+        const row: DebagRow = { bagNo: r.serial || `Input bag ${i + 1}`, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
+        const g = map.get(lot)
+        if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
+        else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
+      })
     } else {
       // SievingData: debag + spillage
       ;(d.spillage ?? []).forEach((r: any, i: number) => {
@@ -170,6 +183,18 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
       ;(d.dustOutputs ?? []).forEach((r: any) => addBag(p, {
         productType: r.dustType, weight: r.weight, serial: r.serial, code: r.code,
         batch: p.lot, destination: p.variant, logged_at: r.logged_at,
+      }))
+    } else if ('byProducts' in d) {
+      // PasteuriserData: final-product pallet lines (kg = bags × kg/bag) + by-products.
+      const perBag = num(d.weightPerBag) || 0
+      ;(d.outputs ?? []).forEach((l: any) => addBag(p, {
+        productType: l.item || l.kind || 'Final Product', code: l.itemCode,
+        weight: String(num(l.bagCount) * (num(l.bagWeight) || perBag)),
+        batch: l.lot || d.batchNo, serial: l.serial, destination: p.variant, logged_at: l.logged_at,
+      }))
+      ;(d.byProducts ?? []).forEach((r: any) => addBag(p, {
+        productType: r.type, weight: r.weight, serial: r.serial || r.type,
+        batch: d.batchNo, destination: p.variant,
       }))
     } else {
       // SievingData: flat outputs array
