@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Checklist fault-select UX + manager verification; maintenance QC sign-off access)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `components/layout/Sidebar.tsx`, `supabase/migrations/20260702_030_maintenance_checklist_verify.sql` (new, applied to staging DB)
+
+- **Fault / No-fault SELECT replaces the tick box** on every checklist item (weekly + monthly). Choosing "No fault ✓" or "Fault" *is* the check — it records the answer and marks the item done (who + when). No more separate tick.
+- **Fault → job card:** when an item is a fault, the "→ Job card" button raises a job card **and writes its card number into the checklist notes + comments**, so the fault is traceable and shows on the printout. The notes field prompts "Describe the issue…".
+- **Manager verification per checklist:** a completed checklist has a **"Send to manager for verification"** button (technician); the **maintenance manager only** sees **"✓ Verified"**; technicians see the sent / verified status but cannot verify. New additive columns `submitted_*/verified_*` on `checklist_completions` (migration applied to staging).
+- **Maintenance QC sign-off access:** added a **QC Sign-off** entry in the Maintenance sidebar group (→ the Quality `Maintenance QC` queue) so maintenance QC can view what's ready for sign-off from within Maintenance too.
+
 ## 2026-07-02 — Gustav (Quality: Maintenance QC tab — post-maintenance check queue)
 
 **Files changed:** `app/(app)/quality/maintenance-qc/page.tsx` (new), `components/layout/Sidebar.tsx`
