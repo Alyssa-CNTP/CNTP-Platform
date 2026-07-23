@@ -30,7 +30,7 @@ const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md 
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, allocateChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const auth = useAuth()
   const canManage = deriveMaintRole(auth).canManage
   // On-duty technicians (auto-suggested for checklist allocation) + the full
@@ -253,37 +253,34 @@ export default function ScheduledPage() {
                       <div className="px-3 pb-3 border-t border-surface-rule pt-2.5 max-h-[400px] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         {cl.tasks.map((task, ti) => {
                           const s = st[ti] ?? {}
+                          // The Fault / No-fault SELECT is the check itself — choosing a
+                          // value records the answer AND marks the item done (no tick box).
                           return (
                             <div key={ti} className="mb-2">
                               <div className="flex items-center gap-2">
-                                <div className={`w-5 h-5 rounded-md border flex-shrink-0 flex items-center justify-center text-[11px] text-white cursor-pointer transition ${s.done ? 'bg-ok border-ok' : 'bg-transparent border-surface-rule hover:border-text/30'}`}
-                                  onClick={() => {
-                                    // Monthly tasks must record Fault / No Fault before they can be ticked done.
-                                    if (freq === 'monthly' && !s.done && s.fault === undefined) { setPopup('Select “Fault” or “No Fault” for this item before marking it done.'); return }
-                                    toggleTask(cl, ti)
-                                  }}>
-                                  {s.done && '✓'}
-                                </div>
-                                <span className={`text-[12px] flex-1 ${s.done ? 'text-text-muted line-through' : 'text-text'}`}>{task}</span>
+                                <span className={`w-5 h-5 rounded-md border flex-shrink-0 flex items-center justify-center text-[11px] font-bold ${s.done ? (s.fault ? 'bg-err border-err text-white' : 'bg-ok border-ok text-white') : 'border-surface-rule text-transparent'}`}
+                                  title={s.done ? (s.fault ? 'Fault recorded' : 'No fault') : 'Not checked yet'}>
+                                  {s.done ? (s.fault ? '!' : '✓') : ''}
+                                </span>
+                                <span className={`text-[12px] flex-1 ${s.done && !s.fault ? 'text-text-muted' : 'text-text'}`}>{task}</span>
                                 {s.done && s.by && <span className="text-[10px] text-text-faint whitespace-nowrap shrink-0">{s.by} {fmtT(s.at ?? null)}</span>}
                               </div>
                               <div className="flex gap-1.5 mt-1" style={{ marginLeft: 28 }}>
-                                {freq === 'monthly' && (
-                                  <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${s.fault === undefined ? 'border-warn text-warn' : ''}`}
-                                    value={s.fault === true ? 'YES' : s.fault === false ? 'NO' : ''}
-                                    onChange={e => { if (e.target.value) setTaskField(cl, ti, 'fault', e.target.value === 'YES') }}>
-                                    <option value="" disabled>Fault? …</option>
-                                    <option value="NO">No Fault</option><option value="YES">Fault</option>
-                                  </select>
-                                )}
-                                <input className={`${INP} flex-1 text-[11px] py-1 min-h-0`} placeholder="Action needed / notes…"
+                                <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${!s.done ? 'border-warn text-warn' : s.fault ? 'border-err text-err' : ''}`}
+                                  value={!s.done ? '' : s.fault ? 'YES' : 'NO'}
+                                  onChange={e => { if (e.target.value) answerTask(cl, ti, e.target.value === 'YES') }}>
+                                  <option value="" disabled>Select…</option>
+                                  <option value="NO">No fault ✓</option>
+                                  <option value="YES">Fault</option>
+                                </select>
+                                <input className={`${INP} flex-1 text-[11px] py-1 min-h-0`} placeholder={s.fault ? 'Describe the issue…' : 'Notes…'}
                                   value={drafts['t' + cl.id + '-' + ti] ?? s.notes ?? ''}
                                   onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
                                   onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
-                                {(s.fault || (drafts['t' + cl.id + '-' + ti] ?? s.notes)) && (
+                                {s.fault && (
                                   <button className="shrink-0 border border-err/40 text-err bg-err/5 rounded-md px-2 py-1 text-[10px] font-semibold hover:bg-err/10 transition whitespace-nowrap"
-                                    title="Raise a job card for this fault"
-                                    onClick={() => raiseFromChecklist(cl.area, cl.doc_ref, task, drafts['t' + cl.id + '-' + ti] ?? s.notes ?? '')}>→ Job card</button>
+                                    title="Raise a job card for this fault — the card number is added to the checklist notes"
+                                    onClick={() => raiseFromChecklist(cl.area, cl.doc_ref, task, drafts['t' + cl.id + '-' + ti] ?? s.notes ?? '', cl, ti)}>→ Job card</button>
                                 )}
                               </div>
                             </div>
@@ -296,7 +293,26 @@ export default function ScheduledPage() {
                             onBlur={e => saveComp(cl, { comments: e.target.value })}
                             placeholder="General comments…" />
                         </div>
-                        {!done && <button className="mt-2 border border-warn/40 text-warn bg-warn/5 rounded-lg px-3 py-2 min-h-[40px] text-[12px] font-semibold hover:bg-warn/10 transition" onClick={() => setPopup(cl.area + ': ' + (cl.tasks.length - doneN) + ' task(s) still outstanding! Please finish the remaining items.')}>Check missing items</button>}
+                        {!done && <button className="mt-2 border border-warn/40 text-warn bg-warn/5 rounded-lg px-3 py-2 min-h-[40px] text-[12px] font-semibold hover:bg-warn/10 transition" onClick={() => setPopup(cl.area + ': ' + (cl.tasks.length - doneN) + ' task(s) still outstanding! Please answer the remaining items.')}>Check missing items</button>}
+
+                        {/* Checklist verification — the technician sends the completed
+                            checklist to the maintenance manager, who (only) verifies it.
+                            Technicians see the status but cannot verify. */}
+                        {done && (
+                          <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                            {comp?.verified_at ? (
+                              <span className="badge badge-ok">✓ Verified by {comp.verified_by || 'manager'} ({fmtD(comp.verified_at)})</span>
+                            ) : comp?.submitted_at ? (
+                              <>
+                                <span className="badge badge-info">Sent to manager to verify{comp.submitted_by ? ` · by ${comp.submitted_by}` : ''}</span>
+                                {canManage && <button className={BTN_OK} onClick={() => verifyChecklist(cl)}>✓ Verified</button>}
+                              </>
+                            ) : (
+                              <button className="border border-brand/40 text-brand bg-brand/5 rounded-lg px-3 py-2 min-h-[40px] text-[12px] font-semibold hover:bg-brand/10 transition"
+                                onClick={() => submitChecklist(cl)}>Send to manager for verification →</button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
