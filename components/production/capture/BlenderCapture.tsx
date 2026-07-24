@@ -585,7 +585,7 @@ export function BlenderCapture({
       const label = it.description || it.inventory_id
       setExtraGroups(gs => [...gs, {
         key, componentItemId: key, label, column: 'F', targetPct: 0,
-        hasLot: /fine leaf|coarse leaf/i.test(label),
+        hasLot: /fine leaf|coarse leaf/i.test(label) && !/cutter/i.test(label),
       }])
     }
     setAddingOther(false)

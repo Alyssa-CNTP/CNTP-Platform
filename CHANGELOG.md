@@ -5,6 +5,32 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Blender: SG-blend cutter materials no longer need a batch number; Granule: lot number now mandatory at assignment)
+
+**Files:** `lib/production/bom.ts`, `components/production/capture/BlenderCapture.tsx`,
+`app/(app)/production/capture/assign/page.tsx`
+
+**Blender — `hasLot` was matching the wrong material.** The batch-number requirement is
+driven by a regex on the BOM component's description: `/fine leaf|coarse leaf/i`. SG
+blends include `Cutter Fine Leaf (Coloured) - Conventional` as an ingredient — a
+different, already-cut material from the raw "Sieved Fine/Coarse Leaf" that actually
+needs lot tracking — but its description also contains the substring "fine leaf", so it
+was incorrectly forced through the same mandatory-batch-number flow. Added a `!/cutter/i`
+exclusion in both `groupComponentsByItem()` (`bom.ts`) and the "+ Add Other material"
+ad-hoc flow (`BlenderCapture.tsx`) so Cutter Fine/Coarse Leaf only need a serial number,
+while genuine Fine Leaf / Coarse Leaf still require a batch number as before.
+
+**Granule — lot number is now required before an assignment can be saved.** `lot_number`
+on `shift_assignments` was optional in the UI even though `GranuleCapture` depends on it
+for output-serial numbering and for linking QC moisture/bulk-density readings back to
+the batch — if a supervisor skipped it, capture proceeded silently with `Lot: —` and QC
+just never linked up. The "Lot / Batch" field is now marked required for the `granule`
+section specifically, and "Save assignment" is disabled with an inline explanation until
+it's filled in. Blender/Small Blender/Pasteuriser (the other `NEEDS_LOT` sections) are
+unchanged — scoped to Granule only, per the reported problem.
+
+---
+
 ## 2026-07-24 — Alyssa (Production Dashboard redesign: single sectioned cockpit, analytics folded in, floor plan woven in)
 
 **Files changed:** `components/production/ProductionDashboard.tsx`, `components/production/ProductionTabs.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`, `app/(app)/production/analytics/page.tsx` (deleted), `components/production/YieldAnalytics.tsx` (deleted)

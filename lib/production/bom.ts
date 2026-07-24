@@ -161,7 +161,10 @@ export function groupComponentsByItem(components: BlendComponent[]): BlendIngred
         label: desc,
         column: comps[0].column,
         targetPct: comps.reduce((s, c) => s + c.qtyRequired, 0),
-        hasLot: /fine leaf|coarse leaf/i.test(desc),
+        // "Cutter Fine Leaf"/"Cutter Coarse Leaf" are a different, already-cut
+        // material (used in SG blends) that only needs a serial — excluding
+        // "cutter" here avoids matching that substring inside their name.
+        hasLot: /fine leaf|coarse leaf/i.test(desc) && !/cutter/i.test(desc),
       }
     })
     .sort((a, b) => a.column.localeCompare(b.column) || a.label.localeCompare(b.label))
