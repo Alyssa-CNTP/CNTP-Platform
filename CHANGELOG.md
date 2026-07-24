@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Shift Roster: fixed-shift roles that no longer auto-rotate)
+
+**Files:** `lib/production/roster-rotate.ts`, `supabase/migrations/20260724_002_roster_fixed_shift_roles.sql`
+
+Some roles are meant to always sit on the same shift, not flip day↔night on the weekly
+rotation: **Store Supervisor** (Bongikaya Ndikinda always day, Steven Paris always
+night), **Forklift Driver** (Sibabalo Lindi + Nkosiphendule Vutza, moved out of Store
+Operator into their own row, always day), and **Refining 2** / **Value Added Product**
+(day-shift operators only). Added `FIXED_SHIFT_ROLE_KEYS` to `roster-rotate.ts` — used by
+both the "Generate next week" button and the unattended rotate cron — so these roles
+carry their shift forward unchanged instead of swapping; the rest of Store Operator is
+untouched and keeps auto-rotating. Migration corrected the two `roster_periods` that
+already existed (this week + the one already generated ahead of it), applied directly
+to staging DB. Deployed via `scripts/staging-deploy.sh`; verified `/production/roster`
+returns 200 post-deploy.
+
+---
+
 ## 2026-07-24 — Alyssa (Remove Maintenance Manager from the Shift Roster)
 
 **Files:** `lib/production/roster-config.ts`, `supabase/migrations/20260724_001_roster_remove_maintenance_manager.sql`
