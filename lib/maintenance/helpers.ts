@@ -93,7 +93,7 @@ export function priorityOf(j: JobCard): Priority {
   if ((j.reopen_count ?? 0) > 0) return 'high'
   const age = diffDays(j.raised_at, new Date().toISOString())
   if (age >= 7) return 'high'
-  if (age >= 3 || ['assigned', 'in_progress', 'qc_check', 'verify'].includes(j.status)) return 'medium'
+  if (age >= 3 || ['assigned', 'in_progress', 'qc_check', 'verify', 'mgr_verify'].includes(j.status)) return 'medium'
   return 'low'
 }
 

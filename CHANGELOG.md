@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Job-card verification chain: QC → originator → maintenance manager sign-off)
+
+**Files changed:** `app/api/maintenance/job-cards/[id]/verify/route.ts`, `lib/maintenance/types.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/helpers.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `supabase/migrations/20260702_040_maintenance_mgr_verify_status.sql` (new, applied to staging DB)
+
+- **New `mgr_verify` stage** inserted before `complete`. The full chain is now: technician completes → **QC check** (must pass — any YES bounces back) → **originator** verifies satisfactory → **maintenance manager** gives the **final sign-off** → **complete**. The manager signs off **every** job card.
+- **Server (`/verify` route) is now status-aware** — the SAME `verifyCard(ok)` call drives both stages, decided from the stored status, so nothing else changed:
+  - at `verify` (originator): *satisfactory* → status `mgr_verify` + **notifies the maintenance managers**; *not satisfactory* → bounces to the technician (unchanged).
+  - at `mgr_verify` (manager, `can_verify_jobs` only): *sign off* → `complete` + photo cleanup; *not satisfactory* → bounces to the technician.
+- **Gating preserved:** satisfactory/unsatisfactory is only reachable once QC has passed the card (`qc_check` all-NO → `verify`); the manager sign-off only at `mgr_verify`.
+- **Hand-offs "talk to each other":** the on-duty QC pop-up (existing), plus new toasts to the **originator** when a card is ready for their verification and to the **manager** when a card is ready for sign-off; the manager's board shows `mgr_verify` cards with a **"Sign off & close"** action. JobCardItem gained the manager sign-off panel + read-only status notes for other viewers.
+- Additive DB migration: widened the `job_cards` status CHECK to allow `mgr_verify` (applied to staging; existing rows untouched).
+
 ## 2026-07-24 — Alyssa (Granule: water measured in litres, not kg; Refining 2: mass-balance tolerance raised to 100kg)
 
 **Files:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/RefiningCapture.tsx`,
