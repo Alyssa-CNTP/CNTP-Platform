@@ -69,12 +69,23 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
       const firstRun = !inited.current
       let sawNew = false
 
-      // Manager: toast when a technician accepts a breakdown (transition null→set).
+      // Hand-off toasts on status transitions — so the chain "talks to each other".
       for (const c of rows) {
         const prev = seen.current.get(c.id)
         if (!prev) sawNew = true
-        if (canManage && !firstRun && prev && !prev.accepted && !!c.accepted_at && c.assigned_to) {
-          toast(`${c.assigned_to} accepted ${c.card_no} — ${c.area}`, 'success')
+        if (!firstRun && prev) {
+          // Manager: a technician accepted a breakdown (transition null→set).
+          if (canManage && !prev.accepted && !!c.accepted_at && c.assigned_to) {
+            toast(`${c.assigned_to} accepted ${c.card_no} — ${c.area}`, 'success')
+          }
+          // Originator: a card they raised is now ready for their verification.
+          if (prev.status !== 'verify' && c.status === 'verify' && c.raised_by_user_id === userId) {
+            toast(`${c.card_no} is ready for your verification — ${c.area}`, 'info')
+          }
+          // Manager: a card is ready for the final sign-off.
+          if (canManage && prev.status !== 'mgr_verify' && c.status === 'mgr_verify') {
+            toast(`${c.card_no} is ready for your sign-off — ${c.area}`, 'info')
+          }
         }
       }
 

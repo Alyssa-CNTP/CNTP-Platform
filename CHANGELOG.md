@@ -5,6 +5,45 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Fix wrong reason shown for Blender's required lot number)
+
+**Files:** `app/(app)/production/capture/assign/page.tsx`
+
+Correction to earlier today's "lot required" change. The Assign screen's error text under
+Blender's Lot/Batch field said "Fine/Coarse Leaf batch tracking in Capture depends on
+it" — wrong attribution. Checked `BlenderCapture.tsx`'s `addOutputBag()`/`setOutputTag()`
+and every finished blend output bag (`bag_tags` row and printed label) is stamped with
+`lot_number: assignment?.lot_number`, not the per-row Fine/Coarse Leaf input batch
+(`finalRow.lot`, a separate field sourced from the scan/BatchKeypadField, unrelated to
+the assignment). Reworded both messages to say what's actually true: every output bag
+tag is stamped with this lot number (Granule's message updated to say the same, in
+addition to the QC-linking reason it already had).
+
+---
+
+## 2026-07-20 — Gustav (Pasteuriser: Flowability Test block)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- Added a **Flowability Test** block to the pasteuriser sample capture form (shown with the Moisture & BD section), matching the paper Flowability Test Datasheet.
+- Per sample it shows **Mass of Tea (g)** (defaults to the standard 400 g, editable), **Bulk Density (cc/100g)** carried over read-only from the Customer BD field already captured, and a **Time (s)** field the QC fills in. The **Mass Flow Rate (g/s)** is then calculated automatically as mass ÷ time (e.g. 400 g ÷ 45 s = 8.9 g/s).
+- Added a **Flow g/s** column to the batch samples table so the calculated rate shows per sample after saving.
+- Stored in the existing `data_json` sample record (`flow_mass`, `flow_time`) — no schema/migration change needed.
+
+---
+
+## 2026-07-02 — Gustav (Job-card verification chain: QC → originator → maintenance manager sign-off)
+
+**Files changed:** `app/api/maintenance/job-cards/[id]/verify/route.ts`, `lib/maintenance/types.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/helpers.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `supabase/migrations/20260702_040_maintenance_mgr_verify_status.sql` (new, applied to staging DB)
+
+- **New `mgr_verify` stage** inserted before `complete`. The full chain is now: technician completes → **QC check** (must pass — any YES bounces back) → **originator** verifies satisfactory → **maintenance manager** gives the **final sign-off** → **complete**. The manager signs off **every** job card.
+- **Server (`/verify` route) is now status-aware** — the SAME `verifyCard(ok)` call drives both stages, decided from the stored status, so nothing else changed:
+  - at `verify` (originator): *satisfactory* → status `mgr_verify` + **notifies the maintenance managers**; *not satisfactory* → bounces to the technician (unchanged).
+  - at `mgr_verify` (manager, `can_verify_jobs` only): *sign off* → `complete` + photo cleanup; *not satisfactory* → bounces to the technician.
+- **Gating preserved:** satisfactory/unsatisfactory is only reachable once QC has passed the card (`qc_check` all-NO → `verify`); the manager sign-off only at `mgr_verify`.
+- **Hand-offs "talk to each other":** the on-duty QC pop-up (existing), plus new toasts to the **originator** when a card is ready for their verification and to the **manager** when a card is ready for sign-off; the manager's board shows `mgr_verify` cards with a **"Sign off & close"** action. JobCardItem gained the manager sign-off panel + read-only status notes for other viewers.
+- Additive DB migration: widened the `job_cards` status CHECK to allow `mgr_verify` (applied to staging; existing rows untouched).
+
 ## 2026-07-24 — Alyssa (Granule: water measured in litres, not kg; Refining 2: mass-balance tolerance raised to 100kg)
 
 **Files:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/RefiningCapture.tsx`,
@@ -415,7 +454,6 @@ Consolidation foundation so capture, bags, quality and (next) Acumatica orders j
 - **Added an automatic GitHub-backed feed to the Changelog**: merged PRs into `staging` are ingested into the same `axis.change_logs` table as manual entries (`source: 'github'`), shown with author avatar, a linked PR badge, and a diff-stat chip — one unified timeline instead of a purely hand-typed log.
 - Flagged separately to the user: a live GitHub token found committed in plaintext in `QUALITY_MIGRATION_NOTES.md` needs to be revoked — unrelated to this change, not touched by it.
 - **Migrations must be run manually** (Supabase SQL editor, staging then production) per this repo's established practice — `db-migrate.yml`'s auto-apply is deliberately disabled.
-
 ---
 
 ## 2026-07-20 — Gustav (EU MRL: real export parser + upload refresh path, loaded 516 Rooibos MRLs)

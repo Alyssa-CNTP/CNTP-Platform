@@ -23,7 +23,8 @@ export const STATUS_LABEL: Record<Status, string> = {
   assigned: 'ASSIGNED — AWAITING ACCEPT',
   in_progress: 'IN PROGRESS',
   qc_check: 'QC CHECK',
-  verify: 'VERIFY',
+  verify: 'VERIFY — ORIGINATOR',
+  mgr_verify: 'MANAGER SIGN-OFF',
   complete: 'COMPLETE',
   cancelled: 'CANCELLED',
 }
@@ -36,6 +37,7 @@ export const STATUS_STYLE: Record<Status, string> = {
   in_progress: 'badge-warn',
   qc_check: 'badge-info',
   verify: 'badge-info',
+  mgr_verify: 'badge-info',
   complete: 'badge-ok',
   cancelled: 'badge-gray',
 }
