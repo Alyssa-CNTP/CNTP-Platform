@@ -1139,12 +1139,12 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
   const fmtPeople = (list: Entry[]) => list.length
     ? list.map(e => e.person_name + (e.tags.length ? ` (${e.tags.join(' ')})` : '')).join(', ')
     : '—'
-  const th: CSSProperties = { textAlign: 'left', padding: '3px 7px', borderBottom: '1.5px solid #333', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.3, color: '#555' }
-  const td: CSSProperties = { padding: '3px 7px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 12, lineHeight: 1.35 }
+  const th: CSSProperties = { textAlign: 'left', padding: '2px 7px', borderBottom: '1.5px solid #333', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.3, color: '#555' }
+  const td: CSSProperties = { padding: '2px 7px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 12, lineHeight: 1.22 }
 
   return (
-    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '4px 6px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '2px solid #1A3A0E', paddingBottom: 5, marginBottom: 9 }}>
+    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '3px 6px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '2px solid #1A3A0E', paddingBottom: 4, marginBottom: 6 }}>
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
           <p style={{ fontSize: 12, margin: '1px 0 0', color: '#555' }}>
@@ -1158,13 +1158,15 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
           land the whole roster (all departments, both shifts) on a single
           portrait page — this is a noticeboard printout meant to be read from
           a few steps away, not a paginated report. Each department is
-          break-inside:avoid so it never splits across a page edge. If a
-          future role list grows enough to overflow one page, shrink these
+          break-inside:avoid so it never splits across a page edge. Text size
+          stays generous for legibility; it's the padding/margins here that
+          get squeezed to make everything land on one page. If a future role
+          list grows enough to overflow, squeeze these further (or the fonts)
           before reaching for a second page. */}
       <div>
         {rolesByCategory.map(({ cat, items }) => (
-          <div key={cat.key} style={{ marginBottom: 8, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
-            <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '2.5px 9px', marginBottom: 2.5 }}>
+          <div key={cat.key} style={{ marginBottom: 5, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+            <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '1.5px 9px', marginBottom: 1.5 }}>
               <span style={{ fontWeight: 700, fontSize: 13, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.3 }}>{cat.label}</span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1189,7 +1191,7 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
         ))}
       </div>
 
-      <div style={{ marginTop: 7, paddingTop: 5, borderTop: '1px solid #ccc', fontSize: 9.5, color: '#555' }}>
+      <div style={{ marginTop: 4, paddingTop: 3, borderTop: '1px solid #ccc', fontSize: 9.5, color: '#555' }}>
         <strong style={{ color: '#111' }}>Skill / certification tags: </strong>
         {SKILL_TAGS.map(t => `${t.code} = ${t.label}`).join('   ·   ')}
       </div>

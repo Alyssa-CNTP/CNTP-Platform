@@ -367,7 +367,7 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
      columns wide) suits portrait better than landscape, and the whole point
      is a single noticeboard sheet. PrintRoster sizes its fonts/spacing to
      fit every department on one A4 portrait page. */
-  @page            { size: portrait; margin: 8mm; }
+  @page            { size: portrait; margin: 6mm; }
   /* App chrome + interactive-only controls drop out of the printout */
   aside            { display: none !important; }
   header           { display: none !important; } /* Topbar — breadcrumb/bell/date bar */
