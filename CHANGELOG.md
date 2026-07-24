@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Shift Roster print: one portrait page, not multi-page landscape)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/globals.css`, `.claude/launch.json`
+
+The roster's noticeboard printout (Print button) was landscape and spilled onto multiple
+pages. Switched `@page` to portrait and tightened `PrintRoster`'s fonts/padding (th/td
+font size, row padding, block margins) so all 6 departments / ~25 roles across both
+shifts land on a single A4 portrait sheet — portrait actually suits this table's shape
+(narrow, tall) better than landscape did. Also enabled `autoPort` in the dev launch
+config so the preview server can start when port 3000 is already occupied by another
+process. Deployed to staging via `scripts/staging-deploy.sh`; verified `/production/roster`
+returns 200 post-deploy.
+
+---
+
 ## 2026-07-24 — Alyssa (Fix wrong reason shown for Blender's required lot number)
 
 **Files:** `app/(app)/production/capture/assign/page.tsx`
