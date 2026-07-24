@@ -7,11 +7,13 @@
 // run-hours, boiler starts) with the Excel database history and due-date formulas.
 
 import { useState } from 'react'
-import { Printer } from 'lucide-react'
+import { Printer, Users } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { useAuth } from '@/lib/auth/context'
+import { getDb } from '@/lib/supabase/db'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { calClass, calBadge, fmtD, fmtT, addDays, diffDays } from '@/lib/maintenance/helpers'
+import { allocateWeekly, allocateMonthly, isoWeekNumber, monthIndexOf } from '@/lib/maintenance/allocation'
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
@@ -79,6 +81,40 @@ export default function ScheduledPage() {
 
   const techNames = staff.length ? staff.map(s => s.name) : TECHS
   const lastOf = <T,>(arr: T[]) => arr[arr.length - 1]
+
+  // Auto-allocate the weekly / monthly checklists to technicians from the OPERATIONS
+  // SHIFT ROSTER (read-only — no roster logic is changed here). Weekly goes to the
+  // morning-shift maintenance techs and rotates by ISO week; monthly goes across all
+  // maintenance techs on the roster with the heavy lines (granule / sieving /
+  // pasteurizer) rotating month-to-month (see lib/maintenance/allocation.ts).
+  // Manager-triggered; writes via the existing client-side allocateChecklist. A lazy
+  // alternative to a server cron: click on Monday morning / after the 5th.
+  const autoAllocate = async (freq: 'weekly' | 'monthly') => {
+    const db = getDb()
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' })
+    const { data: periods } = await db.schema('production' as any).from('roster_periods')
+      .select('id').lte('start_date', today).gte('end_date', today)
+    if (!periods?.length) { setPopup('No shift-roster period covers today — set the roster up in Operations first.'); return }
+    const { data: entries } = await db.schema('production' as any).from('roster_entries')
+      .select('person_name, role_key, shift').in('period_id', (periods as any[]).map(p => p.id))
+      .in('role_key', ['maintenance_tech', 'maintenance_asst'])
+    const rows = (entries ?? []) as { person_name: string; role_key: string; shift: string }[]
+    const uniq = (arr: string[]) => Array.from(new Set(arr.map(x => (x ?? '').trim()).filter(Boolean)))
+    // Weekly → morning (day) shift; monthly → everyone on the roster this month.
+    const techs = freq === 'weekly'
+      ? uniq(rows.filter(r => r.shift === 'day').map(r => r.person_name))
+      : uniq(rows.map(r => r.person_name))
+    if (!techs.length) { setPopup(`No maintenance technicians on the ${freq === 'weekly' ? 'morning shift this week' : 'roster this month'} — check the shift roster in Operations.`); return }
+    const tpls = templates.filter(t => t.frequency === freq)
+    const allocTpls = tpls.map(t => ({ id: t.id, area: t.area, sort_order: t.sort_order }))
+    const now = new Date()
+    const map = freq === 'weekly'
+      ? allocateWeekly(allocTpls, techs, isoWeekNumber(now))
+      : allocateMonthly(allocTpls, techs, monthIndexOf(now))
+    let n = 0
+    for (const t of tpls) { const who = map[t.id]; if (who) { await allocateChecklist(t, who); n++ } }
+    setPopup(`Auto-allocated ${n} ${freq} checklist${n === 1 ? '' : 's'} across ${techs.length} technician${techs.length === 1 ? '' : 's'} (${techs.join(', ')}) from the shift roster.\n\nWeekly is due before 10:00 on Monday; monthly is due by the 15th.`)
+  }
 
   if (loading) {
     return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading…</div></div>
@@ -195,6 +231,13 @@ export default function ScheduledPage() {
                   </label>
                 )}
                 {auditView && <span className="badge badge-gray">Audit view</span>}
+                {/* Manager UX: auto-allocate from the shift roster (reads it only). */}
+                {canManage && !auditView && (
+                  <button onClick={() => autoAllocate(freq)} title={freq === 'weekly' ? 'Allocate weekly checklists to the morning-shift technicians (rotates weekly)' : 'Allocate monthly checklists across the roster (heavy lines rotate monthly)'}
+                    className="inline-flex items-center gap-1.5 bg-brand text-white rounded-lg px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition">
+                    <Users size={14} /> Auto-allocate from roster
+                  </button>
+                )}
                 <button onClick={() => printChecklists(freq, period)}
                   className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition">
                   <Printer size={14} /> Print / export
@@ -217,6 +260,8 @@ export default function ScheduledPage() {
                 const assignedToMe = !!assigned && assigned === actor
                 // Suggest the on-duty technician first, then the rest of the team.
                 const techOptions = [...dutyNow, ...allTechs.filter(t => !dutyNow.includes(t))]
+                // JoJo Tanks water checklist — two percentage readings that we average.
+                const isJojo = cl.area === 'JoJo Tanks Water'
                 return (
                   <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
                     <div className="p-3 cursor-pointer flex justify-between items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
@@ -251,7 +296,34 @@ export default function ScheduledPage() {
                     </div>
                     {isOpen && (
                       <div className="px-3 pb-3 border-t border-surface-rule pt-2.5 max-h-[400px] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        {cl.tasks.map((task, ti) => {
+                        {/* JoJo tanks — two % readings, averaged. Saving stores each value
+                            and marks the two tasks done. */}
+                        {isJojo && (() => {
+                          const n0 = parseFloat(drafts['t' + cl.id + '-0'] ?? st[0]?.notes ?? '')
+                          const n1 = parseFloat(drafts['t' + cl.id + '-1'] ?? st[1]?.notes ?? '')
+                          const avg = (!isNaN(n0) && !isNaN(n1)) ? (n0 + n1) / 2 : null
+                          return (
+                            <div className="space-y-2 mb-2">
+                              {['Tank 1 water level', 'Tank 2 water level'].map((label, ti) => (
+                                <div key={ti} className="flex items-center gap-2">
+                                  <span className="text-[12px] w-32 text-text-muted shrink-0">{label}</span>
+                                  <input className={`${INP} w-24 text-[12px] py-1 min-h-0`} type="number" inputMode="decimal" min={0} max={100} placeholder="%"
+                                    value={drafts['t' + cl.id + '-' + ti] ?? st[ti]?.notes ?? ''}
+                                    onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
+                                    onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
+                                  <span className="text-[11px] text-text-faint">%</span>
+                                </div>
+                              ))}
+                              <div className="flex items-center gap-2 rounded-lg bg-brand/5 border border-brand/20 px-3 py-2">
+                                <span className="text-[12px] font-semibold text-text">Average</span>
+                                <span className="text-[15px] font-semibold text-brand tabular-nums">{avg != null ? avg.toFixed(1) + ' %' : '—'}</span>
+                                <button className={BTN_OK + ' ml-auto'} disabled={avg == null}
+                                  onClick={() => { [0, 1].forEach(ti => { if (!st[ti]?.done) toggleTask(cl, ti) }) }}>Save readings</button>
+                              </div>
+                            </div>
+                          )
+                        })()}
+                        {!isJojo && cl.tasks.map((task, ti) => {
                           const s = st[ti] ?? {}
                           // The Fault / No-fault SELECT is the check itself — choosing a
                           // value records the answer AND marks the item done (no tick box).

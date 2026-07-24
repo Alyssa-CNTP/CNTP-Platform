@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Checklist auto-allocation from shift roster + JoJo tank checklist)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/allocation.ts` (new), `supabase/migrations/20260702_050_maintenance_jojo_checklist.sql` (new, applied to staging DB)
+
+- **"Auto-allocate from roster"** button (manager-only) on the Weekly and Monthly checklist tabs. Reads the **Operations shift roster** (read-only — no roster logic changed) and allocates the checklists to technicians via the existing client-side `allocateChecklist`:
+  - **Weekly** → the **morning (day) shift** maintenance techs, **rotating by ISO week** so nobody does the same checklist every week. Due before 10:00 Monday.
+  - **Monthly** → **all** maintenance techs on the roster; the **granule / sieving / pasteurizer** heavy lines **rotate month-to-month**, and the rest are distributed **greedily to the least-loaded** tech (fair — the tech without a heavy line picks up more). Due by the 15th.
+  - Rotation is **stateless/deterministic** (offset by ISO-week / month index) — no extra table; see `lib/maintenance/allocation.ts`. Lazy alternative to a server cron: click on Monday / after the 5th.
+- **JoJo Tanks water checklist** — new **weekly** checklist template (migration, applied to staging). Two percentage readings (Tank 1 / Tank 2) with a **computed average** and a "Save readings" action; slots into the allocation + verification flow like any other checklist.
+- Re-implemented fresh on current staging (the earlier `gustav/maintenance-autoalloc` review branch had diverged behind weeks of checklist changes; its monthly-verify piece is already covered by the checklist verification shipped earlier).
+
 ## 2026-07-24 — Alyssa (Shift Roster print: bigger text for noticeboard legibility)
 
 **Files:** `app/(app)/production/roster/page.tsx`
