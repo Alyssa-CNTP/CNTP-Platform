@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Fix wrong reason shown for Blender's required lot number)
+
+**Files:** `app/(app)/production/capture/assign/page.tsx`
+
+Correction to earlier today's "lot required" change. The Assign screen's error text under
+Blender's Lot/Batch field said "Fine/Coarse Leaf batch tracking in Capture depends on
+it" — wrong attribution. Checked `BlenderCapture.tsx`'s `addOutputBag()`/`setOutputTag()`
+and every finished blend output bag (`bag_tags` row and printed label) is stamped with
+`lot_number: assignment?.lot_number`, not the per-row Fine/Coarse Leaf input batch
+(`finalRow.lot`, a separate field sourced from the scan/BatchKeypadField, unrelated to
+the assignment). Reworded both messages to say what's actually true: every output bag
+tag is stamped with this lot number (Granule's message updated to say the same, in
+addition to the QC-linking reason it already had).
+
+---
+
 ## 2026-07-20 — Gustav (Pasteuriser: Flowability Test block)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
