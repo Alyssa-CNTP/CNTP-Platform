@@ -363,10 +363,11 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
    as-is, so the printout isn't a cramped screenshot of the app UI. */
 .print-only { display: none; }
 @media print {
-  /* Landscape gives ~40% more usable width than portrait for the roster's
-     full-width per-department tables. No page-count limit here — the
-     printout flows onto as many landscape pages as the roster needs. */
-  @page            { size: landscape; margin: 10mm; }
+  /* Portrait, single page — the roster's shape (many roles stacked, only 3
+     columns wide) suits portrait better than landscape, and the whole point
+     is a single noticeboard sheet. PrintRoster sizes its fonts/spacing to
+     fit every department on one A4 portrait page. */
+  @page            { size: portrait; margin: 8mm; }
   /* App chrome + interactive-only controls drop out of the printout */
   aside            { display: none !important; }
   header           { display: none !important; } /* Topbar — breadcrumb/bell/date bar */
