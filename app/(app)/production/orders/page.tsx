@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
 
 const VARIANT_OPTS = ['Conventional', 'Organic', 'RA-Conventional', 'RA-Organic', 'FT-ORG']
 
@@ -335,7 +335,7 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
   const st         = STATUS[s.status] ?? STATUS.new
   const StatusIcon = st.icon
   const variance   = s.total_input_kg - s.total_output_b_kg
-  const withinTol  = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
+  const withinTol  = Math.abs(variance) <= massBalanceToleranceFor(s.section_id)
   const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
   const archived   = !!s.deleted_at
   const canManage  = canEdit || canDelete

@@ -5,6 +5,35 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Granule: water measured in litres, not kg; Refining 2: mass-balance tolerance raised to 100kg)
+
+**Files:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/RefiningCapture.tsx`,
+`lib/production/capture-config.ts`, `components/production/capture/CaptureOverview.tsx`,
+`app/(app)/production/capture/[section]/page.tsx`, `components/production/LiveCaptureKPIs.tsx`,
+`components/production/ProductionDashboard.tsx`, `app/(app)/production/orders/page.tsx`,
+`app/(app)/supervisor/analytics/page.tsx`
+
+**Granule — water added to a blend is a volume, not a weight.** Every "Water added" label
+and total in `GranuleCapture.tsx` said "kg"; changed to "L" (blend-card badge, the input
+field label, and the blend-totals summary line). Display-only — water was already
+excluded from the dust mass-balance math (`granuleColumnTotals`), so no calculation
+changes.
+
+**Refining 2 — mass-balance warning was flagging too eagerly.** The shared
+`MASS_BALANCE_TOLERANCE_KG` (15kg) is used everywhere a section's in/out variance gets
+flagged, but Refining 2's process naturally carries a wider swing before it's actually
+worth a supervisor's attention. Added `massBalanceToleranceFor(sectionId)` in
+`capture-config.ts` — returns 100kg for `refining2`, the existing 15kg for everything
+else — and swapped every place that reads the flat constant for a section-aware call, so
+Refining 2 shows consistently "balanced" (Capture footer, Overview, Production Orders,
+Supervisor Analytics, Live Capture KPIs, Production Dashboard) instead of agreeing on one
+screen and still flagging on another. Refining 1 and all other sections are unaffected —
+same 15kg as before. Blender and Pasteuriser keep reading the flat constant directly
+since they're single-section components with no cross-section table to stay consistent
+with.
+
+---
+
 ## 2026-07-24 — Alyssa (Blender/Small Blender lot now mandatory at assignment; Granule bagging requires an operator lot-confirmation)
 
 **Files:** `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
