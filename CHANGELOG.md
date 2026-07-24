@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Remove Maintenance Manager from the Shift Roster)
+
+**Files:** `lib/production/roster-config.ts`, `supabase/migrations/20260724_001_roster_remove_maintenance_manager.sql`
+
+Removed the "Maintenance Manager" row from the Shift Roster entirely (reverses the
+20260717 addition — the Maintenance section is back to just Tech / Assistant). Dropped
+the seed entry from `ROSTER_ROLE_SEED`; the migration deactivates the
+`production.roster_roles` row (`active = false`, kept rather than deleted for history)
+and deletes the 2 existing `roster_entries` that were placed under it, so the grid
+doesn't carry a stray invisible entry. Migration applied directly to staging Supabase.
+
+---
+
 ## 2026-07-24 — Alyssa (Shift Roster print: squeeze spacing so Health & Safety fits on page one)
 
 **Files:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
