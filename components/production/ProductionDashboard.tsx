@@ -15,7 +15,7 @@ import {
 import {
   RefreshCw, Scale, Percent, Activity, CheckCircle2, AlertTriangle,
   Wrench, CalendarRange, ClipboardList, Users, ChevronRight,
-  Map as MapIcon, TrendingUp, Cpu, FlaskConical, Info,
+  Map as MapIcon, TrendingUp, Cpu, FlaskConical, Info, Boxes,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
@@ -24,8 +24,11 @@ import { fetchGranuleQuality } from '@/lib/production/granule-quality'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
 import OperationalTrends from '@/components/management/OperationalTrends'
+import { FactoryFloorPlan } from '@/components/production/FactoryFloorPlan'
 
 const C = { brand: '#1A3A0E', accent: '#5A8A2A', azure: '#2A7CB8', warn: '#B85C0A', err: '#B81C1C', ok: '#1A7A3C', info: '#2A7CB8', gray: '#96A88A' }
+// Categorical palette for the output-mix bars — brand-anchored, distinguishable.
+const MIX = ['#1A3A0E', '#5A8A2A', '#2A7CB8', '#B85C0A', '#7A5AA8', '#B81C1C', '#96A88A', '#3C8A6A']
 const round1 = (n: number) => Math.round(n * 10) / 10
 
 // ── Info tooltip ──────────────────────────────────────────────────────────────
@@ -117,6 +120,22 @@ function CompBadge({ pct }: { pct: number | null }) {
   return <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg ${cls}`}>{pct}%</span>
 }
 
+// ── Section title ───────────────────────────────────────────────────────────────
+// Heads each grouped block in the single-scroll cockpit (replaces the old tabs).
+function SectionTitle({ icon: Icon, title, subtitle }: { icon: typeof Scale; title: string; subtitle?: string }) {
+  return (
+    <div className="flex items-center gap-2 mb-5">
+      <span className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${C.brand}12` }}>
+        <Icon size={15} style={{ color: C.brand }} />
+      </span>
+      <div>
+        <h3 className="text-[15px] font-semibold text-text leading-tight">{title}</h3>
+        {subtitle && <p className="text-[11px] text-text-muted">{subtitle}</p>}
+      </div>
+    </div>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface MachineParam { checkKey: string; checkLabel: string; valueNum: number; unit: string; sectionId: string; date: string; shift: string; recordedAt: string; status: string }
@@ -136,7 +155,6 @@ const SESSION_STATUS: Record<string, { label: string; cls: string }> = {
 export default function ProductionDashboard() {
   const today = format(new Date(), 'yyyy-MM-dd')
   const [windowDays, setWindowDays] = useState(14)
-  const [tab, setTab] = useState<'yields' | 'machine' | 'quality'>('yields')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -151,6 +169,12 @@ export default function ProductionDashboard() {
   // Section status (today) — still from direct DB for live view
   const [todayRows, setTodayRows] = useState<any[]>([])
   const [breakdowns, setBreakdowns] = useState<any[]>([])
+
+  // Batch-spine analytics (folded in from the old standalone Analytics page):
+  // per-product output share + the batch grid linking yield to quality.
+  const [outputMix, setOutputMix] = useState<{ productType: string; kg: number; sharePct: number | null }[]>([])
+  const [batches, setBatches] = useState<any[]>([])
+  const [batchSort, setBatchSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'lastDate', dir: -1 })
 
   // Granule KPI foundations — scale-verification health + granule quality readings
   const [granuleScale, setGranuleScale] = useState<{ date: string; label: string; dev: number; readings: number }[]>([])
@@ -178,6 +202,13 @@ export default function ProductionDashboard() {
       setCheckCompliance(kpiRes.checkCompliance || [])
       setPsdRuns(kpiRes.psdRuns || [])
     }
+
+    // Batch-spine analytics — output mix + batch grid (best-effort; the views
+    // may not be populated yet on every environment).
+    fetch(`/api/production/yield-analytics?days=${windowDays}`)
+      .then(r => r.json())
+      .then(j => { if (!j.error) { setOutputMix(j.outputMix || []); setBatches(j.batches || []) } })
+      .catch(() => {})
 
     // Build today's section rows from direct DB data
     const sessRows: any[] = sess || []
@@ -437,24 +468,10 @@ export default function ProductionDashboard() {
         {kpis.map(k => <Kpi key={k.label} {...k} loading={loading} />)}
       </div>
 
-      {/* Main tab strip */}
+      {/* ── §1 Yield & output — the manager's headline ─────────────────────── */}
       <div className="card p-4">
-        <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit mb-5">
-          {([
-            ['yields', 'Yields', TrendingUp],
-            ['machine', 'Machine KPIs', Cpu],
-            ['quality', 'Quality Integration', FlaskConical],
-          ] as [typeof tab, string, typeof TrendingUp][]).map(([k, label, Icon]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${tab === k ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>
-              <Icon size={12} /> {label}
-            </button>
-          ))}
-        </div>
-
-        {/* ── Yields tab ─────────────────────────────────────────────────────── */}
-        {tab === 'yields' && (
-          <div className="space-y-6">
+        <SectionTitle icon={TrendingUp} title="Yield & output" subtitle={`Output ÷ input, throughput & mix · last ${windowDays} days`} />
+        <div className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Chart
                 title="Daily yield %"
@@ -525,11 +542,88 @@ export default function ProductionDashboard() {
               </Chart>
             </div>
           </div>
-        )}
+      </div>
 
-        {/* ── Machine KPIs tab ─────────────────────────────────────────────── */}
-        {tab === 'machine' && (
-          <div className="space-y-6">
+      {/* ── §2 Output mix & batches (folded in from the Analytics page) ─────── */}
+      <div className="card p-4">
+        <SectionTitle icon={Boxes} title="Output mix & batches" subtitle="Per-product share of output, and each batch linked to quality" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          {/* Output mix */}
+          <div>
+            <div className="flex items-center gap-1 mb-3">
+              <h3 className="text-sm font-semibold text-text">Output mix</h3>
+              <InfoTip text="Each product's share of total bagged output over the window, from v_output_stream (bagged kg per product ÷ total bagged output). This is the Fine Leaf ÷ total ratio, generalised to every stream." />
+            </div>
+            {outputMix.length === 0 ? (
+              <div className="text-[12px] text-text-muted py-4">No output captured for this window.</div>
+            ) : (
+              <div className="space-y-1.5">
+                {outputMix.slice(0, 10).map((m, i) => (
+                  <div key={m.productType} className="flex items-center gap-2 text-[12px]">
+                    <span className="w-32 truncate text-text">{m.productType}</span>
+                    <div className="flex-1 h-3.5 bg-surface-dim rounded overflow-hidden">
+                      <div className="h-full rounded" style={{ width: `${m.sharePct ?? 0}%`, background: MIX[i % MIX.length] }} />
+                    </div>
+                    <span className="w-20 text-right font-mono text-text-muted">{Math.round(m.kg).toLocaleString()}</span>
+                    <span className="w-11 text-right font-mono font-semibold text-text">{m.sharePct ?? '—'}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Interactive batch grid — batch → yield → quality */}
+          <div>
+            <div className="flex items-center gap-1 mb-3">
+              <h3 className="text-sm font-semibold text-text">Batches</h3>
+              <InfoTip text="From v_batch_360: each batch's production rollup joined to quality by the canonical batch key. Click a column header to sort. Yield = output ÷ input × 100." />
+            </div>
+            {batches.length === 0 ? (
+              <div className="text-[12px] text-text-muted py-4">No batches in this window.</div>
+            ) : (
+              <div className="rounded-xl border border-surface-rule max-h-80 overflow-auto">
+                <table className="w-full text-[11px]">
+                  <thead className="sticky top-0 bg-surface-dim">
+                    <tr className="border-b border-surface-rule text-left">
+                      {([['displayLot', 'Batch'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['leafShade', 'Leaf shade'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
+                        <th key={k} onClick={() => setBatchSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}
+                          className="px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted cursor-pointer hover:text-text whitespace-nowrap select-none">
+                          {label}{batchSort.key === k ? (batchSort.dir === 1 ? ' ▲' : ' ▼') : ''}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule">
+                    {[...batches].sort((a, b) => {
+                      const av = a[batchSort.key], bv = b[batchSort.key]
+                      if (av == null && bv == null) return 0
+                      if (av == null) return 1
+                      if (bv == null) return -1
+                      return (av > bv ? 1 : av < bv ? -1 : 0) * batchSort.dir
+                    }).slice(0, 60).map((b, i) => (
+                      <tr key={b.batchKey || i} className="hover:bg-surface-dim/40">
+                        <td className="px-2.5 py-2 font-mono text-text whitespace-nowrap">{b.displayLot || b.batchKey}</td>
+                        <td className="px-2.5 py-2 text-text-muted">{b.variant || '—'}</td>
+                        <td className="px-2.5 py-2 font-mono">{b.totalOutputKg != null ? Math.round(b.totalOutputKg).toLocaleString() : '—'}</td>
+                        <td className="px-2.5 py-2 font-mono font-semibold" style={{ color: (b.yieldPct ?? 0) >= 70 ? C.ok : C.warn }}>{b.yieldPct != null ? `${b.yieldPct}%` : '—'}</td>
+                        <td className="px-2.5 py-2 font-mono">{b.bulkDensity ?? '—'}</td>
+                        <td className="px-2.5 py-2 text-text-muted">{b.leafShade || '—'}</td>
+                        <td className="px-2.5 py-2">{b.hasQuality ? (b.allPassed === false ? <span className="text-err font-semibold">Fail</span> : <span className="text-ok font-semibold">Pass</span>) : <span className="text-text-faint">—</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── §3 Machine KPIs & throughput ───────────────────────────────────── */}
+      <div className="card p-4">
+        <SectionTitle icon={Cpu} title="Machine KPIs & throughput" subtitle="Infeed speed (VSD), screen settings & check compliance" />
+        <div className="space-y-6">
 
             {/* VSD trend */}
             {vsdByDay.length > 0 ? (
@@ -660,11 +754,12 @@ export default function ProductionDashboard() {
               </div>
             )}
           </div>
-        )}
+      </div>
 
-        {/* ── Quality Integration tab ──────────────────────────────────────── */}
-        {tab === 'quality' && (
-          <div className="space-y-6">
+      {/* ── §3 Quality integration ─────────────────────────────────────────── */}
+      <div className="card p-4">
+        <SectionTitle icon={FlaskConical} title="Quality integration" subtitle="Particle size (PSD) ↔ machine settings, from QC" />
+        <div className="space-y-6">
 
             {/* Methodology note */}
             <div className="rounded-xl border border-azure/20 bg-info/5 p-4 text-[12px] text-text-muted leading-relaxed" style={{ borderColor: `${C.azure}30`, background: `${C.azure}08` }}>
@@ -755,7 +850,6 @@ export default function ProductionDashboard() {
             ) : null}
 
           </div>
-        )}
       </div>
 
       {/* Granule Line — quality & scale-health KPI foundations */}
@@ -877,6 +971,12 @@ export default function ProductionDashboard() {
         <QuickChip href="/quality/sieving" icon={FlaskConical} label="Sieving QC" />
       </div>
 
+      {/* ── Factory floor plan ─────────────────────────────────────────────── */}
+      <div className="card p-4">
+        <SectionTitle icon={MapIcon} title="Factory floor plan" subtitle="Live section layout & status" />
+        <FactoryFloorPlan />
+      </div>
+
       {/* Energy + breakdowns */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <EnergyWidget />
@@ -903,7 +1003,26 @@ export default function ProductionDashboard() {
         </div>
       </div>
 
-      {/* Section status — today */}
+      {/* AI analyst */}
+      <AiAnalystPanel
+        agg={agg}
+        insightsUrl="/api/production/dashboard-insights"
+        askUrl="/api/production/ask"
+        title="AI Production Analyst"
+        subtitle="Plain-English insights over your production data"
+        cacheKey="prod-insight"
+      />
+
+      {/* Operational trends */}
+      <div className="card p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-text">Operational trends</h3>
+          <p className="text-[11px] text-text-muted">Yield, count reliability &amp; inventory velocity · last 6 months</p>
+        </div>
+        <OperationalTrends dateFrom={format(new Date(new Date().setMonth(new Date().getMonth() - 6)), 'yyyy-MM-dd')} dateTo={today} />
+      </div>
+
+      {/* Section status — today (moved to the end, per manager preference) */}
       <div className="card overflow-hidden p-0">
         <div className="px-4 py-3 border-b border-surface-rule flex items-center justify-between">
           <h3 className="text-sm font-semibold text-text">Section status · today</h3>
@@ -953,25 +1072,6 @@ export default function ProductionDashboard() {
         <div className="px-4 py-2 border-t border-surface-rule text-[10px] text-text-muted">
           Auto-refreshes every 2 min · {format(new Date(), 'HH:mm')}
         </div>
-      </div>
-
-      {/* AI analyst */}
-      <AiAnalystPanel
-        agg={agg}
-        insightsUrl="/api/production/dashboard-insights"
-        askUrl="/api/production/ask"
-        title="AI Production Analyst"
-        subtitle="Plain-English insights over your production data"
-        cacheKey="prod-insight"
-      />
-
-      {/* Operational trends */}
-      <div className="card p-4">
-        <div className="mb-3">
-          <h3 className="text-sm font-semibold text-text">Operational trends</h3>
-          <p className="text-[11px] text-text-muted">Yield, count reliability &amp; inventory velocity · last 6 months</p>
-        </div>
-        <OperationalTrends dateFrom={format(new Date(new Date().setMonth(new Date().getMonth() - 6)), 'yyyy-MM-dd')} dateTo={today} />
       </div>
 
     </div>

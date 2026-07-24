@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Map, LineChart } from 'lucide-react'
+import { LayoutDashboard, Map } from 'lucide-react'
 
 // Top-level nav for the Production hub: the live Dashboard cockpit, the deeper
 // Yield & Batch Analytics report (batch-spine driven), and the (accurate,
@@ -12,7 +12,6 @@ export function ProductionTabs() {
 
   const tabs = [
     { href: '/production/dashboard',  label: 'Dashboard',  icon: LayoutDashboard, match: ['/production/dashboard'] },
-    { href: '/production/analytics',  label: 'Analytics',  icon: LineChart,       match: ['/production/analytics'] },
     { href: '/production/floor-plan', label: 'Floor Plan', icon: Map,             match: ['/production/floor-plan'] },
   ]
 

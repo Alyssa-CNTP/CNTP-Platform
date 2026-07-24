@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Production Dashboard redesign: single sectioned cockpit, analytics folded in, floor plan woven in)
+
+**Files changed:** `components/production/ProductionDashboard.tsx`, `components/production/ProductionTabs.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`, `app/(app)/production/analytics/page.tsx` (deleted), `components/production/YieldAnalytics.tsx` (deleted)
+
+Rebuilt the Production Dashboard into one manager cockpit as requested — **not tabbed**, but sectioned, grouped and graph-driven, everything at a glance with each metric's calculation shown.
+
+- **De-tabbed → sequential sections** (was Yields/Machine/Quality tabs): §Yield & Output → §Output Mix & Batches → §Machine KPIs & Throughput → §Quality Integration → §Granule Quality & Scale Health → §Factory Floor Plan → §Energy & Breakdowns → AI Analyst → Operational Trends → **§Section Status (moved to the very end)**.
+- **Analytics folded in** (standalone `/production/analytics` page retired): per-product **output mix** (Fine Leaf ÷ total, from `v_output_stream`) + an **interactive, sortable batch grid** (batch → output → yield → bulk density → leaf shade → QC, from `v_batch_360`). Removed the analytics route, its hub tab, sidebar link, route guard, route meta and `production.analytics` permission; kept the `yield-analytics` API (the dashboard now consumes it).
+- **Floor plan woven in** as a section (`FactoryFloorPlan`); **removed from the sidebar** (it lives on the dashboard and keeps its hub tab).
+- All data from real DB tables — `manager-kpis` + `yield-analytics` views + direct `prod_*` / `check_*` / `qms` queries. No mock data; every chart keeps its formula `InfoTip`.
+- Follow-ups noted (next iteration): grids grouped per section/line · batch · grade · variant; stronger machine-throughput view; breakdowns/job-cards organised by machine/section with action items.
+
+---
+
 ## 2026-07-24 — Alyssa (Fix production roster/energy cron secrets — both had been 401ing)
 
 **Files:** none (infra/config only — GitHub Actions repo secrets + production VPS `.env.local`)
