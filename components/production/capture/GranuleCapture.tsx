@@ -591,6 +591,12 @@ export function GranuleCapture({
   const [outTarget, setOutTarget] = useState(DEFAULT_TARGET_KG)
   const [outWeight, setOutWeight] = useState('')
   const [adding, setAdding] = useState(false)
+  // Supervisor sets the lot at assignment, but the operator is the one who can
+  // actually see the physical batch on the floor — a typo or a wrong batch
+  // tagged upstream only gets caught here. Ask once per session, before the
+  // first bag; if bags already exist (reopening an in-progress session), it's
+  // already been confirmed.
+  const [lotConfirmed, setLotConfirmed] = useState(value.outputs.length > 0)
 
   async function addOutputBag() {
     if (n(outWeight) <= 0 || adding) return
@@ -826,7 +832,24 @@ export function GranuleCapture({
                   {!locked && <button onClick={() => removeOutput(b.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
                 </div>
               ))}
-              {!locked && (
+              {!locked && !lotConfirmed && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2.5 text-center">
+                  <AlertTriangle size={18} className="mx-auto text-amber-500" />
+                  <div>
+                    <div className="text-[10px] font-semibold text-amber-700 uppercase tracking-widest">Confirm lot before bagging</div>
+                    <div className="text-[20px] font-mono font-bold text-text mt-0.5">{lot || '— not assigned —'}</div>
+                  </div>
+                  {lot ? (
+                    <button onClick={() => setLotConfirmed(true)}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-[13px] font-medium transition-colors" style={{ background: BAG_COLOR }}>
+                      <CheckCircle2 size={15} /> Confirm — matches the physical batch
+                    </button>
+                  ) : (
+                    <p className="text-[12px] text-amber-700">No lot assigned for this shift — ask a supervisor to set one on the Assign screen before bagging.</p>
+                  )}
+                </div>
+              )}
+              {!locked && lotConfirmed && (
                 <div className="space-y-2 pt-1">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
