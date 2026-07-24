@@ -303,12 +303,12 @@ function AssignScreen() {
             const ops    = operators
             const saving = savingSection === sectionId
             const saved  = savedSection === sectionId
-            // Granule and Blender/Small Blender's lot number silently defaults to
-            // blank if skipped here — Granule's serial numbering + QC linking and
-            // Blender's Fine/Coarse Leaf batch tracking both key off it, and the
-            // supervisor doesn't find out until later. Require it up front.
-            const lotMissing = (sectionId === 'granule' || isBlenderSection(sectionId))
-              && draft.operatorIds.length > 0 && !draft.lotNumber.trim()
+            // Granule's lot number silently defaults to blank if skipped here —
+            // every output bag tag depends on it, and the supervisor doesn't find
+            // out until later. Require it up front. Blender/Small Blender don't
+            // need this: their lot is auto-derived (date + run number) in Capture
+            // if the supervisor doesn't set one, so there's nothing to forget.
+            const lotMissing = sectionId === 'granule' && draft.operatorIds.length > 0 && !draft.lotNumber.trim()
 
             return (
               <div key={sectionId} className="bg-white border border-stone-200 rounded-2xl overflow-hidden"
@@ -361,19 +361,17 @@ function AssignScreen() {
                       {NEEDS_LOT.has(sectionId) && (
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
-                            Lot / Batch{(sectionId === 'granule' || isBlenderSection(sectionId)) && <span className="text-err"> *</span>}
+                            Lot / Batch{sectionId === 'granule' && <span className="text-err"> *</span>}
                           </label>
                           <input
                             value={draft.lotNumber} onChange={e => setField(sectionId, 'lotNumber', e.target.value)}
-                            placeholder="e.g. GS-2026-001"
+                            placeholder={isBlenderSection(sectionId) ? 'Auto — date/run number, unless set here' : 'e.g. GS-2026-001'}
                             className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] text-text outline-none focus:border-brand ${lotMissing ? 'border-err' : 'border-stone-200'}`}
                           />
-                          {lotMissing && (
-                            <p className="text-[11px] text-err px-0.5">
-                              {sectionId === 'granule'
-                                ? 'Required — every output bag tag is stamped with this lot, and QC readings link to it.'
-                                : 'Required — every output bag tag (the finished blend label) is stamped with this lot number.'}
-                            </p>
+                          {lotMissing ? (
+                            <p className="text-[11px] text-err px-0.5">Required — every output bag tag is stamped with this lot, and QC readings link to it.</p>
+                          ) : isBlenderSection(sectionId) && (
+                            <p className="text-[11px] text-stone-400 px-0.5">Optional override — Capture auto-generates one (date/run number) if left blank.</p>
                           )}
                         </div>
                       )}

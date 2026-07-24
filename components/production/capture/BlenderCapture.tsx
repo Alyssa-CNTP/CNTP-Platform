@@ -66,6 +66,7 @@ export interface BlenderOutputBag {
   tagMethod: 'printed' | 'handwritten' | null
   secured: boolean
   logged_at?: string
+  lot?: string             // resolved once at creation — see autoLot() in BlenderCapture
 }
 
 export interface BlenderData {
@@ -125,6 +126,17 @@ function productionDayRange(date: string): { start: string; end: string } {
   const [y, m, d] = date.split('-').map(Number)
   const next = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)
   return { start: `${date}T00:00:00+02:00`, end: `${next}T07:00:00+02:00` }
+}
+
+// The output-bag lot number doesn't need a supervisor to type it — everything
+// it needs (the date, and which numbered run of the day this is) is already
+// tracked for the serial itself. Auto-deriving it as DD-MM-YY/runNo removes
+// the "supervisor forgot to set it" failure mode entirely, since there's
+// nothing left to forget. An explicit assignment.lot_number (a manual
+// rework/override case) still wins if a supervisor sets one anyway.
+function autoLot(date: string, runNo: number): string {
+  const [y, m, d] = date.split('-')
+  return `${d}-${m}-${y.slice(2)}/${runNo}`
 }
 
 export async function resolveExistingBlendRunNo(bomId: string, date: string): Promise<number | null> {
@@ -625,12 +637,13 @@ export function BlenderCapture({
   async function addOutputBag(weight: string) {
     if (n(weight) <= 0) return
     const serial = await genBlendSerial()
+    const lot = assignment?.lot_number || autoLot(date, runNoRef.current ?? 1)
     const now = nowISO()
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: sectionId, session_id: null,
         product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantWord || null,
-        weight_kg: n(weight), lot_number: assignment?.lot_number || null,
+        weight_kg: n(weight), lot_number: lot,
         acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
@@ -640,7 +653,7 @@ export function BlenderCapture({
     } catch { /* session save retries */ }
 
     patch({ outputs: [...value.outputs, {
-      id: crypto.randomUUID(), serial, time: fmtTime(now), weight, tagMethod: null, secured: true, logged_at: now,
+      id: crypto.randomUUID(), serial, time: fmtTime(now), weight, lot, tagMethod: null, secured: true, logged_at: now,
     }] })
   }
 
@@ -656,7 +669,7 @@ export function BlenderCapture({
       if (b) {
         printLabel({
           id: b.id, serial_number: b.serial, product_type: bomId ? `Blend ${bomId}` : 'Blended Batch',
-          variant: variantShort, grade: 'A', weight_kg: n(b.weight), lot_number: assignment?.lot_number ?? '',
+          variant: variantShort, grade: 'A', weight_kg: n(b.weight), lot_number: b.lot ?? assignment?.lot_number ?? '',
           section_id: sectionId, section_name: SECTION_CONFIG[sectionId]?.name ?? sectionId,
           created_at: b.logged_at ?? nowISO(), printed: true,
         })
