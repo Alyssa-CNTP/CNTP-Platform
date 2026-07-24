@@ -16,6 +16,14 @@ import { addDays, format, parseISO, getISOWeek } from 'date-fns'
 
 export const ROSTER_PERIOD_DAYS = 7  // weekly cadence
 
+// Role keys that are FIXED to their current shift and never flip on rotation —
+// everything else still auto-rotates day↔night as normal. Set per-request, not
+// derived from any pattern in the data:
+//   - store_supervisor: always Bongikaya Ndikinda (day) / Steven Paris (night)
+//   - forklift_driver:  Sibabalo Lindi + Nkosiphendule Vutza, always day
+//   - refining_2, rosehip (Value Added Product): day-only operators, no night
+export const FIXED_SHIFT_ROLE_KEYS = ['store_supervisor', 'forklift_driver', 'refining_2', 'rosehip']
+
 export interface RotatePeriod {
   id: string; name: string; start_date: string; end_date: string
   day_label: string; night_label: string
@@ -43,12 +51,14 @@ export function nextPeriodConfig(source: RotatePeriod, periodDays = ROSTER_PERIO
   }
 }
 
-/** Every entry, with its shift flipped, ready to insert against `newPeriodId`. */
+/** Every entry, with its shift flipped, ready to insert against `newPeriodId`.
+ *  Entries whose role_key is in FIXED_SHIFT_ROLE_KEYS keep their current shift
+ *  instead — those roles don't rotate. */
 export function rotateEntries(entries: RotateEntry[], newPeriodId: string) {
   return entries.map(e => ({
     period_id:   newPeriodId,
     role_key:    e.role_key,
-    shift:       e.shift === 'day' ? 'night' : 'day',
+    shift:       FIXED_SHIFT_ROLE_KEYS.includes(e.role_key) ? e.shift : (e.shift === 'day' ? 'night' : 'day'),
     employee_id: e.employee_id ?? null,
     operator_id: e.operator_id ?? null,
     person_name: e.person_name,

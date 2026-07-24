@@ -5,6 +5,77 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Shift Roster: fixed-shift roles that no longer auto-rotate)
+
+**Files:** `lib/production/roster-rotate.ts`, `supabase/migrations/20260724_002_roster_fixed_shift_roles.sql`
+
+Some roles are meant to always sit on the same shift, not flip day↔night on the weekly
+rotation: **Store Supervisor** (Bongikaya Ndikinda always day, Steven Paris always
+night), **Forklift Driver** (Sibabalo Lindi + Nkosiphendule Vutza, moved out of Store
+Operator into their own row, always day), and **Refining 2** / **Value Added Product**
+(day-shift operators only). Added `FIXED_SHIFT_ROLE_KEYS` to `roster-rotate.ts` — used by
+both the "Generate next week" button and the unattended rotate cron — so these roles
+carry their shift forward unchanged instead of swapping; the rest of Store Operator is
+untouched and keeps auto-rotating. Migration corrected the two `roster_periods` that
+already existed (this week + the one already generated ahead of it), applied directly
+to staging DB. Deployed via `scripts/staging-deploy.sh`; verified `/production/roster`
+returns 200 post-deploy.
+
+---
+
+## 2026-07-24 — Alyssa (Remove Maintenance Manager from the Shift Roster)
+
+**Files:** `lib/production/roster-config.ts`, `supabase/migrations/20260724_001_roster_remove_maintenance_manager.sql`
+
+Removed the "Maintenance Manager" row from the Shift Roster entirely (reverses the
+20260717 addition — the Maintenance section is back to just Tech / Assistant). Dropped
+the seed entry from `ROSTER_ROLE_SEED`; the migration deactivates the
+`production.roster_roles` row (`active = false`, kept rather than deleted for history)
+and deletes the 2 existing `roster_entries` that were placed under it, so the grid
+doesn't carry a stray invisible entry. Migration applied directly to staging Supabase.
+
+---
+
+## 2026-07-24 — Alyssa (Shift Roster print: squeeze spacing so Health & Safety fits on page one)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+Follow-up to the enlarged-text change — the bigger fonts pushed the last department
+(Health & Safety) onto its own second page. Trimmed row padding, line-height, block/legend
+margins, and the `@page` margin (8mm → 6mm) throughout `PrintRoster` — text size is
+unchanged, only the whitespace around it — so all 6 departments land back on a single
+portrait page. Deployed via `scripts/staging-deploy.sh`; verified `/production/roster`
+returns 200 post-deploy.
+
+---
+
+## 2026-07-24 — Alyssa (Shift Roster print: bigger text for noticeboard legibility)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+Follow-up to the portrait one-page change below — once everything fit on one page the
+text was too small to read from a few steps away on an actual noticeboard. There was
+plenty of spare vertical space on the page, so grown `PrintRoster`'s font sizes and
+padding across the board (role/person names, headers, category labels, title). Deployed
+via `scripts/staging-deploy.sh`; verified `/production/roster` returns 200 post-deploy.
+
+---
+
+## 2026-07-24 — Alyssa (Shift Roster print: one portrait page, not multi-page landscape)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/globals.css`, `.claude/launch.json`
+
+The roster's noticeboard printout (Print button) was landscape and spilled onto multiple
+pages. Switched `@page` to portrait and tightened `PrintRoster`'s fonts/padding (th/td
+font size, row padding, block margins) so all 6 departments / ~25 roles across both
+shifts land on a single A4 portrait sheet — portrait actually suits this table's shape
+(narrow, tall) better than landscape did. Also enabled `autoPort` in the dev launch
+config so the preview server can start when port 3000 is already occupied by another
+process. Deployed to staging via `scripts/staging-deploy.sh`; verified `/production/roster`
+returns 200 post-deploy.
+
+---
+
 ## 2026-07-24 — Alyssa (Fix wrong reason shown for Blender's required lot number)
 
 **Files:** `app/(app)/production/capture/assign/page.tsx`

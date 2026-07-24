@@ -1139,39 +1139,40 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
   const fmtPeople = (list: Entry[]) => list.length
     ? list.map(e => e.person_name + (e.tags.length ? ` (${e.tags.join(' ')})` : '')).join(', ')
     : '—'
-  const th: CSSProperties = { textAlign: 'left', padding: '3px 6px', borderBottom: '1.5px solid #333', fontSize: 8.5, textTransform: 'uppercase', letterSpacing: 0.3, color: '#555' }
-  const td: CSSProperties = { padding: '3px 6px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 9.5, lineHeight: 1.3 }
+  const th: CSSProperties = { textAlign: 'left', padding: '2px 7px', borderBottom: '1.5px solid #333', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.3, color: '#555' }
+  const td: CSSProperties = { padding: '2px 7px', borderBottom: '1px solid #e5e5e5', verticalAlign: 'top', fontSize: 12, lineHeight: 1.22 }
 
   return (
-    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '10px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '2px solid #1A3A0E', paddingBottom: 6, marginBottom: 10 }}>
+    <div className="print-only" style={{ fontFamily: 'Arial, sans-serif', color: '#111', padding: '3px 6px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '2px solid #1A3A0E', paddingBottom: 4, marginBottom: 6 }}>
         <div>
-          <h1 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
-          <p style={{ fontSize: 11, margin: '2px 0 0', color: '#555' }}>
+          <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: '#1A3A0E' }}>Shift Roster</h1>
+          <p style={{ fontSize: 12, margin: '1px 0 0', color: '#555' }}>
             {fmtRange(period)}{hasCustomName ? ` · ${period.name}` : ''}
           </p>
         </div>
-        <p style={{ fontSize: 9, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
+        <p style={{ fontSize: 10, color: '#999', margin: 0 }}>Printed {format(new Date(), 'd MMM yyyy HH:mm')}</p>
       </div>
 
-      {/* One full-width table per department, stacked top to bottom. CSS
-          multi-column (column-count) looked good but Chromium's print engine
-          balances column height to a single page and silently drops any
-          content that doesn't fit — it does not flow the rest onto page 2.
-          Plain block stacking has no such ceiling: the browser's normal print
-          pagination reliably continues onto as many landscape pages as the
-          roster needs. Each department is break-inside:avoid so its table
-          only splits across a page if it genuinely can't fit on one. */}
+      {/* One full-width table per department, stacked top to bottom, sized to
+          land the whole roster (all departments, both shifts) on a single
+          portrait page — this is a noticeboard printout meant to be read from
+          a few steps away, not a paginated report. Each department is
+          break-inside:avoid so it never splits across a page edge. Text size
+          stays generous for legibility; it's the padding/margins here that
+          get squeezed to make everything land on one page. If a future role
+          list grows enough to overflow, squeeze these further (or the fonts)
+          before reaching for a second page. */}
       <div>
         {rolesByCategory.map(({ cat, items }) => (
-          <div key={cat.key} style={{ marginBottom: 10, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
-            <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '2px 8px', marginBottom: 3 }}>
-              <span style={{ fontWeight: 700, fontSize: 10.5, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.3 }}>{cat.label}</span>
+          <div key={cat.key} style={{ marginBottom: 5, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+            <div style={{ borderLeft: `4px solid ${cat.colorHex}`, background: cat.colorHex + '14', padding: '1.5px 9px', marginBottom: 1.5 }}>
+              <span style={{ fontWeight: 700, fontSize: 13, color: cat.colorHex, textTransform: 'uppercase', letterSpacing: 0.3 }}>{cat.label}</span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{ ...th, width: '22%' }}>Role</th>
+                  <th style={{ ...th, width: '24%' }}>Role</th>
                   <th style={th}>{dayHeader}</th>
                   <th style={th}>{nightHeader}</th>
                 </tr>
@@ -1190,7 +1191,7 @@ function PrintRoster({ period, rolesByCategory, cellEntries }: {
         ))}
       </div>
 
-      <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid #ccc', fontSize: 8.5, color: '#555' }}>
+      <div style={{ marginTop: 4, paddingTop: 3, borderTop: '1px solid #ccc', fontSize: 9.5, color: '#555' }}>
         <strong style={{ color: '#111' }}>Skill / certification tags: </strong>
         {SKILL_TAGS.map(t => `${t.code} = ${t.label}`).join('   ·   ')}
       </div>
