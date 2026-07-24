@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Shift Roster print: squeeze spacing so Health & Safety fits on page one)
+
+**Files:** `app/(app)/production/roster/page.tsx`, `app/globals.css`
+
+Follow-up to the enlarged-text change — the bigger fonts pushed the last department
+(Health & Safety) onto its own second page. Trimmed row padding, line-height, block/legend
+margins, and the `@page` margin (8mm → 6mm) throughout `PrintRoster` — text size is
+unchanged, only the whitespace around it — so all 6 departments land back on a single
+portrait page. Deployed via `scripts/staging-deploy.sh`; verified `/production/roster`
+returns 200 post-deploy.
+
+---
+
 ## 2026-07-02 — Gustav (Checklist auto-allocation from shift roster + JoJo tank checklist)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `lib/maintenance/allocation.ts` (new), `supabase/migrations/20260702_050_maintenance_jojo_checklist.sql` (new, applied to staging DB)
