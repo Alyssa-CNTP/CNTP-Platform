@@ -5,6 +5,35 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Fix production roster/energy cron secrets — both had been 401ing)
+
+**Files:** none (infra/config only — GitHub Actions repo secrets + production VPS `.env.local`)
+
+`roster-rotate-production.yml` (merged 2026-07-23 as part of the Shift Roster staging↔main
+merge) needs `PROD_APP_URL` and `PROD_CRON_SECRET` repo secrets to call the production
+app's `/api/production/roster/cron` endpoint. Neither secret existed on the repo at all —
+confirmed via the GitHub API, not just inferred. That also explained why
+`energy-capture-production.yml` (same two secrets, same pattern) had been failing on
+every single scheduled run since at least 2026-07-18 with no one noticing, since it only
+surfaces in the Actions log for that workflow.
+
+Fixed by setting `PROD_APP_URL` and a freshly generated `PROD_CRON_SECRET` as GitHub repo
+secrets, then setting the matching `CRON_SECRET` value in `.env.local` on the production
+VPS (`/home/cntpdev/apps/production/app/cntp-ops`) and restarting `cntp-production` with
+`pm2 restart cntp-production --update-env`. Verified end-to-end with a manual
+`workflow_dispatch` run of `roster-rotate-production.yml` (`task=rotate`) — completed
+`success`, confirming the bearer-token auth now matches. `doRotate()`
+(`app/api/production/roster/cron/route.ts`) is idempotent — it skips if a period already
+starts on/after the computed next date — so this test run did not disturb the
+already-generated upcoming week's roster. This also unblocks
+`energy-capture-production.yml`'s next scheduled run.
+
+Still needed on the VPS side going forward: `CRON_SECRET` in production's `.env.local`
+must be kept in sync with GitHub's `PROD_CRON_SECRET` secret manually if either is ever
+rotated — there's no automated sync between the two.
+
+---
+
 ## 2026-07-22 — Alyssa (PRODUCTION: Refining 1 & 2 capture — added Coarse Leaf + Cut Heavy Stick Fine/Coarse as scannable/pickable inputs)
 
 **Files changed:** `lib/production/live-types.ts`, `components/production/capture/RefiningCapture.tsx`
