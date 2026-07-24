@@ -5,6 +5,31 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Blender/Small Blender lot now mandatory at assignment; Granule bagging requires an operator lot-confirmation)
+
+**Files:** `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+**Assign screen — Lot/Batch now required for Blender and Small Blender too**, mirroring
+today's earlier Granule fix. `isBlenderSection()` (already used elsewhere on this page)
+covers both `blender` and `smallblender` — same underlying reason: their Fine/Coarse Leaf
+batch tracking in Capture depends on a real value being set here, and it was possible to
+save an assignment with operators rostered but no lot.
+
+**Granule bagging — operator must actively confirm the lot before the first bag.** The
+supervisor sets the lot on the Assign screen (now mandatory, see above), but only the
+operator on the floor can see whether it actually matches the physical batch in front of
+them — a supervisor typo or a swapped batch previously went straight through unnoticed.
+Bagging's "Add bag" controls are now hidden behind a one-time confirmation card showing
+the assigned lot in large mono text; the operator must tap "Confirm — matches the
+physical batch" before the weight inputs unlock. Skipped automatically if the session
+already has logged bags (reopening in-progress work isn't asked twice). If no lot was
+assigned at all (pre-existing/unmigrated sessions), it tells the operator to get a
+supervisor to set one instead of offering a confirm button. Scoped to Granule only, per
+the reported problem — Blender's per-row Fine/Coarse Leaf batch entry is scanned/typed by
+the operator directly and already serves the equivalent role there.
+
+---
+
 ## 2026-07-24 — Alyssa (Blender: SG-blend cutter materials no longer need a batch number; Granule: lot number now mandatory at assignment)
 
 **Files:** `lib/production/bom.ts`, `components/production/capture/BlenderCapture.tsx`,
