@@ -95,6 +95,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
     : j.status === 'in_progress' && isTech ? { label: 'Log work', primary: true }
     : j.status === 'qc_check' && isQc ? { label: 'QC check', primary: true }
     : j.status === 'verify' && isRaiser ? { label: 'Verify', primary: true }
+    : j.status === 'mgr_verify' && canManage ? { label: 'Sign off', primary: true }
     : { label: expanded ? 'Hide' : 'Open', primary: false }
 
   const ageDays = diffDays(j.raised_at, j.completed_at ?? j.verified_at ?? new Date().toISOString())
@@ -497,7 +498,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
-          {/* verify → originator signs off */}
+          {/* verify → originator signs off, then it goes to the manager */}
           {j.status === 'verify' && isRaiser && (
             <div className={PANEL}>
               <div className="text-[12px] font-semibold text-text mb-2">Verification by originator ({j.raised_by})</div>
@@ -507,10 +508,34 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
               {j.qc_required && <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
               <div className="flex gap-2 flex-wrap mt-1">
-                <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>Satisfactory — close</button>
+                <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>Satisfactory — send to manager</button>
                 <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>
               </div>
             </div>
+          )}
+          {/* verify stage — non-originator view */}
+          {j.status === 'verify' && !isRaiser && (
+            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting verification by the originator ({j.raised_by}).</div></div>
+          )}
+
+          {/* mgr_verify → maintenance manager gives the final sign-off (every card) */}
+          {j.status === 'mgr_verify' && canManage && (
+            <div className={PANEL}>
+              <div className="text-[12px] font-semibold text-text mb-2">Final sign-off — maintenance manager</div>
+              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Work:</span> {j.work_done || '—'}</div>
+              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Root Cause:</span> {j.root_cause || '—'}</div>
+              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
+              {j.qc_required && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
+              <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">Originator verified:</span> {j.raised_by}</div>
+              <div className="flex gap-2 flex-wrap mt-1">
+                <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>✓ Sign off &amp; close</button>
+                <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>
+              </div>
+            </div>
+          )}
+          {/* mgr_verify — everyone else sees it's with the manager */}
+          {j.status === 'mgr_verify' && !canManage && (
+            <div className={PANEL}><div className="text-[12px] text-text-muted">Originator verified — awaiting the maintenance manager's final sign-off.</div></div>
           )}
 
           {j.status === 'complete' && (
