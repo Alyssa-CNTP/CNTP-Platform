@@ -153,13 +153,15 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
     if ('bomId' in d) {
       // BlenderData: the output is the blend itself — labeled "Blend {bomId}",
       // the same convention BlenderCapture uses when it upserts these bags to
-      // bag_tags. There's no per-bag productType/batch/destination on a
-      // BlenderOutputBag (unlike every other section's output shape), so
-      // those are supplied here rather than read off `b`.
+      // bag_tags. productType/destination aren't per-bag on a BlenderOutputBag
+      // (unlike every other section's output shape) so those are supplied here;
+      // `lot` IS per-bag (resolved once at creation — see autoLot() in
+      // BlenderCapture) — falls back to the blend code for bags logged before
+      // that field existed.
       const label = d.bomId ? `Blend ${d.bomId}` : 'Blended Batch'
       ;(d.outputs ?? []).forEach((b: any) => addBag(p, {
         productType: label, weight: b.weight, serial: b.serial,
-        batch: d.bomId || undefined, destination: p.variant, logged_at: b.logged_at,
+        batch: b.lot || d.bomId || undefined, destination: p.variant, logged_at: b.logged_at,
       }))
     } else if ('inputs' in d) {
       // RefiningData: outputA/B/C/D groups each have a bags array

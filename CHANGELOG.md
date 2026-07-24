@@ -5,6 +5,34 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Blender's output lot number is now auto-generated — no more supervisor entry needed)
+
+**Files:** `components/production/capture/BlenderCapture.tsx`, `components/production/capture/CaptureOverview.tsx`,
+`app/(app)/production/capture/assign/page.tsx`
+
+Follow-up to today's earlier "lot required at assignment" fix — better answer for
+Blender specifically: everything the lot number needs (the date, and which numbered
+blend run of the day this is) is already tracked for the output-bag serial itself, so
+there's nothing left for a supervisor to type or forget. Added `autoLot(date, runNo)` in
+`BlenderCapture.tsx` (`DD-MM-YY/runNo`, e.g. `24-07-26/1`) using the exact same `runNo`
+already resolved for `genBlendSerial()` — no new counter. `addOutputBag()` now writes
+`lot_number: assignment?.lot_number || autoLot(date, runNoRef.current ?? 1)` to
+`bag_tags`, and stores the resolved value on the output bag record itself (`lot?: string`
+added to `BlenderOutputBag`) so reprints use the value actually on the bag rather than
+re-deriving it later.
+
+An explicit `assignment.lot_number` still wins if a supervisor sets one anyway (rework/
+override case) — the Assign screen's Lot/Batch field for Blender/Small Blender is now
+optional again (placeholder explains it auto-generates), and the earlier "Required"
+validation there is scoped back to Granule only, which has no equivalent auto-derivation.
+
+**Also fixed while in there:** `CaptureOverview`'s product-groups table was showing the
+*blend code* in the Lot/Batch column for Blender output (there was no per-bag lot field
+to read before now) — switched to the bag's real resolved lot, falling back to the blend
+code only for bags logged before this field existed.
+
+---
+
 ## 2026-07-24 — Alyssa (Shift Roster: fixed-shift roles that no longer auto-rotate)
 
 **Files:** `lib/production/roster-rotate.ts`, `supabase/migrations/20260724_002_roster_fixed_shift_roles.sql`
