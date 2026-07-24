@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
-import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { fetchGranuleQuality } from '@/lib/production/granule-quality'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
@@ -1041,7 +1041,7 @@ export default function ProductionDashboard() {
               {todayRows.map(r => {
                 const m = sectionMeta(r.id)
                 const st = SESSION_STATUS[r.status] ?? SESSION_STATUS.none
-                const flag = r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG
+                const flag = r.kgIn > 0 && Math.abs(r.variance) > massBalanceToleranceFor(r.id)
                 return (
                   <tr key={r.id} className="hover:bg-surface-dim/60 transition-colors cursor-pointer" onClick={() => { window.location.href = `/production/capture/${r.id}?date=${today}` }}>
                     <td className="px-4 py-3">

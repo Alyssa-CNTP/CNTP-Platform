@@ -15,7 +15,7 @@ import { type RefiningData } from '@/components/production/capture/RefiningCaptu
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
-import { MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
@@ -217,10 +217,10 @@ const fmtTime = (iso?: string) =>
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function CaptureOverview({
-  productions, sectionName, sectionColor, date, shift, showSerials = false,
+  productions, sectionId, sectionName, sectionColor, date, shift, showSerials = false,
   productionOrders, locked = false, balanceRows, balanceNote, blenderRatios,
 }: {
-  productions: Production[]; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
+  productions: Production[]; sectionId?: string; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
   balanceRows?: BalanceRow[]; balanceNote?: string; blenderRatios?: BlenderRatioGroup[]
 }) {
@@ -241,7 +241,8 @@ export function CaptureOverview({
   const totalOut      = productGroups.reduce((s, g) => s + g.totalKg, 0)
   const totalBags     = productGroups.reduce((s, g) => s + g.totalCount, 0)
   const variance      = totalOut - totalIncl
-  const withinTol     = Math.abs(variance) <= MASS_BALANCE_TOLERANCE_KG
+  const balanceTolKg  = massBalanceToleranceFor(sectionId ?? '')
+  const withinTol     = Math.abs(variance) <= balanceTolKg
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
 
@@ -551,7 +552,7 @@ export function CaptureOverview({
             {/* Mass balance — tabular (Morning / Afternoon / whole run) when the
                 page supplies per-shift rows; otherwise a single-line fallback. */}
             {balanceRows && balanceRows.length > 0 ? (
-              <MassBalanceTable rows={balanceRows} tolerance={MASS_BALANCE_TOLERANCE_KG} note={balanceNote} />
+              <MassBalanceTable rows={balanceRows} tolerance={balanceTolKg} note={balanceNote} />
             ) : (
               <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
                 <span className="text-stone-500">In {totalIncl.toFixed(1)} − Out {totalOut.toFixed(1)} =</span>

@@ -467,7 +467,7 @@ function BlendCard({
                   {DUST_LABEL(r.dustKey)} {n(r.weight).toFixed(0)}
                 </span>
               ))}
-              {n(blend.water) > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700">Water {n(blend.water).toFixed(0)}</span>}
+              {n(blend.water) > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700">Water {n(blend.water).toFixed(0)}L</span>}
             </div>
           </div>
           <span className="font-mono font-bold text-[14px] text-text shrink-0">{total.toFixed(0)} kg</span>
@@ -530,7 +530,7 @@ function BlendCard({
         {/* Water */}
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-sky-200 bg-sky-50/50">
           <Droplets size={15} className="text-sky-500 shrink-0" />
-          <label className="text-[12px] font-medium text-sky-800 flex-1">Water added (kg)</label>
+          <label className="text-[12px] font-medium text-sky-800 flex-1">Water added (L)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={blend.water} disabled={locked}
             onChange={e => onChange({ ...blend, water: e.target.value })}
             className="w-24 px-3 py-2 rounded-lg border border-sky-200 bg-white text-[14px] text-right outline-none focus:border-sky-400" />
@@ -794,7 +794,7 @@ export function GranuleCapture({
               {t.water > 0 && (
                 <div className="flex items-center justify-between px-4 py-2 text-[13px] text-sky-700">
                   <span className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-sky-400" />Water <span className="text-stone-400 text-[11px]">(not in A)</span></span>
-                  <span className="font-mono font-semibold">{t.water.toFixed(1)} kg</span>
+                  <span className="font-mono font-semibold">{t.water.toFixed(1)} L</span>
                 </div>
               )}
             </div>
