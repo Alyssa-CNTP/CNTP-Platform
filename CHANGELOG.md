@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Shift Roster print: bigger text for noticeboard legibility)
+
+**Files:** `app/(app)/production/roster/page.tsx`
+
+Follow-up to the portrait one-page change below — once everything fit on one page the
+text was too small to read from a few steps away on an actual noticeboard. There was
+plenty of spare vertical space on the page, so grown `PrintRoster`'s font sizes and
+padding across the board (role/person names, headers, category labels, title). Deployed
+via `scripts/staging-deploy.sh`; verified `/production/roster` returns 200 post-deploy.
+
+---
+
 ## 2026-07-24 — Alyssa (Shift Roster print: one portrait page, not multi-page landscape)
 
 **Files:** `app/(app)/production/roster/page.tsx`, `app/globals.css`, `.claude/launch.json`
