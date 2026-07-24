@@ -110,6 +110,8 @@ interface BatchSample {
   moisture:       string
   untapped_bd:    string
   customer_bd:    string
+  flow_mass:      string
+  flow_time:      string
   needle_count:   string
   compares_to_ref:string
   final_weight_1: string; final_weight_2: string; final_weight_3: string
@@ -670,6 +672,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
       gt6:'',gt10:'',gt12:'',gt16:'',gt20:'',gt60:'',dust:'',
       gt6_g:'',gt10_g:'',gt12_g:'',gt16_g:'',gt20_g:'',gt60_g:'',dust_g:'',
       moisture:'', untapped_bd:'', customer_bd:'',
+      flow_mass:'400', flow_time:'',
       final_weight_1:'', final_weight_2:'', final_weight_3:'',
       afternoon_qc: now.getHours() >= 16 ? '' : undefined,
       has_sieve: isOdd, has_mb: true,
@@ -740,7 +743,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
       }
     }
     // No captured value may be negative.
-    const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'final_weight_1', 'final_weight_2', 'final_weight_3',
+    const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'flow_mass', 'flow_time', 'final_weight_1', 'final_weight_2', 'final_weight_3',
       ...PAST_SIEVE_COLS.flatMap(c => [c.key, c.key + '_g'])]
     if (negFields.some(k => isNegative(row[k]))) { alert('Values cannot be negative.'); return }
     if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
@@ -914,6 +917,45 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
               </div>
             </div>
           )}
+
+          {/* Flowability Test — QC enters the time (s); mass flow rate is calculated
+              as mass ÷ time. Bulk density is carried over from Customer BD (cc/100g). */}
+          {row.has_mb && (() => {
+            const fMass = parseFloat(row.flow_mass)
+            const fTime = parseFloat(row.flow_time)
+            const flowRate = !isNaN(fMass) && !isNaN(fTime) && fTime > 0 ? fMass / fTime : null
+            return (
+              <div className="bg-teal-50 border-2 border-teal-200 rounded-xl p-4">
+                <div className="font-bold text-[12px] text-teal-700 mb-3">⏱️ Flowability Test</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+                  <div>
+                    <label className={lbl}>Mass of Tea (g)</label>
+                    <input type="number" min="0" inputMode="decimal" step="1" value={row.flow_mass}
+                      onChange={e => set('flow_mass', e.target.value)} className={`${inp} w-full`} />
+                  </div>
+                  <div>
+                    <label className={lbl}>Bulk Density (cc/100g)</label>
+                    <input type="number" value={row.customer_bd} readOnly title="Carried over from Customer BD"
+                      placeholder="— enter Customer BD above"
+                      className={`${inp} w-full bg-surface/60 text-text-muted cursor-not-allowed`} />
+                  </div>
+                  <div>
+                    <label className={lbl}>Time (s)</label>
+                    <input type="number" min="0" inputMode="decimal" step="0.1" value={row.flow_time}
+                      onChange={e => set('flow_time', e.target.value)} placeholder="QC fills in"
+                      className={`${inp} w-full border-teal-300`} />
+                  </div>
+                  <div>
+                    <label className={lbl}>Mass Flow Rate (g/s)</label>
+                    <div className={`${inp} w-full ${flowRate!=null ? 'font-bold text-teal-700 bg-teal-100/60' : 'text-text-faint'}`}>
+                      {flowRate != null ? flowRate.toFixed(1) : '—'}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-[10px] text-text-muted mt-2">Mass flow rate = mass ÷ time, calculated automatically per sample.</div>
+              </div>
+            )
+          })()}
 
           {/* Variation / outlier warnings — require explicit confirmation before saving */}
           {anomalyWarnings.length > 0 && (
@@ -1577,7 +1619,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                             <tr>
                               <th colSpan={7} className="px-3 py-2 bg-brand text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sample Identity</th>
                               <th colSpan={8} className="px-3 py-2 bg-info text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Sieve Analysis (%)</th>
-                              <th colSpan={3} className="px-3 py-2 bg-purple-600 text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Moisture & BD</th>
+                              <th colSpan={4} className="px-3 py-2 bg-purple-600 text-white text-[10px] font-semibold text-center border-r-2 border-white/30">Moisture & BD</th>
                               <th colSpan={6} className="px-3 py-2 bg-ok text-white text-[10px] font-semibold text-center">Sensorial</th>
                               <th className="px-3 py-2 bg-text text-surface-card text-[10px] font-semibold text-center"></th>
                             </tr>
@@ -1593,6 +1635,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                               <th className="px-1.5 py-2 text-center font-bold border-r-2 border-surface-rule">Total</th>
                               <th className="px-2 py-2 text-center">Moist%</th>
                               <th className="px-2 py-2 text-center">BD cc</th>
+                              <th className="px-2 py-2 text-center">Flow g/s</th>
                               <th className="px-2 py-2 text-center border-r-2 border-surface-rule">FW (kg)</th>
                               <th className="px-1.5 py-2 text-center">Aroma</th>
                               <th className="px-1.5 py-2 text-center">Flav</th>
@@ -1655,6 +1698,12 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                       const sp = getPastSpec(activeBatch.customer,'untapped_bd',activeBatch._spec,activeBatch.batch_specs)
                                       const st = pastChk(s.untapped_bd, sp)
                                       return <td className="px-2 py-2.5 text-center font-mono text-[11px]" style={{ color:st==='fail'?'var(--color-err)':st==='pass'?'var(--color-ok)':s.untapped_bd?'var(--color-text)':'var(--color-text-faint)', fontWeight:st!=='neutral'?700:400 }}>{s.untapped_bd||(s.has_mb?'—':'')}</td>
+                                    })()}
+                                    {/* Flowability — mass flow rate (mass ÷ time) */}
+                                    {(() => {
+                                      const m = parseFloat((s as any).flow_mass), t = parseFloat((s as any).flow_time)
+                                      const rate = !isNaN(m) && !isNaN(t) && t > 0 ? (m / t).toFixed(1) : null
+                                      return <td className="px-2 py-2.5 text-center font-mono text-[11px]" style={{ color: rate!=null?'var(--color-text)':'var(--color-text-faint)', fontWeight: rate!=null?700:400 }}>{rate ?? (s.has_mb?'—':'')}</td>
                                     })()}
                                     <td className="px-2 py-2.5 text-center text-[10px] text-text-muted border-r-2 border-surface-rule">
                                       {[s.final_weight_1,s.final_weight_2,s.final_weight_3].filter(Boolean).join(' / ')||'—'}

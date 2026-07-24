@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-20 — Gustav (Pasteuriser: Flowability Test block)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- Added a **Flowability Test** block to the pasteuriser sample capture form (shown with the Moisture & BD section), matching the paper Flowability Test Datasheet.
+- Per sample it shows **Mass of Tea (g)** (defaults to the standard 400 g, editable), **Bulk Density (cc/100g)** carried over read-only from the Customer BD field already captured, and a **Time (s)** field the QC fills in. The **Mass Flow Rate (g/s)** is then calculated automatically as mass ÷ time (e.g. 400 g ÷ 45 s = 8.9 g/s).
+- Added a **Flow g/s** column to the batch samples table so the calculated rate shows per sample after saving.
+- Stored in the existing `data_json` sample record (`flow_mass`, `flow_time`) — no schema/migration change needed.
+
+---
+
 ## 2026-07-02 — Gustav (Job-card verification chain: QC → originator → maintenance manager sign-off)
 
 **Files changed:** `app/api/maintenance/job-cards/[id]/verify/route.ts`, `lib/maintenance/types.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/helpers.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `supabase/migrations/20260702_040_maintenance_mgr_verify_status.sql` (new, applied to staging DB)
@@ -396,7 +407,6 @@ Consolidation foundation so capture, bags, quality and (next) Acumatica orders j
 - **Added an automatic GitHub-backed feed to the Changelog**: merged PRs into `staging` are ingested into the same `axis.change_logs` table as manual entries (`source: 'github'`), shown with author avatar, a linked PR badge, and a diff-stat chip — one unified timeline instead of a purely hand-typed log.
 - Flagged separately to the user: a live GitHub token found committed in plaintext in `QUALITY_MIGRATION_NOTES.md` needs to be revoked — unrelated to this change, not touched by it.
 - **Migrations must be run manually** (Supabase SQL editor, staging then production) per this repo's established practice — `db-migrate.yml`'s auto-apply is deliberately disabled.
-
 ---
 
 ## 2026-07-20 — Gustav (EU MRL: real export parser + upload refresh path, loaded 516 Rooibos MRLs)
