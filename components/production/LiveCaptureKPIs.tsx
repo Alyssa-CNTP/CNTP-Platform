@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { Activity, Package, Scale, CheckCircle2, AlertTriangle, RefreshCw, Layers, ChevronRight } from 'lucide-react'
-import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
 
 /**
  * Live capture KPIs — driven entirely by the structured capture tables
@@ -79,7 +79,7 @@ export function LiveCaptureKPIs() {
   const signed   = rows.filter(r => r.status === 'approved').length
   const totalKg  = rows.reduce((s, r) => s + r.kgOut, 0)
   const totalBags = rows.reduce((s, r) => s + r.bags, 0)
-  const flags    = rows.filter(r => r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG).length
+  const flags    = rows.filter(r => r.kgIn > 0 && Math.abs(r.variance) > massBalanceToleranceFor(r.sectionId)).length
 
   const tiles = [
     { label: 'Capturing now', value: String(active),  icon: Activity,     cls: 'text-warn' },
@@ -122,7 +122,7 @@ export function LiveCaptureKPIs() {
               {rows.map(r => {
                 const m = sectionMeta(r.sectionId)
                 const st = (STATUS as any)[r.status] ?? STATUS.none
-                const flag = r.kgIn > 0 && Math.abs(r.variance) > MASS_BALANCE_TOLERANCE_KG
+                const flag = r.kgIn > 0 && Math.abs(r.variance) > massBalanceToleranceFor(r.sectionId)
                 const href = `/production/capture/${r.sectionId}?date=${today}&shift=${shiftNow}`
                 return (
                   <tr key={r.sectionId} className="hover:bg-surface transition-colors cursor-pointer"

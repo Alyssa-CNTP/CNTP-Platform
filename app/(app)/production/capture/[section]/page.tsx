@@ -42,7 +42,7 @@ import { CaptureOverview, type BlenderRatioGroup } from '@/components/production
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
-import { sectionMeta, makeSerial, MASS_BALANCE_TOLERANCE_KG, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
@@ -1277,7 +1277,7 @@ function CaptureScreen() {
     ? { totalIn: st.totalIn + ot.totalIn, totalOut: st.totalOut + ot.totalOut }
     : st
   const rtVariance  = rt.totalIn - rt.totalOut
-  const rtWithinTol = Math.abs(rtVariance) <= MASS_BALANCE_TOLERANCE_KG
+  const rtWithinTol = Math.abs(rtVariance) <= massBalanceToleranceFor(sectionId)
   const multi = productions.length > 1
   // Rows for the tabular balance — only shifts that actually captured material.
   const balanceRows = [
@@ -1333,7 +1333,7 @@ function CaptureScreen() {
       if (recId) await appendCheckEvent(recId, {
         phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance (change-over)', kind: 'massbalance',
         value_num: prev.totalIn - prev.totalOut, value_text: `${prev.totalIn.toFixed(1)} in / ${prev.totalOut.toFixed(1)} out`,
-        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= MASS_BALANCE_TOLERANCE_KG ? 'ok' : 'flagged',
+        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= massBalanceToleranceFor(sectionId) ? 'ok' : 'flagged',
         production_idx: activeIdx, source: 'auto',
       })
     } catch { /* snapshot is best-effort */ }
@@ -1582,7 +1582,7 @@ function CaptureScreen() {
                     Overview. Other sections show the quick balance here too. */}
                 {rt.totalIn > 0 && sectionId !== 'granule' && (
                   <div className="pt-3 border-t border-stone-100">
-                    <MassBalanceTable rows={balanceRows} tolerance={MASS_BALANCE_TOLERANCE_KG} note={balanceNote} />
+                    <MassBalanceTable rows={balanceRows} tolerance={massBalanceToleranceFor(sectionId)} note={balanceNote} />
                   </div>
                 )}
               </div>
@@ -1704,6 +1704,7 @@ function CaptureScreen() {
               </div>
               <CaptureOverview
                 productions={[...productions, ...siblingProductions, ...otherShiftProductions]}
+                sectionId={sectionId}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
                 date={dateParam}
@@ -1793,7 +1794,7 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
           <div><div className={`font-mono font-bold text-[18px] ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div><div className="text-[10px] text-text-muted">variance</div></div>
         </div>
         {!withinTol && (
-          <p className="text-[11px] text-warn flex items-center gap-1.5"><AlertTriangle size={12} /> Outside {MASS_BALANCE_TOLERANCE_KG} kg tolerance — review before submitting</p>
+          <p className="text-[11px] text-warn flex items-center gap-1.5"><AlertTriangle size={12} /> Outside {massBalanceToleranceFor(sectionId)} kg tolerance — review before submitting</p>
         )}
       </div>
 

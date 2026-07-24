@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
@@ -607,7 +607,8 @@ export function RefiningCapture({
 
   const { totalIn, totalA, totalB, totalC, totalD, balance } = refiningTotals(value)
   const totalOut = totalA + totalB + totalC + totalD
-  const withinTol = Math.abs(balance) <= MASS_BALANCE_TOLERANCE_KG
+  const balanceTolKg = massBalanceToleranceFor(sectionId)
+  const withinTol = Math.abs(balance) <= balanceTolKg
   const inputCount = value.inputs.length
   const outputCount = (value.outputA?.bags.length ?? 0) + (value.outputB?.bags.length ?? 0) + (value.outputC?.bags.length ?? 0) + (value.outputD?.bags.length ?? 0)
   const sectionOutputs = SECTION_OUTPUTS[sectionId] ?? []
@@ -748,7 +749,7 @@ export function RefiningCapture({
               <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance</span>
               {!withinTol && (
                 <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-                  <AlertTriangle size={12} /> Outside ±{MASS_BALANCE_TOLERANCE_KG} kg
+                  <AlertTriangle size={12} /> Outside ±{balanceTolKg} kg
                 </span>
               )}
             </div>

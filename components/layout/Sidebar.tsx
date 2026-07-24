@@ -14,7 +14,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
-  CalendarCheck, CalendarRange, Activity, Map, ClipboardCheck,
+  CalendarCheck, CalendarRange, Activity, ClipboardCheck,
   FileSpreadsheet, GraduationCap, Printer,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
@@ -39,14 +39,12 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
-  { href: '/production/analytics',      label: 'Yield & Batch Analytics',    icon: BarChart2,       group: 'Production', departments: ['Production','Management'], permission: 'can_view_ops_dashboard', orPermission: true },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/inventory',      label: 'Master Inventory',           icon: PackageOpen,     group: 'Production', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
   { href: '/production/blends',         label: 'Blends',                     icon: Layers,          group: 'Production', departments: ['Production','Management'], permission: 'can_view_blends', orPermission: true },
   { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
-  { href: '/production/floor-plan',     label: 'Floor Plan',                 icon: Map,             group: 'Production', departments: ['Production','Management'] },
 
   // ── Operations — cross-role, universal entries ──
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },

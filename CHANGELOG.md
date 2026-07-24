@@ -5,6 +5,100 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Granule: water measured in litres, not kg; Refining 2: mass-balance tolerance raised to 100kg)
+
+**Files:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/RefiningCapture.tsx`,
+`lib/production/capture-config.ts`, `components/production/capture/CaptureOverview.tsx`,
+`app/(app)/production/capture/[section]/page.tsx`, `components/production/LiveCaptureKPIs.tsx`,
+`components/production/ProductionDashboard.tsx`, `app/(app)/production/orders/page.tsx`,
+`app/(app)/supervisor/analytics/page.tsx`
+
+**Granule — water added to a blend is a volume, not a weight.** Every "Water added" label
+and total in `GranuleCapture.tsx` said "kg"; changed to "L" (blend-card badge, the input
+field label, and the blend-totals summary line). Display-only — water was already
+excluded from the dust mass-balance math (`granuleColumnTotals`), so no calculation
+changes.
+
+**Refining 2 — mass-balance warning was flagging too eagerly.** The shared
+`MASS_BALANCE_TOLERANCE_KG` (15kg) is used everywhere a section's in/out variance gets
+flagged, but Refining 2's process naturally carries a wider swing before it's actually
+worth a supervisor's attention. Added `massBalanceToleranceFor(sectionId)` in
+`capture-config.ts` — returns 100kg for `refining2`, the existing 15kg for everything
+else — and swapped every place that reads the flat constant for a section-aware call, so
+Refining 2 shows consistently "balanced" (Capture footer, Overview, Production Orders,
+Supervisor Analytics, Live Capture KPIs, Production Dashboard) instead of agreeing on one
+screen and still flagging on another. Refining 1 and all other sections are unaffected —
+same 15kg as before. Blender and Pasteuriser keep reading the flat constant directly
+since they're single-section components with no cross-section table to stay consistent
+with.
+
+---
+
+## 2026-07-24 — Alyssa (Blender/Small Blender lot now mandatory at assignment; Granule bagging requires an operator lot-confirmation)
+
+**Files:** `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+**Assign screen — Lot/Batch now required for Blender and Small Blender too**, mirroring
+today's earlier Granule fix. `isBlenderSection()` (already used elsewhere on this page)
+covers both `blender` and `smallblender` — same underlying reason: their Fine/Coarse Leaf
+batch tracking in Capture depends on a real value being set here, and it was possible to
+save an assignment with operators rostered but no lot.
+
+**Granule bagging — operator must actively confirm the lot before the first bag.** The
+supervisor sets the lot on the Assign screen (now mandatory, see above), but only the
+operator on the floor can see whether it actually matches the physical batch in front of
+them — a supervisor typo or a swapped batch previously went straight through unnoticed.
+Bagging's "Add bag" controls are now hidden behind a one-time confirmation card showing
+the assigned lot in large mono text; the operator must tap "Confirm — matches the
+physical batch" before the weight inputs unlock. Skipped automatically if the session
+already has logged bags (reopening in-progress work isn't asked twice). If no lot was
+assigned at all (pre-existing/unmigrated sessions), it tells the operator to get a
+supervisor to set one instead of offering a confirm button. Scoped to Granule only, per
+the reported problem — Blender's per-row Fine/Coarse Leaf batch entry is scanned/typed by
+the operator directly and already serves the equivalent role there.
+
+---
+
+## 2026-07-24 — Alyssa (Blender: SG-blend cutter materials no longer need a batch number; Granule: lot number now mandatory at assignment)
+
+**Files:** `lib/production/bom.ts`, `components/production/capture/BlenderCapture.tsx`,
+`app/(app)/production/capture/assign/page.tsx`
+
+**Blender — `hasLot` was matching the wrong material.** The batch-number requirement is
+driven by a regex on the BOM component's description: `/fine leaf|coarse leaf/i`. SG
+blends include `Cutter Fine Leaf (Coloured) - Conventional` as an ingredient — a
+different, already-cut material from the raw "Sieved Fine/Coarse Leaf" that actually
+needs lot tracking — but its description also contains the substring "fine leaf", so it
+was incorrectly forced through the same mandatory-batch-number flow. Added a `!/cutter/i`
+exclusion in both `groupComponentsByItem()` (`bom.ts`) and the "+ Add Other material"
+ad-hoc flow (`BlenderCapture.tsx`) so Cutter Fine/Coarse Leaf only need a serial number,
+while genuine Fine Leaf / Coarse Leaf still require a batch number as before.
+
+**Granule — lot number is now required before an assignment can be saved.** `lot_number`
+on `shift_assignments` was optional in the UI even though `GranuleCapture` depends on it
+for output-serial numbering and for linking QC moisture/bulk-density readings back to
+the batch — if a supervisor skipped it, capture proceeded silently with `Lot: —` and QC
+just never linked up. The "Lot / Batch" field is now marked required for the `granule`
+section specifically, and "Save assignment" is disabled with an inline explanation until
+it's filled in. Blender/Small Blender/Pasteuriser (the other `NEEDS_LOT` sections) are
+unchanged — scoped to Granule only, per the reported problem.
+
+---
+
+## 2026-07-24 — Alyssa (Production Dashboard redesign: single sectioned cockpit, analytics folded in, floor plan woven in)
+
+**Files changed:** `components/production/ProductionDashboard.tsx`, `components/production/ProductionTabs.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`, `app/(app)/production/analytics/page.tsx` (deleted), `components/production/YieldAnalytics.tsx` (deleted)
+
+Rebuilt the Production Dashboard into one manager cockpit as requested — **not tabbed**, but sectioned, grouped and graph-driven, everything at a glance with each metric's calculation shown.
+
+- **De-tabbed → sequential sections** (was Yields/Machine/Quality tabs): §Yield & Output → §Output Mix & Batches → §Machine KPIs & Throughput → §Quality Integration → §Granule Quality & Scale Health → §Factory Floor Plan → §Energy & Breakdowns → AI Analyst → Operational Trends → **§Section Status (moved to the very end)**.
+- **Analytics folded in** (standalone `/production/analytics` page retired): per-product **output mix** (Fine Leaf ÷ total, from `v_output_stream`) + an **interactive, sortable batch grid** (batch → output → yield → bulk density → leaf shade → QC, from `v_batch_360`). Removed the analytics route, its hub tab, sidebar link, route guard, route meta and `production.analytics` permission; kept the `yield-analytics` API (the dashboard now consumes it).
+- **Floor plan woven in** as a section (`FactoryFloorPlan`); **removed from the sidebar** (it lives on the dashboard and keeps its hub tab).
+- All data from real DB tables — `manager-kpis` + `yield-analytics` views + direct `prod_*` / `check_*` / `qms` queries. No mock data; every chart keeps its formula `InfoTip`.
+- Follow-ups noted (next iteration): grids grouped per section/line · batch · grade · variant; stronger machine-throughput view; breakdowns/job-cards organised by machine/section with action items.
+
+---
+
 ## 2026-07-24 — Alyssa (Fix production roster/energy cron secrets — both had been 401ing)
 
 **Files:** none (infra/config only — GitHub Actions repo secrets + production VPS `.env.local`)

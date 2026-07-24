@@ -90,6 +90,14 @@ export function makeSerial(sectionCode: string, dateStr: string, seq: number): s
 
 export const MASS_BALANCE_TOLERANCE_KG = 15
 
+// Refining 2's process naturally carries a wider swing before a mass-balance
+// variance is actually worth flagging — every screen that flags a variance
+// (Capture footer, Overview, dashboards/KPIs) should agree on this, so it's
+// centralised here rather than each screen guessing its own threshold.
+export function massBalanceToleranceFor(sectionId: string): number {
+  return sectionId === 'refining2' ? 100 : MASS_BALANCE_TOLERANCE_KG
+}
+
 // Label printing is not available on the floor yet (no printer). While this is
 // false, capture does NOT depend on a printer: the output picker reads
 // "Complete bag" (no print round-trip) and each bag shows its serial prominently

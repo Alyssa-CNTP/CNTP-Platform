@@ -467,7 +467,7 @@ function BlendCard({
                   {DUST_LABEL(r.dustKey)} {n(r.weight).toFixed(0)}
                 </span>
               ))}
-              {n(blend.water) > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700">Water {n(blend.water).toFixed(0)}</span>}
+              {n(blend.water) > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700">Water {n(blend.water).toFixed(0)}L</span>}
             </div>
           </div>
           <span className="font-mono font-bold text-[14px] text-text shrink-0">{total.toFixed(0)} kg</span>
@@ -530,7 +530,7 @@ function BlendCard({
         {/* Water */}
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-sky-200 bg-sky-50/50">
           <Droplets size={15} className="text-sky-500 shrink-0" />
-          <label className="text-[12px] font-medium text-sky-800 flex-1">Water added (kg)</label>
+          <label className="text-[12px] font-medium text-sky-800 flex-1">Water added (L)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={blend.water} disabled={locked}
             onChange={e => onChange({ ...blend, water: e.target.value })}
             className="w-24 px-3 py-2 rounded-lg border border-sky-200 bg-white text-[14px] text-right outline-none focus:border-sky-400" />
@@ -591,6 +591,12 @@ export function GranuleCapture({
   const [outTarget, setOutTarget] = useState(DEFAULT_TARGET_KG)
   const [outWeight, setOutWeight] = useState('')
   const [adding, setAdding] = useState(false)
+  // Supervisor sets the lot at assignment, but the operator is the one who can
+  // actually see the physical batch on the floor — a typo or a wrong batch
+  // tagged upstream only gets caught here. Ask once per session, before the
+  // first bag; if bags already exist (reopening an in-progress session), it's
+  // already been confirmed.
+  const [lotConfirmed, setLotConfirmed] = useState(value.outputs.length > 0)
 
   async function addOutputBag() {
     if (n(outWeight) <= 0 || adding) return
@@ -788,7 +794,7 @@ export function GranuleCapture({
               {t.water > 0 && (
                 <div className="flex items-center justify-between px-4 py-2 text-[13px] text-sky-700">
                   <span className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-sky-400" />Water <span className="text-stone-400 text-[11px]">(not in A)</span></span>
-                  <span className="font-mono font-semibold">{t.water.toFixed(1)} kg</span>
+                  <span className="font-mono font-semibold">{t.water.toFixed(1)} L</span>
                 </div>
               )}
             </div>
@@ -826,7 +832,24 @@ export function GranuleCapture({
                   {!locked && <button onClick={() => removeOutput(b.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
                 </div>
               ))}
-              {!locked && (
+              {!locked && !lotConfirmed && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2.5 text-center">
+                  <AlertTriangle size={18} className="mx-auto text-amber-500" />
+                  <div>
+                    <div className="text-[10px] font-semibold text-amber-700 uppercase tracking-widest">Confirm lot before bagging</div>
+                    <div className="text-[20px] font-mono font-bold text-text mt-0.5">{lot || '— not assigned —'}</div>
+                  </div>
+                  {lot ? (
+                    <button onClick={() => setLotConfirmed(true)}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-[13px] font-medium transition-colors" style={{ background: BAG_COLOR }}>
+                      <CheckCircle2 size={15} /> Confirm — matches the physical batch
+                    </button>
+                  ) : (
+                    <p className="text-[12px] text-amber-700">No lot assigned for this shift — ask a supervisor to set one on the Assign screen before bagging.</p>
+                  )}
+                </div>
+              )}
+              {!locked && lotConfirmed && (
                 <div className="space-y-2 pt-1">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">

@@ -303,6 +303,12 @@ function AssignScreen() {
             const ops    = operators
             const saving = savingSection === sectionId
             const saved  = savedSection === sectionId
+            // Granule and Blender/Small Blender's lot number silently defaults to
+            // blank if skipped here — Granule's serial numbering + QC linking and
+            // Blender's Fine/Coarse Leaf batch tracking both key off it, and the
+            // supervisor doesn't find out until later. Require it up front.
+            const lotMissing = (sectionId === 'granule' || isBlenderSection(sectionId))
+              && draft.operatorIds.length > 0 && !draft.lotNumber.trim()
 
             return (
               <div key={sectionId} className="bg-white border border-stone-200 rounded-2xl overflow-hidden"
@@ -354,12 +360,21 @@ function AssignScreen() {
                       )}
                       {NEEDS_LOT.has(sectionId) && (
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Lot / Batch</label>
+                          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
+                            Lot / Batch{(sectionId === 'granule' || isBlenderSection(sectionId)) && <span className="text-err"> *</span>}
+                          </label>
                           <input
                             value={draft.lotNumber} onChange={e => setField(sectionId, 'lotNumber', e.target.value)}
                             placeholder="e.g. GS-2026-001"
-                            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand"
+                            className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] text-text outline-none focus:border-brand ${lotMissing ? 'border-err' : 'border-stone-200'}`}
                           />
+                          {lotMissing && (
+                            <p className="text-[11px] text-err px-0.5">
+                              {sectionId === 'granule'
+                                ? 'Required for Granule — links output serials and QC readings to this batch.'
+                                : 'Required — Fine/Coarse Leaf batch tracking in Capture depends on it.'}
+                            </p>
+                          )}
                         </div>
                       )}
                       <div className="space-y-1.5 sm:col-span-2">
@@ -401,11 +416,11 @@ function AssignScreen() {
 
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => saveSection(sectionId)} disabled={saving || ops.length === 0 || draft.operatorIds.length === 0}
+                      onClick={() => saveSection(sectionId)} disabled={saving || ops.length === 0 || draft.operatorIds.length === 0 || lotMissing}
                       className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand text-white font-medium text-[13px] disabled:opacity-40 disabled:bg-stone-300 hover:bg-brand-mid transition-colors"
                     >
                       {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <CheckCircle2 size={14} className="text-white" /> : <Save size={14} />}
-                      {saving ? 'Saving…' : saved ? 'Saved ✓' : draft.operatorIds.length === 0 ? 'Select an operator first' : 'Save assignment'}
+                      {saving ? 'Saving…' : saved ? 'Saved ✓' : draft.operatorIds.length === 0 ? 'Select an operator first' : lotMissing ? 'Enter a lot/batch number first' : 'Save assignment'}
                     </button>
                     {draft.operatorIds.length === 0 && (
                       <button onClick={() => saveSection(sectionId)} className="text-[12px] text-stone-400 hover:text-err px-2 whitespace-nowrap">Clear</button>

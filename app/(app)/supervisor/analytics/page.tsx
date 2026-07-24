@@ -7,7 +7,7 @@ import {
 } from 'recharts'
 import { Clock, Scale, Factory, AlertTriangle, Users, Loader2, TrendingUp } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { sectionMeta, SECTION_ORDER, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 
 const todayStr = () => format(new Date(), 'yyyy-MM-dd')
@@ -90,7 +90,7 @@ export default function SupervisorAnalytics() {
   const totals = useMemo(() => {
     const totalMin = sheets.reduce((s, r) => s + (r.worked_minutes ?? 0), 0)
     const totalKg = sessions.reduce((s, r) => s + kgOut(mb.get(r.id)), 0)
-    const flags = sessions.filter(s => { const m = mb.get(s.id); if (!m) return false; const v = (Number(m.total_input_kg) || 0) - kgOut(m); return Number(m.total_input_kg) > 0 && Math.abs(v) > MASS_BALANCE_TOLERANCE_KG }).length
+    const flags = sessions.filter(s => { const m = mb.get(s.id); if (!m) return false; const v = (Number(m.total_input_kg) || 0) - kgOut(m); return Number(m.total_input_kg) > 0 && Math.abs(v) > massBalanceToleranceFor(s.section_id) }).length
     return { totalMin, totalKg: Math.round(totalKg), productions: sessions.length, flags, operators: new Set(sheets.map(s => s.operator_name)).size }
   }, [sheets, sessions, mb])
 
