@@ -371,8 +371,8 @@ function AssignScreen() {
                           {lotMissing && (
                             <p className="text-[11px] text-err px-0.5">
                               {sectionId === 'granule'
-                                ? 'Required for Granule — links output serials and QC readings to this batch.'
-                                : 'Required — Fine/Coarse Leaf batch tracking in Capture depends on it.'}
+                                ? 'Required — every output bag tag is stamped with this lot, and QC readings link to it.'
+                                : 'Required — every output bag tag (the finished blend label) is stamped with this lot number.'}
                             </p>
                           )}
                         </div>
