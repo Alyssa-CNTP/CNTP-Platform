@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Gustav (COA signatures loaded + identity-gated sign-off)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `public/signatures/monique-gordon.png` (new), `public/signatures/michelle-brown.png` (new), `supabase/migrations/20260724_004_coa_signatories_email_and_signatures.sql` (new, applied to staging)
+
+- Loaded **Monique Gordon** (Lab Manager) and **Michelle Brown** (Quality Manager) signatures from the supplied PDFs — trimmed to transparent PNGs, served from `/signatures/`, and set on the two `qms.coa_signatories` slots. The PDF export now loads each signature (static path or drawn data URL) and keeps its aspect ratio.
+- **Identity-gated sign-off.** Each signatory now has a **login email**; a signature can only be applied by the person logged in as that signatory. Exception per request: the **Quality manager can also apply the Lab manager's signature**. Buttons are disabled (with a reason tooltip) for anyone else. A signatory with no email set is unrestricted, and a banner prompts setting the emails to enforce it.
+- Emails are set under the COA Generator's **✍ Signatories** panel. Migration + `public/signatures/*` need promoting to production with the code.
+
 ## 2026-07-24 — Gustav (Flowability BD source, COA manager sign-off, customer-spec name cleanup)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260724_003_coa_specs_strip_variant_from_desc.sql` (new, applied to staging)

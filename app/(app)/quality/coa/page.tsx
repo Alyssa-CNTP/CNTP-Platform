@@ -199,7 +199,7 @@ export default function CoaGeneratorPage() {
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
-  const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; signature: string }[]>([])
+  const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; signature: string; email: string }[]>([])
   const [showSigEditor, setShowSigEditor] = useState(false)
   const [savingSig, setSavingSig]   = useState(false)
   // COA sign-off: lab manager (Monique) signs first, then a pop-up asks the
@@ -216,6 +216,16 @@ export default function CoaGeneratorPage() {
   // For print/preview/PDF a signature only appears once that person has signed off.
   const signatoriesForOutput = signatories.map(s => ({ ...s, signature: verified[s.slot] ? s.signature : '' }))
 
+  // Identity gating — a signature can only be applied by the person logged in as
+  // that signatory. Exception: the Quality manager may also apply the Lab
+  // manager's signature. A signatory with no `email` set is unrestricted (so the
+  // feature isn't dead before logins are configured).
+  const myEmail = (session?.user?.email || '').toLowerCase()
+  const eq = (a?: string) => !!a && a.toLowerCase() === myEmail
+  const canSignLab = !labSig?.email || eq(labSig?.email) || eq(qaSig?.email)
+  const canSignQa  = !qaSig?.email  || eq(qaSig?.email)
+  const gatingConfigured = !!(labSig?.email && qaSig?.email)
+
   // Reset sign-offs whenever a new batch/COA is looked up.
   useEffect(() => { setVerified({}); setShowQaSignoff(false) }, [model?.batch])
 
@@ -223,16 +233,16 @@ export default function CoaGeneratorPage() {
   useEffect(() => {
     db.schema('qms').from('coa_signatories').select('*').order('slot')
       .then(({ data }: { data: any[] | null }) => {
-        setSignatories((data ?? []).map((r: any) => ({ slot: r.slot, title: r.title || '', name: r.name || '', signature: r.signature || '' })))
+        setSignatories((data ?? []).map((r: any) => ({ slot: r.slot, title: r.title || '', name: r.name || '', signature: r.signature || '', email: r.email || '' })))
       })
   }, [db])
 
-  const setSig = (slot: number, field: 'title' | 'name' | 'signature', v: string) =>
+  const setSig = (slot: number, field: 'title' | 'name' | 'signature' | 'email', v: string) =>
     setSignatories(prev => prev.map(s => s.slot === slot ? { ...s, [field]: v } : s))
 
   const saveSignatories = async () => {
     setSavingSig(true)
-    const rows = signatories.map(s => ({ slot: s.slot, title: s.title, name: s.name, signature: s.signature || null, updated_by: whoAmI, updated_at: new Date().toISOString() }))
+    const rows = signatories.map(s => ({ slot: s.slot, title: s.title, name: s.name, signature: s.signature || null, email: s.email || null, updated_by: whoAmI, updated_at: new Date().toISOString() }))
     const { error } = await db.schema('qms').from('coa_signatories').upsert(rows, { onConflict: 'slot' })
     setSavingSig(false)
     if (error) { alert('Save failed: ' + error.message); return }
@@ -527,6 +537,9 @@ export default function CoaGeneratorPage() {
                     <input value={s.title} onChange={e => setSig(s.slot, 'title', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
                     <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Name</label>
                     <input value={s.name} onChange={e => setSig(s.slot, 'name', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
+                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Login email (who may apply this signature)</label>
+                    <input value={s.email} onChange={e => setSig(s.slot, 'email', e.target.value)} type="email" placeholder="name@rooibostea.co.za"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
                     <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Signature (draw below)</label>
                     <SignaturePad value={s.signature} onChange={v => setSig(s.slot, 'signature', v)} />
                   </div>
@@ -544,25 +557,31 @@ export default function CoaGeneratorPage() {
               <button
                 onClick={() => {
                   if (!labSig) { alert('No lab-manager signatory configured.'); return }
+                  if (!canSignLab) { alert(`Only ${labSig.name}${qaSig?.name ? ` or ${qaSig.name}` : ''} may apply the lab-manager signature.`); return }
                   if (!labSig.signature) { alert(`No signature on file for ${labSig.name}. Add it under ✍ Signatories first.`); return }
                   setVerified(v => ({ ...v, [labSig.slot]: true }))
                   setShowQaSignoff(true)
                 }}
-                disabled={!labSig || !!(labSig && verified[labSig.slot])}
-                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50"
+                disabled={!labSig || !canSignLab || !!(labSig && verified[labSig.slot])}
+                title={labSig && !canSignLab ? `Only ${labSig.name} or the Quality manager may apply this signature` : ''}
+                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ background: '#1f4e79' }}>
                 {labSig && verified[labSig.slot] ? `✔ Signed — ${labSig.name}` : `✔ Lab Manager sign-off${labSig ? ` (${labSig.name})` : ''}`}
               </button>
               {/* Step 2 — QA manager (Michelle): only after the lab manager */}
               <button
-                onClick={() => setShowQaSignoff(true)}
-                disabled={!labSig || !verified[labSig.slot] || !!(qaSig && verified[qaSig.slot])}
-                title={labSig && !verified[labSig.slot] ? 'The lab manager must sign off first' : ''}
-                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50"
+                onClick={() => {
+                  if (!canSignQa) { alert(`Only ${qaSig?.name || 'the Quality manager'} may apply this signature.`); return }
+                  setShowQaSignoff(true)
+                }}
+                disabled={!labSig || !verified[labSig.slot] || !canSignQa || !!(qaSig && verified[qaSig.slot])}
+                title={labSig && !verified[labSig.slot] ? 'The lab manager must sign off first' : (!canSignQa ? `Only ${qaSig?.name || 'the Quality manager'} may sign` : '')}
+                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ background: '#7c3aed' }}>
                 {qaSig && verified[qaSig.slot] ? `✔ Signed — ${qaSig.name}` : `✔ Quality Manager sign-off${qaSig ? ` (${qaSig.name})` : ''}`}
               </button>
               {labSig && !verified[labSig.slot] && <span className="text-[10px] text-gray-400">Lab manager signs first.</span>}
+              {!gatingConfigured && <span className="text-[10px] text-amber-600">⚠ Set each signatory&apos;s login email under ✍ Signatories to restrict who can sign.</span>}
             </div>
           </div>
 
@@ -588,6 +607,7 @@ export default function CoaGeneratorPage() {
                   <button onClick={() => setShowQaSignoff(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">Cancel</button>
                   <button
                     onClick={() => {
+                      if (!canSignQa) { alert(`Only ${qaSig.name} may apply this signature.`); return }
                       if (!qaSig.signature) { alert(`No signature on file for ${qaSig.name}. Add it under ✍ Signatories first.`); return }
                       setVerified(v => ({ ...v, [qaSig.slot]: true }))
                       setShowQaSignoff(false)
@@ -1051,13 +1071,22 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
   const sigList = (signatories && signatories.length ? signatories : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))) as any[]
   const sigW = 170
   const sigX = [margin + 20, pageW - margin - 20 - sigW]
-  sigList.slice(0, 2).forEach((s: any, i: number) => {
+  for (let i = 0; i < Math.min(2, sigList.length); i++) {
+    const s = sigList[i]
     const x = sigX[i]
-    if (s.signature) { try { doc.addImage(s.signature, 'PNG', x, y - 32, 120, 30) } catch { /* ignore bad image */ } }
+    if (s.signature) {
+      // signature may be a static path (/signatures/x.png) or a drawn data URL —
+      // loadImage handles both and gives us dimensions to keep the aspect ratio.
+      const img = await loadImage(s.signature)
+      if (img) {
+        const h = 30, w = Math.min(150, img.w * (h / img.h))
+        try { doc.addImage(img.dataUrl, 'PNG', x, y - 32, w, h) } catch { /* ignore bad image */ }
+      }
+    }
     doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)
     doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title || '', x, y + 12)
     doc.setFont('helvetica', 'normal'); doc.text(s.name || '', x, y + 23)
-  })
+  }
   y += 46
 
   // Centred company footer
