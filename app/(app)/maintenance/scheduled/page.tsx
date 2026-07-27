@@ -30,7 +30,7 @@ const BTN_OK = 'bg-ok text-white rounded-lg px-3 py-2 text-[12px] font-semibold 
 const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md px-2.5 py-1.5 text-[11px] font-semibold hover:border-text/25 transition'
 
 export default function ScheduledPage() {
-  const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
+  const { loading, data, actions, derived, ui, weekKey, moKey, actor, reload } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
   const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const auth = useAuth()
@@ -113,6 +113,7 @@ export default function ScheduledPage() {
       : allocateMonthly(allocTpls, techs, monthIndexOf(now))
     let n = 0
     for (const t of tpls) { const who = map[t.id]; if (who) { await allocateChecklist(t, who); n++ } }
+    reload() // refresh so every allocation shows immediately
     setPopup(`Auto-allocated ${n} ${freq} checklist${n === 1 ? '' : 's'} across ${techs.length} technician${techs.length === 1 ? '' : 's'} (${techs.join(', ')}) from the shift roster.\n\nWeekly is due before 10:00 on Monday; monthly is due by the 15th.`)
   }
 
@@ -260,8 +261,11 @@ export default function ScheduledPage() {
                 const assignedToMe = !!assigned && assigned === actor
                 // Suggest the on-duty technician first, then the rest of the team.
                 const techOptions = [...dutyNow, ...allTechs.filter(t => !dutyNow.includes(t))]
-                // JoJo Tanks water checklist — two percentage readings that we average.
+                // Reading checklists capture NUMBERS, not fault/no-fault: the JoJo tanks
+                // (two % values, averaged) and the meter-reading sheets (IP, Generator,
+                // Water — doc_ref 'Database').
                 const isJojo = cl.area === 'JoJo Tanks Water'
+                const isReading = isJojo || cl.doc_ref === 'Database'
                 return (
                   <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
                     <div className="p-3 cursor-pointer flex justify-between items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
@@ -281,7 +285,7 @@ export default function ScheduledPage() {
                       <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
                         {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
                         {canManage && (
-                          <select className={`${INP} w-28 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                          <select className={`${INP} w-44 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
                             value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
                             <option value="">Allocate…</option>
                             {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
@@ -296,34 +300,40 @@ export default function ScheduledPage() {
                     </div>
                     {isOpen && (
                       <div className="px-3 pb-3 border-t border-surface-rule pt-2.5 max-h-[400px] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        {/* JoJo tanks — two % readings, averaged. Saving stores each value
-                            and marks the two tasks done. */}
-                        {isJojo && (() => {
-                          const n0 = parseFloat(drafts['t' + cl.id + '-0'] ?? st[0]?.notes ?? '')
-                          const n1 = parseFloat(drafts['t' + cl.id + '-1'] ?? st[1]?.notes ?? '')
-                          const avg = (!isNaN(n0) && !isNaN(n1)) ? (n0 + n1) / 2 : null
+                        {/* Reading checklists — numeric entry per task (not fault/no-fault),
+                            with the previous period's value shown as a hint. Saving stores
+                            each value + marks the entered tasks done. JoJo also averages. */}
+                        {isReading && (() => {
+                          const prevComp = lastComp(cl.id)
+                          const valOf = (ti: number) => drafts['t' + cl.id + '-' + ti] ?? st[ti]?.notes ?? ''
+                          const jojoNums = isJojo ? [0, 1].map(ti => parseFloat(valOf(ti))) : []
+                          const avg = isJojo && jojoNums.every(n => !isNaN(n)) ? (jojoNums[0] + jojoNums[1]) / 2 : null
                           return (
-                            <div className="space-y-2 mb-2">
-                              {['Tank 1 water level', 'Tank 2 water level'].map((label, ti) => (
-                                <div key={ti} className="flex items-center gap-2">
-                                  <span className="text-[12px] w-32 text-text-muted shrink-0">{label}</span>
-                                  <input className={`${INP} w-24 text-[12px] py-1 min-h-0`} type="number" inputMode="decimal" min={0} max={100} placeholder="%"
-                                    value={drafts['t' + cl.id + '-' + ti] ?? st[ti]?.notes ?? ''}
-                                    onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
-                                    onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
-                                  <span className="text-[11px] text-text-faint">%</span>
-                                </div>
-                              ))}
+                            <div className="space-y-1.5 mb-2">
+                              {cl.tasks.map((task, ti) => {
+                                const prevVal = prevComp?.task_states?.[ti]?.notes
+                                return (
+                                  <div key={ti} className="flex items-center gap-2">
+                                    <span className="text-[12px] flex-1 min-w-0 text-text-muted">{task}</span>
+                                    <input className={`${INP} w-28 text-[12px] py-1 min-h-0 text-right`} type="number" inputMode="decimal"
+                                      placeholder={prevVal ? 'prev: ' + prevVal : 'value'}
+                                      value={valOf(ti)}
+                                      onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
+                                      onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
+                                  </div>
+                                )
+                              })}
                               <div className="flex items-center gap-2 rounded-lg bg-brand/5 border border-brand/20 px-3 py-2">
-                                <span className="text-[12px] font-semibold text-text">Average</span>
-                                <span className="text-[15px] font-semibold text-brand tabular-nums">{avg != null ? avg.toFixed(1) + ' %' : '—'}</span>
-                                <button className={BTN_OK + ' ml-auto'} disabled={avg == null}
-                                  onClick={() => { [0, 1].forEach(ti => { if (!st[ti]?.done) toggleTask(cl, ti) }) }}>Save readings</button>
+                                {isJojo
+                                  ? <><span className="text-[12px] font-semibold text-text">Average</span><span className="text-[15px] font-semibold text-brand tabular-nums">{avg != null ? avg.toFixed(1) + ' %' : '—'}</span></>
+                                  : <span className="text-[11px] text-text-muted">Enter this week's readings.</span>}
+                                <button className={BTN_OK + ' ml-auto'}
+                                  onClick={() => cl.tasks.forEach((_, ti) => { if (valOf(ti) !== '' && !st[ti]?.done) toggleTask(cl, ti) })}>Save readings</button>
                               </div>
                             </div>
                           )
                         })()}
-                        {!isJojo && cl.tasks.map((task, ti) => {
+                        {!isReading && cl.tasks.map((task, ti) => {
                           const s = st[ti] ?? {}
                           // The Fault / No-fault SELECT is the check itself — choosing a
                           // value records the answer AND marks the item done (no tick box).
@@ -412,7 +422,7 @@ export default function ScheduledPage() {
 
           <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="data-table">
+              <table className="data-table min-w-[1300px]">
                 <thead><tr>
                   <th>Status</th>
                   <th><select className={`${INP} text-[11px] py-1 min-h-0 font-semibold ${annualCat !== 'all' ? 'text-brand' : ''}`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
@@ -429,16 +439,16 @@ export default function ScheduledPage() {
                   return (
                   <tr key={a.id}>
                     <td><span className={`badge ${calClass(a.days)}`} title={a.days <= 0 ? `overdue by ${Math.abs(a.days)}d` : `due in ${a.days}d`}>{calBadge(a.days)}</span></td>
-                    <td><input className={`${INP} w-24 text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
+                    <td><input className={`${INP} w-32 text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
                       onChange={e => setDrafts(p => ({ ...p, ['ac' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.category && updateAnnual(a.id, { category: e.target.value })} /></td>
-                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
+                    <td><input className={`${INP} w-56 text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
                       onChange={e => setDrafts(p => ({ ...p, ['aa' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.asset && updateAnnual(a.id, { asset: e.target.value })} /></td>
-                    <td><input className={`${INP} w-28 text-[10px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
+                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
                       onChange={e => setDrafts(p => ({ ...p, ['as' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.serial_no && updateAnnual(a.id, { serial_no: e.target.value })} /></td>
-                    <td><input className={`${INP} w-28 text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
+                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
                       onChange={e => setDrafts(p => ({ ...p, ['au' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.supplier && updateAnnual(a.id, { supplier: e.target.value })} /></td>
                     <td className="text-[11px] whitespace-nowrap">{a.last_done
@@ -475,6 +485,10 @@ export default function ScheduledPage() {
                         <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
                           value={cf.date ?? new Date().toISOString().slice(0, 10)}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
+                        <input className={`${INP} w-20 text-[11px] py-1 min-h-0`} type="number" inputMode="numeric" title="Cycle in days — the next due date is set this many days forward from the calibration date"
+                          placeholder={a.interval_days != null ? `${a.interval_days}d` : 'cycle d'}
+                          value={cf.interval ?? (a.interval_days != null ? String(a.interval_days) : '')}
+                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], interval: e.target.value } }))} />
                         <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
                           value={cf.by ?? ''}
                           onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
@@ -482,9 +496,9 @@ export default function ScheduledPage() {
                           {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
                           <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
                         </select>
-                        <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when, then recompute next due from the cycle"
+                        <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when; the next-due date is set forward by the cycle days"
                           onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
-                            (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days) ?? null,
+                            (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
                             cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
                       </div>
                     </td>

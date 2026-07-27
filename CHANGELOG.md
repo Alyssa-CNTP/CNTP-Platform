@@ -5,6 +5,17 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Maintenance fixes: pop-up deep links, reading checklists numeric, checklist-verify pop-up, annual scroll + cycle-calibrate)
+
+**Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/scheduled/page.tsx`
+
+- **Pop-ups open the specific job card.** The manager-allocate and QC pop-up rows are now links straight to `/maintenance/job-cards/[id]` (the card + its job), not just the board.
+- **Reading checklists capture numbers.** IP Measurement, Generator/Diesel and Water Meters (and JoJo) now render **numeric inputs per task** (not fault/no-fault), with the **previous period's value shown as a hint**; JoJo still averages its two %.
+- **Full names visible.** The checklist allocate dropdown widened; the annual register table is now **horizontally scrollable** (min-width) with wider Asset/Serial/Supplier fields so full names show — shift left/right instead of truncating.
+- **Manager checklist-verify pop-up.** When a technician sends a completed weekly/monthly checklist for verification, the maintenance manager gets a corner pop-up ("N checklists to verify → Open to sign off").
+- **Annual calibration cycle → forward date.** Added a **cycle-days input right in the "Mark calibrated" cluster**; clicking Calibrated sets the next-due date forward by that cycle from the calibration date (the calc already existed — now it's easy to enter).
+- Auto-allocate now calls `reload()` so every allocation shows immediately (all monthly checklists verified allocated in the DB).
+
 ## 2026-07-24 — Gustav (COA signatures: drag to move / resize)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

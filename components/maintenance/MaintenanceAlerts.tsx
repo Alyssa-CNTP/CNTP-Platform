@@ -54,6 +54,10 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
   const [techDismissed, setTechDismissed] = useState<number[]>([])
   const [allocDismissed, setAllocDismissed] = useState<number[]>([])
   const [qcDismissed, setQcDismissed] = useState<number[]>([])
+  // Manager: checklists awaiting verification (template area + period).
+  const tplMap = useRef<Map<number, string> | null>(null)
+  const [pendingVerify, setPendingVerify] = useState<{ key: string; area: string; period: string; by: string }[]>([])
+  const [verifyDismissed, setVerifyDismissed] = useState<string[]>([])
 
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
@@ -115,6 +119,23 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
           }
           seenLog.current = maxId
         }
+
+        // Manager: checklists a technician has completed + sent for verification
+        // (submitted, not yet verified) — so the manager can sign off the numbers.
+        try {
+          const { data: pend } = await db.schema('maintenance').from('checklist_completions')
+            .select('id, template_id, period_key, submitted_by').not('submitted_at', 'is', null).is('verified_at', null)
+          if (alive) {
+            if (!tplMap.current) {
+              const { data: tpls } = await db.schema('maintenance').from('checklist_templates').select('id, area')
+              tplMap.current = new Map((tpls as any[] ?? []).map(t => [t.id, t.area]))
+            }
+            const map = tplMap.current!
+            setPendingVerify((pend as any[] ?? []).map(p => ({
+              key: `${p.template_id}-${p.period_key}`, area: map.get(p.template_id) ?? 'Checklist', period: p.period_key, by: p.submitted_by ?? '',
+            })))
+          }
+        } catch { /* checklist_completions verify columns not present yet — skip */ }
       }
     }
     poll()
@@ -219,10 +240,12 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
             </div>
             <div className="p-3 space-y-1.5 max-h-[180px] overflow-y-auto">
               {pendingAlloc.slice(0, 5).map(c => (
-                <div key={c.id} className="text-[12px] text-text-muted">
+                <Link key={c.id} href={`/maintenance/job-cards/${c.id}`}
+                  onClick={() => setAllocDismissed(d => [...d, c.id])}
+                  className="block text-[12px] text-text-muted rounded-md px-1.5 py-1 -mx-1.5 hover:bg-surface-dim transition">
                   <span className={`badge ${c.workflow === 'breakdown' ? 'badge-err' : 'badge-info'} mr-1`}>{c.workflow === 'breakdown' ? 'BD' : 'PL'}</span>
-                  <strong className="text-text">{c.card_no}</strong> · {c.area} — {c.description}
-                </div>
+                  <strong className="text-accent">{c.card_no}</strong> · {c.area} — {c.description}
+                </Link>
               ))}
               {pendingAlloc.length > 5 && <div className="text-[11px] text-text-faint">+{pendingAlloc.length - 5} more</div>}
             </div>
@@ -248,9 +271,11 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
             </div>
             <div className="p-3 space-y-1.5 max-h-[180px] overflow-y-auto">
               {pendingQc.slice(0, 5).map(c => (
-                <div key={c.id} className="text-[12px] text-text-muted">
-                  <strong className="text-text">{c.card_no}</strong> · {c.area}{c.machine ? ' · ' + c.machine : ''} — {c.description}
-                </div>
+                <Link key={c.id} href={`/maintenance/job-cards/${c.id}`}
+                  onClick={() => setQcDismissed(d => [...d, c.id])}
+                  className="block text-[12px] text-text-muted rounded-md px-1.5 py-1 -mx-1.5 hover:bg-surface-dim transition">
+                  <strong className="text-accent">{c.card_no}</strong> · {c.area}{c.machine ? ' · ' + c.machine : ''} — {c.description}
+                </Link>
               ))}
               {pendingQc.length > 5 && <div className="text-[11px] text-text-faint">+{pendingQc.length - 5} more</div>}
             </div>
@@ -261,6 +286,36 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
           </div>
         </div>
       )}
+
+      {/* ── Manager: checklists completed & sent for verification (sign off the numbers) ── */}
+      {(() => {
+        const shownVerify = pendingVerify.filter(v => !verifyDismissed.includes(v.key))
+        if (!shownVerify.length) return null
+        return (
+          <div className="fixed top-5 right-5 z-[1000] w-[340px] max-w-[92vw]">
+            <div className="card overflow-hidden shadow-menu border border-brand/30">
+              <div className="bg-brand/10 text-text px-4 py-2.5 flex items-center gap-2">
+                <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-brand/20 text-brand shrink-0"><CheckCircle2 className="w-4 h-4" /></span>
+                <div className="flex-1 text-sm font-semibold">{shownVerify.length} checklist{shownVerify.length > 1 ? 's' : ''} to verify</div>
+                <button onClick={() => setVerifyDismissed(d => [...d, ...shownVerify.map(v => v.key)])}
+                  className="text-text-muted hover:text-text transition" title="Dismiss"><X size={16} /></button>
+              </div>
+              <div className="p-3 space-y-1.5 max-h-[180px] overflow-y-auto">
+                {shownVerify.slice(0, 6).map(v => (
+                  <div key={v.key} className="text-[12px] text-text-muted">
+                    <strong className="text-text">{v.area}</strong> <span className="text-text-faint">({v.period})</span>{v.by ? ` · ${v.by}` : ''}
+                  </div>
+                ))}
+                {shownVerify.length > 6 && <div className="text-[11px] text-text-faint">+{shownVerify.length - 6} more</div>}
+              </div>
+              <Link href="/maintenance/scheduled" onClick={() => setVerifyDismissed(d => [...d, ...shownVerify.map(v => v.key)])}
+                className="block bg-brand text-white text-center text-sm font-semibold py-2.5 hover:brightness-110 transition">
+                Open to sign off →
+              </Link>
+            </div>
+          </div>
+        )
+      })()}
     </>
   )
 }
