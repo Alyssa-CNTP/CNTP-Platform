@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Fit full names: annual table compacted, checklist names no longer truncate)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
+
+- **Annual register now fits full names on one line — no horizontal scroll.** The heavy "Mark calibrated" action (date + cycle + who + Calibrated) plus Email + Notes moved into an **expandable "Calibrate ▾" panel** per row, so the main table only carries Status / Category / Asset / Serial / Supplier / Calibrated / Cycle / Next due — and the Asset / Serial / Supplier fields are full-width so the whole name shows.
+- **Weekly / monthly checklist names** no longer truncate ("Compress…") — the area name wraps to show in full.
+
 ## 2026-07-02 — Gustav (Maintenance fixes: pop-up deep links, reading checklists numeric, checklist-verify pop-up, annual scroll + cycle-calibrate)
 
 **Files changed:** `components/maintenance/MaintenanceAlerts.tsx`, `app/(app)/maintenance/scheduled/page.tsx`
