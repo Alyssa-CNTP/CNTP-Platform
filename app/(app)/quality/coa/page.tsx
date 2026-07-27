@@ -202,8 +202,22 @@ export default function CoaGeneratorPage() {
   const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; signature: string }[]>([])
   const [showSigEditor, setShowSigEditor] = useState(false)
   const [savingSig, setSavingSig]   = useState(false)
+  // COA sign-off: lab manager (Monique) signs first, then a pop-up asks the
+  // QA manager (Michelle) to sign off above her name. Keyed by signatory slot.
+  const [verified, setVerified]     = useState<Record<number, boolean>>({})
+  const [showQaSignoff, setShowQaSignoff] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
   const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
+
+  // Signatories ordered by slot: [0] = lab manager (signs first), [1] = QA manager.
+  const orderedSigs = [...signatories].sort((a, b) => a.slot - b.slot)
+  const labSig = orderedSigs[0]
+  const qaSig  = orderedSigs[1]
+  // For print/preview/PDF a signature only appears once that person has signed off.
+  const signatoriesForOutput = signatories.map(s => ({ ...s, signature: verified[s.slot] ? s.signature : '' }))
+
+  // Reset sign-offs whenever a new batch/COA is looked up.
+  useEffect(() => { setVerified({}); setShowQaSignoff(false) }, [model?.batch])
 
   // Load the shared COA signatories (editable names + drawable signatures).
   useEffect(() => {
@@ -522,10 +536,69 @@ export default function CoaGeneratorPage() {
             {!showSigEditor && <div className="text-[10px] text-gray-400">{signatories.map(s => `${s.name} (${s.title})${s.signature ? ' ✍' : ''}`).join('  ·  ') || 'No signatories set'}</div>}
           </div>
 
+          {/* COA sign-off — lab manager first, then QA manager pop-up */}
+          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
+            <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">✔ COA Sign-off</div>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Step 1 — Lab manager (Monique) */}
+              <button
+                onClick={() => {
+                  if (!labSig) { alert('No lab-manager signatory configured.'); return }
+                  if (!labSig.signature) { alert(`No signature on file for ${labSig.name}. Add it under ✍ Signatories first.`); return }
+                  setVerified(v => ({ ...v, [labSig.slot]: true }))
+                  setShowQaSignoff(true)
+                }}
+                disabled={!labSig || !!(labSig && verified[labSig.slot])}
+                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50"
+                style={{ background: '#1f4e79' }}>
+                {labSig && verified[labSig.slot] ? `✔ Signed — ${labSig.name}` : `✔ Lab Manager sign-off${labSig ? ` (${labSig.name})` : ''}`}
+              </button>
+              {/* Step 2 — QA manager (Michelle): only after the lab manager */}
+              <button
+                onClick={() => setShowQaSignoff(true)}
+                disabled={!labSig || !verified[labSig.slot] || !!(qaSig && verified[qaSig.slot])}
+                title={labSig && !verified[labSig.slot] ? 'The lab manager must sign off first' : ''}
+                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50"
+                style={{ background: '#7c3aed' }}>
+                {qaSig && verified[qaSig.slot] ? `✔ Signed — ${qaSig.name}` : `✔ Quality Manager sign-off${qaSig ? ` (${qaSig.name})` : ''}`}
+              </button>
+              {labSig && !verified[labSig.slot] && <span className="text-[10px] text-gray-400">Lab manager signs first.</span>}
+            </div>
+          </div>
+
           <div className="flex gap-2 mb-4 no-print">
             <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatories) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatoriesForOutput) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
+
+          {/* QA manager (Michelle) sign-off pop-up — appears above her name */}
+          {showQaSignoff && qaSig && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 no-print" onClick={() => setShowQaSignoff(false)}>
+              <div className="bg-white rounded-xl p-5 w-[min(420px,92vw)] shadow-xl" onClick={e => e.stopPropagation()}>
+                <div className="text-[13px] font-bold text-gray-800 mb-1">Quality Manager Sign-off</div>
+                <div className="text-[11px] text-gray-500 mb-3">{qaSig.title} — {qaSig.name}</div>
+                <div className="border border-gray-200 rounded-lg p-3 mb-3 flex items-end justify-center" style={{ minHeight: 60 }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {qaSig.signature
+                    ? <img src={qaSig.signature} alt="signature" style={{ maxHeight: 48, maxWidth: 220 }} />
+                    : <span className="text-[11px] text-gray-400">No signature on file — add it under ✍ Signatories first.</span>}
+                </div>
+                <div className="text-[10px] text-gray-500 mb-3 text-center">Signing places <b>{qaSig.name}</b>&apos;s signature above her name on the COA.</div>
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setShowQaSignoff(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">Cancel</button>
+                  <button
+                    onClick={() => {
+                      if (!qaSig.signature) { alert(`No signature on file for ${qaSig.name}. Add it under ✍ Signatories first.`); return }
+                      setVerified(v => ({ ...v, [qaSig.slot]: true }))
+                      setShowQaSignoff(false)
+                    }}
+                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#7c3aed' }}>
+                    ✔ Sign off as {qaSig.name}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── COA preview (editable) ── */}
           <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>
@@ -597,7 +670,7 @@ export default function CoaGeneratorPage() {
 
             {/* Signatures — editable names + drawn signature images */}
             <div className="flex justify-between gap-8 mt-10">
-              {(signatories.length ? signatories : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))).map((s: any, i: number) => (
+              {(signatoriesForOutput.length ? signatoriesForOutput : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))).map((s: any, i: number) => (
                 <div key={i} style={{ flex: 1, maxWidth: 260 }}>
                   <div style={{ height: 40, display: 'flex', alignItems: 'flex-end' }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}

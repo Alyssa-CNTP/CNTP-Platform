@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Gustav (Flowability BD source, COA manager sign-off, customer-spec name cleanup)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260724_003_coa_specs_strip_variant_from_desc.sql` (new, applied to staging)
+
+- **Pasteuriser flowability** now uses the **QC-measured bulk density (Untapped BD)** carried over into the block, instead of Customer BD. The sample mass is fixed at the standard **400 g** (read-only), so the QC only enters the time; mass flow rate = 400 g ÷ time.
+- **COA sign-off buttons.** Added a two-step sign-off to the COA Generator: the **Lab Manager (Monique)** signs off first, which pops up a dialog for the **Quality Manager (Michelle)** to sign off above her name. A signature only appears on the on-screen COA / print / PDF once that person has signed off (the QA button is disabled until the lab manager has signed). Signatures are drawn from the stored `qms.coa_signatories` records.
+- **Customer specs — product description cleaned.** Stripped the Organic / Conventional / RA / Fairtrade qualifiers from `product_description` in `qms.coa_specs` (they duplicate the `variant` column), e.g. "Conventional Rooibos Super Grade" → "Rooibos Super Grade", "RA Organic Rooibos Super Grade" → "Rooibos Super Grade". Product names (incl. JAS/Green/Honeybush) preserved. Migration applied to staging; production needs it when promoted.
+
+---
+
 ## 2026-07-22 — Alyssa (Shift Roster: per-person working days + production-manager approval pop-up)
 
 **Files changed:** `supabase/migrations/20260722_005_roster_entry_days.sql` (new), `app/(app)/production/roster/page.tsx`, `app/api/production/roster/notify-change/route.ts` (new)
