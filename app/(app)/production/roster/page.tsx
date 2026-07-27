@@ -23,7 +23,9 @@ import { rotateEntries } from '@/lib/production/roster-rotate'
 // Columns selected for a Period everywhere in this page.
 const PERIOD_SELECT = 'id,name,start_date,end_date,day_label,night_label,notes,status,published_at,kind'
 // Columns selected for a roster Entry everywhere in this page.
-const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
+const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order,days'
+// Same, minus `days` — used as a graceful fallback if that column isn't migrated yet.
+const ENTRY_SELECT_BASE = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
 
 interface Period {
   id: string; name: string; start_date: string; end_date: string
@@ -34,6 +36,29 @@ interface Period {
 interface Entry {
   id: string; period_id: string; role_key: string; shift: RosterShift
   employee_id: string | null; operator_id: string | null; person_name: string; tags: string[]; sort_order: number
+  days: string[]   // weekdays this person works, e.g. ['mon','tue','wed','thu','fri']
+}
+
+// The working week for per-person day assignment (Mon–Fri; Saturday is its own
+// sheet). Kept deliberately small and obvious for low-tech-confidence users.
+const WEEKDAYS: { key: string; short: string; full: string }[] = [
+  { key: 'mon', short: 'M', full: 'Mon' }, { key: 'tue', short: 'T', full: 'Tue' },
+  { key: 'wed', short: 'W', full: 'Wed' }, { key: 'thu', short: 'T', full: 'Thu' },
+  { key: 'fri', short: 'F', full: 'Fri' },
+]
+const ALL_WEEKDAYS = WEEKDAYS.map(d => d.key)
+const isFullWeek = (days: string[] | null | undefined) =>
+  !days || days.length === 0 || ALL_WEEKDAYS.every(d => days.includes(d))
+// Compact label for a partial week ('' when it's the whole week). Contiguous
+// runs collapse to a range ("Mon–Wed"); gaps list out ("Mon, Wed, Fri").
+function fmtDays(days: string[] | null | undefined): string {
+  if (isFullWeek(days)) return ''
+  const idx = WEEKDAYS.map((d, i) => days!.includes(d.key) ? i : -1).filter(i => i >= 0)
+  if (idx.length === 0) return 'no days'
+  const contiguous = idx.every((v, i) => i === 0 || v === idx[i - 1] + 1)
+  return contiguous && idx.length > 1
+    ? `${WEEKDAYS[idx[0]].full}–${WEEKDAYS[idx[idx.length - 1]].full}`
+    : idx.map(i => WEEKDAYS[i].full).join(', ')
 }
 interface Employee {
   id: string; name: string; display_name: string | null
@@ -58,6 +83,33 @@ function logRosterAudit(action: string, payload: {
   }).catch(() => {})
 }
 
+// Human-readable list of what changed in a section between two entry sets —
+// drives the production-manager approval notification. Adds show "+", removals
+// "−", and a same-slot change of working-days shows "~".
+function diffRosterEntries(
+  before: { person_name: string; role_key: string; shift: RosterShift; days: string[] }[],
+  after:  { person_name: string; role_key: string; shift: RosterShift; days: string[] }[],
+  roleName: (k: string) => string,
+): string[] {
+  const shiftLabel = (s: RosterShift) => s === 'day' ? 'Morning' : 'Night'
+  const key  = (e: { person_name: string; role_key: string; shift: RosterShift }) => `${e.person_name}|${e.role_key}|${e.shift}`
+  const desc = (e: { person_name: string; role_key: string; shift: RosterShift; days: string[] }) => {
+    const d = fmtDays(e.days)
+    return `${e.person_name} — ${roleName(e.role_key)} · ${shiftLabel(e.shift)}${d ? ` · ${d}` : ''}`
+  }
+  const bMap = new Map(before.map(e => [key(e), e]))
+  const aMap = new Map(after.map(e => [key(e), e]))
+  const out: string[] = []
+  for (const [k, e] of aMap) if (!bMap.has(k)) out.push(`+ ${desc(e)}`)
+  for (const [k, e] of bMap) if (!aMap.has(k)) out.push(`− ${desc(e)}`)
+  for (const [k, a] of aMap) {
+    const b = bMap.get(k)
+    if (b && fmtDays(a.days) !== fmtDays(b.days))
+      out.push(`~ ${a.person_name} — ${roleName(a.role_key)}: ${fmtDays(b.days) || 'whole week'} → ${fmtDays(a.days) || 'whole week'}`)
+  }
+  return out
+}
+
 const fmtRange = (p: Period) =>
   `${format(parseISO(p.start_date + 'T12:00:00'), 'd MMM')} – ${format(parseISO(p.end_date + 'T12:00:00'), 'd MMM yyyy')}`
 
@@ -78,7 +130,7 @@ function daysUntilWednesday(): number {
 }
 
 export default function RosterPage() {
-  const { user, p, isFullAdmin } = useAuth()
+  const { user, p, isFullAdmin, displayName } = useAuth()
   // ── Roster permissions (view is global; edit/submit/delete are per section) ──
   // Category keys in ROSTER_CATEGORIES match the RosterSectionKey enum exactly.
   const canView   = isFullAdmin || p('can_view_roster')
@@ -190,10 +242,19 @@ export default function RosterPage() {
   useEffect(() => {
     if (!periodId) { setEntries([]); return }
     setDirtyCategories(new Set()) // fresh load clears all unsaved state
-    db().from('roster_entries')
-      .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
+    // Tolerant of the `days` column not being migrated yet: retry without it and
+    // default to the full week, so the roster still loads pre-migration.
+    const mapEntries = (rows: any[]) =>
+      setEntries(rows.map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS })) as Entry[])
+    db().from('roster_entries').select(ENTRY_SELECT)
       .eq('period_id', periodId).order('sort_order')
-      .then(({ data }: any) => setEntries((data as Entry[]) ?? []))
+      .then(({ data, error }: any) => {
+        if (error) {
+          db().from('roster_entries').select(ENTRY_SELECT_BASE)
+            .eq('period_id', periodId).order('sort_order')
+            .then(({ data: d2 }: any) => mapEntries((d2 as any[]) ?? []))
+        } else mapEntries((data as any[]) ?? [])
+      })
     // Per-section submission status (graceful if the table isn't migrated yet)
     db().from('roster_section_status')
       .select('section,status,submitted_by,submitted_at')
@@ -228,6 +289,7 @@ export default function RosterPage() {
     roles.forEach(r => m.set(r.key, r.category))
     return m
   }, [roles])
+  const roleName = (k: string) => roles.find(r => r.key === k)?.name ?? k
 
   // ── Per-department staged save ──────────────────────────────────────────────
   // All edits update local state only — no DB write until "Save [Dept]" is clicked.
@@ -248,22 +310,22 @@ export default function RosterPage() {
   }
 
   // Stage locally — no DB write
-  function addEntry(roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) {
+  function addEntry(roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[], days: string[]) {
     if (!periodId || !name.trim()) return
     const cat = roleCategory.get(roleKey) ?? ''
     const sort = cellEntries(roleKey, shift).length
     const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const emp = employees.find(e => e.id === employeeId)
-    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags, sort_order: sort }])
+    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags, sort_order: sort, days: days.length ? days : ALL_WEEKDAYS }])
     markDirty(cat)
     setEditing(null)
   }
-  function updateEntry(id: string, employeeId: string | null, name: string, tags: string[]) {
+  function updateEntry(id: string, employeeId: string | null, name: string, tags: string[], days: string[]) {
     if (!name.trim()) return
     const entry = entries.find(e => e.id === id)
     const cat = entry ? (roleCategory.get(entry.role_key) ?? '') : ''
     const emp = employees.find(e => e.id === employeeId)
-    setEntries(es => es.map(e => e.id === id ? { ...e, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags } : e))
+    setEntries(es => es.map(e => e.id === id ? { ...e, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags, days: days.length ? days : ALL_WEEKDAYS } : e))
     markDirty(cat)
     setEditing(null)
   }
@@ -291,6 +353,14 @@ export default function RosterPage() {
     try {
       const catRoleKeys = roles.filter(r => r.category === categoryKey).map(r => r.key)
       if (catRoleKeys.length === 0) return
+      // Snapshot the section as it was in the DB (for the manager change summary),
+      // before we delete + re-insert. Only needed for Production.
+      let before: Entry[] = []
+      if (categoryKey === 'production') {
+        let bres = await db().from('roster_entries').select(ENTRY_SELECT).eq('period_id', periodId).in('role_key', catRoleKeys)
+        if (bres.error) bres = await db().from('roster_entries').select(ENTRY_SELECT_BASE).eq('period_id', periodId).in('role_key', catRoleKeys)
+        before = ((bres.data as any[]) ?? []).map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS })) as Entry[]
+      }
       await db().from('roster_entries').delete()
         .eq('period_id', periodId)
         .in('role_key', catRoleKeys)
@@ -300,14 +370,18 @@ export default function RosterPage() {
           period_id: e.period_id, role_key: e.role_key, shift: e.shift,
           employee_id: e.employee_id, operator_id: e.operator_id ?? null,
           person_name: e.person_name, tags: e.tags, sort_order: i,
+          days: e.days?.length ? e.days : ALL_WEEKDAYS,
         }))
       let fresh: Entry[] = []
       if (toInsert.length > 0) {
-        const { data, error } = await db().from('roster_entries')
-          .insert(toInsert as any)
-          .select('id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order')
-        if (error) throw error
-        fresh = (data as Entry[]) ?? []
+        // Tolerant of the `days` column not being migrated yet.
+        let res = await db().from('roster_entries').insert(toInsert as any).select(ENTRY_SELECT)
+        if (res.error) {
+          res = await db().from('roster_entries')
+            .insert(toInsert.map(({ days, ...rest }) => rest) as any).select(ENTRY_SELECT_BASE)
+        }
+        if (res.error) throw res.error
+        fresh = ((res.data as any[]) ?? []).map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS })) as Entry[]
       }
       setEntries(es => [...es.filter(e => !catRoleKeys.includes(e.role_key)), ...fresh])
       setDirtyCategories(s => { const n = new Set(s); n.delete(categoryKey); return n })
@@ -315,6 +389,21 @@ export default function RosterPage() {
         periodId, periodName: period?.name ?? null, section: categoryKey,
         detail: `Saved ${toInsert.length} ${toInsert.length === 1 ? 'person' : 'people'}`,
       })
+      // Notify the production manager of exactly what changed so they can review
+      // and sign off. Only for the Production section; server filters out the
+      // editor themselves, so a manager saving their own section is not pinged.
+      if (categoryKey === 'production') {
+        const changes = diffRosterEntries(before, fresh, roleName)
+        if (changes.length > 0) {
+          fetch('/api/production/roster/notify-change', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              periodId, periodName: period?.name ?? null, section: 'production',
+              actorName: displayName, changes,
+            }),
+          }).catch(() => {})
+        }
+      }
       // A save means the section changed — it is no longer "submitted".
       // Best-effort: don't let a missing status table break the save.
       try {
@@ -382,8 +471,10 @@ export default function RosterPage() {
         period_id: mapped.id, role_key: e.role_key, shift: e.shift,
         employee_id: e.employee_id, operator_id: e.operator_id ?? null,
         person_name: e.person_name, tags: e.tags, sort_order: e.sort_order,
+        days: e.days?.length ? e.days : ALL_WEEKDAYS,
       }))
-      const { error: insErr } = await db().from('roster_entries').insert(toInsert as any)
+      let insErr = (await db().from('roster_entries').insert(toInsert as any)).error
+      if (insErr) insErr = (await db().from('roster_entries').insert(toInsert.map(({ days, ...rest }) => rest) as any)).error
       if (insErr) {
         setActionError(`Period created, but pre-fill failed: ${insErr.message}. The period is empty — add people manually, or delete it and try again.`)
       }
@@ -1376,8 +1467,8 @@ function RosterGrid({
   cellEntries: (roleKey: string, shift: RosterShift) => Entry[]
   editing: string | null
   setEditing: (v: string | null) => void
-  onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
-  onUpdate: (id: string, employeeId: string | null, name: string, tags: string[]) => void
+  onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[], days: string[]) => void
+  onUpdate: (id: string, employeeId: string | null, name: string, tags: string[], days: string[]) => void
   onDelete: (id: string) => void
   dragEntryId: string | null
   setDragEntryId: (id: string | null) => void
@@ -1496,7 +1587,7 @@ function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmp
             <span className="font-body font-medium text-[13px] text-text leading-tight">{role.name}</span>
           </td>
           {shifts.map((s: { key: RosterShift }) => (
-            <RosterCell key={s.key} roleKey={role.key} shift={s.key} employees={employees} leaveEmpIds={leaveEmpIds}
+            <RosterCell key={s.key} roleKey={role.key} shift={s.key} showDays={(shifts?.length ?? 2) > 1} employees={employees} leaveEmpIds={leaveEmpIds}
               entries={cellEntries(role.key, s.key)}
               editing={editing} setEditing={setEditing}
               onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
@@ -1510,11 +1601,11 @@ function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmp
   )
 }
 
-function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, canEdit }: {
-  roleKey: string; shift: RosterShift; employees: Employee[]; leaveEmpIds: Set<string>; entries: Entry[]
+function RosterCell({ roleKey, shift, showDays = true, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, canEdit }: {
+  roleKey: string; shift: RosterShift; showDays?: boolean; employees: Employee[]; leaveEmpIds: Set<string>; entries: Entry[]
   editing: string | null; setEditing: (v: string | null) => void
-  onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[]) => void
-  onUpdate: (id: string, employeeId: string | null, name: string, tags: string[]) => void
+  onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[], days: string[]) => void
+  onUpdate: (id: string, employeeId: string | null, name: string, tags: string[], days: string[]) => void
   onDelete: (id: string) => void
   dragEntryId: string | null; setDragEntryId: (id: string | null) => void
   dragOverCell: string | null; setDragOverCell: (key: string | null) => void
@@ -1541,20 +1632,21 @@ function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, 
       <div className="flex flex-col gap-1.5">
         {entries.map(e => canEdit && editing === e.id ? (
           <PersonEditor key={e.id} employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds.filter(id => id !== e.employee_id)}
-            initialEmployeeId={e.employee_id} initialName={e.person_name} initialTags={e.tags}
-            onSave={(empId, n, t) => onUpdate(e.id, empId, n, t)} onCancel={() => setEditing(null)}
+            showDays={showDays}
+            initialEmployeeId={e.employee_id} initialName={e.person_name} initialTags={e.tags} initialDays={e.days}
+            onSave={(empId, n, t, d) => onUpdate(e.id, empId, n, t, d)} onCancel={() => setEditing(null)}
             onDelete={() => onDelete(e.id)} />
         ) : (
           <PersonChip key={e.id} entry={e} away={!!e.employee_id && leaveEmpIds.has(e.employee_id)}
-            canEdit={canEdit}
+            canEdit={canEdit} showDays={showDays}
             onEdit={() => setEditing(e.id)}
             onDragStart={id => { setDragEntryId(id) }}
             onDragEnd={() => { setDragEntryId(null); setDragOverCell(null) }} />
         ))}
 
         {canEdit && (editing === addKey ? (
-          <PersonEditor employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds}
-            onSave={(empId, n, t) => onAdd(roleKey, shift, empId, n, t)} onCancel={() => setEditing(null)} />
+          <PersonEditor employees={employees} leaveEmpIds={leaveEmpIds} excludeIds={takenIds} showDays={showDays}
+            onSave={(empId, n, t, d) => onAdd(roleKey, shift, empId, n, t, d)} onCancel={() => setEditing(null)} />
         ) : (
           <button onClick={() => setEditing(addKey)}
             className="self-start inline-flex items-center gap-1 text-[12px] text-stone-400 hover:text-brand transition-colors py-1 no-print">
@@ -1566,10 +1658,11 @@ function RosterCell({ roleKey, shift, employees, leaveEmpIds, entries, editing, 
   )
 }
 
-function PersonChip({ entry, away, canEdit = true, onEdit, onDragStart, onDragEnd }: {
-  entry: Entry; away?: boolean; canEdit?: boolean; onEdit: () => void
+function PersonChip({ entry, away, canEdit = true, showDays = true, onEdit, onDragStart, onDragEnd }: {
+  entry: Entry; away?: boolean; canEdit?: boolean; showDays?: boolean; onEdit: () => void
   onDragStart?: (id: string) => void; onDragEnd?: () => void
 }) {
+  const daysLabel = showDays ? fmtDays(entry.days) : ''
   return (
     <div
       draggable={canEdit}
@@ -1586,6 +1679,9 @@ function PersonChip({ entry, away, canEdit = true, onEdit, onDragStart, onDragEn
         <span key={code} title={tagLabel(code)}
           className="font-mono font-semibold text-[9px] px-1.5 py-0.5 rounded bg-brand/8 text-brand shrink-0">{code}</span>
       ))}
+      {daysLabel && (
+        <span title={`Works ${daysLabel}`} className="font-mono font-semibold text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">{daysLabel}</span>
+      )}
       {canEdit && (
         <button
           onClick={e => { e.stopPropagation(); onEdit() }}
@@ -1598,14 +1694,17 @@ function PersonChip({ entry, away, canEdit = true, onEdit, onDragStart, onDragEn
   )
 }
 
-function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployeeId = null, initialName = '', initialTags = [], onSave, onCancel, onDelete }: {
-  employees: Employee[]; leaveEmpIds?: Set<string>; excludeIds?: string[]
-  initialEmployeeId?: string | null; initialName?: string; initialTags?: string[]
-  onSave: (employeeId: string | null, name: string, tags: string[]) => void; onCancel: () => void; onDelete?: () => void
+function PersonEditor({ employees, leaveEmpIds, excludeIds = [], showDays = true, initialEmployeeId = null, initialName = '', initialTags = [], initialDays, onSave, onCancel, onDelete }: {
+  employees: Employee[]; leaveEmpIds?: Set<string>; excludeIds?: string[]; showDays?: boolean
+  initialEmployeeId?: string | null; initialName?: string; initialTags?: string[]; initialDays?: string[]
+  onSave: (employeeId: string | null, name: string, tags: string[], days: string[]) => void; onCancel: () => void; onDelete?: () => void
 }) {
   const [employeeId, setEmployeeId] = useState<string | null>(initialEmployeeId)
   const [name, setName] = useState(initialName)
   const [tags, setTags] = useState<string[]>(initialTags)
+  const [days, setDays] = useState<string[]>(initialDays && initialDays.length ? initialDays : ALL_WEEKDAYS)
+  const wholeWeek = isFullWeek(days)
+  const toggleDay = (k: string) => setDays(d => d.includes(k) ? d.filter(x => x !== k) : [...ALL_WEEKDAYS.filter(w => d.includes(w) || w === k)])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(!initialName)
   const toggle = (c: string) => setTags(t => t.includes(c) ? t.filter(x => x !== c) : [...t, c])
@@ -1700,8 +1799,30 @@ function PersonEditor({ employees, leaveEmpIds, excludeIds = [], initialEmployee
           )
         })}
       </div>
+      {showDays && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Days working</label>
+            {!wholeWeek && (
+              <button type="button" onClick={() => setDays(ALL_WEEKDAYS)} className="text-[10px] font-medium text-brand hover:underline">Whole week</button>
+            )}
+          </div>
+          <div className="inline-flex rounded-lg border border-stone-200 overflow-hidden">
+            {WEEKDAYS.map(d => {
+              const on = days.includes(d.key)
+              return (
+                <button key={d.key} type="button" onClick={() => toggleDay(d.key)} title={d.full}
+                  className={`w-9 py-2 text-[12px] font-semibold border-r border-stone-200 last:border-r-0 transition-colors ${on ? 'bg-brand text-white' : 'bg-white text-stone-300 hover:text-stone-500'}`}>
+                  {d.short}
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-[10px] text-stone-400">{wholeWeek ? 'Works the whole week — tap a day to remove it.' : `Works ${fmtDays(days)}.`}</p>
+        </div>
+      )}
       <div className="flex items-center gap-2">
-        <button onClick={() => name.trim() && onSave(employeeId, name, tags)} disabled={!name.trim()}
+        <button onClick={() => name.trim() && onSave(employeeId, name, tags, days)} disabled={!name.trim()}
           className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-brand text-white text-[13px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors">
           <Check size={14} /> Save
         </button>
