@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (PRODUCTION: Shift Roster — per-person working days + production-manager approval pop-up)
+
+**Files changed:** `supabase/migrations/20260722_005_roster_entry_days.sql` (new), `app/(app)/production/roster/page.tsx`, `app/api/production/roster/notify-change/route.ts` (new)
+
+Requires migration `20260722_005` on the production project (run before merging; the entries load falls back gracefully if it lags).
+
+- **Per-person working days** — each roster entry gets a `days` array (default Mon–Fri) with a simple day-picker (whole week by default, tap to remove, "Whole week" resets; hidden on the Saturday sheet). Partial weeks show a chip tag.
+- **Production-manager approval pop-up** — saving the Production section diffs the change and notifies the sign-off holder (production_manager) via the unified feed (`source:'roster'`) with a realtime pop-up listing person / role / Morning-Night / days. Editor filtered out. Approval is the existing "Submit Production" (notify + sign-off; changes save immediately).
+
 ## 2026-07-22 — Alyssa (PRODUCTION: Unified notifications foundation — one shared feed, realtime, read/unread/delete)
 
 **Files changed:** `supabase/migrations/20260722_003_shared_notifications.sql` (new), `lib/notifications/index.ts`, `components/layout/NotificationBell.tsx`, `components/management/AnnouncementBoard.tsx`, `app/api/announcements/route.ts` (new), `app/api/axis/comments/route.ts`
