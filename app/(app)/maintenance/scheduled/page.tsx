@@ -6,7 +6,7 @@
 // calibration registers, and Readings & Trends (water, IP, diesel, loadshedding,
 // run-hours, boiler starts) with the Excel database history and due-date formulas.
 
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { Printer, Users } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { useAuth } from '@/lib/auth/context'
@@ -48,6 +48,9 @@ export default function ScheduledPage() {
   const [rd, setRd] = useState<Record<string, string>>({})
   // Per-row calibrate form for the editable annual register (date · interval · who).
   const [calForm, setCalForm] = useState<Record<number, { date?: string; interval?: string; by?: string }>>({})
+  // Which annual row's "mark calibrated" panel is expanded (keeps the table compact
+  // so full asset / serial / supplier names fit on one line without scrolling).
+  const [calPanel, setCalPanel] = useState<number | null>(null)
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
@@ -272,7 +275,7 @@ export default function ScheduledPage() {
                       <div className="flex items-center gap-2 min-w-0">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
                         <div className="min-w-0">
-                          <div className="text-[13px] font-semibold text-text truncate">{cl.area}</div>
+                          <div className="text-[13px] font-semibold text-text leading-tight">{cl.area}</div>
                           <div className="text-[11px] text-text-faint">{cl.doc_ref} · {cl.tasks.length} tasks</div>
                           <div className={`text-[10px] mt-0.5 ${prev || done ? 'text-text-muted' : 'text-err'}`}>
                             {done && comp ? <>✓ Completed by <strong className="text-ok">{comp.completed_by || '—'}</strong> ({fmtD(comp.updated_at ?? null)})</>
@@ -422,33 +425,35 @@ export default function ScheduledPage() {
 
           <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="data-table min-w-[1300px]">
+              <table className="data-table w-full">
                 <thead><tr>
                   <th>Status</th>
                   <th><select className={`${INP} text-[11px] py-1 min-h-0 font-semibold ${annualCat !== 'all' ? 'text-brand' : ''}`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
                     <option value="all">Category ▾</option>
                     {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
                   </select></th>
-                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}
+                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', ''].map((h, i) => <th key={i}>{h}</th>)}
                 </tr></thead>
                 <tbody>{annualRows
                   .filter(a => (annualCat === 'all' || a.category === annualCat)
                     && (!annualSearch || `${a.asset} ${a.serial_no} ${a.category} ${a.supplier}`.toLowerCase().includes(annualSearch.toLowerCase())))
                   .map(a => {
                   const cf = calForm[a.id] ?? {}
+                  const open = calPanel === a.id
                   return (
-                  <tr key={a.id}>
+                  <Fragment key={a.id}>
+                  <tr>
                     <td><span className={`badge ${calClass(a.days)}`} title={a.days <= 0 ? `overdue by ${Math.abs(a.days)}d` : `due in ${a.days}d`}>{calBadge(a.days)}</span></td>
-                    <td><input className={`${INP} w-32 text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
+                    <td><input className={`${INP} w-full min-w-[100px] text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
                       onChange={e => setDrafts(p => ({ ...p, ['ac' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.category && updateAnnual(a.id, { category: e.target.value })} /></td>
-                    <td><input className={`${INP} w-56 text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
+                    <td><input className={`${INP} w-full min-w-[200px] text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
                       onChange={e => setDrafts(p => ({ ...p, ['aa' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.asset && updateAnnual(a.id, { asset: e.target.value })} /></td>
-                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
+                    <td><input className={`${INP} w-full min-w-[120px] text-[11px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
                       onChange={e => setDrafts(p => ({ ...p, ['as' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.serial_no && updateAnnual(a.id, { serial_no: e.target.value })} /></td>
-                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
+                    <td><input className={`${INP} w-full min-w-[130px] text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
                       onChange={e => setDrafts(p => ({ ...p, ['au' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.supplier && updateAnnual(a.id, { supplier: e.target.value })} /></td>
                     <td className="text-[11px] whitespace-nowrap">{a.last_done
@@ -464,7 +469,7 @@ export default function ScheduledPage() {
                         const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
                         const patch: any = { interval_days: v }
                         if (v && anchor) patch.next_due = addDays(anchor, v).toISOString().slice(0, 10)
-                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n }) // let the recomputed date show
+                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n })
                         updateAnnual(a.id, patch)
                       }} /></td>
                     {/* Next due → recomputes Cycle (days) from the anchor. Bidirectional. */}
@@ -477,37 +482,45 @@ export default function ScheduledPage() {
                         const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
                         const patch: any = { next_due: nd }
                         if (nd) patch.interval_days = Math.max(0, diffDays(anchor, nd))
-                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n }) // let the recomputed cycle show
+                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n })
                         updateAnnual(a.id, patch)
                       }} /></td>
-                    <td>
-                      <div className="flex gap-1 items-center">
-                        <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
-                          value={cf.date ?? new Date().toISOString().slice(0, 10)}
-                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
-                        <input className={`${INP} w-20 text-[11px] py-1 min-h-0`} type="number" inputMode="numeric" title="Cycle in days — the next due date is set this many days forward from the calibration date"
-                          placeholder={a.interval_days != null ? `${a.interval_days}d` : 'cycle d'}
-                          value={cf.interval ?? (a.interval_days != null ? String(a.interval_days) : '')}
-                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], interval: e.target.value } }))} />
-                        <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
-                          value={cf.by ?? ''}
-                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
-                          <option value="">Who?…</option>
-                          {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
-                          <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
-                        </select>
-                        <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when; the next-due date is set forward by the cycle days"
-                          onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
-                            (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
-                            cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
-                      </div>
-                    </td>
-                    <td>{a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>Email</button>}</td>
-                    <td><input className={`${INP} w-28 text-[11px] py-1 min-h-0`} placeholder="Notes…"
-                      value={drafts['a' + a.id] ?? a.notes}
-                      onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
-                      onBlur={e => saveAnnualNotes(a.id, e.target.value)} /></td>
+                    <td><button className={BTN_SM} onClick={() => setCalPanel(open ? null : a.id)}>{open ? 'Close' : 'Calibrate ▾'}</button></td>
                   </tr>
+                  {open && (
+                    <tr>
+                      <td colSpan={9} className="bg-surface-raised/40">
+                        <div className="flex gap-2 flex-wrap items-center p-2">
+                          <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">Mark calibrated:</span>
+                          <label className="text-[11px] text-text-muted">Date <input className={`${INP} w-36 text-[11px] py-1 min-h-0 ml-1`} type="date"
+                            value={cf.date ?? new Date().toISOString().slice(0, 10)}
+                            onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} /></label>
+                          <label className="text-[11px] text-text-muted">Cycle (d) <input className={`${INP} w-20 text-[11px] py-1 min-h-0 ml-1`} type="number" inputMode="numeric"
+                            title="The next-due date is set this many days forward from the calibration date"
+                            placeholder={a.interval_days != null ? `${a.interval_days}` : 'days'}
+                            value={cf.interval ?? (a.interval_days != null ? String(a.interval_days) : '')}
+                            onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], interval: e.target.value } }))} /></label>
+                          <label className="text-[11px] text-text-muted">By <select className={`${INP} w-36 text-[11px] py-1 min-h-0 ml-1 ${cf.by ? '' : 'border-warn'}`}
+                            value={cf.by ?? ''} onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
+                            <option value="">Who?…</option>
+                            {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                            <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
+                          </select></label>
+                          <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by}
+                            title="Record who calibrated it and when; the next-due date is set forward by the cycle days"
+                            onClick={() => { calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
+                              (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
+                              cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!); setCalPanel(null) }}>✓ Calibrated</button>
+                          {a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>✉ Email supplier</button>}
+                          <label className="text-[11px] text-text-muted flex-1 min-w-[160px]">Notes <input className={`${INP} w-full text-[11px] py-1 min-h-0 mt-0.5`} placeholder="Notes…"
+                            value={drafts['a' + a.id] ?? a.notes}
+                            onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
+                            onBlur={e => saveAnnualNotes(a.id, e.target.value)} /></label>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )})}</tbody>
               </table>
             </div>
