@@ -1,81 +1,78 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { formatDistanceToNow, parseISO } from 'date-fns'
-import { Bell, X, ChevronRight } from 'lucide-react'
-import Link from 'next/link'
+import { Bell, X, Check, Trash2, CheckCheck, Dot } from 'lucide-react'
 
-interface Announcement {
-  id:                 string
-  title:              string
-  from_name:          string
-  target_departments: string[]
-  created_at:         string
-}
-
-interface MaintNote {
-  id:         number
-  kind:       string
+// One unified notification shape — everything now lives in shared.notifications.
+interface Note {
+  id:         string
+  source:     string
+  kind:       string | null
   title:      string
   body:       string | null
   url:        string | null
   urgent:     boolean
+  from_name:  string | null
   read_at:    string | null
   created_at: string
 }
 
-interface AxisNote {
-  id:              number
-  type:            string
-  title:           string
-  body:            string | null
-  reference_id:    string | null
-  reference_table: string | null
-  read_at:         string | null
-  created_at:      string
+const SOURCE_LABEL: Record<string, string> = {
+  maintenance: 'Maintenance', axis: 'AXIS', roster: 'Roster',
+  production: 'Production', announcement: 'Announcement', system: '',
 }
 
 export default function NotificationBell() {
   const db = getDb()
-  const { userId, department, isManagement, isIT } = useAuth()
+  const router = useRouter()
+  const { userId } = useAuth()
 
-  const [anns,      setAnns]      = useState<Announcement[]>([])
-  const [readIds,   setReadIds]   = useState<Set<string>>(new Set())
-  const [notes,     setNotes]     = useState<MaintNote[]>([])
-  const [axisNotes, setAxisNotes] = useState<AxisNote[]>([])
-  const [open,      setOpen]      = useState(false)
+  const [items, setItems] = useState<Note[]>([])
+  const [open, setOpen]   = useState(false)
+  const [toast, setToast] = useState<Note | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => { if (userId) load() }, [userId])
-
-  // Other parts of the app (e.g. submitting a roster section) dispatch this
-  // to nudge the bell to refetch without waiting for the next page load.
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!userId) return
+    const { data, error } = await db.schema('shared').from('notifications')
+      .select('id,source,kind,title,body,url,urgent,from_name,read_at,created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(40)
+    if (!error) setItems((data ?? []) as Note[])
+  }, [db, userId])
+
+  useEffect(() => { load() }, [load])
+
+  // Manual nudge from elsewhere in the app (kept for backwards-compat).
+  useEffect(() => {
     const handler = () => load()
     window.addEventListener('notifications:refresh', handler)
     return () => window.removeEventListener('notifications:refresh', handler)
-  }, [userId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [load])
 
-  // Mark personal notifications read when the panel opens.
+  // Realtime: new rows for this user arrive the instant they're written.
   useEffect(() => {
-    if (!open || !userId) return
-    const now = new Date().toISOString()
-
-    const unreadMaint = notes.filter(n => !n.read_at).map(n => n.id)
-    if (unreadMaint.length > 0) {
-      setNotes(p => p.map(n => (n.read_at ? n : { ...n, read_at: now })))
-      db.schema('maintenance').from('notifications').update({ read_at: now }).in('id', unreadMaint).then(() => {})
-    }
-
-    const unreadAxis = axisNotes.filter(n => !n.read_at).map(n => n.id)
-    if (unreadAxis.length > 0) {
-      setAxisNotes(p => p.map(n => (n.read_at ? n : { ...n, read_at: now })))
-      db.schema('axis').from('notifications').update({ read_at: now }).in('id', unreadAxis).then(() => {})
-    }
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!userId) return
+    const channel = db
+      .channel(`notifications:${userId}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'shared', table: 'notifications', filter: `user_id=eq.${userId}` },
+        (payload: any) => {
+          const n = payload.new as Note
+          setItems(prev => (prev.some(p => p.id === n.id) ? prev : [n, ...prev]))
+          setToast(n)
+          if (toastTimer.current) clearTimeout(toastTimer.current)
+          toastTimer.current = setTimeout(() => setToast(null), 6000)
+        })
+      .subscribe()
+    return () => { db.removeChannel(channel) }
+  }, [db, userId])
 
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -85,44 +82,36 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handle)
   }, [])
 
-  async function load() {
-    const [{ data: annData }, { data: readData }, { data: noteData }, { data: axisData }] = await Promise.all([
-      db.from('management_announcements')
-        .select('id,title,from_name,target_departments,created_at')
-        .order('created_at', { ascending: false })
-        .limit(20),
-      db.from('announcement_reads').select('announcement_id').eq('user_id', userId),
-      db.schema('maintenance').from('notifications')
-        .select('id,kind,title,body,url,urgent,read_at,created_at')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(20),
-      db.schema('axis').from('notifications')
-        .select('id,type,title,body,reference_id,reference_table,read_at,created_at')
-        .eq('recipient_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(20),
-    ])
+  const unreadCount = useMemo(() => items.filter(n => !n.read_at).length, [items])
 
-    const all = (annData ?? []) as Announcement[]
-    const visible = all.filter(a =>
-      isManagement || isIT || !a.target_departments.length || (department && a.target_departments.includes(department))
-    )
-    setAnns(visible)
-    setReadIds(new Set((readData ?? []).map((r: any) => r.announcement_id)))
-    setNotes((noteData ?? []) as MaintNote[])
-    setAxisNotes((axisData ?? []) as AxisNote[])
+  async function setRead(id: string, read: boolean) {
+    const read_at = read ? new Date().toISOString() : null
+    setItems(prev => prev.map(n => (n.id === id ? { ...n, read_at } : n)))
+    await db.schema('shared').from('notifications').update({ read_at }).eq('id', id)
   }
 
-  const unread = [
-    ...anns.filter(a => !readIds.has(a.id)),
-    ...notes.filter(n => !n.read_at),
-    ...axisNotes.filter(n => !n.read_at),
-  ]
+  async function markAllRead() {
+    const now = new Date().toISOString()
+    const unread = items.filter(n => !n.read_at).map(n => n.id)
+    if (!unread.length) return
+    setItems(prev => prev.map(n => (n.read_at ? n : { ...n, read_at: now })))
+    await db.schema('shared').from('notifications').update({ read_at: now }).in('id', unread)
+  }
+
+  async function remove(id: string) {
+    setItems(prev => prev.filter(n => n.id !== id))
+    await db.schema('shared').from('notifications').delete().eq('id', id)
+  }
+
+  function openNote(n: Note) {
+    if (!n.read_at) setRead(n.id, true)
+    setOpen(false)
+    setToast(null)
+    if (n.url) router.push(n.url)
+  }
 
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
-      {/* Bell button */}
       <button
         onClick={() => setOpen(o => !o)}
         style={{
@@ -130,153 +119,107 @@ export default function NotificationBell() {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: open ? 'rgba(26,58,14,0.08)' : 'transparent',
           border: '1px solid ' + (open ? 'rgba(26,58,14,0.15)' : 'transparent'),
-          cursor: 'pointer',
-          position: 'relative',
-          transition: 'background 120ms, border 120ms',
+          cursor: 'pointer', position: 'relative', transition: 'background 120ms, border 120ms',
         }}
         onMouseEnter={e => { if (!open) (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.05)' }}
         onMouseLeave={e => { if (!open) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-        aria-label="Notifications"
+        aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`}
       >
-        <Bell size={15} style={{ color: unread.length > 0 ? '#1A3A0E' : '#9CA3AF' }} />
-        {unread.length > 0 && (
+        <Bell size={15} style={{ color: unreadCount > 0 ? '#1A3A0E' : '#9CA3AF' }} />
+        {unreadCount > 0 && (
           <span style={{
-            position: 'absolute', top: 4, right: 4,
-            width: 8, height: 8, borderRadius: '50%',
-            background: '#1A3A0E',
-            border: '1.5px solid white',
-          }} />
+            position: 'absolute', top: 1, right: 1, minWidth: 15, height: 15, padding: '0 3px',
+            borderRadius: 8, background: '#1A3A0E', color: '#fff', border: '1.5px solid white',
+            fontSize: 9, fontWeight: 700, lineHeight: '12px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
         )}
       </button>
 
-      {/* Dropdown */}
+      {/* Toast — pops the moment a notification arrives */}
+      {toast && !open && (
+        <button
+          onClick={() => openNote(toast)}
+          style={{
+            position: 'fixed', top: 60, right: 20, width: 300, textAlign: 'left',
+            background: '#fff', border: '1px solid #E4E7EC', borderLeft: `3px solid ${toast.urgent ? '#B81C1C' : '#1A3A0E'}`,
+            borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.16)', padding: '12px 14px',
+            zIndex: 10000, cursor: 'pointer',
+          }}
+        >
+          <p style={{ fontWeight: 600, fontSize: 12, color: toast.urgent ? '#B81C1C' : '#1A2415', margin: 0 }}>{toast.title}</p>
+          {toast.body && <p style={{ fontSize: 11, color: '#637056', margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toast.body}</p>}
+        </button>
+      )}
+
       {open && (
         <div style={{
-          position: 'absolute', top: 40, right: 0,
-          width: 320, maxHeight: 420,
-          background: '#fff',
-          border: '1px solid #E4E7EC',
-          borderRadius: 14,
+          position: 'absolute', top: 40, right: 0, width: 340, maxHeight: 460,
+          background: '#fff', border: '1px solid #E4E7EC', borderRadius: 14,
           boxShadow: '0 12px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)',
-          overflow: 'hidden',
-          zIndex: 9999,
-          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', zIndex: 9999, display: 'flex', flexDirection: 'column',
         }}>
-          {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px 10px', borderBottom: '1px solid #E4E7EC', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px 10px', borderBottom: '1px solid #E4E7EC', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: '#1A2415' }}>Announcements</span>
-              {unread.length > 0 && (
-                <span style={{
-                  background: '#1A3A0E', color: '#fff',
-                  fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700,
-                  padding: '1px 6px', borderRadius: 10,
-                }}>
-                  {unread.length} new
+              <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: '#1A2415' }}>Notifications</span>
+              {unreadCount > 0 && (
+                <span style={{ background: '#1A3A0E', color: '#fff', fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 10 }}>
+                  {unreadCount} new
                 </span>
               )}
             </div>
-            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}>
-              <X size={13} style={{ color: '#9CA3AF' }} />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {unreadCount > 0 && (
+                <button onClick={markAllRead} title="Mark all read"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px', borderRadius: 6, fontSize: 10, color: '#637056', fontFamily: 'var(--font-mono)' }}>
+                  <CheckCheck size={13} /> Mark all read
+                </button>
+              )}
+              <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}>
+                <X size={13} style={{ color: '#9CA3AF' }} />
+              </button>
+            </div>
           </div>
 
-          {/* List */}
           <div style={{ overflowY: 'auto', flex: 1 }}>
-            {/* AXIS project / comment notifications */}
-            {axisNotes.map(n => {
-              const href = n.reference_table === 'projects'
-                ? '/axis/projects'
-                : '/axis/consideration'
-              const item = (
-                <div style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10,
-                  padding: '10px 16px', borderBottom: '1px solid #F3F4F6',
-                  background: n.read_at ? 'transparent' : 'rgba(26,58,14,0.025)',
-                }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: n.read_at ? '#E4E7EC' : '#1A3A0E', flexShrink: 0, marginTop: 6 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontFamily: 'var(--font-body)', fontWeight: n.read_at ? 400 : 600, fontSize: 12, color: '#1A2415', margin: 0 }}>{n.title}</p>
-                    {n.body && <p style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#637056', margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.body}</p>}
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
-                      AXIS · {formatDistanceToNow(parseISO(n.created_at), { addSuffix: true })}
-                    </p>
-                  </div>
-                </div>
-              )
+            {items.length === 0 ? (
+              <div style={{ padding: '28px 16px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#9CA3AF' }}>
+                You&apos;re all caught up
+              </div>
+            ) : items.map(n => {
+              const label = SOURCE_LABEL[n.source] ?? ''
+              const dot = n.read_at ? '#E4E7EC' : (n.urgent ? '#B81C1C' : '#1A3A0E')
               return (
-                <Link key={`ax${n.id}`} href={href} onClick={() => setOpen(false)} style={{ textDecoration: 'none', display: 'block' }}>
-                  {item}
-                </Link>
-              )
-            })}
-
-            {/* Personal maintenance notifications */}
-            {notes.map(n => {
-              const item = (
-                <div style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10,
-                  padding: '10px 16px', borderBottom: '1px solid #F3F4F6',
-                  background: n.read_at ? 'transparent' : (n.urgent ? 'rgba(184,28,28,0.05)' : 'rgba(26,58,14,0.025)'),
-                }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: n.read_at ? '#E4E7EC' : (n.urgent ? '#B81C1C' : '#1A3A0E'), flexShrink: 0, marginTop: 6 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                <div key={n.id}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px 10px 14px',
+                    borderBottom: '1px solid #F3F4F6',
+                    background: n.read_at ? 'transparent' : (n.urgent ? 'rgba(184,28,28,0.05)' : 'rgba(26,58,14,0.03)'),
+                  }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0, marginTop: 6 }} />
+                  <button onClick={() => openNote(n)} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'none', border: 'none', padding: 0, cursor: n.url ? 'pointer' : 'default' }}>
                     <p style={{ fontFamily: 'var(--font-body)', fontWeight: n.read_at ? 400 : 600, fontSize: 12, color: n.urgent ? '#B81C1C' : '#1A2415', margin: 0 }}>{n.title}</p>
                     {n.body && <p style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#637056', margin: '2px 0 0' }}>{n.body}</p>}
                     <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
-                      {formatDistanceToNow(parseISO(n.created_at), { addSuffix: true })}
+                      {label ? `${label} · ` : ''}{formatDistanceToNow(parseISO(n.created_at), { addSuffix: true })}
                     </p>
-                  </div>
-                </div>
-              )
-              return n.url
-                ? <Link key={`n${n.id}`} href={n.url} onClick={() => setOpen(false)} style={{ textDecoration: 'none', display: 'block' }}>{item}</Link>
-                : <div key={`n${n.id}`}>{item}</div>
-            })}
-
-            {anns.length === 0 && notes.length === 0 && axisNotes.length === 0 ? (
-              <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#9CA3AF' }}>
-                Nothing new
-              </div>
-            ) : anns.map(a => {
-              const read = readIds.has(a.id)
-              return (
-                <div key={a.id} style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10,
-                  padding: '10px 16px',
-                  borderBottom: '1px solid #F3F4F6',
-                  background: read ? 'transparent' : 'rgba(26,58,14,0.025)',
-                }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: read ? '#E4E7EC' : '#1A3A0E', flexShrink: 0, marginTop: 6 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontFamily: 'var(--font-body)', fontWeight: read ? 400 : 600, fontSize: 12, color: '#1A2415', margin: 0 }}>
-                      {a.title}
-                    </p>
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
-                      {a.from_name} · {formatDistanceToNow(parseISO(a.created_at), { addSuffix: true })}
-                    </p>
+                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                    <button onClick={() => setRead(n.id, !n.read_at)} title={n.read_at ? 'Mark unread' : 'Mark read'}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 2, borderRadius: 5, display: 'flex' }}>
+                      {n.read_at ? <Dot size={16} /> : <Check size={13} />}
+                    </button>
+                    <button onClick={() => remove(n.id)} title="Delete"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 2, borderRadius: 5, display: 'flex' }}>
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 </div>
               )
             })}
           </div>
-
-          {/* Footer */}
-          <Link
-            href="/management"
-            onClick={() => setOpen(false)}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-              padding: '10px 16px',
-              borderTop: '1px solid #E4E7EC',
-              fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600,
-              color: '#1A3A0E', textDecoration: 'none',
-              background: 'rgba(26,58,14,0.03)',
-              flexShrink: 0,
-            }}
-          >
-            View all in Management <ChevronRight size={11} />
-          </Link>
         </div>
       )}
     </div>
