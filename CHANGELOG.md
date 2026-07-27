@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (PRODUCTION: Unified notifications foundation — one shared feed, realtime, read/unread/delete)
+
+**Files changed:** `supabase/migrations/20260722_003_shared_notifications.sql` (new), `lib/notifications/index.ts`, `components/layout/NotificationBell.tsx`, `components/management/AnnouncementBoard.tsx`, `app/api/announcements/route.ts` (new), `app/api/axis/comments/route.ts`
+
+Replaces the fragmented notification storage (maintenance.notifications + axis.notifications + management_announcements) with ONE per-user feed in `shared.notifications`. **Run migration 20260722_003 on the production Supabase project BEFORE merging this** (the bell reads the new table; running the migration first avoids an empty-feed gap). notify() falls back to the legacy table if it hasn't run, so nothing is lost.
+
+- New `shared.notifications` table (per-user RLS, realtime publication, guarded backfill from the two old tables).
+- `notify()` writes there (service_role) with a legacy fallback for safe cutover.
+- Bell rewrite: unified newest-first feed, unread count, mark read/unread, delete, mark-all-read, deep-link open, realtime subscription + arrival toast.
+- Announcements publish via `/api/announcements` and fan out a per-user row to every targeted user.
+- AXIS @-mentions route through `notify()`.
+
+
 ## 2026-07-24 — Alyssa (Shift Roster: fixed-shift roles that no longer auto-rotate)
 
 **Files:** `lib/production/roster-rotate.ts`, `supabase/migrations/20260724_002_roster_fixed_shift_roles.sql`
