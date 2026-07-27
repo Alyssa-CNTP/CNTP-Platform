@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (Unified notifications foundation: one shared feed, realtime, read/unread/delete)
+
+**Files changed:** `supabase/migrations/20260722_003_shared_notifications.sql` (new), `lib/notifications/index.ts`, `components/layout/NotificationBell.tsx`, `components/management/AnnouncementBoard.tsx`, `app/api/announcements/route.ts` (new), `app/api/axis/comments/route.ts`
+
+Replaces the fragmented notification storage (maintenance.notifications + axis.notifications + management_announcements) with ONE per-user feed in `shared.notifications`. Requires the new migration on **both** Supabase projects.
+
+- **New `shared.notifications` table** — unified shape (source/kind/title/body/url/urgent/from_name/ref_table/ref_id/read_at + roster auto-dismiss fields), RLS so a user reads/updates/deletes only their own rows, added to the realtime publication, and a guarded backfill from the two old tables.
+- **`notify()` writes here** (service_role), with a fallback to the legacy maintenance table if the migration hasn't run yet — so nothing is lost mid-rollout.
+- **Bell rewrite** — one feed, newest-first, unread count, per-item mark read/unread + delete, mark-all-read, deep-link open (marks read), and a **realtime subscription + toast** so users are prompted the instant a notification arrives.
+- **Announcements fold in** — publishing now goes through `/api/announcements` (server-side), which saves the board record AND fans a per-user row into `shared.notifications` for every targeted user.
+- **AXIS @-mentions** route through `notify()` instead of writing `axis.notifications` directly.
+
+
 ## 2026-07-24 — Alyssa (Blender's output lot number is now auto-generated — no more supervisor entry needed)
 
 **Files:** `components/production/capture/BlenderCapture.tsx`, `components/production/capture/CaptureOverview.tsx`,

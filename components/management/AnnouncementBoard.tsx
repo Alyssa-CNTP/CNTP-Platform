@@ -325,13 +325,13 @@ export default function AnnouncementBoard() {
   }
 
   async function handleCompose(title: string, body: string, depts: string[]) {
-    await db.from('management_announcements').insert({
-      title,
-      body,
-      from_user_id:       userId,
-      from_name:          displayName,
-      target_departments: depts,
-      pinned:             false,
+    // Publish server-side so it both saves to the board AND fans out into every
+    // targeted user's notification feed (shared.notifications). Fan-out to other
+    // users needs service_role, so it can't be a client insert.
+    await fetch('/api/announcements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body, fromName: displayName, targetDepartments: depts, pinned: false }),
     })
     setComposing(false)
     load()
