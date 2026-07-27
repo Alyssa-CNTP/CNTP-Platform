@@ -25,6 +25,13 @@ export interface NotifyInput {
   url?:       string            // deep link, e.g. /maintenance/job-cards/123
   urgent?:    boolean
   channels?:  NotificationChannel[]   // default ['inApp']
+  // Unified-feed metadata (shared.notifications). `source` groups + labels the
+  // notification in the bell; ref_table/ref_id generalise the old per-schema
+  // foreign keys; fromName is used by announcements.
+  source?:    string            // maintenance | axis | roster | production | announcement | system
+  refTable?:  string | null
+  refId?:     string | null
+  fromName?:  string | null
   // Roster-reminder linkage: lets a DB trigger auto-dismiss the in-app
   // notification once this (period, section) is submitted. See
   // production.dismiss_roster_reminders() in the roster migrations.
@@ -67,23 +74,40 @@ export async function notify(input: NotifyInput): Promise<{ inApp: number; email
   const wants = (userId: string, channel: 'email' | 'urgent') => optOuts.get(userId)?.[channel] !== false
 
   // ── In-app feed (service_role bypasses RLS to write for other users) ──
+  // Canonical home is shared.notifications; if that table isn't present yet
+  // (pre-migration), fall back to the legacy maintenance.notifications shape so
+  // the feed never goes dark mid-rollout.
   if (channels.includes('inApp')) {
     try {
       const admin = getAdminClient()
-      const rows = recipients.map(r => ({
-        user_id: r.userId,
-        kind:    input.kind,
-        title:   input.title,
-        body:    input.body,
-        card_id: input.cardId ?? null,
-        url:     input.url ?? null,
-        urgent:  !!input.urgent,
+      const sharedRows = recipients.map(r => ({
+        user_id:  r.userId,
+        source:   input.source ?? 'system',
+        kind:     input.kind,
+        title:    input.title,
+        body:     input.body,
+        url:      input.url ?? null,
+        urgent:   !!input.urgent,
+        from_name: input.fromName ?? null,
+        ref_table: input.refTable ?? null,
+        ref_id:    input.refId ?? (input.cardId != null ? String(input.cardId) : null),
         roster_period_id: input.rosterPeriodId ?? null,
         roster_section:   input.rosterSection ?? null,
       }))
-      const { error } = await admin.schema('maintenance' as any).from('notifications').insert(rows)
-      if (error) console.error('[notifications] in-app insert failed:', error.message)
-      else result.inApp = rows.length
+      const { error } = await admin.schema('shared' as any).from('notifications').insert(sharedRows)
+      if (!error) {
+        result.inApp = sharedRows.length
+      } else {
+        // Fallback: legacy maintenance table (old column shape).
+        const legacyRows = recipients.map(r => ({
+          user_id: r.userId, kind: input.kind, title: input.title, body: input.body,
+          card_id: input.cardId ?? null, url: input.url ?? null, urgent: !!input.urgent,
+          roster_period_id: input.rosterPeriodId ?? null, roster_section: input.rosterSection ?? null,
+        }))
+        const { error: legacyErr } = await admin.schema('maintenance' as any).from('notifications').insert(legacyRows)
+        if (legacyErr) console.error('[notifications] in-app insert failed (shared + legacy):', error.message, legacyErr.message)
+        else result.inApp = legacyRows.length
+      }
     } catch (e: any) {
       console.error('[notifications] in-app exception:', e?.message)
     }

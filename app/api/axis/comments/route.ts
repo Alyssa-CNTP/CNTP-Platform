@@ -4,6 +4,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
+import { notify } from '@/lib/notifications'
+import { resolveRecipients } from '@/lib/notifications/recipients'
 
 const VALID_ENTITY_TYPES = new Set(['project', 'change_log', 'project_request'])
 
@@ -200,16 +202,19 @@ export async function POST(req: NextRequest) {
       entity_type === 'project'         ? 'projects' :
       entity_type === 'change_log'      ? 'change_logs' :
       entity_type === 'project_request' ? 'project_requests' : entity_type
-    const rows = mentionIds.map(uid => ({
-      recipient_id:    uid,
-      type:            'comment_mention',
-      title:           `${authorName} mentioned you`,
-      body:            preview,
-      reference_id:    entity_id,
-      reference_table: refTable,
-    }))
-    const { error: notifErr } = await axis.from('notifications').insert(rows)
-    if (notifErr) console.error('[api/axis/comments] notification fan-out:', notifErr)
+    // Route through the unified feed (shared.notifications) rather than writing
+    // axis.notifications directly, so mentions show in the same bell as everything else.
+    try {
+      const url = refTable === 'projects' ? '/axis/projects' : '/axis/consideration'
+      const recipients = await resolveRecipients(mentionIds)
+      await notify({
+        recipients, source: 'axis', kind: 'comment_mention',
+        title: `${authorName} mentioned you`, body: preview,
+        refTable, refId: entity_id, url, channels: ['inApp'],
+      })
+    } catch (notifErr) {
+      console.error('[api/axis/comments] notification fan-out:', notifErr)
+    }
   }
 
   return NextResponse.json({ ok: true, id: inserted.id, mentions: mentionIds })
