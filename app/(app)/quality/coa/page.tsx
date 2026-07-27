@@ -206,6 +206,9 @@ export default function CoaGeneratorPage() {
   // QA manager (Michelle) to sign off above her name. Keyed by signatory slot.
   const [verified, setVerified]     = useState<Record<number, boolean>>({})
   const [showQaSignoff, setShowQaSignoff] = useState(false)
+  // Per-signatory position/size adjustment (drag to move, handle to resize).
+  const [sigAdjust, setSigAdjust]   = useState<Record<number, { dx: number; dy: number; scale: number }>>({})
+  const adjustOf = (slot: number) => sigAdjust[slot] || { dx: 0, dy: 0, scale: 1 }
   const printRef = useRef<HTMLDivElement>(null)
   const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
 
@@ -227,7 +230,7 @@ export default function CoaGeneratorPage() {
   const gatingConfigured = !!(labSig?.email && qaSig?.email)
 
   // Reset sign-offs whenever a new batch/COA is looked up.
-  useEffect(() => { setVerified({}); setShowQaSignoff(false) }, [model?.batch])
+  useEffect(() => { setVerified({}); setShowQaSignoff(false); setSigAdjust({}) }, [model?.batch])
 
   // Load the shared COA signatories (editable names + drawable signatures).
   useEffect(() => {
@@ -587,7 +590,7 @@ export default function CoaGeneratorPage() {
 
           <div className="flex gap-2 mb-4 no-print">
             <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatoriesForOutput) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatoriesForOutput, sigAdjust) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
 
           {/* QA manager (Michelle) sign-off pop-up — appears above her name */}
@@ -692,10 +695,9 @@ export default function CoaGeneratorPage() {
             <div className="flex justify-between gap-8 mt-10">
               {(signatoriesForOutput.length ? signatoriesForOutput : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))).map((s: any, i: number) => (
                 <div key={i} style={{ flex: 1, maxWidth: 260 }}>
-                  <div style={{ height: 40, display: 'flex', alignItems: 'flex-end' }}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {s.signature ? <img src={s.signature} alt="signature" style={{ maxHeight: 40, maxWidth: 200 }} /> : null}
-                  </div>
+                  {s.signature
+                    ? <DraggableSignature src={s.signature} adjust={adjustOf(s.slot)} onChange={a => setSigAdjust(p => ({ ...p, [s.slot]: a }))} />
+                    : <div style={{ height: 40 }} />}
                   <div style={{ borderTop: '1px solid #111', paddingTop: 3 }} />
                   <div className="text-[11px] font-semibold">{s.title}</div>
                   <div className="text-[11px]">{s.name}</div>
@@ -876,6 +878,54 @@ function buildModel(src: any, spec: any): CoaModel {
 
 // ─── Signature pad (draw with mouse or touch) ─────────────────────────────────
 
+// A signed signature that can be dragged to reposition and resized via a corner
+// handle. The bottom edge stays anchored just above the ruled line; scaling grows
+// it upward. The handle is .no-print so it never appears on the printed COA.
+function DraggableSignature({ src, adjust, onChange }: {
+  src: string
+  adjust: { dx: number; dy: number; scale: number }
+  onChange: (a: { dx: number; dy: number; scale: number }) => void
+}) {
+  const drag = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null)
+  const rez  = useRef<{ x: number; scale: number } | null>(null)
+  const baseH = 40
+
+  const onImgDown = (e: React.PointerEvent) => {
+    e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+    drag.current = { x: e.clientX, y: e.clientY, dx: adjust.dx, dy: adjust.dy }
+  }
+  const onImgMove = (e: React.PointerEvent) => {
+    if (!drag.current) return
+    // bottom-anchored: dragging up (smaller clientY) increases dy
+    onChange({ ...adjust, dx: drag.current.dx + (e.clientX - drag.current.x), dy: drag.current.dy - (e.clientY - drag.current.y) })
+  }
+  const endImg = () => { drag.current = null }
+
+  const onHandleDown = (e: React.PointerEvent) => {
+    e.preventDefault(); e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+    rez.current = { x: e.clientX, scale: adjust.scale }
+  }
+  const onHandleMove = (e: React.PointerEvent) => {
+    if (!rez.current) return
+    onChange({ ...adjust, scale: Math.max(0.4, Math.min(3, rez.current.scale + (e.clientX - rez.current.x) / 90)) })
+  }
+  const endHandle = () => { rez.current = null }
+
+  return (
+    <div style={{ position: 'relative', height: baseH, overflow: 'visible' }}>
+      <div style={{ position: 'absolute', left: adjust.dx, bottom: adjust.dy }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt="signature" draggable={false}
+          onPointerDown={onImgDown} onPointerMove={onImgMove} onPointerUp={endImg} onPointerCancel={endImg}
+          style={{ display: 'block', height: baseH * adjust.scale, width: 'auto', maxWidth: 260, cursor: 'move', touchAction: 'none', userSelect: 'none' }} />
+        <div className="no-print" title="Drag to resize"
+          onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={endHandle} onPointerCancel={endHandle}
+          style={{ position: 'absolute', right: -6, top: -6, width: 12, height: 12, background: '#1f4e79', border: '2px solid #fff', borderRadius: 3, cursor: 'nesw-resize', touchAction: 'none' }} />
+      </div>
+    </div>
+  )
+}
+
 function SignaturePad({ value, onChange }: { value: string; onChange: (dataUrl: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawing = useRef(false)
@@ -978,7 +1028,7 @@ async function loadImage(url: string): Promise<{ dataUrl: string; w: number; h: 
 
 // ─── PDF export (jsPDF, laid out to mirror the template) ──────────────────────
 
-async function exportPdf(model: CoaModel, description: string, signatories?: { slot: number; title: string; name: string; signature: string }[]) {
+async function exportPdf(model: CoaModel, description: string, signatories?: { slot: number; title: string; name: string; signature: string }[], sigAdjust?: Record<number, { dx: number; dy: number; scale: number }>) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const pageW = doc.internal.pageSize.getWidth()
   const margin = 40
@@ -1079,8 +1129,16 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
       // loadImage handles both and gives us dimensions to keep the aspect ratio.
       const img = await loadImage(s.signature)
       if (img) {
-        const h = 30, w = Math.min(150, img.w * (h / img.h))
-        try { doc.addImage(img.dataUrl, 'PNG', x, y - 32, w, h) } catch { /* ignore bad image */ }
+        // Apply the on-screen move/resize. Preview base height is 40px ≈ 30pt,
+        // so convert px offsets to pt with k = 0.75. Bottom stays anchored above
+        // the line (y - 2) and scaling grows the image upward.
+        const adj = (sigAdjust && sigAdjust[s.slot]) || { dx: 0, dy: 0, scale: 1 }
+        const k = 0.75
+        const h = 30 * adj.scale
+        const w = Math.min(150, img.w * (30 / img.h)) * adj.scale
+        const left = x + adj.dx * k
+        const top = (y - 2) - h - adj.dy * k
+        try { doc.addImage(img.dataUrl, 'PNG', left, top, w, h) } catch { /* ignore bad image */ }
       }
     }
     doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)

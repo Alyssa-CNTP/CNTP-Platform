@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Gustav (COA signatures: drag to move / resize)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- After a manager signs off, their signature on the COA can now be **dragged to reposition** and **resized** via a small corner handle. The bottom edge stays anchored just above the ruled line; scaling grows the signature upward.
+- Adjustments carry through to both **Print** (the on-screen layout prints as shown) and **Export PDF** (offsets/scale applied to the placed image). The resize handle is hidden on print/PDF.
+- Adjustments reset when a different batch/COA is looked up.
+
 ## 2026-07-24 — Gustav (COA signatures loaded + identity-gated sign-off)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `public/signatures/monique-gordon.png` (new), `public/signatures/michelle-brown.png` (new), `supabase/migrations/20260724_004_coa_signatories_email_and_signatures.sql` (new, applied to staging)
