@@ -24,8 +24,13 @@ import { ROSTER_SECTION_KEYS, ROSTER_SECTION_LABEL, rosterPerm, type RosterSecti
 const PERIOD_COLS = 'id,name,start_date,end_date,day_label,night_label'
 const ENTRY_COLS  = 'role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
 
+// Only ever consider the WEEKLY roster. The manual Saturday sheet
+// (kind='saturday') is independent and must never be rotated from, nor block or
+// skew the weekly rotation/reminders. `kind` defaults to 'week' for every
+// pre-Saturday-migration period, so this stays correct on older data too.
 async function latestPeriod(prod: any): Promise<RotatePeriod | null> {
   const { data } = await prod.from('roster_periods').select(PERIOD_COLS)
+    .eq('kind', 'week')
     .order('start_date', { ascending: false }).limit(1)
   return (data?.[0] as RotatePeriod) ?? null
 }
@@ -36,9 +41,10 @@ async function doRotate(prod: any) {
   if (!latest) return { rotated: false, reason: 'no existing period to rotate from' }
 
   const config = nextPeriodConfig(latest)
-  // Idempotent: if a period already starts on/after the computed next start, skip.
+  // Idempotent: if a WEEKLY period already starts on/after the computed next
+  // start, skip. Scoped to kind='week' so a Saturday sheet never blocks rotation.
   const { data: ahead } = await prod.from('roster_periods').select('id')
-    .gte('start_date', config.start).limit(1)
+    .eq('kind', 'week').gte('start_date', config.start).limit(1)
   if (ahead && ahead.length > 0) return { rotated: false, reason: 'next period already exists' }
 
   const { data: entries } = await prod.from('roster_entries').select(ENTRY_COLS).eq('period_id', latest.id)

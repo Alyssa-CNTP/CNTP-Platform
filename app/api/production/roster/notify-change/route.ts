@@ -17,7 +17,8 @@ export async function POST(req: NextRequest) {
   const periodId   = String(body?.periodId ?? '').trim()
   const periodName = body?.periodName ? String(body.periodName) : null
   const section    = String(body?.section ?? 'production')
-  const actorName  = body?.actorName ? String(body.actorName) : 'A supervisor'
+  // Signed-in user (server-verified), not a client-supplied name.
+  const actorName  = caller.name || (body?.actorName ? String(body.actorName) : 'A supervisor')
   const changes: string[] = Array.isArray(body?.changes) ? body.changes.map((c: any) => String(c)) : []
   if (!periodId || changes.length === 0) return NextResponse.json({ ok: true, skipped: 'nothing to notify' })
 
