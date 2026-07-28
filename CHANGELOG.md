@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Job card: predefined packaging auto-calc, auto-numbering, blend+customer settings memory; Assign screen shows the digital job card + today's roster)
+
+**Files changed:** `supabase/migrations/20260729_003_job_card_packaging_numbering_templates.sql` (new), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/capture/assign/page.tsx`
+
+Follow-up to the same session's BOM catalogue + job card work, driven by more detail on the physical process (bulk bags → sieving → refining → granule line → blender → pasteuriser → packing) and three concrete asks: packaging should be predefined per finished-good code (not typed), the job card number should be automatic, and plant settings/special instructions should be remembered per blend+customer instead of retyped every time.
+
+- **Packaging is predefined per Acumatica code, not typed.** A Pasteuriser BOM's own packaging component lines (uom = PCS) already encode "N units per kg" via `qty_required` (e.g. 0.055556 = 1 bag per 18kg) — picking a BOM now auto-detects those lines, defaults the packaging + weight-per-bag fields to the primary one, and offers a dropdown to switch when a BOM lists more than one (e.g. bag + carton). No. of bags is computed live from Total mass ÷ weight-per-bag (still a plain editable field for a manual override). New `packaging_item_id`/`packaging_lines` columns carry the real Acumatica packaging code(s) through to the saved record so usage is auditable per PO, not just a free-text label.
+- **Job card number is now automatic.** `public.next_job_card_no()` (backed by a plain sequence) issues `JC-<year>-<seq>` the moment a fresh draft opens — deliberately its own audit-trail number, not a guess at Acumatica's internal production-order numbering (the paper examples' 5-digit codes use a scheme this session couldn't confirm; a wrong guess would look like a real Acumatica number when it isn't).
+- **Plant settings + special instructions remembered per (item, customer).** New `public.job_card_settings_templates` (deliberately public schema, not production — it's config/memory for the digital workflow itself, not a physical-production record). Saved best-effort on every job-card save; looked up when a BOM is picked with a customer already entered, or when the customer field is completed after picking a BOM — only fills fields the manager hasn't already typed this session, never clobbers.
+- **Assign screen now surfaces both asks from the floor.** A "Today's roster" panel (new, resolves operator_id/employee_id roster entries to display names, split Morning / Afternoon-Night) sits above the per-section list; the Pasteuriser section's card now shows that day's approved digital job card inline (item, batch, customer, packaging, mass/bags, special instructions) so a supervisor sees exactly what's being produced without leaving Assign.
+
+**Not done this session:** none of the SQL (this migration or the two from the earlier entry) has been run against Supabase yet — copied to `C:\Users\Alyssa\Documents\Supabase Scripts` for the developer to run in staging then production. Packaging usage isn't yet reconciled against Master Inventory stock levels (recorded on the job card, not deducted anywhere).
+
+---
+
 ## 2026-07-28 — Alyssa (BOM catalogue widened to all work centres; Pasteuriser job card generation + supervisor approval)
 
 **Files changed:** `supabase/migrations/20260729_001_bom_all_work_centres.sql` (new), `supabase/migrations/20260729_002_job_cards_pasteuriser_workflow.sql` (new), `supabase/seeds/full_bom_import.sql` (new), `lib/production/bom.ts`, `app/(app)/production/blends/page.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/api/production/job-cards/[id]/send-for-approval/route.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts` (new), `components/production/capture/PasteuriserCapture.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/pdf/load-image.ts` (new), `app/(app)/quality/coa/page.tsx`

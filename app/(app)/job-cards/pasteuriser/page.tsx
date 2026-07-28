@@ -13,6 +13,7 @@ import { upperCode } from '@/lib/production/normalize-code'
 import { loadImage } from '@/lib/pdf/load-image'
 
 interface RatioLine { componentItemId: string; label: string; pct: number }
+interface PackagingLine { componentItemId: string; label: string; kgPerUnit: number }
 type CardStatus = 'draft' | 'sent_for_approval' | 'approved' | 'rejected'
 
 interface Form {
@@ -41,6 +42,8 @@ interface Form {
   rejected_reason: string | null
   blend_ratio_lines: RatioLine[] | null
   final_ratio_lines: RatioLine[] | null
+  packaging_item_id: string | null
+  packaging_lines: PackagingLine[] | null
 }
 
 function empty(): Form {
@@ -60,6 +63,7 @@ function empty(): Form {
     sig_quality_officer: null, sig_production_manager: null, submitted_at: null,
     status: 'draft', bom_output_item_id: null, rejected_reason: null,
     blend_ratio_lines: null, final_ratio_lines: null,
+    packaging_item_id: null, packaging_lines: null,
   }
 }
 
@@ -252,6 +256,16 @@ export default function PasteuriserJobCard() {
   const locked = form.status === 'sent_for_approval' || form.status === 'approved' || !!form.submitted_at
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
 
+  // A fresh draft gets its number the moment the page opens — auto, atomic
+  // (public.next_job_card_no(), a DB sequence), never hand-typed.
+  useEffect(() => {
+    if (savedId || form.job_card_no) return
+    db.rpc('next_job_card_no' as any).then(({ data }: any) => {
+      if (data) setForm(f => (f.job_card_no ? f : { ...f, job_card_no: data as string }))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function save(patch?: Partial<Form>): Promise<string | null> {
     setSaving(true)
     const nextForm = { ...form, ...(patch ?? {}) }
@@ -264,7 +278,53 @@ export default function PasteuriserJobCard() {
     }
     setSaving(false)
     setForm(f => ({ ...f, ...(patch ?? {}), batch_number: payload.batch_number }))
+    saveSettingsTemplate(nextForm)
     return id
+  }
+
+  // Plant settings + special/re-work instructions, remembered per (item,
+  // customer) so the manager only ever types them once for a given blend and
+  // customer — every later card for the same pair prefills them (still
+  // editable). Best-effort: never blocks the primary save.
+  async function saveSettingsTemplate(f: Form) {
+    const item = upperCode(f.item_no)
+    const customer = f.customer.trim()
+    if (!item || !customer) return
+    try {
+      await db.from('job_card_settings_templates').upsert({
+        item_no: item, customer,
+        debagging_hopper_inverter: f.debagging_hopper_inverter || null,
+        debagging_hopper_manual: f.debagging_hopper_manual || null,
+        steriliser_inverter: f.steriliser_inverter || null,
+        post_sieve_plate_size: f.post_sieve_plate_size || null,
+        product_temp_at_pasteuriser: f.product_temp_at_pasteuriser || null,
+        special_instructions: f.special_instructions || null,
+        rework_material: f.rework_material || null,
+      } as any, { onConflict: 'item_no,customer' })
+    } catch { /* memory is a convenience, never block the real save */ }
+  }
+
+  async function applySettingsTemplate(itemNo: string, customer: string) {
+    const item = upperCode(itemNo)
+    const cust = customer.trim()
+    if (!item || !cust) return
+    const { data } = await db.from('job_card_settings_templates')
+      .select('*').eq('item_no', item).eq('customer', cust).maybeSingle()
+    if (!data) return
+    const t = data as any
+    // Only fill fields the manager hasn't already touched this session — never
+    // clobber something they just typed.
+    setForm(f => ({
+      ...f,
+      debagging_hopper_inverter: f.debagging_hopper_inverter || t.debagging_hopper_inverter || f.debagging_hopper_inverter,
+      debagging_hopper_manual: f.debagging_hopper_manual || t.debagging_hopper_manual || f.debagging_hopper_manual,
+      steriliser_inverter: f.steriliser_inverter || t.steriliser_inverter || f.steriliser_inverter,
+      post_sieve_plate_size: f.post_sieve_plate_size || t.post_sieve_plate_size || f.post_sieve_plate_size,
+      product_temp_at_pasteuriser: (f.product_temp_at_pasteuriser === '>85°C' || !f.product_temp_at_pasteuriser)
+        ? (t.product_temp_at_pasteuriser || f.product_temp_at_pasteuriser) : f.product_temp_at_pasteuriser,
+      special_instructions: f.special_instructions || t.special_instructions || f.special_instructions,
+      rework_material: f.rework_material || t.rework_material || f.rework_material,
+    }))
   }
 
   async function pickBom(b: BomSummary) {
@@ -279,6 +339,16 @@ export default function PasteuriserJobCard() {
     const blendLines: RatioLine[] = (parent?.components ?? []).map(c => ({
       componentItemId: c.componentItemId, label: c.componentDescription || c.componentItemId, pct: c.qtyRequired * 100,
     }))
+    // Packaging is predefined per finished good in the BOM itself — any
+    // component line measured in PCS (a bag/box/carton, not a raw material)
+    // with qty_required as "N units per kg" (e.g. 0.055556 = 1 per 18kg).
+    // The manager confirms rather than types it; No. of bags then derives
+    // from Total mass automatically.
+    const packagingLines: PackagingLine[] = finalComponents
+      .filter(c => c.uom === 'PCS' && c.qtyRequired > 0)
+      .map(c => ({ componentItemId: c.componentItemId, label: c.componentDescription || c.componentItemId, kgPerUnit: Math.round((1 / c.qtyRequired) * 100) / 100 }))
+    const primaryPackaging = packagingLines[0] ?? null
+
     setForm(f => ({
       ...f,
       item_no: upperCode(b.outputItemId) ?? b.outputItemId,
@@ -287,8 +357,33 @@ export default function PasteuriserJobCard() {
       bom_output_item_id: b.outputItemId,
       final_ratio_lines: finalLines,
       blend_ratio_lines: blendLines.length ? blendLines : null,
+      packaging_lines: packagingLines.length ? packagingLines : null,
+      packaging_item_id: primaryPackaging?.componentItemId ?? f.packaging_item_id,
+      packaging: primaryPackaging?.label ?? f.packaging,
+      weight_per_bulk_bag: primaryPackaging ? String(primaryPackaging.kgPerUnit) : f.weight_per_bulk_bag,
     }))
+    if (form.customer.trim()) applySettingsTemplate(b.outputItemId, form.customer)
     setBomLoading(false)
+  }
+
+  function selectPackaging(line: PackagingLine) {
+    setForm(f => ({ ...f, packaging_item_id: line.componentItemId, packaging: line.label, weight_per_bulk_bag: String(line.kgPerUnit) }))
+  }
+
+  // No. of bags is always Total mass ÷ Weight per bulk bag once both are
+  // known — computed live, still a plain editable field for a manual override.
+  useEffect(() => {
+    const mass = parseFloat(form.total_mass)
+    const perBag = parseFloat(form.weight_per_bulk_bag)
+    if (mass > 0 && perBag > 0) {
+      const bags = String(Math.ceil(mass / perBag))
+      setForm(f => (f.no_of_bags === bags ? f : { ...f, no_of_bags: bags }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.total_mass, form.weight_per_bulk_bag])
+
+  function onCustomerBlur() {
+    if (form.item_no.trim()) applySettingsTemplate(form.item_no, form.customer)
   }
 
   async function sendForApproval() {
@@ -325,7 +420,7 @@ export default function PasteuriserJobCard() {
       <div className="card p-4 space-y-3">
         <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold">Job details</p>
         <div className="grid grid-cols-2 gap-3">
-          <F label="Customer"><input className="input" value={form.customer} onChange={set('customer')} disabled={locked} /></F>
+          <F label="Customer"><input className="input" value={form.customer} onChange={set('customer')} onBlur={onCustomerBlur} disabled={locked} /></F>
           <F label="Date of job card"><input type="date" className="input" value={form.date_of_card} onChange={set('date_of_card')} disabled={locked} /></F>
           <F label="Expected commencement"><input type="date" className="input" value={form.expected_commencement} onChange={set('expected_commencement')} disabled={locked} /></F>
           <F label="Job card no."><input className="input font-mono" value={form.job_card_no} onChange={set('job_card_no')} disabled={locked} /></F>
@@ -400,8 +495,18 @@ export default function PasteuriserJobCard() {
           <F label="Batch number"><input className="input font-mono" value={form.batch_number} onChange={set('batch_number')} disabled={locked} /></F>
           <F label="Total mass (kg)"><input className="input" value={form.total_mass} onChange={set('total_mass')} disabled={locked} /></F>
           <F label="Weight per bulk bag (kg)"><input className="input" value={form.weight_per_bulk_bag} onChange={set('weight_per_bulk_bag')} disabled={locked} /></F>
-          <F label="No. of bags"><input className="input" value={form.no_of_bags} onChange={set('no_of_bags')} disabled={locked} /></F>
-          <F label="Packaging"><input className="input" value={form.packaging} onChange={set('packaging')} disabled={locked} /></F>
+          <F label="No. of bags (auto — Total mass ÷ weight)"><input className="input" value={form.no_of_bags} onChange={set('no_of_bags')} disabled={locked} /></F>
+          <F label="Packaging">
+            {form.packaging_lines && form.packaging_lines.length > 1 ? (
+              <select className="input" value={form.packaging_item_id ?? ''} disabled={locked}
+                onChange={e => { const line = form.packaging_lines!.find(l => l.componentItemId === e.target.value); if (line) selectPackaging(line) }}>
+                {form.packaging_lines.map(l => <option key={l.componentItemId} value={l.componentItemId}>{l.label} ({l.kgPerUnit}kg)</option>)}
+              </select>
+            ) : (
+              <input className="input" value={form.packaging} onChange={set('packaging')} disabled={locked || !!form.packaging_item_id}
+                placeholder={form.bom_output_item_id ? undefined : 'Pick a BOM above, or type it'} />
+            )}
+          </F>
           <F label="Customer PO"><input className="input" value={form.customer_po} onChange={set('customer_po')} disabled={locked} /></F>
           <F label="Bag markings"><input className="input" value={form.bag_markings} onChange={set('bag_markings')} disabled={locked} /></F>
           <F label="Local or export"><select className="input" value={form.local_or_export} onChange={set('local_or_export')} disabled={locked}><option>Export</option><option>Local</option></select></F>
