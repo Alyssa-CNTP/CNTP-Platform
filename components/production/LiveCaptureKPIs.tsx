@@ -50,7 +50,7 @@ export function LiveCaptureKPIs() {
     let mb: any[] = []
     if (sessIds.length) {
       const { data } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg,balance_kg')
+        .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg,balance_kg')
         .in('session_id', sessIds)
       mb = (data as any[]) ?? []
     }
@@ -63,7 +63,7 @@ export function LiveCaptureKPIs() {
       let kgIn = 0, kgOut = 0
       secSessions.forEach(s => {
         const m = mbBySession.get(s.id)
-        if (m) { kgIn += Number(m.total_input_kg) || 0; kgOut += (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) }
+        if (m) { kgIn += Number(m.total_input_kg) || 0; kgOut += (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) }
       })
       const bagCount = ((bags as any[]) ?? []).filter(b => b.section_id === sectionId).length
       return { sectionId, status, kgIn, kgOut, variance: kgIn - kgOut, bags: bagCount }
