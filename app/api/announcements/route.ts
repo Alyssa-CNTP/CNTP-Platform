@@ -17,7 +17,8 @@ export async function POST(req: NextRequest) {
   try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
   const title = String(body?.title ?? '').trim()
   const text  = String(body?.body ?? '').trim()
-  const fromName = String(body?.fromName ?? '').trim() || null
+  // Author is the signed-in user (server-verified), never a client-supplied name.
+  const fromName = caller.name || String(body?.fromName ?? '').trim() || null
   const targetDepartments: string[] = Array.isArray(body?.targetDepartments) ? body.targetDepartments : []
   const pinned = !!body?.pinned
   if (!title) return NextResponse.json({ error: 'A title is required' }, { status: 400 })

@@ -153,6 +153,16 @@ First round of floor feedback on the Pasteuriser build (#424): two of its debagg
 
 ---
 
+## 2026-07-22 — Alyssa (Notifications/messages attributed to the signed-in user; roster auto-publish race fixed; cron scoped to weekly)
+
+**Files changed:** `lib/auth/server-helpers.ts`, `app/(app)/production/roster/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/api/production/roster/cron/route.ts`, `app/api/production/notify-line-message/route.ts`, `app/api/announcements/route.ts`, `app/api/production/roster/notify-change/route.ts`, `app/api/maintenance/card-messages/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`
+
+- **Author = signed-in user, everywhere (server-verified).** `getCallerPermissions()` now returns the caller's `name`. The production line-chat used the section's assigned/verified operator; it now uses the signed-in user. The line-message, announcement, roster-change, maintenance card-message, and PO reopen-request routes derive the actor from the session, not a client-supplied name.
+- **Fixed roster false auto-publish.** `sectionStatus` now resets synchronously on period switch and auto-publish is gated on a `statusPeriodId`, so a fresh period can't inherit a prior period's all-submitted state and publish with zero confirmations (seen live: "Week 32"). Week 32 reset to draft on prod.
+- **Cron scoped to weekly.** `latestPeriod()` (rotate + remind) now filters `kind='week'`, so the manual Saturday sheet can never be rotated from, nor block the weekly Sunday rotation.
+
+---
+
 ## 2026-07-22 — Alyssa (Shift Roster: per-person working days + production-manager approval pop-up)
 
 **Files changed:** `supabase/migrations/20260722_005_roster_entry_days.sql` (new), `app/(app)/production/roster/page.tsx`, `app/api/production/roster/notify-change/route.ts` (new)
