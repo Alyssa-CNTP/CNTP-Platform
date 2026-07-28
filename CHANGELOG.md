@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Fix: `job_cards_pasteuriser` migration assumed the table already existed)
+
+**Files changed:** `supabase/migrations/20260729_002_job_cards_pasteuriser_workflow.sql`
+
+Running the migrations in Supabase failed with `42P01: relation "public.job_cards_pasteuriser" does not exist` — the earlier assumption that this table already existed in the live database (inferred from code, never confirmed against an actual database) was wrong. `20260729_002` now `CREATE TABLE IF NOT EXISTS` the full original table (matching the job-card page's original field list) plus RLS/grants, before adding the workflow columns — a no-op wherever the table already exists, and safe wherever it doesn't. Re-copied to `C:\Users\Alyssa\Documents\Supabase Scripts` — re-run file 2 (then 3, 4 if not already run) in the same numbered order.
+
+---
+
 ## 2026-07-28 — Alyssa (Job card: predefined packaging auto-calc, auto-numbering, blend+customer settings memory; Assign screen shows the digital job card + today's roster)
 
 **Files changed:** `supabase/migrations/20260729_003_job_card_packaging_numbering_templates.sql` (new), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/capture/assign/page.tsx`
