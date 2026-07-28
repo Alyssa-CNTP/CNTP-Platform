@@ -220,7 +220,7 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
       const { data } = await db
         .schema('production')
         .from('prod_mass_balance')
-        .select('session_id,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+        .select('session_id,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
         .in('session_id', prodSessIds)
       prodMb = data ?? []
     }
@@ -256,12 +256,12 @@ export default function MonthlyReconciliation({ session }: { session: McSession 
       prevBySection.set(e.section_id, existing + (e.kg ?? 0) / 2)
     })
 
-    // Production by section — sum of mass-balance outputs (B + C + D)
+    // Production by section — sum of mass-balance outputs (A + B + C + D)
     const prodBySection = new Map<string, number>()
     prodMb.forEach((m: any) => {
       const sid = toCountSection(prodSessSection.get(m.session_id))
       if (!sid) return
-      const kg = (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
+      const kg = (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
       prodBySection.set(sid, (prodBySection.get(sid) ?? 0) + kg)
     })
 

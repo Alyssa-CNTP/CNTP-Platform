@@ -120,7 +120,7 @@ export default function SupervisorProductions() {
       let mb: any[] = []
       if (ids.length) {
         const { data } = await db.schema('production').from('prod_mass_balance')
-          .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+          .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
           .in('session_id', ids)
         mb = (data as any[]) ?? []
       }
@@ -131,7 +131,7 @@ export default function SupervisorProductions() {
         return {
           ...s,
           kgIn: m ? Number(m.total_input_kg) || 0 : 0,
-          kgOut: m ? (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0,
+          kgOut: m ? (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0,
         } as Row
       }))
       setLoading(false)

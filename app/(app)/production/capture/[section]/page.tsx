@@ -1052,11 +1052,11 @@ function CaptureScreen() {
     await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
     if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
 
-    let mbB = 0, mbC = 0, mbD = 0
+    let mbA = 0, mbB = 0, mbC = 0, mbD = 0
     if (sectionId.startsWith('refining')) {
       prods.forEach(p => {
         const t = refiningTotals(p.data as RefiningData)
-        mbB += t.totalB; mbC += t.totalC; mbD += t.totalD
+        mbA += t.totalA; mbB += t.totalB; mbC += t.totalC; mbD += t.totalD
       })
     } else if (sectionId === 'granule') {
       // Total produced (G) is the single output figure — balance = A − G matches PR-FM-026/7.
@@ -1069,7 +1069,7 @@ function CaptureScreen() {
     }
     await db.schema('production').from('prod_mass_balance').upsert({
       session_id: sid, total_input_kg: totalIn,
-      total_output_b_kg: mbB, total_output_c_kg: mbC, total_output_d_kg: mbD,
+      total_output_a_kg: mbA, total_output_b_kg: mbB, total_output_c_kg: mbC, total_output_d_kg: mbD,
       calculated_at: new Date().toISOString(),
     } as any, { onConflict: 'session_id' })
 
@@ -1089,7 +1089,7 @@ function CaptureScreen() {
         const p0 = prods[0]
         const variant = p0?.variant ?? ''
         const grade   = runGrade(p0)
-        const hasData = totalIn > 0 || mbB > 0 || mbC > 0 || mbD > 0
+        const hasData = totalIn > 0 || mbA > 0 || mbB > 0 || mbC > 0 || mbD > 0
         // Blender is gradeless for the UI's per-batch Grade dropdown, but its run
         // discriminator (the blend code, via runGrade) is just as real as Sieving's
         // grade — a run must not open before a blend is actually chosen.
@@ -1113,11 +1113,11 @@ function CaptureScreen() {
         const ids = ((runSess as any[]) ?? []).map(s => s.id)
         if (ids.length) {
           const { data: mbs } = await db.schema('production').from('prod_mass_balance')
-            .select('total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg').in('session_id', ids)
+            .select('total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg').in('session_id', ids)
           let tin = 0, tout = 0
           ;((mbs as any[]) ?? []).forEach(m => {
             tin  += Number(m.total_input_kg) || 0
-            tout += (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
+            tout += (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0)
           })
           await db.schema('production').from('production_runs')
             .update({ total_input_kg: tin, total_output_kg: tout, batch_id: sessionBatchId, updated_at: new Date().toISOString() } as any).eq('id', rid)
