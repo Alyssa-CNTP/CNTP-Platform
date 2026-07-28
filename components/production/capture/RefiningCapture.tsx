@@ -9,7 +9,9 @@ import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
-import type { ShiftAssignment } from '@/lib/supabase/database.types'
+import { loadAllInventory } from '@/lib/production/inventory'
+import { ItemPicker } from '@/components/production/capture/ItemPicker'
+import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -188,16 +190,18 @@ async function lookupSerial(serial: string): Promise<{
 // ── Scan row ─────────────────────────────────────────────────────────────────
 
 function ScanRow({
-  row, sectionId, locked, onUpdate, onSecure, onRemove,
+  row, sectionId, locked, items, onUpdate, onSecure, onRemove,
 }: {
   row: RefiningInputBag
   sectionId: string
   locked: boolean
+  items: InventoryItem[]
   onUpdate: (k: keyof RefiningInputBag, v: string) => void
   onSecure: () => void
   onRemove: () => void
 }) {
   const [looking, setLooking] = useState(false)
+  const [searching, setSearching] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const cfg = SECTION_CONFIG[sectionId]
   const inputTypes = cfg?.inputTypes ?? []
@@ -266,12 +270,27 @@ function ScanRow({
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
           <label className={LBL}>Product type</label>
-          <select value={row.productType} disabled={locked}
-            onChange={e => onUpdate('productType', e.target.value)}
-            className={INP + ' cursor-pointer'}>
-            <option value="">Select…</option>
-            {inputTypes.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
+          {searching ? (
+            <div className="space-y-1">
+              <ItemPicker items={items} placeholder="Search Master Inventory…"
+                onPick={it => { onUpdate('productType', it.description || it.inventory_id); setSearching(false) }}
+                className={INP} />
+              <button type="button" onClick={() => setSearching(false)} className="text-[11px] text-stone-400 hover:text-text">
+                ← Back to list
+              </button>
+            </div>
+          ) : (
+            <select value={row.productType} disabled={locked}
+              onChange={e => e.target.value === '__other__' ? setSearching(true) : onUpdate('productType', e.target.value)}
+              className={INP + ' cursor-pointer'}>
+              <option value="">Select…</option>
+              {inputTypes.map(t => <option key={t} value={t}>{t}</option>)}
+              {row.productType && !inputTypes.includes(row.productType) && (
+                <option value={row.productType}>{row.productType} (other)</option>
+              )}
+              {!locked && <option value="__other__">Other — search Master Inventory…</option>}
+            </select>
+          )}
         </div>
         <div className="space-y-1">
           <label className={LBL}>Weight (kg)</label>
@@ -462,7 +481,10 @@ export function RefiningCapture({
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   const [addMode, setAddMode] = useState<RefiningInputBag['inputMode']>('scan')
   const [showSystemPick, setShowSystemPick] = useState(false)
+  const [items, setItems] = useState<InventoryItem[]>([])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
+
+  useEffect(() => { loadAllInventory().then(setItems) }, [])
 
   const patch = (p: Partial<RefiningData>) => onChange({ ...value, ...p })
 
@@ -671,7 +693,7 @@ export function RefiningCapture({
               )}
             </div>
           ) : (
-            <ScanRow key={r.id} row={r} sectionId={sectionId} locked={locked}
+            <ScanRow key={r.id} row={r} sectionId={sectionId} locked={locked} items={items}
               onUpdate={(k, v) => updateInput(r.id, k as keyof RefiningInputBag, v)}
               onSecure={() => secureInput(r.id)}
               onRemove={() => removeInput(r.id)} />
