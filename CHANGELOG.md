@@ -5,6 +5,23 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (PRODUCTION: Refining mass balance — fixed dropped output-A stream across 8 screens)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/manager-kpis/route.ts`, `components/count/monthly/MonthlyReconciliation.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/ProductionDashboard.tsx`, `supabase/migrations/20260728_001_refining_mass_balance_output_a.sql` (new — run on production Supabase before/with this deploy)
+
+- **Root cause of "mass balances are wrong" on Production Orders:** Refining 1/2 sessions produce up to 4 output streams (A/B/C/D), but `production.prod_mass_balance` only ever had B/C/D slots, and `persist()` only wrote those — Refining's **A** stream (Indent Dust / Cut Heavy Stick Fine) silently never reached the table, even though the live capture screen's own balance footer showed the correct total. This is also why Refining 2's tolerance was previously widened to ±100kg (a band-aid over the same missing data).
+- New migration adds `total_output_a_kg`, rebuilds the generated `balance_kg` column and the `v_session_yield`/`v_batch_360` views to include it.
+- `persist()` now tracks and writes output-A for refining, including the run-level rollup into `production_runs`.
+- The identical missing-A summation bug was independently duplicated in 7 other screens reading `prod_mass_balance` directly — fixed all of them so every mass-balance/yield figure app-wide is now correct for refining sessions.
+- Production Orders also: now uses the DB-generated `balance_kg` directly instead of a client-side B-only recompute, and the production-order number no longer gets truncated off the card's meta line.
+- Left Refining 2's ±100kg tolerance override as-is for now — recommend re-evaluating after a few days of real sessions with correct data to see how much the true variance shrinks.
+
+## 2026-07-28 — Alyssa (PRODUCTION: Refining 1/2 — search Master Inventory for input materials not in the fixed list)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`
+
+- Refining 1/2 input product-type was a hardcoded dropdown with no way to log a material outside that list. Added an "Other — search Master Inventory…" option, mirroring the existing Blender/Pasteuriser pattern (`ItemPicker` + `loadAllInventory`). `RefiningCapture.tsx` is shared by both sections so this covers both Refining 1 and Refining 2.
+
 ## 2026-07-22 — Alyssa (PRODUCTION: Shift Roster — per-person working days + production-manager approval pop-up)
 
 **Files changed:** `supabase/migrations/20260722_005_roster_entry_days.sql` (new), `app/(app)/production/roster/page.tsx`, `app/api/production/roster/notify-change/route.ts` (new)
