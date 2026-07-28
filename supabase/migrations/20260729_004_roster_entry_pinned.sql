@@ -16,10 +16,11 @@
 ALTER TABLE production.roster_entries
   ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
 
--- Preserve today's behaviour + make it visible: the store-supervisor and
--- forklift-driver people were previously fixed in code. Pin their existing
--- entries so they stay put and now show as pinned in the UI.
+-- Preserve today's behaviour + make it visible: the store-supervisor people
+-- were previously fixed in code. Pin their existing entries so they stay put
+-- and now show as pinned in the UI. (Forklift drivers are handled in
+-- 20260729_005 — moved to Store Operator and pinned there.)
 UPDATE production.roster_entries
 SET    pinned = true
-WHERE  role_key IN ('store_supervisor', 'forklift_driver')
+WHERE  role_key = 'store_supervisor'
   AND  pinned = false;
