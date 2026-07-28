@@ -6,6 +6,7 @@
 // that triggers it.
 
 import { NextRequest, NextResponse } from 'next/server'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
 import { notify } from '@/lib/notifications'
 import { resolveRecipients, getProductionSupervisorIds } from '@/lib/notifications/recipients'
 import { sectionMeta } from '@/lib/production/capture-config'
@@ -15,7 +16,10 @@ export async function POST(req: NextRequest) {
     const b = await req.json()
     const sectionId: string | null = b.sectionId || null
     const body: string = (b.body ?? '').trim()
-    const authorName: string = b.authorName || 'An operator'
+    // Attribute to whoever is SIGNED IN (server-verified from the session), not a
+    // client-supplied name — same rule everywhere.
+    const caller = await getCallerPermissions()
+    const authorName: string = caller.name || b.authorName || 'An operator'
     if (!body) return NextResponse.json({ error: 'body required' }, { status: 400 })
 
     const supervisorIds = await getProductionSupervisorIds()

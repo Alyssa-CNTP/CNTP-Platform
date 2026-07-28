@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (PRODUCTION: messages/notifications attributed to signed-in user; roster auto-publish race fixed)
+
+**Files changed:** `lib/auth/server-helpers.ts`, `app/(app)/production/roster/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/api/production/notify-line-message/route.ts`, `app/api/announcements/route.ts`, `app/api/production/roster/notify-change/route.ts`, `app/api/maintenance/card-messages/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`
+
+- **Author = signed-in user, server-verified, everywhere.** `getCallerPermissions()` now returns the caller's `name`; the production line-chat and every notification route (line message, announcement, roster change, maintenance card message, PO reopen request) attribute to whoever is signed in — not a client-supplied name or the section's assigned operator. Fixes line messages at a section showing the assigned operator instead of the person who actually typed.
+- **Fixed roster false auto-publish.** `sectionStatus` now resets synchronously on period switch and auto-publish is gated on `statusPeriodId`, so a fresh period can no longer inherit the previous period's all-submitted state and publish with zero confirmations. Data fix applied on prod: reset the wrongly-published "Week 32" back to draft.
+
 ## 2026-07-28 — Alyssa (PRODUCTION: Refining mass balance — fixed dropped output-A stream across 8 screens)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/manager-kpis/route.ts`, `components/count/monthly/MonthlyReconciliation.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/ProductionDashboard.tsx`, `supabase/migrations/20260728_001_refining_mass_balance_output_a.sql` (new — run on production Supabase before/with this deploy)

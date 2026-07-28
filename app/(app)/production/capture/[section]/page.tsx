@@ -111,7 +111,7 @@ function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
   const router = useRouter()
-  const { user, role, isSupervisor, isIT, signOut } = useAuth()
+  const { user, role, isSupervisor, isIT, signOut, displayName } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
   // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
@@ -1744,9 +1744,12 @@ function CaptureScreen() {
           {tab === 'messages' && (
             <LineChat
               channel={sectionId}
-              meName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? 'Operator')}
-              meId={verifiedOp?.user_id ?? user?.id ?? null}
-              meRole="Operator"
+              // Author is always whoever is SIGNED IN (not the section's assigned
+              // operator) — a message is attributed to the person who actually
+              // typed it, matching every other notification in the app.
+              meName={displayName || user?.email?.split('@')[0] || 'Unknown'}
+              meId={user?.id ?? null}
+              meRole={role ? role.replace(/_/g, ' ') : null}
               title={`${meta.name} · line messages`}
             />
           )}
