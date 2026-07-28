@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa ("Generate job card" button on the BOMs page, deep-linked into the job card)
+
+**Files changed:** `app/(app)/production/blends/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`
+
+Scoped-down follow-up: the user's fuller ask (a Production Manager dashboard with cost roll-up, multi-level component hierarchy, supplier/sourcing analytics, and farmer-of-origin tracking at Sieving) was investigated and found to be mostly net-new data modeling — no cost fields exist anywhere on `inventory_items`/`bom_components`, no lead-time field on `suppliers`, and no farmer/grower concept anywhere in the schema. Deferred pending a cost-data source and the exact name of an existing "rooibos farmers" table the user referenced but couldn't confirm this session. Landed just the concrete, immediate piece instead.
+
+- Each Pasteuriser row on the BOMs page (`/production/blends`) now has a **"Generate job card"** link, gated on `can_generate_job_cards`, going to `/job-cards/pasteuriser?bomId=<bomId>`.
+- The job card page reads that `bomId` param on load and auto-picks the BOM (same `pickBom()` used by its own in-page picker) — the manager never re-searches the same code twice. Wrapped the page in `Suspense` (required for `useSearchParams` in the App Router).
+
+**Not done this session:** the Production Manager dashboard (material-usage tracker, cost roll-up, component hierarchy, supplier/farmer analytics) — blocked on a cost-data source decision and the live-DB farmers table name; parked until those are available.
+
+---
+
 ## 2026-07-28 — Alyssa (Fix: `job_cards_pasteuriser` migration assumed the table already existed)
 
 **Files changed:** `supabase/migrations/20260729_002_job_cards_pasteuriser_workflow.sql`

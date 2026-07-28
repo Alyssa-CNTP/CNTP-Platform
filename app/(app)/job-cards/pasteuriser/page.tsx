@@ -1,6 +1,7 @@
 'use client'
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, Suspense, useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { Save, Send, CheckCircle2, XCircle, Clock, ThumbsUp, ThumbsDown, Layers, Printer, Download } from 'lucide-react'
@@ -238,11 +239,13 @@ function PendingCardRow({ c, expanded, onToggle, onDecide }: {
   )
 }
 
-export default function PasteuriserJobCard() {
+function PasteuriserJobCardScreen() {
   const db = getDb()
   const { p, isFullAdmin } = useAuth()
   const canGenerate = isFullAdmin || p('can_generate_job_cards')
   const canApprove = isFullAdmin || p('can_approve_job_cards')
+  const searchParams = useSearchParams()
+  const deepLinkBomId = searchParams.get('bomId')
 
   const [form, setForm] = useState<Form>(empty())
   const [saving, setSaving] = useState(false)
@@ -265,6 +268,17 @@ export default function PasteuriserJobCard() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Deep-linked from the BOMs page's "Generate Job Card" button (?bomId=...) —
+  // picks that BOM automatically so the manager never has to re-search it here.
+  useEffect(() => {
+    if (!deepLinkBomId) return
+    listBoms('06-PASTEURISING').then(all => {
+      const match = all.find(b => b.bomId === deepLinkBomId)
+      if (match) pickBom(match)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkBomId])
 
   async function save(patch?: Partial<Form>): Promise<string | null> {
     setSaving(true)
@@ -698,6 +712,14 @@ export default function PasteuriserJobCard() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function PasteuriserJobCard() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-text-muted">Loading…</div>}>
+      <PasteuriserJobCardScreen />
+    </Suspense>
   )
 }
 
