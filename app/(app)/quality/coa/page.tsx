@@ -30,6 +30,7 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDateTime } from '@/lib/utils/formatDate'
 import { jsPDF } from 'jspdf'
+import { loadImage } from '@/lib/pdf/load-image'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
 
@@ -1010,20 +1011,6 @@ function CoaTable({ title, cols, lines, onEdit }: {
       </table>
     </div>
   )
-}
-
-// Fetch an image URL and return a data URL + natural dimensions (for jsPDF).
-async function loadImage(url: string): Promise<{ dataUrl: string; w: number; h: number } | null> {
-  try {
-    const res = await fetch(url); const blob = await res.blob()
-    const dataUrl: string = await new Promise((resolve, reject) => {
-      const r = new FileReader(); r.onload = () => resolve(r.result as string); r.onerror = reject; r.readAsDataURL(blob)
-    })
-    const dim = await new Promise<{ w: number; h: number }>((resolve) => {
-      const img = new Image(); img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight }); img.onerror = () => resolve({ w: 1, h: 1 }); img.src = dataUrl
-    })
-    return { dataUrl, w: dim.w, h: dim.h }
-  } catch { return null }
 }
 
 // ─── PDF export (jsPDF, laid out to mirror the template) ──────────────────────
