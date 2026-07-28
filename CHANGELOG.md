@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Pasteuriser debagging: corrected material sources; Blender bag-write failures no longer silent)
+
+**Files changed:** `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
+
+First round of floor feedback on the Pasteuriser build (#424): two of its debagging streams were sourcing the wrong bags, and a real reliability gap in Blender's output-bag write was found while confirming blend serials are unique.
+
+- **Post-sieve blending (E) now consumes Granule Line output, not Blender output.** Matches the physical process — granule material (SG/SF/Export Granules) is folded in at the post-sieve stage, a completely separate pool of bags from the blend feeding the main debagging stream. Was previously searching the same "any blend bag" pool as the main stream. New `GRANULE_OUTPUT_TYPES` constant scopes its system-pick and lookup; whole-bag consumption throughout (consistent with every other section — no new partial/pooled-stock mechanic).
+- **Main debagging (D) now also surfaces in-stock High Moisture rework bags**, not just blend bags — High Moisture is bagged as a reject/rework output and later fed back in as a debagging input (a recycle loop, not tied to a same-shift direction toggle like Sieving's bucket elevator). `useSystemBagsForStream()` replaces the blend-only hook, querying per stream; the smart blend-mismatch flag is skipped for High Moisture bags since they aren't tied to any blend code. `SystemPickList`'s search now also matches on lot number.
+- **Blender: a failed `bag_tags` write is no longer swallowed.** `addOutputBag()` previously wrapped the bag_tags upsert in a bare `catch {}` — on failure the operator still saw a serial and wrote it on the tag, but no DB row existed, so a later scan (e.g. at the Pasteuriser) would come back "not found" with no indication why. Confirmed via code review that Blender output IS uniquely serialized per bag (`{bomId}/{runNo}-{bagNo}`, the `bag_tags` PK) whenever the write succeeds — this only closes the silent-failure gap. Now surfaces an inline error and leaves the weight input intact for retry instead of adding an unsaved bag to the list; the audit-trail `scan_events` insert stays best-effort (a lesser miss than an unfindable bag).
+
+**Deferred (per this session's scope decision):** the Job Card → Release → Capture workflow (production-manager job card creation, supervisor release, locked prefill, structured finished-product BOM, Acumatica-linked packaging reconciliation) and the Process Timesheet are scoped as separate follow-up builds — not started this session.
+
+**Open question for the floor:** paper tags observed use a date-based serial (`13-07-26/1-11`), but the live Blender screen generates a blend-code-based serial (`SFC-KUN25-C/1-11`) — two different conventions exist in the codebase (`lib/qr/serial.ts` vs `BlenderCapture.tsx`). If operators are copying the paper convention rather than what's shown on the tablet, Pasteuriser scan-in lookups will keep missing. Needs confirming with the floor before it causes a real backlog of "not found" bags.
+
+---
+
 ## 2026-07-28 — Alyssa (Refining mass balance: fixed dropped output-A stream across 8 screens)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/manager-kpis/route.ts`, `components/count/monthly/MonthlyReconciliation.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/ProductionDashboard.tsx`, `supabase/migrations/20260728_001_refining_mass_balance_output_a.sql` (new, needs applying to staging Supabase)
