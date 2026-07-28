@@ -3,6 +3,8 @@
 // These call the browser/session Supabase client directly — appropriate for the
 // prototype. Move to server-side API routes once the access pattern stabilises.
 
+import { getDb } from '@/lib/supabase/db'
+import { markBagConsumed } from '@/lib/production/scan-utils'
 import { logisticsDb } from './db'
 import { newUnitBarcode } from './barcode'
 import type { Unit, UnitEvent, EventType, UnitStage } from './types'
@@ -110,6 +112,84 @@ export async function receiveUnit(input: ReceiveUnitInput): Promise<{ unit: Unit
   })
 
   return { unit: unit as Unit, barcode }
+}
+
+export interface ReceiveProductionUnitInput {
+  bagSerial:     string             // production.bag_tags.serial_number being scanned in
+  unitType:      'bag' | 'box' | 'pallet'
+  locationId?:   string | null
+  operatorId?:   string | null
+  operatorName?: string | null
+}
+
+export type ReceiveProductionUnitErrorCode =
+  | 'not_found'         // no bag_tags row with that serial
+  | 'not_in_stock'      // bag exists but isn't status='in_stock' (already consumed/dispatched/on_hold/rejected)
+  | 'already_received'  // a logistics unit already exists with this barcode
+  | 'insert_failed'
+
+/**
+ * The production-sourced counterpart to receiveUnit() (which is GRN/supplier
+ * sourced) — creates a warehouse unit directly from a scanned production bag
+ * serial, using that serial as the unit's barcode (the shared identity that
+ * links the two schemas; see migration 20260728_002).
+ *
+ * Retires the source bag_tags row via markBagConsumed() in the same call, so
+ * the same physical bag is never simultaneously "in stock" on the production
+ * floor AND "active" in the warehouse — each physical unit is represented in
+ * exactly one of the two systems at any moment, which is what makes a
+ * combined stock count (bag_tags in_stock + logistics.units active) correct
+ * rather than double-counted.
+ */
+export async function receiveProductionUnit(input: ReceiveProductionUnitInput):
+  Promise<{ unit: Unit; barcode: string } | { error: string; code: ReceiveProductionUnitErrorCode }> {
+  const db = logisticsDb()
+  const serial = input.bagSerial.trim()
+
+  const { data: bagRow } = await getDb().schema('production').from('bag_tags')
+    .select('serial_number, product_type, variant, weight_kg, lot_number, acumatica_id, section_id, status')
+    .eq('serial_number', serial).maybeSingle()
+  const bag = bagRow as { serial_number: string; product_type: string; variant: string | null; weight_kg: number | null; lot_number: string | null; acumatica_id: string | null; section_id: string; status: string } | null
+  if (!bag) return { error: `No production bag with serial "${serial}".`, code: 'not_found' }
+  if (bag.status !== 'in_stock') {
+    return { error: `Bag ${serial} is "${bag.status}" — only in-stock bags can be received into the warehouse.`, code: 'not_in_stock' }
+  }
+
+  const { data: existingUnit } = await db.from('units').select('id').eq('barcode', serial).maybeSingle()
+  if (existingUnit) return { error: `Bag ${serial} has already been received into the warehouse.`, code: 'already_received' }
+
+  const { data: unit, error: unitErr } = await db
+    .from('units')
+    .insert({
+      barcode:                serial,
+      unit_type:               input.unitType,
+      source:                  'production',
+      source_section_id:       bag.section_id ?? null,
+      product_type:            bag.product_type,
+      variant:                 bag.variant ?? null,
+      weight_kg:                bag.weight_kg ?? null,
+      acumatica_inventory_id:   bag.acumatica_id ?? null,
+      current_stage:           'finished',
+      current_location_id:     input.locationId ?? null,
+      status:                  'active',
+    } as any)
+    .select('*')
+    .maybeSingle()
+  if (unitErr || !unit) return { error: unitErr?.message ?? 'Failed to create unit', code: 'insert_failed' }
+
+  await recordEvent({
+    unitId:        (unit as any).id,
+    eventType:     'receive_in',
+    toStage:       'finished',
+    toLocation:    input.locationId ?? null,
+    operatorId:    input.operatorId ?? null,
+    operatorName:  input.operatorName ?? null,
+    payload:       { barcode: serial, weight_kg: bag.weight_kg, source: 'production', lot_number: bag.lot_number },
+  })
+
+  await markBagConsumed(serial, 'logistics', null, bag.weight_kg ?? undefined, input.operatorId ?? null)
+
+  return { unit: unit as Unit, barcode: serial }
 }
 
 export interface MoveUnitInput {

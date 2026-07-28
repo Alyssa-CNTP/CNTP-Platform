@@ -163,6 +163,10 @@ function CaptureScreen() {
   const [changeoverNeeded, setChangeoverNeeded] = useState(false)
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
+  // Whether the last production_runs full-day rollup write failed — surfaced so
+  // a supervisor never trusts a full-day total that may be stale with zero
+  // visible sign anything went wrong (see persist()'s run-rollup try/catch).
+  const [runRollupStale, setRunRollupStale] = useState(false)
   const [tab, setTab]             = useState<Tab>(() => {
     const t = sp.get('tab')
     return (['production', 'checks', 'cleaning', 'overview', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
@@ -1123,7 +1127,14 @@ function CaptureScreen() {
             .update({ total_input_kg: tin, total_output_kg: tout, batch_id: sessionBatchId, updated_at: new Date().toISOString() } as any).eq('id', rid)
         }
       }
-    } catch { /* run linking/rollup is best-effort — never blocks the core save */ }
+      setRunRollupStale(false)
+    } catch (e) {
+      // Never let a run-linking/rollup hiccup lose the capture already committed
+      // above — but silently swallowing it left the full-day total able to go
+      // stale with zero indication to whoever's about to trust it at sign-off.
+      console.warn('production_runs rollup failed — full-day total may be stale', e)
+      setRunRollupStale(true)
+    }
   }
   persistRef.current = persist
 
@@ -1464,6 +1475,16 @@ function CaptureScreen() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
         <div className="px-4 py-5 max-w-[800px] space-y-5">
+          {/* The full-day rollup write failed on the last save — the per-shift
+              mass balance above is still correct and safely saved, but the
+              combined full-day total (production_runs) may be stale until the
+              next successful save. Non-blocking: capture continues normally. */}
+          {runRollupStale && runId && tab !== 'messages' && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span><strong>Full-day total may be out of date</strong> — the last save couldn't update the combined run total. Your per-shift figures above are still correct and saved; try Save draft again to refresh the full-day total.</span>
+            </div>
+          )}
           {/* Handover note from the previous shift on this line */}
           {prevNote && tab !== 'messages' && (
             <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
