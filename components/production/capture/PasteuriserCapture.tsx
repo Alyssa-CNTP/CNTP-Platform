@@ -567,6 +567,7 @@ export function PasteuriserCapture({
   useEffect(() => {
     getDb().from('job_cards_pasteuriser')
       .select('id, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
+      .eq('status', 'approved')
       .order('date_of_card', { ascending: false }).limit(40)
       .then(({ data }: any) => setJobCards(data ?? []))
       .catch(() => setJobCards([]))

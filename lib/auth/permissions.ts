@@ -73,6 +73,9 @@ export type PermissionKey =
   | 'can_view_blends'
   | 'can_edit_blends'
   | 'can_delete_blends'
+  // Production — Pasteuriser job cards (BOM-driven generation + approval)
+  | 'can_generate_job_cards'   // production manager: pick a BOM code, auto-fill ratios, send for approval
+  | 'can_approve_job_cards'    // production supervisor: approve/reject a generated job card
   // Sales & Marketing
   | 'can_access_sales'
   | 'can_access_marketing'
@@ -145,6 +148,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_edit_session','can_delete_session','can_approve_reopen_request','can_edit_bag_tag','can_delete_bag_tag',
   'can_view_inventory','can_edit_inventory','can_delete_inventory',
   'can_view_blends','can_edit_blends','can_delete_blends',
+  'can_generate_job_cards','can_approve_job_cards',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
@@ -322,6 +326,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // Master Inventory & Blends (BOM) — supervisors keep these current
     can_view_inventory: true, can_edit_inventory: true,
     can_view_blends: true, can_edit_blends: true,
+    // Pasteuriser job cards — supervisor approves what the manager generates
+    can_approve_job_cards: true,
     // Staff & Competency
     can_access_hr: true, can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
@@ -346,6 +352,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_export_csv: true,
     can_view_roster: true, can_submit_roster_production: true,
     can_approve_reopen_request: true,
+    // BOM catalogue (read) + Pasteuriser job cards — manager generates, supervisor approves
+    can_view_blends: true, can_generate_job_cards: true,
   },
 
   // ── Store — owns the Store roster section ──────────────────────────────────
@@ -607,9 +615,17 @@ export const PERMISSION_GROUPS: {
       { key: 'can_view_inventory',   label: 'View Master Inventory' },
       { key: 'can_edit_inventory',   label: 'Add & edit inventory items' },
       { key: 'can_delete_inventory', label: 'Deactivate inventory items' },
-      { key: 'can_view_blends',      label: 'View Blends (BOM) page' },
-      { key: 'can_edit_blends',      label: 'Add & edit blends and their components' },
-      { key: 'can_delete_blends',    label: 'Delete blends and components' },
+      { key: 'can_view_blends',      label: 'View BOMs page (all work centres)' },
+      { key: 'can_edit_blends',      label: 'Add & edit Blender BOMs and their components' },
+      { key: 'can_delete_blends',    label: 'Delete Blender BOMs and components' },
+    ],
+  },
+  {
+    group: 'Production — Pasteuriser Job Cards',
+    department: 'Production',
+    permissions: [
+      { key: 'can_generate_job_cards', label: 'Generate a job card from a BOM and send it for approval' },
+      { key: 'can_approve_job_cards',  label: 'Approve or reject a job card sent for approval' },
     ],
   },
   {

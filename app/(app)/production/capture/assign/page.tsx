@@ -291,6 +291,8 @@ function AssignScreen() {
         </div>
       )}
 
+      <TodaysRoster date={date} operators={operators} />
+
       {error && <p className="text-[12px] text-err px-1">{error}</p>}
 
       {loading ? (
@@ -326,6 +328,12 @@ function AssignScreen() {
                 </div>
 
                 <div className="px-4 py-4 space-y-4">
+                  {sectionId === 'pasteuriser' && (
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Today's digital job card</label>
+                      <PasteuriserJobCardPanel date={date} />
+                    </div>
+                  )}
                   {/* Operators */}
                   {ops.length === 0 ? (
                     <p className="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -430,6 +438,127 @@ function AssignScreen() {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// Flattened list of the roster role keys that feed a Production capture
+// section — used to scope "today's roster" to floor roles the supervisor
+// actually needs here, not the full multi-department roster.
+const ALL_SECTION_ROLE_KEYS = Object.values(SECTION_ROLES).flat()
+
+// Quick "who's rostered today" reference so a supervisor doesn't have to open
+// the full Shift Roster just to see names — resolves operator_id/employee_id
+// entries to a display name the same way fillFromRoster() does, but read-only.
+function TodaysRoster({ date, operators }: { date: string; operators: Operator[] }) {
+  const [rows, setRows] = useState<{ role_key: string; shift: 'day' | 'night'; name: string }[]>([])
+  const [periodName, setPeriodName] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const pdb = getDb().schema('production')
+    pdb.from('roster_periods').select('id,name').lte('start_date', date).gte('end_date', date)
+      .order('start_date', { ascending: false }).limit(1)
+      .then(async ({ data }: any) => {
+        const period = ((data as any[]) ?? [])[0]
+        if (!period) { if (!cancelled) { setRows([]); setPeriodName(null); setLoading(false) } return }
+        const { data: entries } = await pdb.from('roster_entries')
+          .select('role_key,operator_id,employee_id,person_name,shift')
+          .eq('period_id', period.id).in('role_key', ALL_SECTION_ROLE_KEYS)
+        const list = (entries as any[]) ?? []
+        const empIds = [...new Set(list.filter(e => !e.operator_id && !e.person_name && e.employee_id).map(e => e.employee_id))]
+        const empName = new Map<string, string>()
+        if (empIds.length) {
+          const { data: emps } = await pdb.from('employees').select('id,operator_id,name,display_name').in('id', empIds)
+          const opById = new Map(operators.map(o => [o.id, o.name]))
+          ;(emps as any[] ?? []).forEach(e => empName.set(e.id, (e.operator_id && opById.get(e.operator_id)) || e.display_name || e.name || ''))
+        }
+        const opById = new Map(operators.map(o => [o.id, o.name]))
+        const resolved = list.map(e => ({
+          role_key: e.role_key, shift: e.shift as 'day' | 'night',
+          name: e.person_name || (e.operator_id && opById.get(e.operator_id)) || (e.employee_id && empName.get(e.employee_id)) || '',
+        })).filter(e => e.name)
+        if (!cancelled) { setRows(resolved); setPeriodName(period.name); setLoading(false) }
+      })
+    return () => { cancelled = true }
+  }, [date, operators])
+
+  if (loading || rows.length === 0) return null
+
+  const day = rows.filter(r => r.shift === 'day')
+  const night = rows.filter(r => r.shift === 'night')
+
+  return (
+    <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
+      <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest flex items-center gap-1.5">
+        <Users size={13} /> Today's roster{periodName ? ` — ${periodName}` : ''}
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[12px]">
+        <div>
+          <p className="text-[10px] text-stone-400 uppercase mb-1">Morning</p>
+          {day.length ? day.map((r, i) => (
+            <div key={i} className="text-text">{r.name} <span className="text-stone-400">— {r.role_key}</span></div>
+          )) : <p className="text-stone-400">Nobody rostered</p>}
+        </div>
+        <div>
+          <p className="text-[10px] text-stone-400 uppercase mb-1">Afternoon / Night</p>
+          {night.length ? night.map((r, i) => (
+            <div key={i} className="text-text">{r.name} <span className="text-stone-400">— {r.role_key}</span></div>
+          )) : <p className="text-stone-400">Nobody rostered</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Read-only summary of today's approved digital Pasteuriser job card(s), so a
+// supervisor sees exactly what's being produced and how it should be packed
+// without leaving Assign. Blank until the production manager has generated one
+// and it's been approved — matches the manager-generates/supervisor-approves
+// flow (see app/(app)/job-cards/pasteuriser).
+function PasteuriserJobCardPanel({ date }: { date: string }) {
+  const [cards, setCards] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    getDb().from('job_cards_pasteuriser')
+      .select('id, job_card_no, item_no, product_name, customer, batch_number, blend_description, packaging, total_mass, no_of_bags, special_instructions, status')
+      .eq('status', 'approved').eq('date_of_card', date)
+      .then(({ data }: any) => { if (!cancelled) { setCards((data as any[]) ?? []); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [date])
+
+  if (loading) return null
+  if (cards.length === 0) {
+    return (
+      <p className="text-[12px] text-stone-400 bg-stone-50 border border-stone-200 rounded-xl px-3 py-2.5">
+        No approved job card for {date} yet — the production manager generates one from the BOM catalogue and a supervisor approves it on the Job Card page.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {cards.map(c => (
+        <div key={c.id} className="rounded-xl border border-brand/20 bg-accent-bg/30 p-3 text-[12px] space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-text truncate">{c.product_name || c.item_no}</span>
+            {c.job_card_no && <span className="font-mono text-[11px] text-text-muted shrink-0">{c.job_card_no}</span>}
+          </div>
+          <div className="text-text-muted font-mono truncate">{c.item_no} {c.blend_description ? `· ${c.blend_description}` : ''}</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-text-muted">
+            <span>Customer: {c.customer || '—'}</span>
+            <span>Batch: {c.batch_number || '—'}</span>
+            <span>Packaging: {c.packaging || '—'}</span>
+            <span>{c.total_mass ? `${c.total_mass} kg` : '—'} · {c.no_of_bags || '—'} bags</span>
+          </div>
+          {c.special_instructions && <div className="text-[11px] text-warn">⚠ {c.special_instructions}</div>}
+        </div>
+      ))}
     </div>
   )
 }

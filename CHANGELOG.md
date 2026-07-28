@@ -5,6 +5,64 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Fix: `job_cards_pasteuriser` migration assumed the table already existed)
+
+**Files changed:** `supabase/migrations/20260729_002_job_cards_pasteuriser_workflow.sql`
+
+Running the migrations in Supabase failed with `42P01: relation "public.job_cards_pasteuriser" does not exist` — the earlier assumption that this table already existed in the live database (inferred from code, never confirmed against an actual database) was wrong. `20260729_002` now `CREATE TABLE IF NOT EXISTS` the full original table (matching the job-card page's original field list) plus RLS/grants, before adding the workflow columns — a no-op wherever the table already exists, and safe wherever it doesn't. Re-copied to `C:\Users\Alyssa\Documents\Supabase Scripts` — re-run file 2 (then 3, 4 if not already run) in the same numbered order.
+
+---
+
+## 2026-07-28 — Alyssa (Job card: predefined packaging auto-calc, auto-numbering, blend+customer settings memory; Assign screen shows the digital job card + today's roster)
+
+**Files changed:** `supabase/migrations/20260729_003_job_card_packaging_numbering_templates.sql` (new), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/capture/assign/page.tsx`
+
+Follow-up to the same session's BOM catalogue + job card work, driven by more detail on the physical process (bulk bags → sieving → refining → granule line → blender → pasteuriser → packing) and three concrete asks: packaging should be predefined per finished-good code (not typed), the job card number should be automatic, and plant settings/special instructions should be remembered per blend+customer instead of retyped every time.
+
+- **Packaging is predefined per Acumatica code, not typed.** A Pasteuriser BOM's own packaging component lines (uom = PCS) already encode "N units per kg" via `qty_required` (e.g. 0.055556 = 1 bag per 18kg) — picking a BOM now auto-detects those lines, defaults the packaging + weight-per-bag fields to the primary one, and offers a dropdown to switch when a BOM lists more than one (e.g. bag + carton). No. of bags is computed live from Total mass ÷ weight-per-bag (still a plain editable field for a manual override). New `packaging_item_id`/`packaging_lines` columns carry the real Acumatica packaging code(s) through to the saved record so usage is auditable per PO, not just a free-text label.
+- **Job card number is now automatic.** `public.next_job_card_no()` (backed by a plain sequence) issues `JC-<year>-<seq>` the moment a fresh draft opens — deliberately its own audit-trail number, not a guess at Acumatica's internal production-order numbering (the paper examples' 5-digit codes use a scheme this session couldn't confirm; a wrong guess would look like a real Acumatica number when it isn't).
+- **Plant settings + special instructions remembered per (item, customer).** New `public.job_card_settings_templates` (deliberately public schema, not production — it's config/memory for the digital workflow itself, not a physical-production record). Saved best-effort on every job-card save; looked up when a BOM is picked with a customer already entered, or when the customer field is completed after picking a BOM — only fills fields the manager hasn't already typed this session, never clobbers.
+- **Assign screen now surfaces both asks from the floor.** A "Today's roster" panel (new, resolves operator_id/employee_id roster entries to display names, split Morning / Afternoon-Night) sits above the per-section list; the Pasteuriser section's card now shows that day's approved digital job card inline (item, batch, customer, packaging, mass/bags, special instructions) so a supervisor sees exactly what's being produced without leaving Assign.
+
+**Not done this session:** none of the SQL (this migration or the two from the earlier entry) has been run against Supabase yet — copied to `C:\Users\Alyssa\Documents\Supabase Scripts` for the developer to run in staging then production. Packaging usage isn't yet reconciled against Master Inventory stock levels (recorded on the job card, not deducted anywhere).
+
+---
+
+## 2026-07-28 — Alyssa (BOM catalogue widened to all work centres; Pasteuriser job card generation + supervisor approval)
+
+**Files changed:** `supabase/migrations/20260729_001_bom_all_work_centres.sql` (new), `supabase/migrations/20260729_002_job_cards_pasteuriser_workflow.sql` (new), `supabase/seeds/full_bom_import.sql` (new), `lib/production/bom.ts`, `app/(app)/production/blends/page.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/api/production/job-cards/[id]/send-for-approval/route.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts` (new), `components/production/capture/PasteuriserCapture.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/pdf/load-image.ts` (new), `app/(app)/quality/coa/page.tsx`
+
+Investigated why Acumatica codes prefixed `30FP...` from the Pasteuriser line's paper job cards "don't show" in the app. Root cause: `production.bom_components` (the only structured BOM table) had a CHECK constraint hard-limiting it to the two Blender work centres, so Pasteuriser BOMs had nowhere to live; the one place a `30FP` code could land — `job_cards_pasteuriser.item_no` — was a free-text field with no validation. Confirmed the BOM chain in the customer's Acumatica export fully reproduces both paper job cards provided (blend ratio + final product ratio match exactly).
+
+- **Full BOM catalogue import.** Widened the `work_centre` CHECK to all 12 real Acumatica work centres and imported the full ~800-row spreadsheet (up from Blender-only) into `bom_components` via a reviewed one-off script (`supabase/seeds/full_bom_import.sql`); 723 rows accepted, 72 filtered (blank/`#N/A` codes or non-canonical work centres in the source data) and logged for review, 6 exact duplicates skipped.
+- **`lib/production/bom.ts`** gained `listBoms()`, `getBomComponents()`, and `findParentBlendBom()` (resolves a Pasteuriser BOM's "before granules" blend ratio one hop up the chain) alongside the existing Blender-only functions, which are untouched.
+- **Blends page → BOMs.** Extended in place (not a new page): work-centre filter across all 12 centres, browse-only rows with a resolved parent-blend panel for Pasteuriser BOMs and a Master-Inventory match badge; create/edit/delete stays scoped to the two Blender work centres exactly as before.
+- **Pasteuriser job card generation + approval.** `job_cards_pasteuriser` gains a `status` workflow (draft → sent_for_approval → approved/rejected) plus `blend_ratio_lines`/`final_ratio_lines` JSONB columns (a BOM-generated card's ratio tables have a variable number of components, which the form's original 11 fixed pct fields can't represent — those fields are kept for any card still created the old manual-entry way). A production manager can now pick a Pasteuriser Acumatica code and have both ratio tables, the item code and product name auto-fill from the BOM instead of being re-typed; sending it to a supervisor notifies them in-app + by email, and a pending-approvals panel lets them approve (with their own signature) or reject with a reason. `PasteuriserCapture`'s job-card prefill now only offers approved cards.
+- **Branded print/PDF export** for the job card, mirroring the COA page's approach (print-CSS view + client-side jsPDF), using the existing `/logo.png`; extracted the shared `loadImage()` helper out of the COA page into `lib/pdf/load-image.ts` since it's now used by both.
+
+**Not done this session:** the two new migrations and `full_bom_import.sql` still need to be run against Supabase (staging first) before any of this is live — nothing here applies automatically. A live Acumatica sync for item master/BOM data was explicitly out of scope; the BOM catalogue is still a point-in-time import, same as Master Inventory.
+
+---
+
+## 2026-07-28 — Alyssa (Trustworthy KPIs: full-day rollup failures surfaced; production↔warehouse stock link; clearer barcode labels; print health page)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/logistics/actions.ts` (+80 lines), `lib/logistics/types.ts`, `app/(app)/logistics/receiving/page.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx` (new), `lib/production/label-zpl.ts`, `lib/production/label-pplb.ts`, `components/stock-control/PrintHealthModule.tsx` (new), `app/(app)/stock-control/page.tsx`, `supabase/migrations/20260728_002_logistics_production_link.sql` (new)
+
+Investigated three asks this session — barcode printing, stock counts, dashboard filtering — before touching code, since two of the three revealed real structural gaps that would have produced actively wrong numbers if built naively. Full findings + the scope decisions behind each item are in this session's transcript; summary below. Dashboard day/hourly/pivot filtering was explicitly **deferred** — nothing changed there this session.
+
+- **Full-day KPI rollup no longer fails silently.** `persist()`'s `production_runs` total_input_kg/total_output_kg rollup was wrapped in a bare `catch {}` — if it failed, the supervisor got zero indication the full-day total might be stale. Now surfaces a non-blocking amber banner ("Full-day total may be out of date") without affecting the core per-session save, which was already reliable.
+- **Closed the gap between production and the warehouse — the actual blocker on trustworthy stock counts.** Investigation found `logistics.units` (the warehouse/dispatch lifecycle) was created ONLY from supplier GRNs — nothing ever created a unit from a finished production bag, so `production.bag_tags.status` never learns a bag left the building (dispatch marks a totally separate table). A naive stock count from `bag_tags` alone would count shipped goods as "in stock" forever.
+  - New **"Receive from production"** flow (`/logistics/receiving/from-production`, linked from the Receiving hub) — scan a `bag_tags.serial_number` directly; that serial becomes the new `logistics.units.barcode` (one physical bag, one identity, across both schemas — no separate mapping column).
+  - `receiveProductionUnit()` (`lib/logistics/actions.ts`) creates the unit AND retires the source `bag_tags` row via the existing `markBagConsumed()` (section `'logistics'`) in the same call — so a bag is represented in exactly one of the two systems at any moment, never both (avoids a double-count window that a "mark dispatched at dispatch time" design would have left open).
+  - Migration `20260728_002`: `logistics.units.grn_id` now nullable, new `source`/`source_section_id` columns, and a new `production.v_stock_on_hand` view (floor stock ∪ warehoused-not-dispatched stock, grouped by product/variant) — the actual trustworthy number this whole thread was about, ready for a future dashboard to query without reinventing the aggregation.
+  - Dispatch itself needed no changes — its existing `status='dispatched'` update on `logistics.units` was already sufficient once bag_tags is retired at warehouse-receipt time instead of at dispatch time.
+- **Barcode labels: Type/Grade redesign extended to the thermal printers.** The HTML label already showed Type and Grade as clearly captioned fields (fixed in an earlier PR); the Zebra (ZPL) and Argox (PPLB) renderers still crammed both into one small unlabelled badge and dropped the grade letter entirely. Both now show two captioned rows ("TYPE" / "GRADE"), and grade shows the letter alongside the word (e.g. "B Export Blend"), matching what an operator actually sorts pallets by. Barcode payload is unchanged (serial-only). Exact dot positions are conservative but not yet confirmed against a physical print — no printer has ever been tested end-to-end (see below).
+- **New "Print health" page** (`/stock-control` → Print health tab) — since this session can't SSH into the VPS or reach the factory LAN to confirm the print-relay agent is actually running, this surfaces what IS observable from the database: `production.print_jobs` status breakdown, recent errors, and last-successful-print per section, plus a clear note when `LABEL_PRINTING_ENABLED` is off (so "untested" doesn't read as "broken").
+
+**Not done this session (explicit scope decisions):** dashboard day-picker/hourly/pivot-table work (deferred entirely); actually enabling label printing (`LABEL_PRINTING_ENABLED`) — still blocked on physical/operational steps only IT/the floor can do (confirm `PRINT_RELAY` env vars on the VPS, stand up the relay-agent PC on the factory LAN, run a real test print on the Argox).
+
+---
+
 ## 2026-07-28 — Alyssa (Pasteuriser debagging: corrected material sources; Blender bag-write failures no longer silent)
 
 **Files changed:** `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
