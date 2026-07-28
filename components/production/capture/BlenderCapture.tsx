@@ -518,6 +518,7 @@ export function BlenderCapture({
   // editing/removing an existing one.
   const [bagModal, setBagModal] = useState<{ editing: BlenderInputBag | null } | null>(null)
   const [outputWeight, setOutputWeight] = useState('')
+  const [bagError, setBagError] = useState<string | null>(null)
   const [groups, setGroups] = useState<BlendIngredientGroup[]>([])
   // Materials the operator added that aren't part of the blend's declared recipe —
   // client-side only, never written back to bom_components (that stays curated on
@@ -634,27 +635,38 @@ export function BlenderCapture({
 
   // ── Output bag helpers ─────────────────────────────────────────────────────
 
-  async function addOutputBag(weight: string) {
-    if (n(weight) <= 0) return
+  async function addOutputBag(weight: string): Promise<boolean> {
+    if (n(weight) <= 0) return false
+    setBagError(null)
     const serial = await genBlendSerial()
     const lot = assignment?.lot_number || autoLot(date, runNoRef.current ?? 1)
     const now = nowISO()
+    // A bag "logged" here but missing from bag_tags would be invisible to every
+    // downstream scan (e.g. the Pasteuriser trying to consume it) — surfacing the
+    // failure and refusing to add the bag beats silently showing the operator a
+    // serial the system can never find again. scan_events stays best-effort (an
+    // audit-trail miss is a lesser problem than an unfindable bag).
+    const { error: tagErr } = await getDb().schema('production').from('bag_tags').upsert({
+      serial_number: serial, section_id: sectionId, session_id: null,
+      product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantWord || null,
+      weight_kg: n(weight), lot_number: lot,
+      acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
+    } as any, { onConflict: 'serial_number' })
+    if (tagErr) {
+      setBagError(`Could not save bag ${serial} to the system — check the connection and try again.`)
+      return false
+    }
     try {
-      await getDb().schema('production').from('bag_tags').upsert({
-        serial_number: serial, section_id: sectionId, session_id: null,
-        product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantWord || null,
-        weight_kg: n(weight), lot_number: lot,
-        acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
-      } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
         serial_number: serial, action: 'bagging_out', section_id: sectionId,
         weight_kg: n(weight), operator_id: operatorId ?? null,
       } as any)
-    } catch { /* session save retries */ }
+    } catch { /* audit trail is best-effort — the bag itself is already saved */ }
 
     patch({ outputs: [...value.outputs, {
       id: crypto.randomUUID(), serial, time: fmtTime(now), weight, lot, tagMethod: null, secured: true, logged_at: now,
     }] })
+    return true
   }
 
   function removeOutputBag(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
@@ -856,14 +868,19 @@ export function BlenderCapture({
                       onTag={m => setOutputTag(b.id, m)} />
                   ))}
                   {!locked && (
-                    <div className="flex gap-2 pt-1">
-                      <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outputWeight} onChange={e => setOutputWeight(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOutputBag(outputWeight); setOutputWeight('') } }}
-                        placeholder="Weight (kg)" className={INP + ' flex-1'} />
-                      <button onClick={() => { addOutputBag(outputWeight); setOutputWeight('') }} disabled={n(outputWeight) <= 0}
-                        className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0" style={{ background: BAG_COLOR }}>
-                        <Plus size={15} /> Add bag
-                      </button>
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex gap-2">
+                        <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outputWeight} onChange={e => setOutputWeight(e.target.value)}
+                          onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); if (await addOutputBag(outputWeight)) setOutputWeight('') } }}
+                          placeholder="Weight (kg)" className={INP + ' flex-1'} />
+                        <button onClick={async () => { if (await addOutputBag(outputWeight)) setOutputWeight('') }} disabled={n(outputWeight) <= 0}
+                          className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0" style={{ background: BAG_COLOR }}>
+                          <Plus size={15} /> Add bag
+                        </button>
+                      </div>
+                      {bagError && (
+                        <p className="text-[11px] text-err flex items-center gap-1.5"><AlertTriangle size={12} /> {bagError}</p>
+                      )}
                     </div>
                   )}
                   {value.outputs.length === 0 && locked && <p className="text-[11px] text-stone-400 text-center py-1">No bags recorded for this output.</p>}
