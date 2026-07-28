@@ -42,12 +42,20 @@ export async function getCallerPermissions() {
   const db = await getSessionClient()
 
   const { data: { user }, error } = await db.auth.getUser()
-  if (error || !user) return { userId: null, role: null, department: null, can: () => false }
+  if (error || !user) return { userId: null, name: null, role: null, department: null, can: () => false }
 
   // ── Priority 1: read from JWT claims (set by custom_access_token_hook) ──
   // This is the fast, consistent path once the Supabase hook is configured.
   const { data: { session } } = await db.auth.getSession()
   const payload = session?.access_token ? decodeJwtPayload(session.access_token) : null
+
+  // Best display name for the signed-in user — prefer the signed JWT claim,
+  // fall back to auth metadata / email local-part. Used to attribute messages
+  // and notifications to whoever is actually signed in (never a client-supplied
+  // or section-assigned name).
+  const authName = (user.user_metadata?.full_name as string)
+    || (user.user_metadata?.display_name as string)
+    || user.email?.split('@')[0] || null
 
   if (payload && 'user_role' in payload) {
     const role       = (payload.user_role  as string)     || null
@@ -57,6 +65,7 @@ export async function getCallerPermissions() {
 
     return {
       userId: user.id,
+      name: (payload.user_name as string) || authName,
       role,
       department,
       can: (key: PermissionKey) => {
@@ -71,7 +80,7 @@ export async function getCallerPermissions() {
   const { data } = await db
     .schema('shared' as any)
     .from('app_roles')
-    .select('role, department, permissions')
+    .select('role, department, permissions, full_name')
     .eq('user_id', user.id)
     .maybeSingle()
 
@@ -82,6 +91,7 @@ export async function getCallerPermissions() {
 
   return {
     userId:     user.id,
+    name:       ((data as any)?.full_name as string) || authName,
     role,
     department,
     can: (key: PermissionKey) => {
