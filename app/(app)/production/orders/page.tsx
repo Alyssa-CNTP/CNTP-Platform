@@ -31,7 +31,7 @@ interface SessionRow {
   deleted_at: string | null
   edited_at: string | null
   total_input_kg: number
-  total_output_b_kg: number
+  total_output_kg: number
   balance_kg: number | null
   debag_count: number
   bag_count: number
@@ -123,7 +123,7 @@ export default function ProductionOrdersPage() {
 
       // Mass balance
       const { data: mb } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_b_kg,balance_kg').in('session_id', ids)
+        .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg,balance_kg').in('session_id', ids)
       const mbMap = new Map<string, any>()
       ;(mb ?? []).forEach((r: any) => mbMap.set(r.session_id, r))
 
@@ -145,9 +145,12 @@ export default function ProductionOrdersPage() {
           record_no:  x.record_no ?? null,
           deleted_at: x.deleted_at ?? null,
           edited_at:  x.edited_at ?? null,
-          total_input_kg:   m ? parseFloat(m.total_input_kg)   : 0,
-          total_output_b_kg: m ? parseFloat(m.total_output_b_kg) : 0,
-          balance_kg:        m ? parseFloat(m.balance_kg)       : null,
+          total_input_kg: m ? parseFloat(m.total_input_kg) : 0,
+          total_output_kg: m
+            ? (parseFloat(m.total_output_a_kg) || 0) + (parseFloat(m.total_output_b_kg) || 0)
+              + (parseFloat(m.total_output_c_kg) || 0) + (parseFloat(m.total_output_d_kg) || 0)
+            : 0,
+          balance_kg: m ? parseFloat(m.balance_kg) : null,
           debag_count: debagCount.get(s.id) ?? 0,
           bag_count:   bagCount.get(s.id)   ?? 0,
           has_raw_data: rawData.get(s.id) ?? false,
@@ -165,7 +168,7 @@ export default function ProductionOrdersPage() {
     // and no mass balance is an abandoned "No data" row (e.g. an opened-then-left
     // section). Submitted/approved records always show. New captures create a row
     // only once real weights are entered, so a real in-progress shift still appears.
-    const isEmpty = s.debag_count === 0 && s.bag_count === 0 && !s.total_input_kg && !s.total_output_b_kg && !s.has_raw_data
+    const isEmpty = s.debag_count === 0 && s.bag_count === 0 && !s.total_input_kg && !s.total_output_kg && !s.has_raw_data
     if (isEmpty && (s.status === 'draft' || s.status === 'new')) return false
     // Archived (soft-deleted) records are hidden unless the toggle is on.
     if (s.deleted_at && !showArchived) return false
@@ -182,7 +185,7 @@ export default function ProductionOrdersPage() {
   // Totals across filtered results
   const totals = useMemo(() => filtered.reduce((acc, s) => ({
     in:  acc.in  + s.total_input_kg,
-    out: acc.out + s.total_output_b_kg,
+    out: acc.out + s.total_output_kg,
     bags: acc.bags + s.bag_count,
   }), { in: 0, out: 0, bags: 0 }), [filtered])
 
@@ -334,7 +337,7 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
   const meta       = sectionMeta(s.section_id)
   const st         = STATUS[s.status] ?? STATUS.new
   const StatusIcon = st.icon
-  const variance   = s.total_input_kg - s.total_output_b_kg
+  const variance   = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
   const withinTol  = Math.abs(variance) <= massBalanceToleranceFor(s.section_id)
   const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
   const archived   = !!s.deleted_at
@@ -375,8 +378,8 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
   const metaParts = [
     s.operator_names?.length ? s.operator_names.join(', ') : 'No operators',
     s.lot_number,
-    s.production_orders?.length ? `PO ${s.production_orders.join(', ')}` : null,
   ].filter(Boolean)
+  const poLabel = s.production_orders?.length ? `PO ${s.production_orders.join(', ')}` : null
 
   return (
     <div className={`bg-white border rounded-2xl transition-all ${archived ? 'border-stone-200 opacity-70' : 'border-stone-200 hover:border-brand/40 hover:shadow-sm'}`}>
@@ -394,7 +397,10 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
               {s.record_no && <span className="font-mono text-[10px] font-semibold text-brand">{s.record_no}</span>}
               {archived && <span className="text-[9px] font-semibold uppercase tracking-wide text-stone-500 bg-stone-100 rounded px-1.5 py-0.5">Archived</span>}
             </div>
-            <div className="text-[11px] text-stone-400 truncate mt-0.5">{metaParts.join(' · ')}</div>
+            <div className="flex items-center gap-1.5 min-w-0 mt-0.5">
+              <div className="text-[11px] text-stone-400 truncate">{metaParts.join(' · ')}</div>
+              {poLabel && <span className="text-[11px] font-medium text-stone-500 shrink-0">{poLabel}</span>}
+            </div>
           </div>
 
           <div className="text-right shrink-0 hidden sm:block">
@@ -403,7 +409,7 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
                 <div className="flex items-center justify-end gap-1 text-[12px] text-stone-600">
                   <Package size={11} /> {s.total_input_kg.toFixed(1)}
                   <ArrowRight size={10} className="text-stone-300" />
-                  <PackageCheck size={11} /> {s.total_output_b_kg.toFixed(1)} kg
+                  <PackageCheck size={11} /> {s.total_output_kg.toFixed(1)} kg
                 </div>
                 <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full mt-0.5 ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
                   <Scale size={10} />{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg{!withinTol && <AlertTriangle size={10} />}
@@ -476,7 +482,7 @@ function OrderCard({ session: s, canEdit, canDelete, onChanged }: {
         <div className="sm:hidden flex items-center gap-2 px-5 pb-3 -mt-1 text-[11px] text-stone-500">
           <Package size={11} /> {s.total_input_kg.toFixed(1)} kg
           <ArrowRight size={10} className="text-stone-300" />
-          <PackageCheck size={11} /> {s.total_output_b_kg.toFixed(1)} kg
+          <PackageCheck size={11} /> {s.total_output_kg.toFixed(1)} kg
           <span className={`inline-flex items-center gap-1 font-medium px-1.5 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
             {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
           </span>

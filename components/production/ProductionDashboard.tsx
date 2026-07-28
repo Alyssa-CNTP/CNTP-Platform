@@ -217,12 +217,12 @@ export default function ProductionDashboard() {
     let mbRows: any[] = []
     if (sessIds.length) {
       const { data } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+        .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
         .in('session_id', sessIds)
       mbRows = data || []
     }
     const mbMap = new Map(mbRows.map(m => [m.session_id, m]))
-    const outOf = (s: any) => { const m = mbMap.get(s.id); return m ? (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0 }
+    const outOf = (s: any) => { const m = mbMap.get(s.id); return m ? (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0 }
     const inOf = (s: any) => { const m = mbMap.get(s.id); return m ? Number(m.total_input_kg) || 0 : 0 }
     const rank = (s: string) => ({ approved: 3, submitted: 2, draft: 1 } as Record<string, number>)[s] ?? 0
 

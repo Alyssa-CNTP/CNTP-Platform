@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     let mbRows: any[] = []
     for (let i = 0; i < sessIds.length; i += 200) {
       const { data } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+        .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
         .in('session_id', sessIds.slice(i, i + 200))
       mbRows = mbRows.concat(data || [])
     }
@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
 
     const outOf = (s: any) => {
       const m = mbMap.get(s.id)
-      return m ? (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0
+      return m ? (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0
     }
     const inOf = (s: any) => {
       const m = mbMap.get(s.id)
