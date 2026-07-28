@@ -57,7 +57,8 @@ export const ROSTER_ROLE_SEED: RosterRole[] = [
 
   { key: 'store_supervisor',   name: 'Store Supervisor',            category: 'store',      sort: 200 },
   { key: 'store_operator',     name: 'Store Operator',              category: 'store',      sort: 210 },
-  { key: 'forklift_driver',    name: 'Forklift Driver',             category: 'store',      sort: 220 },
+  // 'forklift_driver' retired 2026-07-28 — forklift drivers are Store Operators
+  // pinned to day (see migration 20260729_005).
 
   { key: 'qc_supervisor',      name: 'QC Supervisor',               category: 'qc',         sort: 300 },
   { key: 'qc',                 name: 'QC',                          category: 'qc',         sort: 310 },
