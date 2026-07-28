@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { logisticsDb } from '@/lib/logistics/db'
-import { Plus, PackageOpen, ArrowRight, Loader2 } from 'lucide-react'
+import { Plus, PackageOpen, ArrowRight, Loader2, ScanBarcode } from 'lucide-react'
 import { format } from 'date-fns'
 
 interface Row {
@@ -85,12 +85,20 @@ export default function ReceivingListPage() {
           <h1 className="text-2xl font-semibold text-text">Receiving</h1>
           <p className="text-sm text-text-muted mt-1">Inbound from suppliers. Each GRN groups one delivery into one or more lines.</p>
         </div>
-        <Link
-          href="/logistics/receiving/new"
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-text text-white text-sm hover:bg-text/90 transition"
-        >
-          <Plus className="w-4 h-4" /> New GRN
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/logistics/receiving/from-production"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-surface-rule bg-white text-sm text-text hover:bg-surface transition"
+          >
+            <ScanBarcode className="w-4 h-4" /> Receive from production
+          </Link>
+          <Link
+            href="/logistics/receiving/new"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-text text-white text-sm hover:bg-text/90 transition"
+          >
+            <Plus className="w-4 h-4" /> New GRN
+          </Link>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 mb-4">
