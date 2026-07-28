@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (PRODUCTION: Shift Roster — pin an individual to their shift)
+
+**Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
+
+Requires migration `20260729_004` on the production project.
+
+- Pin a person (pin icon on their chip) to keep them on their current shift through the weekly day↔night rotation; everyone else still rotates and the pin carries forward each week. Weekly roster only; persists with the section Save.
+- Replaces the hardcoded `store_supervisor`/`forklift_driver` fixed-shift lists with per-person pins (migration pins their existing entries). `refining_2`/`rosehip` remain structurally day-only in code. Generate-next-week preview mirrors the real rotation.
+
 ## 2026-07-22 — Alyssa (PRODUCTION: messages/notifications attributed to signed-in user; roster auto-publish race fixed)
 
 **Files changed:** `lib/auth/server-helpers.ts`, `app/(app)/production/roster/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/api/production/notify-line-message/route.ts`, `app/api/announcements/route.ts`, `app/api/production/roster/notify-change/route.ts`, `app/api/maintenance/card-messages/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`

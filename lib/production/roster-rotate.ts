@@ -16,13 +16,13 @@ import { addDays, format, parseISO, getISOWeek } from 'date-fns'
 
 export const ROSTER_PERIOD_DAYS = 7  // weekly cadence
 
-// Role keys that are FIXED to their current shift and never flip on rotation —
-// everything else still auto-rotates day↔night as normal. Set per-request, not
-// derived from any pattern in the data:
-//   - store_supervisor: always Bongikaya Ndikinda (day) / Steven Paris (night)
-//   - forklift_driver:  Sibabalo Lindi + Nkosiphendule Vutza, always day
+// Role keys that are STRUCTURALLY day-only (the whole role never runs a night
+// shift), so they never flip on rotation regardless of who's in them:
 //   - refining_2, rosehip (Value Added Product): day-only operators, no night
-export const FIXED_SHIFT_ROLE_KEYS = ['store_supervisor', 'forklift_driver', 'refining_2', 'rosehip']
+// Individual people who stay on a shift (e.g. the store supervisor, forklift
+// drivers) are no longer hardcoded here — they're PINNED per-entry on the
+// roster (roster_entries.pinned), which rotateEntries honours below.
+export const FIXED_SHIFT_ROLE_KEYS = ['refining_2', 'rosehip']
 
 export interface RotatePeriod {
   id: string; name: string; start_date: string; end_date: string
@@ -32,6 +32,7 @@ export interface RotateEntry {
   role_key: string; shift: 'day' | 'night'
   employee_id?: string | null; operator_id?: string | null
   person_name: string; tags: string[]; sort_order: number
+  pinned?: boolean
 }
 
 /** Dates + label for the period that follows `source`. */
@@ -52,19 +53,24 @@ export function nextPeriodConfig(source: RotatePeriod, periodDays = ROSTER_PERIO
 }
 
 /** Every entry, with its shift flipped, ready to insert against `newPeriodId`.
- *  Entries whose role_key is in FIXED_SHIFT_ROLE_KEYS keep their current shift
- *  instead — those roles don't rotate. */
+ *  An entry keeps its current shift (doesn't rotate) when it is PINNED, or when
+ *  its role is structurally day-only (FIXED_SHIFT_ROLE_KEYS). The pin carries
+ *  forward so it stays put every week until someone unpins it. */
 export function rotateEntries(entries: RotateEntry[], newPeriodId: string) {
-  return entries.map(e => ({
-    period_id:   newPeriodId,
-    role_key:    e.role_key,
-    shift:       FIXED_SHIFT_ROLE_KEYS.includes(e.role_key) ? e.shift : (e.shift === 'day' ? 'night' : 'day'),
-    employee_id: e.employee_id ?? null,
-    operator_id: e.operator_id ?? null,
-    person_name: e.person_name,
-    tags:        e.tags,
-    sort_order:  e.sort_order,
-  }))
+  return entries.map(e => {
+    const stays = e.pinned || FIXED_SHIFT_ROLE_KEYS.includes(e.role_key)
+    return {
+      period_id:   newPeriodId,
+      role_key:    e.role_key,
+      shift:       stays ? e.shift : (e.shift === 'day' ? 'night' : 'day'),
+      employee_id: e.employee_id ?? null,
+      operator_id: e.operator_id ?? null,
+      person_name: e.person_name,
+      tags:        e.tags,
+      sort_order:  e.sort_order,
+      pinned:      e.pinned ?? false,
+    }
+  })
 }
 
 /**
