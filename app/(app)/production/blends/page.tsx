@@ -11,7 +11,8 @@
 // centre and free-text search.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Search, Check, X, ChevronDown, ChevronRight, Trash2, Layers, AlertTriangle, ArrowUpRight } from 'lucide-react'
+import Link from 'next/link'
+import { Plus, Search, Check, X, ChevronDown, ChevronRight, Trash2, Layers, AlertTriangle, ArrowUpRight, FileText } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -67,6 +68,7 @@ export default function BlendsPage() {
   const { p, isFullAdmin } = useAuth()
   const canEdit = isFullAdmin || p('can_edit_blends')
   const canDelete = isFullAdmin || p('can_delete_blends')
+  const canGenerateJobCards = isFullAdmin || p('can_generate_job_cards')
 
   const [rows, setRows] = useState<BomRow[]>([])
   const [items, setItems] = useState<InventoryItem[]>([])
@@ -211,6 +213,7 @@ export default function BlendsPage() {
             <BlendGroupRow key={g.bomId} g={g} items={items} itemsById={itemsById}
               expanded={expanded === g.bomId} onToggle={() => setExpanded(expanded === g.bomId ? null : g.bomId)}
               canEdit={canEdit && isEditableWorkCentre(g.workCentre)} canDelete={canDelete && isEditableWorkCentre(g.workCentre)}
+              canGenerateJobCards={canGenerateJobCards}
               onAddComponent={addComponent} onUpdateComponent={updateComponent}
               onRemoveComponent={removeComponent} onRemoveBlend={removeBlend} />
           ))}
@@ -225,9 +228,9 @@ export default function BlendsPage() {
   )
 }
 
-function BlendGroupRow({ g, items, itemsById, expanded, onToggle, canEdit, canDelete, onAddComponent, onUpdateComponent, onRemoveComponent, onRemoveBlend }: {
+function BlendGroupRow({ g, items, itemsById, expanded, onToggle, canEdit, canDelete, canGenerateJobCards, onAddComponent, onUpdateComponent, onRemoveComponent, onRemoveBlend }: {
   g: BlendGroup; items: InventoryItem[]; itemsById: Map<string, InventoryItem>
-  expanded: boolean; onToggle: () => void; canEdit: boolean; canDelete: boolean
+  expanded: boolean; onToggle: () => void; canEdit: boolean; canDelete: boolean; canGenerateJobCards: boolean
   onAddComponent: (g: BlendGroup, componentItemId: string, description: string, qtyPct: number) => void
   onUpdateComponent: (id: string, patch: Partial<BomRow>) => void
   onRemoveComponent: (id: string) => void
@@ -251,6 +254,12 @@ function BlendGroupRow({ g, items, itemsById, expanded, onToggle, canEdit, canDe
           <div className="text-[10px] text-text-faint mt-0.5">{g.workCentre} · {variant ?? 'variant unknown'} · {g.components.length} component{g.components.length !== 1 ? 's' : ''}</div>
         </div>
         <span className={`text-[12px] font-mono font-semibold ${outOfRange ? 'text-warn' : 'text-ok'}`}>{totalPct.toFixed(0)}%</span>
+        {canGenerateJobCards && g.workCentre === '06-PASTEURISING' && (
+          <Link href={`/job-cards/pasteuriser?bomId=${encodeURIComponent(g.bomId)}`} onClick={e => e.stopPropagation()}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-brand/10 text-brand text-[11px] font-semibold hover:bg-brand/20 shrink-0">
+            <FileText className="w-3 h-3" /> Generate job card
+          </Link>
+        )}
         {canDelete && (
           <span onClick={e => { e.stopPropagation(); onRemoveBlend(g.bomId) }} className="text-text-faint hover:text-err p-1">
             <Trash2 className="w-3.5 h-3.5" />
