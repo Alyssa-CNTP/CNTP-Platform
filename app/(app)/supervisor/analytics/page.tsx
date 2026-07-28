@@ -17,7 +17,7 @@ const GRID = '#F0F2F5'
 
 interface Sheet { operator_name: string; date: string; worked_minutes: number | null }
 interface Sess  { id: string; section_id: string; date: string }
-interface MB    { session_id: string; total_input_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
+interface MB    { session_id: string; total_input_kg: number; total_output_a_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
 
 export default function SupervisorAnalytics() {
   const [start, setStart] = useState(() => format(subDays(new Date(), 13), 'yyyy-MM-dd'))
@@ -40,7 +40,7 @@ export default function SupervisorAnalytics() {
       let mbRows: MB[] = []
       if (sess.length) {
         const { data } = await db.schema('production').from('prod_mass_balance')
-          .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+          .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
           .in('session_id', sess.map(s => s.id))
         mbRows = (data as MB[]) ?? []
       }
@@ -54,7 +54,7 @@ export default function SupervisorAnalytics() {
     return () => { alive = false }
   }, [start, end])
 
-  const kgOut = (m?: MB) => m ? (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0
+  const kgOut = (m?: MB) => m ? (Number(m.total_output_a_kg) || 0) + (Number(m.total_output_b_kg) || 0) + (Number(m.total_output_c_kg) || 0) + (Number(m.total_output_d_kg) || 0) : 0
 
   // Continuous day axis (fills gaps with zeros).
   const dayKeys = useMemo(() => {

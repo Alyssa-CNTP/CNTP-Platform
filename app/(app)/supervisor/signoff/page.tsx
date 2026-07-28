@@ -29,7 +29,7 @@ const LINE_STATUS: Record<string, { label: string; cls: string; dot: string; ico
 }
 
 interface Sess { id: string; section_id: string; date: string; shift: string; status: string; operator_names: string[] | null }
-interface MB   { session_id: string; total_input_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
+interface MB   { session_id: string; total_input_kg: number; total_output_a_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
 interface Pending { id: string; section_id: string; date: string; shift: string; operators: string[]; submitted_at: string | null }
 interface Line { sectionId: string; status: string; operators: string[]; kg: number }
 
@@ -60,7 +60,7 @@ export default function SupervisorSignoff() {
     let mbRows: MB[] = []
     if (sessRows.length) {
       const { data } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+        .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg')
         .in('session_id', sessRows.map(s => s.id))
       mbRows = (data as MB[]) ?? []
     }
@@ -81,7 +81,7 @@ export default function SupervisorSignoff() {
 
   useEffect(() => { load() }, [])
 
-  const kgOut = (s: Sess) => { const r = mb.get(s.id); return r ? (Number(r.total_output_b_kg) || 0) + (Number(r.total_output_c_kg) || 0) + (Number(r.total_output_d_kg) || 0) : 0 }
+  const kgOut = (s: Sess) => { const r = mb.get(s.id); return r ? (Number(r.total_output_a_kg) || 0) + (Number(r.total_output_b_kg) || 0) + (Number(r.total_output_c_kg) || 0) + (Number(r.total_output_d_kg) || 0) : 0 }
 
   const signedOff = useMemo(() => sess.filter(s => s.status === 'approved').length, [sess])
 
