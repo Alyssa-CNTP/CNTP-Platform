@@ -145,6 +145,9 @@ export default function RosterPage() {
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [entries, setEntries]   = useState<Entry[]>([])
   const [sectionStatus, setSectionStatus] = useState<Record<string, SectionStatus>>({})
+  // Which period the sectionStatus map was actually loaded for — guards
+  // auto-publish against acting on a previous period's lingering status.
+  const [statusPeriodId, setStatusPeriodId] = useState<string | null>(null)
   const [submittingSection, setSubmittingSection] = useState<string | null>(null)
   const [leaveEmpIds, setLeaveEmpIds] = useState<Set<string>>(new Set())
   const [loading, setLoading]   = useState(true)
@@ -240,8 +243,14 @@ export default function RosterPage() {
 
   // ── Load entries when the selected period changes ───────────────────────────
   useEffect(() => {
-    if (!periodId) { setEntries([]); return }
+    if (!periodId) { setEntries([]); setSectionStatus({}); setStatusPeriodId(null); return }
     setDirtyCategories(new Set()) // fresh load clears all unsaved state
+    // Reset the submission status SYNCHRONOUSLY on every period switch. Without
+    // this the previous period's (possibly all-submitted) status lingered until
+    // the async refetch resolved — long enough for the auto-publish effect to
+    // wrongly publish a brand-new draft period that had zero submissions.
+    setSectionStatus({})
+    setStatusPeriodId(null)
     // Tolerant of the `days` column not being migrated yet: retry without it and
     // default to the full week, so the roster still loads pre-migration.
     const mapEntries = (rows: any[]) =>
@@ -255,7 +264,9 @@ export default function RosterPage() {
             .then(({ data: d2 }: any) => mapEntries((d2 as any[]) ?? []))
         } else mapEntries((data as any[]) ?? [])
       })
-    // Per-section submission status (graceful if the table isn't migrated yet)
+    // Per-section submission status (graceful if the table isn't migrated yet).
+    // Stamp statusPeriodId so auto-publish only ever acts on status that truly
+    // belongs to the period now selected.
     db().from('roster_section_status')
       .select('section,status,submitted_by,submitted_at')
       .eq('period_id', periodId)
@@ -263,7 +274,8 @@ export default function RosterPage() {
         const map: Record<string, SectionStatus> = {}
         ;((data as SectionStatus[]) ?? []).forEach(r => { map[r.section] = r })
         setSectionStatus(map)
-      }, () => setSectionStatus({}))
+        setStatusPeriodId(periodId)
+      }, () => { setSectionStatus({}); setStatusPeriodId(periodId) })
   }, [periodId])
 
   // Leave flags for the selected period
@@ -681,11 +693,14 @@ export default function RosterPage() {
   const autoPublishedRef = useRef<string | null>(null)
   useEffect(() => {
     if (!period || isPublished || !allSubmitted) return
+    // Only act on status that was actually loaded for THIS period — never on a
+    // previous period's lingering "all submitted" state during a switch.
+    if (statusPeriodId !== period.id) return
     if (autoPublishedRef.current === period.id) return
     autoPublishedRef.current = period.id
     publishPeriod()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, isPublished, allSubmitted])
+  }, [period, isPublished, allSubmitted, statusPeriodId])
 
   // View gate — the roster is permission-gated; without view access, stop here.
   if (!loading && !canView) {

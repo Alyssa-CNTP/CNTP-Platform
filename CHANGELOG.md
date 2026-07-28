@@ -5,6 +5,13 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-22 — Alyssa (Notifications/messages attributed to the signed-in user; roster auto-publish race fixed)
+
+**Files changed:** `lib/auth/server-helpers.ts`, `app/(app)/production/roster/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/api/production/notify-line-message/route.ts`, `app/api/announcements/route.ts`, `app/api/production/roster/notify-change/route.ts`, `app/api/maintenance/card-messages/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`
+
+- **Author = signed-in user, everywhere.** A message/notification is now attributed to whoever is actually signed in, server-verified. `getCallerPermissions()` now returns the caller's `name` (from the signed JWT claim, DB/auth fallback). The production line-chat previously used the section's assigned/verified operator — so if a supervisor/IT user typed at a section it showed the operator's name; it now uses the signed-in user. The line-message, announcement, roster-change, maintenance card-message, and PO reopen-request routes all derive the actor from the session instead of trusting a client-supplied name. Timestamps (`created_at`) were already recorded.
+- **Fixed roster false auto-publish.** Switching from an all-submitted/published period to a fresh draft left the previous period's `sectionStatus` in state until the async refetch resolved — long enough for the auto-publish effect to publish a brand-new period with zero submissions (seen live: "Week 32" published with no confirmations). Now `sectionStatus` resets synchronously on every period switch, and auto-publish is gated on a `statusPeriodId` that proves the loaded status belongs to the current period. Data fix applied: reset the wrongly-published Week 32 back to draft on production.
+
 ## 2026-07-28 — Alyssa (Pasteuriser debagging: corrected material sources; Blender bag-write failures no longer silent)
 
 **Files changed:** `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/BlenderCapture.tsx`

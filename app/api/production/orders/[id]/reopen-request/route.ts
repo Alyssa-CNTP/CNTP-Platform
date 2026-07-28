@@ -22,7 +22,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
   const reason = String(body?.reason ?? '').trim()
   if (!reason) return NextResponse.json({ error: 'A reason is required' }, { status: 400 })
-  const requestedByName = typeof body?.requestedByName === 'string' ? body.requestedByName.trim() || null : null
+  // Requester is the signed-in user (server-verified), not a client-supplied name.
+  const requestedByName = caller.name || (typeof body?.requestedByName === 'string' ? body.requestedByName.trim() || null : null)
 
   const admin = getAdminClient() as any
   const { data: session, error: sErr } = await admin.schema('production')

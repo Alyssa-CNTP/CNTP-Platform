@@ -51,9 +51,11 @@ export async function POST(req: NextRequest) {
     if (!b.body?.trim() && attachments.length === 0)
       return NextResponse.json({ error: 'Message or photo required' }, { status: 400 })
 
+    // Author is the signed-in user (server-verified), not a client-supplied name.
+    const authorName = caller.name || b.author_name || 'Unknown'
     const db = await getSessionClient()
     const { data: msg, error } = await db.schema('maintenance' as any).from('card_messages').insert({
-      card_id: cardId, author_id: caller.userId, author_name: b.author_name ?? 'Unknown',
+      card_id: cardId, author_id: caller.userId, author_name: authorName,
       body: b.body ?? '', mentions, attachments,
     }).select().single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -64,7 +66,7 @@ export async function POST(req: NextRequest) {
       const { data: card } = await db.schema('maintenance' as any).from('job_cards').select('card_no').eq('id', cardId).single()
       const recipients = await resolveRecipients(targets)
       await notify({ recipients, kind: 'mention', cardId, url: `/maintenance/job-cards/${cardId}`,
-        title: `${b.author_name ?? 'Someone'} mentioned you on ${card?.card_no ?? 'a job card'}`,
+        title: `${authorName} mentioned you on ${card?.card_no ?? 'a job card'}`,
         body: (b.body ?? '').slice(0, 140) || 'Shared a photo.', channels: ['inApp'] })
     }
 
