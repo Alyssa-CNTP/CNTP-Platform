@@ -145,6 +145,130 @@ export interface BlendIngredientGroup {
   hasLot: boolean          // Fine Leaf / Coarse Leaf track a lot number, per the paper form
 }
 
+// ── Full BOM catalogue (all work centres) ─────────────────────────────────────
+// Generic read layer alongside the Blender-only functions above. Blender capture
+// keeps calling listBlenderBoms/getBlendComponents unchanged; these power the
+// BOMs page (all work centres, browse-only outside Blender) and job-card
+// generation (Pasteuriser BOM lookup + its parent Blender BOM one hop up).
+
+export interface BomSummary {
+  bomId: string
+  outputItemId: string
+  outputDescription: string | null
+  workCentre: string
+  componentCount: number
+  itemFound: boolean   // false = output_item_id doesn't currently resolve in inventory_items
+}
+
+export interface BomComponent {
+  id: string
+  bomId: string
+  lineNbr: number
+  componentItemId: string
+  componentDescription: string | null
+  qtyRequired: number   // fraction 0..1 (occasionally negative — a by-product/waste line)
+  uom: string | null
+  itemFound: boolean
+}
+
+const BLENDER_WORK_CENTRES = ['05-BLENDER BIG', '05-BLENDER SMALL']
+
+/** Every distinct BOM across every work centre, optionally filtered by work centre and/or a free-text query against bom_id/output_item_id/output_description. */
+export async function listBoms(workCentre?: string | null, query?: string | null): Promise<BomSummary[]> {
+  const db = getDb()
+  const { data: rows } = await db.schema('production').from('bom_components')
+    .select('bom_id, output_item_id, output_description, work_centre')
+    .order('bom_id')
+  const all = (rows as any[]) ?? []
+
+  const byBom = new Map<string, { outputItemId: string; outputDescription: string | null; workCentre: string; count: number }>()
+  for (const r of all) {
+    const existing = byBom.get(r.bom_id)
+    if (existing) { existing.count += 1; continue }
+    byBom.set(r.bom_id, { outputItemId: r.output_item_id, outputDescription: r.output_description, workCentre: r.work_centre, count: 1 })
+  }
+
+  const outputIds = Array.from(new Set(Array.from(byBom.values()).map(v => v.outputItemId)))
+  const { data: items } = outputIds.length
+    ? await db.schema('production').from('inventory_items').select('inventory_id').in('inventory_id', outputIds)
+    : { data: [] as any[] }
+  const foundSet = new Set((items as any[] ?? []).map(it => it.inventory_id))
+
+  let summaries: BomSummary[] = Array.from(byBom.entries()).map(([bomId, v]) => ({
+    bomId, outputItemId: v.outputItemId, outputDescription: v.outputDescription, workCentre: v.workCentre,
+    componentCount: v.count, itemFound: foundSet.has(v.outputItemId),
+  }))
+
+  if (workCentre) summaries = summaries.filter(s => s.workCentre === workCentre)
+  if (query) {
+    const q = query.toLowerCase()
+    summaries = summaries.filter(s =>
+      s.bomId.toLowerCase().includes(q) ||
+      s.outputItemId.toLowerCase().includes(q) ||
+      (s.outputDescription ?? '').toLowerCase().includes(q))
+  }
+  return summaries
+}
+
+/** One BOM's full component list, any work centre — same shape as getBlendComponents but without the Blender-only ingredient-column framing. */
+export async function getBomComponents(bomId: string): Promise<BomComponent[]> {
+  if (!bomId) return []
+  const db = getDb()
+  const { data: rows } = await db.schema('production').from('bom_components')
+    .select('id, bom_id, line_nbr, component_item_id, component_description, qty_required, uom')
+    .eq('bom_id', bomId).order('line_nbr')
+  const all = (rows as any[]) ?? []
+  if (!all.length) return []
+
+  const componentIds = Array.from(new Set(all.map(r => r.component_item_id)))
+  const { data: items } = await db.schema('production').from('inventory_items').select('inventory_id').in('inventory_id', componentIds)
+  const found = new Set((items as any[] ?? []).map(it => it.inventory_id))
+
+  return all.map(r => ({
+    id: r.id, bomId: r.bom_id, lineNbr: r.line_nbr,
+    componentItemId: r.component_item_id, componentDescription: r.component_description,
+    qtyRequired: Number(r.qty_required) || 0, uom: r.uom,
+    itemFound: found.has(r.component_item_id),
+  }))
+}
+
+export interface ParentBlendBom {
+  bomId: string
+  outputItemId: string
+  outputDescription: string | null
+  components: BomComponent[]
+}
+
+/**
+ * The "before granules" blend ratio table on a Pasteuriser job card is one hop
+ * up the BOM chain: a Pasteuriser BOM's own components include one line whose
+ * component_item_id is itself the output_item_id of a Blender-work-centre BOM
+ * (e.g. Pasteuriser `30FPSFC-KUN25-C` consumes Blend `25BLSFC-KUN25-C`, and
+ * THAT blend's components are the fine/coarse leaf percentages printed on the
+ * paper job card). Returns null if no component resolves to a Blender BOM.
+ */
+export async function findParentBlendBom(pasteuriserBomId: string): Promise<ParentBlendBom | null> {
+  const components = await getBomComponents(pasteuriserBomId)
+  if (!components.length) return null
+
+  const db = getDb()
+  const candidateIds = Array.from(new Set(components.map(c => c.componentItemId)))
+  const { data: blendRows } = await db.schema('production').from('bom_components')
+    .select('bom_id, output_item_id, output_description')
+    .in('output_item_id', candidateIds)
+    .in('work_centre', BLENDER_WORK_CENTRES)
+    .limit(1)
+  const match = ((blendRows as any[]) ?? [])[0]
+  if (!match) return null
+
+  return {
+    bomId: match.bom_id,
+    outputItemId: match.output_item_id,
+    outputDescription: match.output_description,
+    components: await getBomComponents(match.bom_id),
+  }
+}
+
 export function groupComponentsByItem(components: BlendComponent[]): BlendIngredientGroup[] {
   const byItem = new Map<string, BlendComponent[]>()
   for (const c of components) {
