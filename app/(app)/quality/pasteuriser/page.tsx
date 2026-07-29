@@ -469,6 +469,27 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   const [specLoading, setSpecL] = useState(false)
   const [err, setErr]           = useState('')
 
+  // Data-driven dropdowns: load the families / grades / variants that actually
+  // exist in the customer specs so any new product the lab adds (e.g. Pure Leaf)
+  // is immediately selectable here — no hardcoded list to maintain.
+  const [specIndex, setSpecIndex] = useState<{ product_family: string; grade: string; variant: string }[]>([])
+  useEffect(() => {
+    db.schema('qms').from('customer_specs').select('product_family, grade, variant')
+      .then(({ data }: { data: any[] | null }) => setSpecIndex((data ?? []) as any))
+  }, [])
+  const uniqMerge = (base: string[], extra: (string | null | undefined)[]) => {
+    const seen = new Set(base.map(x => x.toLowerCase())); const out = [...base]
+    for (const e of extra) { const v = (e || '').trim(); if (v && !seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); out.push(v) } }
+    return out
+  }
+  const gradesFor = (family: string) => uniqMerge(
+    SPEC_GRADES[family] || [],
+    specIndex.filter(s => (s.product_family || '').toLowerCase() === family.toLowerCase()).map(s => s.grade),
+  )
+  const familyOptions  = uniqMerge(SPEC_FAMILIES, specIndex.map(s => s.product_family))
+  const gradeOptions   = gradesFor(form.product_family)
+  const variantOptions = uniqMerge(SPEC_VARIANTS, specIndex.map(s => s.variant))
+
   // Load spec when product/grade/variant/customer changes
   useEffect(() => {
     if (!form.product_family || !form.grade || !form.variant) return
@@ -544,11 +565,11 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
           <div className="bg-info/5 border border-info/20 rounded-xl p-4">
             <div className="font-mono text-[10px] uppercase tracking-wide text-info font-bold mb-3">📋 Product & Spec Lookup</div>
             <div className="grid grid-cols-3 gap-3 mb-3">
-              {[['Product Family','product_family',SPEC_FAMILIES],['Grade','grade',SPEC_GRADES[form.product_family]||[]],['Variant','variant',SPEC_VARIANTS]].map(([label,key,opts]) => (
+              {[['Product Family','product_family',familyOptions],['Grade','grade',gradeOptions],['Variant','variant',variantOptions]].map(([label,key,opts]) => (
                 <div key={key as string}>
                   <label className={lbl}>{label as string}</label>
                   <select value={(form as any)[key as string]} onChange={e => {
-                    if (key === 'product_family') { setForm(p => ({ ...p, product_family: e.target.value, grade: (SPEC_GRADES[e.target.value]??[])[0]??'' })) }
+                    if (key === 'product_family') { setForm(p => ({ ...p, product_family: e.target.value, grade: gradesFor(e.target.value)[0] ?? '' })) }
                     else setForm(p => ({ ...p, [key as string]: e.target.value }))
                   }} className={`${inp} w-full`}>
                     {(opts as string[]).map(o => <option key={o}>{o}</option>)}

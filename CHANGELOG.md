@@ -19,6 +19,16 @@ Traced the actual data flow before touching anything (not guessed): `shift_assig
 
 ---
 
+## 2026-07-24 — Gustav (Pasteuriser New Run: data-driven Grade/Family/Variant dropdowns)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- The New Pasteuriser Run modal's **Product Family / Grade / Variant** dropdowns are now **data-driven** — merged from the hardcoded defaults *plus* every distinct value that exists in `qms.customer_specs`. Any spec the lab creates in the Customer Specs (sieving) tab is now immediately selectable here, and its spec pulls through automatically. Fixes the reported case where a new **Pure Leaf** product couldn't be selected and its spec wouldn't load.
+- No hardcoded grade list to maintain going forward; new products/grades appear the moment their spec is saved.
+- (Staging only: seeded a Rooibos / Pure Leaf / Organic test spec so it's selectable for building the spec from samples. Production already has the real Pure Leaf spec.)
+
+---
+
 ## 2026-07-29 — Alyssa (Job card round 2: PDF text overlap, scroll room, sticky per-customer blend, resilient auto-numbering)
 
 **Files changed:** `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`
@@ -48,6 +58,30 @@ Redesigned per feedback: signatures should live on a person's Staff Directory pr
 - Also fixed while in these files: `getCallerPermissions()` doesn't return a `name` field (`caller.name` in the two job-card routes was always `undefined`, silently falling back to generic notification text) — now resolves the real employee name for notifications.
 
 **Not done this session:** migration `20260729_007` not yet run against Supabase — copied to `C:\Users\Alyssa\Documents\Supabase Scripts` (file `7 -`).
+---
+
+## 2026-07-28 — Alyssa (PRODUCTION: Shift Roster — pin an individual to their shift)
+
+**Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
+
+Requires migration `20260729_004` on the production project.
+
+- Pin a person (pin icon on their chip) to keep them on their current shift through the weekly day↔night rotation; everyone else still rotates and the pin carries forward each week. Weekly roster only; persists with the section Save.
+- Replaces the hardcoded `store_supervisor`/`forklift_driver` fixed-shift lists with per-person pins (migration pins their existing entries). `refining_2`/`rosehip` remain structurally day-only in code. Generate-next-week preview mirrors the real rotation.
+
+## 2026-07-22 — Alyssa (PRODUCTION: messages/notifications attributed to signed-in user; roster auto-publish race fixed)
+
+**Files changed:** `lib/auth/server-helpers.ts`, `app/(app)/production/roster/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/api/production/notify-line-message/route.ts`, `app/api/announcements/route.ts`, `app/api/production/roster/notify-change/route.ts`, `app/api/maintenance/card-messages/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`
+
+- **Author = signed-in user, server-verified, everywhere.** `getCallerPermissions()` now returns the caller's `name`; the production line-chat and every notification route (line message, announcement, roster change, maintenance card message, PO reopen request) attribute to whoever is signed in — not a client-supplied name or the section's assigned operator. Fixes line messages at a section showing the assigned operator instead of the person who actually typed.
+- **Fixed roster false auto-publish.** `sectionStatus` now resets synchronously on period switch and auto-publish is gated on `statusPeriodId`, so a fresh period can no longer inherit the previous period's all-submitted state and publish with zero confirmations. Data fix applied on prod: reset the wrongly-published "Week 32" back to draft.
+
+## 2026-07-28 — Alyssa (PRODUCTION: Refining mass balance — fixed dropped output-A stream across 8 screens)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/manager-kpis/route.ts`, `components/count/monthly/MonthlyReconciliation.tsx`, `components/production/LiveCaptureKPIs.tsx`, `components/production/ProductionDashboard.tsx`, `supabase/migrations/20260728_001_refining_mass_balance_output_a.sql` (new — run on production Supabase before/with this deploy)
+
+- **Root cause of "mass balances are wrong" on Production Orders:** Refining 1/2 sessions produce up to 4 output streams (A/B/C/D), but `production.prod_mass_balance` only ever had B/C/D slots, and `persist()` only wrote those — Refining's **A** stream (Indent Dust / Cut Heavy Stick Fine) silently never reached the table, even though the live capture screen's own balance footer showed the correct total. This is also why Refining 2's tolerance was previously widened to ±100kg (a band-aid over the same missing data).
+- New migration adds `total_output_a_kg`, rebuilds the generated `balance_kg` column and the `v_session_yield`/`v_batch_360` views to include it.
 
 ---
 
@@ -238,6 +272,29 @@ First round of floor feedback on the Pasteuriser build (#424): two of its debagg
 
 - Refining 1/2 input product-type was a hardcoded dropdown with no way to log a material outside that list. Added an "Other — search Master Inventory…" option, mirroring the existing Blender/Pasteuriser pattern (`ItemPicker` + `loadAllInventory`). `RefiningCapture.tsx` is shared by both sections so this covers both Refining 1 and Refining 2.
 
+## 2026-07-22 — Alyssa (PRODUCTION: Shift Roster — per-person working days + production-manager approval pop-up)
+
+**Files changed:** `supabase/migrations/20260722_005_roster_entry_days.sql` (new), `app/(app)/production/roster/page.tsx`, `app/api/production/roster/notify-change/route.ts` (new)
+
+Requires migration `20260722_005` on the production project (run before merging; the entries load falls back gracefully if it lags).
+
+- **Per-person working days** — each roster entry gets a `days` array (default Mon–Fri) with a simple day-picker (whole week by default, tap to remove, "Whole week" resets; hidden on the Saturday sheet). Partial weeks show a chip tag.
+- **Production-manager approval pop-up** — saving the Production section diffs the change and notifies the sign-off holder (production_manager) via the unified feed (`source:'roster'`) with a realtime pop-up listing person / role / Morning-Night / days. Editor filtered out. Approval is the existing "Submit Production" (notify + sign-off; changes save immediately).
+
+## 2026-07-22 — Alyssa (PRODUCTION: Unified notifications foundation — one shared feed, realtime, read/unread/delete)
+
+**Files changed:** `supabase/migrations/20260722_003_shared_notifications.sql` (new), `lib/notifications/index.ts`, `components/layout/NotificationBell.tsx`, `components/management/AnnouncementBoard.tsx`, `app/api/announcements/route.ts` (new), `app/api/axis/comments/route.ts`
+
+Replaces the fragmented notification storage (maintenance.notifications + axis.notifications + management_announcements) with ONE per-user feed in `shared.notifications`. **Run migration 20260722_003 on the production Supabase project BEFORE merging this** (the bell reads the new table; running the migration first avoids an empty-feed gap). notify() falls back to the legacy table if it hasn't run, so nothing is lost.
+
+- New `shared.notifications` table (per-user RLS, realtime publication, guarded backfill from the two old tables).
+- `notify()` writes there (service_role) with a legacy fallback for safe cutover.
+- Bell rewrite: unified newest-first feed, unread count, mark read/unread, delete, mark-all-read, deep-link open, realtime subscription + arrival toast.
+- Announcements publish via `/api/announcements` and fan out a per-user row to every targeted user.
+- AXIS @-mentions route through `notify()`.
+
+---
+
 ## 2026-07-02 — Gustav (Fit full names: annual table compacted, checklist names no longer truncate)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
@@ -255,7 +312,6 @@ First round of floor feedback on the Pasteuriser build (#424): two of its debagg
 - **Manager checklist-verify pop-up.** When a technician sends a completed weekly/monthly checklist for verification, the maintenance manager gets a corner pop-up ("N checklists to verify → Open to sign off").
 - **Annual calibration cycle → forward date.** Added a **cycle-days input right in the "Mark calibrated" cluster**; clicking Calibrated sets the next-due date forward by that cycle from the calibration date (the calc already existed — now it's easy to enter).
 - Auto-allocate now calls `reload()` so every allocation shows immediately (all monthly checklists verified allocated in the DB).
-
 ## 2026-07-24 — Gustav (COA signatures: drag to move / resize)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
@@ -396,6 +452,8 @@ returns 200 post-deploy.
   - Rotation is **stateless/deterministic** (offset by ISO-week / month index) — no extra table; see `lib/maintenance/allocation.ts`. Lazy alternative to a server cron: click on Monday / after the 5th.
 - **JoJo Tanks water checklist** — new **weekly** checklist template (migration, applied to staging). Two percentage readings (Tank 1 / Tank 2) with a **computed average** and a "Save readings" action; slots into the allocation + verification flow like any other checklist.
 - Re-implemented fresh on current staging (the earlier `gustav/maintenance-autoalloc` review branch had diverged behind weeks of checklist changes; its monthly-verify piece is already covered by the checklist verification shipped earlier).
+
+---
 
 ## 2026-07-24 — Alyssa (Shift Roster print: bigger text for noticeboard legibility)
 
@@ -583,6 +641,46 @@ already-generated upcoming week's roster. This also unblocks
 Still needed on the VPS side going forward: `CRON_SECRET` in production's `.env.local`
 must be kept in sync with GitHub's `PROD_CRON_SECRET` secret manually if either is ever
 rotated — there's no automated sync between the two.
+
+---
+
+## 2026-07-22 — Alyssa (PRODUCTION: Refining 1 & 2 capture — added Coarse Leaf + Cut Heavy Stick Fine/Coarse as scannable/pickable inputs)
+
+**Files changed:** `lib/production/live-types.ts`, `components/production/capture/RefiningCapture.tsx`
+
+Cherry-picked onto `main` (these two files are identical on `main` and `staging`, so this touches nothing else on prod). Adds three upstream input products to the Refining 1 and Refining 2 debagging inputs so operators can scan, manually enter, or search stock for them. These all originate upstream (Coarse Leaf from the sieving tower; Cut Heavy Stick Fine/Coarse from refining), and their batch number + serial trace back to the origin bag via the existing scan/system-pick lookup against `bag_tags`. No existing logic changed — purely additive.
+
+- **`SECTION_CONFIG.inputTypes`** — `refining1` gained `Coarse Leaf`, `Cut Heavy Stick Fine`, `Cut Heavy Stick Coarse`. `refining2` gained `Cut Heavy Stick Fine` (it already listed Cut Heavy Stick Coarse and Coarse Leaf).
+- **System-pick aliases** (`useSystemBags`) — added explicit `bag_tags.product_type` alias entries for `Coarse Leaf` and `Cut Heavy Stick Fine` so the in-stock origin bag (serial + batch) surfaces when picking from stock.
+- **Coarse Leaf batch-number requirement** was already enforced by the existing `needsLot = productType === 'Coarse Leaf'` gate — left unchanged; it now applies on Refining 1 as well now that Coarse Leaf is selectable there.
+
+---
+
+## 2026-07-22 — Alyssa (PRODUCTION: Shift Roster — automatic weekly rotation to prod, week-number labels, one rotation path)
+
+**Hotfix cherry-picked directly onto `main`** (roster files are identical on `main` and `staging`, so this touches nothing else on prod). Fixes real users' report that "nothing saves / next week never appears" on production.
+
+**Files changed:** `app/(app)/production/roster/page.tsx`, `lib/production/roster-rotate.ts`, `.github/workflows/roster-rotate-production.yml` (new)
+
+Root cause: the `roster-rotate.yml` cron only ever pinged the **staging** URL, so **production never auto-rotated** — prod had no period past the current week and supervisors had nothing to fill in. Manual "New period" produced a blank sheet and swallowed any write error, which read as "nothing saves."
+
+- **Production now auto-rotates.** Added `roster-rotate-production.yml` (mirror of the staging cron and of `energy-capture-production.yml`) that hits `PROD_APP_URL/api/production/roster/cron` with `PROD_CRON_SECRET` — Sun 22:00 rotate, Mon/Wed 06:00 reminders. **Requires the `PROD_APP_URL` + `PROD_CRON_SECRET` repo secrets (already used by energy prod cron) and `CRON_SECRET` set on the production VPS.**
+- **One rotation path, system-driven.** "Generate next week" and "New period" are now **admin-only** overrides; normal users (supervisors) only edit → save → submit. Weekly rotation is the cron's job. Empty-state copy now explains rotation is automatic.
+- **Week-number labels.** Auto-generated periods are named by ISO week (e.g. "Week 31") via `nextPeriodConfig`. Day/night columns are fixed clock ranges (07h00–16h00 / 16h00–01h00) and no longer swap — only the people rotate (`rotateEntries`). Dropped the "Shift A/B" toggle.
+- **No more silent write failures.** `createPeriod`/`generateNextPeriod` now check every insert and surface a dismissible error banner; the admin "New period" carries the current roster over (pre-fill) instead of starting blank.
+- **Data (prod, applied directly):** created the missing next week ("Week 31", 27–31 Jul, rotated from 20–24 Jul); removed Shuaib Sentso from the current week. Two past-week Shuaib entries left as history.
+
+---
+
+## 2026-07-21 — Alyssa (PRODUCTION: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
+
+**Promoted to production from staging PR [#416](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/416) — login fix only, cherry-picked onto `main` (the other 8 commits ahead on `staging` at this time — print-relay agent, maintenance pop-ups/filters, calibration work — were intentionally left off this promotion; they'll go to prod separately once their DB migrations are confirmed on the production Supabase project).**
+
+**Files changed:** `app/api/floor/operators/route.ts`, `app/login/page.tsx`
+
+- **Fixed operators not showing "On shift" correctly on the floor login.** The `/api/floor/operators` route resolved today's date and the current day/night shift from `new Date().getHours()` / `.toISOString()` — i.e. the **server's** timezone. The VPS runs in UTC (no `TZ` set for the app process), so the shift boundary — and the date around midnight — landed two hours off SAST, making the on-shift list disagree with the published roster (day-shift people showing before 09:00, etc.). Replaced with a SAST-aware `sastNow()` helper (`Intl.DateTimeFormat` with `timeZone: 'Africa/Johannesburg'`), mirroring the roster page's own `sastNow()` / "On duty" logic so both read the roster identically.
+- **Stopped Microsoft silently auto-logging the previous person back in on a shared browser.** The Azure OAuth call had no `prompt` param, so Azure re-used its cached SSO session and signed the last user straight back in ("storing cache and logging people in automatically"). Added `queryParams: { prompt: 'select_account' }` to `signInWithOAuth`, forcing the account picker every time so the next user must choose/confirm their own account. (Inactivity auto-logout — 60 min, in `app/(app)/layout.tsx` — left unchanged, as intended.)
+- **No database migration required** — pure application code change.
 
 ---
 
@@ -774,15 +872,6 @@ Consolidation foundation so capture, bags, quality and (next) Acumatica orders j
 - **Phase 3 (part 1) — consolidated batch view + three-way reconciliation.** New `production.order_reconciliation` table (`20260721_004`) stores the manual sides of the accuracy check as an auditable record. `/api/production/batch/[key]` returns the full "batch 360" (per-shift yield, output streams with share, machine params incl. sieving config, quality, input/output bags) and `/api/production/reconciliation` reads/writes the paperwork & Acumatica figures. New reusable `BatchConsolidation` component surfaces all the new KPIs per batch (sieving config, grade/variant, quality, output mix, yield) plus a **paperwork · system · Acumatica** comparison table with ±15 kg variance flags. Turned the empty `/traceability` roadmap shell into the real batch search + consolidation surface (with `?batch=` deep-link so bag/order pages can link straight in); the build roadmap is kept, collapsed, below.
 - **Bag-tracking entry points.** Added a "View batch KPIs" link from the bag detail modal on `/tags` and from each order card on `/production/orders`, both deep-linking to `/traceability?batch=<lot>` — so from any bag or order you jump straight to the consolidated batch view.
 - **Phase 3 (part 2) — automatic Acumatica production-order ingest is still pending** the production-order Generic Inquiry name in Acumatica. Once built, the reconciliation table's manual "Acumatica" column auto-fills from the sync (`acumatica_source` flips `manual`→`gi_sync`); layout and variance logic are unchanged.
-
----
-
-## 2026-07-21 — Alyssa (Login: fixed floor "on shift" list vs roster, and Microsoft silent auto-login on shared devices)
-
-**Files changed:** `app/api/floor/operators/route.ts`, `app/login/page.tsx`
-
-- **Fixed operators not showing "On shift" correctly on the floor login.** The `/api/floor/operators` route resolved today's date and the current day/night shift from `new Date().getHours()` / `.toISOString()` — i.e. the **server's** timezone. The VPS runs in UTC (no `TZ` set for the app process), so the shift boundary — and the date around midnight — landed two hours off SAST, making the on-shift list disagree with the published roster (day-shift people showing before 09:00, etc.). Replaced with a SAST-aware `sastNow()` helper (`Intl.DateTimeFormat` with `timeZone: 'Africa/Johannesburg'`), mirroring the roster page's own `sastNow()` / "On duty" logic so both read the roster identically.
-- **Stopped Microsoft silently auto-logging the previous person back in on a shared browser.** The Azure OAuth call had no `prompt` param, so Azure re-used its cached SSO session and signed the last user straight back in ("storing cache and logging people in automatically"). Added `queryParams: { prompt: 'select_account' }` to `signInWithOAuth`, forcing the account picker every time so the next user must choose/confirm their own account. (Inactivity auto-logout — 60 min, in `app/(app)/layout.tsx` — left unchanged, as intended.)
 
 ---
 
