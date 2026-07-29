@@ -381,8 +381,12 @@ function AssignScreen() {
                     </div>
                   )}
 
-                  {/* Lot / variant / POs */}
-                  {(NEEDS_VARIANT.has(sectionId) || NEEDS_LOT.has(sectionId)) && (
+                  {/* Lot / variant / POs — dropped for Pasteuriser: its approved
+                      job card (panel above) now fully determines item/blend/
+                      batch, so there's nothing left here to duplicate. Lot was
+                      already dead input for this section (Capture never reads
+                      it) and Production Orders was always empty. */}
+                  {sectionId !== 'pasteuriser' && (NEEDS_VARIANT.has(sectionId) || NEEDS_LOT.has(sectionId)) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {NEEDS_VARIANT.has(sectionId) && (
                         <div className="space-y-1.5">

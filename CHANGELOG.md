@@ -5,6 +5,20 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Approved job card now drives Assign + Capture — eliminates duplicate entry)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `lib/production/bom.ts`
+
+Traced the actual data flow before touching anything (not guessed): `shift_assignments.lot_number` for Pasteuriser was never read by Capture (only a last-resort fallback, `[section]/page.tsx:838,928,939`), `production_orders` was already always empty for this section (dead UI), and `variant` was only ever used for a post-hoc mismatch warning, never inherited. Confirmed the plan with the user before changing floor-facing screens: (1) Assign drops the dead fields for Pasteuriser, (2) Capture locks the job-card-sourced fields once one auto-applies, with an escape hatch, (3) no job card yet = today's exact behaviour, never a blocker.
+
+- **Assign screen** — the Pasteuriser section now shows only Operators + the existing read-only job-card panel. Dropped the Variant select, the Lot/Batch input (confirmed dead — Capture never read it), and the Production Orders picker (always empty for this section anyway).
+- **Capture auto-applies today's approved job card** — scoped by date (matching the Assign panel's own query) instead of requiring a manual pick from an unscoped list of the last 40 approved cards company-wide. If exactly one exists for today, it applies automatically on load.
+- **Job-card-sourced fields now lock** (item, item code, batch number, blend code, packaging, weight/bag) once applied — closes a real gap where these stayed silently editable with nothing marking them as authoritative. A "Not this batch? Change" link unlocks them and reveals the manual picker/free-typing, so nothing is a hard wall.
+- **Variant gets a suggested default, never a silent one** — derived from the job card's item code suffix (reusing `variantFromSuffix`, now exported from `lib/production/bom.ts` instead of duplicated), pre-filling the operator's own variant selector but leaving it an active, changeable choice — preserves the existing "capture never silently defaults" floor-safety behaviour (`[section]/page.tsx:73-75`) while cutting the lookup work.
+- **No approved job card for the day** → both screens behave exactly as before (manual entry, nothing locked) — this is a strict upgrade, never a blocker on starting a shift.
+
+---
+
 ## 2026-07-24 — Gustav (Pasteuriser New Run: data-driven Grade/Family/Variant dropdowns)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`

@@ -45,6 +45,7 @@ import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import { isValidLot } from '@/components/production/capture/SievingCapture'
 import { upperCode } from '@/lib/production/normalize-code'
+import { variantFromSuffix } from '@/lib/production/bom'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
@@ -539,11 +540,13 @@ function OutputLineRow({ line, perBag, locked, onEdit, onRemove, onTag }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function PasteuriserCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId,
+  sectionId, assignment, variantWord, onVariantSuggestion, date, locked, value, onChange, genSerial, operatorId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
   variantWord: string
+  onVariantSuggestion?: (variant: string) => void
+  date?: string
   locked: boolean
   value: PasteuriserData
   onChange: (d: PasteuriserData) => void
@@ -555,15 +558,20 @@ export function PasteuriserCapture({
   const [editLine, setEditLine] = useState<PastOutputLine | null>(null)
   const [items, setItems] = useState<InventoryItem[]>([])
   const [jobCards, setJobCards] = useState<any[]>([])
+  const [todaysJobCards, setTodaysJobCards] = useState<any[]>([])
   const [pickingItem, setPickingItem] = useState(false)
+  // Locked once today's (unambiguous) approved job card has been applied —
+  // closes the old silent-overwrite gap where a job card's fields stayed
+  // freely editable with nothing marking them as authoritative.
+  const [jobCardLocked, setJobCardLocked] = useState(false)
   const variantShort = variantToShort(variantWord as any) as ShortVariant
 
   const patch = (p: Partial<PasteuriserData>) => onChange({ ...value, ...p })
 
   useEffect(() => { loadAllInventory().then(setItems) }, [])
 
-  // Recent pasteuriser job cards — the prefill source for item / batch / blend /
-  // packaging / weight per bag. Public schema (matches the Job Card page).
+  // Recent pasteuriser job cards — the manual-override picker (last 40,
+  // company-wide). Public schema (matches the Job Card page).
   useEffect(() => {
     getDb().from('job_cards_pasteuriser')
       .select('id, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
@@ -572,6 +580,24 @@ export function PasteuriserCapture({
       .then(({ data }: any) => setJobCards(data ?? []))
       .catch(() => setJobCards([]))
   }, [])
+
+  // Today's card(s) for THIS date — if there's exactly one, it auto-applies
+  // and locks its fields (the manual list above stays available as the
+  // "not this batch, change" escape hatch). If none exist yet, nothing
+  // changes from today's manual-entry behaviour — never a blocker.
+  useEffect(() => {
+    if (!date || value.jobCardId) return
+    getDb().from('job_cards_pasteuriser')
+      .select('id, job_card_no, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
+      .eq('status', 'approved').eq('date_of_card', date)
+      .then(({ data }: any) => {
+        const rows = (data as any[]) ?? []
+        setTodaysJobCards(rows)
+        if (rows.length === 1) { applyJobCard(rows[0]); setJobCardLocked(true) }
+      })
+      .catch(() => setTodaysJobCards([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date])
 
   const t = pasteuriserTotals(value)
   const perBag = n(value.weightPerBag) || 18
@@ -588,6 +614,12 @@ export function PasteuriserCapture({
       packaging: jc.packaging ?? value.packaging,
       weightPerBag: jc.weight_per_bulk_bag ? String(jc.weight_per_bulk_bag).replace(/[^0-9.]/g, '') || value.weightPerBag : value.weightPerBag,
     })
+    // A suggested default only — the operator's own variant selector still
+    // shows it and can change it; never silently locked (see [section]/page.tsx).
+    if (jc.item_no) {
+      const suggested = variantFromSuffix(upperCode(jc.item_no))
+      if (suggested) onVariantSuggestion?.(suggested)
+    }
   }
 
   function applyItem(it: InventoryItem) {
@@ -677,7 +709,15 @@ export function PasteuriserCapture({
           <FileText size={13} className="text-stone-400" />
           <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Final product for this batch</span>
         </div>
-        {!locked && (
+        {jobCardLocked && !locked && (
+          <div className="flex items-center justify-between gap-2 bg-brand/5 border border-brand/20 rounded-lg px-2.5 py-1.5">
+            <span className="text-[11px] text-stone-600">
+              From Job Card{todaysJobCards[0]?.job_card_no ? ` ${todaysJobCards[0].job_card_no}` : ''} — today's approved batch.
+            </span>
+            <button onClick={() => setJobCardLocked(false)} className="text-[11px] font-semibold text-brand hover:underline shrink-0">Not this batch? Change</button>
+          </div>
+        )}
+        {!locked && !jobCardLocked && (
           <select value={value.jobCardId ?? ''} onChange={e => applyJobCard(jobCards.find(j => j.id === e.target.value))} className={INP}>
             <option value="">Prefill from a job card…</option>
             {jobCards.map(j => (
@@ -690,11 +730,11 @@ export function PasteuriserCapture({
         <div className="grid grid-cols-2 gap-2.5">
           <div className="space-y-1">
             <label className={LBL}>Batch number</label>
-            <BatchKeypadField value={value.batchNo} placeholder="26244-CON-SFC" onChange={v => patch({ batchNo: v })} className={INP} />
+            <BatchKeypadField value={value.batchNo} placeholder="26244-CON-SFC" onChange={v => patch({ batchNo: v })} className={INP} disabled={locked || jobCardLocked} />
           </div>
           <div className="space-y-1">
             <label className={LBL}>Blend code</label>
-            <BatchKeypadField value={value.blendCode} placeholder="SFC-KUN25-C" onChange={v => patch({ blendCode: v })} className={INP} />
+            <BatchKeypadField value={value.blendCode} placeholder="SFC-KUN25-C" onChange={v => patch({ blendCode: v })} className={INP} disabled={locked || jobCardLocked} />
           </div>
         </div>
         <div className="space-y-1">
@@ -702,22 +742,22 @@ export function PasteuriserCapture({
           {pickingItem ? (
             <ItemPicker items={items} placeholder="Search Master Inventory (30FP…)" onPick={applyItem} className={INP} />
           ) : (
-            <button onClick={() => !locked && setPickingItem(true)} disabled={locked}
+            <button onClick={() => !locked && !jobCardLocked && setPickingItem(true)} disabled={locked || jobCardLocked}
               className={INP + ' flex items-center justify-between text-left disabled:opacity-70'}>
               <span className="truncate">{value.item || 'Pick the final product item…'}{value.itemCode ? <span className="font-mono text-[11px] text-stone-400"> · {value.itemCode}</span> : null}</span>
-              {!locked && <Search size={14} className="text-stone-400 shrink-0" />}
+              {!locked && !jobCardLocked && <Search size={14} className="text-stone-400 shrink-0" />}
             </button>
           )}
         </div>
         <div className="grid grid-cols-2 gap-2.5">
           <div className="space-y-1">
             <label className={LBL}>Weight per bag (kg)</label>
-            <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.weightPerBag} disabled={locked}
+            <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.weightPerBag} disabled={locked || jobCardLocked}
               onChange={e => patch({ weightPerBag: e.target.value })} className={INP} />
           </div>
           <div className="space-y-1">
             <label className={LBL}>Packaging</label>
-            <input type="text" value={value.packaging} disabled={locked} onChange={e => patch({ packaging: e.target.value })} className={INP} />
+            <input type="text" value={value.packaging} disabled={locked || jobCardLocked} onChange={e => patch({ packaging: e.target.value })} className={INP} />
           </div>
         </div>
       </div>
