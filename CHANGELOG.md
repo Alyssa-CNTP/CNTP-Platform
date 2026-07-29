@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Job card floor feedback: visible fields, sequential sign-off with remembered signatures, seeded settings, dashboard outstanding-tasks nudge)
+
+**Files changed:** `app/globals.css`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`, `components/production/ProductionDashboard.tsx`, `lib/production/user-signature.ts` (new), `supabase/migrations/20260729_005_job_card_settings_seed.sql` (new), `supabase/migrations/20260729_006_user_signatures.sql` (new)
+
+Real screenshots from the floor surfaced concrete bugs and workflow mismatches, several of them pre-existing (not introduced this session, just never caught):
+
+- **Fixed: fields were unreadable.** No `.input` CSS class was ever defined anywhere in the repo — every page using `className="input"` (this one, plus `job-cards/granule`, `hs`, `cleaning`) was silently falling back to bare browser-default input styling with a near-invisible border. Added a real `.input` class to `globals.css` (border, background, focus ring, disabled state) — fixes all four pages at once.
+- **Fixed: the header card rendered blank.** `<div className="card p-4 bg-brand ...">` — the shared `.card` class hardcodes a translucent white background in plain CSS, which won the cascade over the `bg-brand` Tailwind utility stacked on the same element, so the header rendered white-on-white. Pre-existing bug (present before this session's edits); switched the header to a plain `rounded-2xl` div instead of `.card` so `bg-brand` actually applies.
+- **Sign-off flow now matches the real process.** Was 4 equally-editable signature pads with no sequencing. Now: Production Manager signs to send it (their own signature only, at the top) → Supervisor signs to approve (unchanged mechanism, just tidied) → Quality Officer signs once approved (new, gated to Quality/admin). Dropped Production Coordinator from the flow — the user's described process only has these three. Print view and PDF export updated to the same 3-signature layout.
+- **Signatures are now remembered per person** (new `public.user_signatures`, one row per user) — Manager, Supervisor, and Quality Officer each draw their signature once; every later job card auto-loads and reuses it instead of asking them to redraw it.
+- **Seeded the two known (item, customer) plant-settings/instructions pairs** transcribed off the paper cards already reviewed this session (Entyce/`30FPSG-NAT26-1-C`, Kunitaro/`30FPSFC-KUN25-C`) — `supabase/migrations/20260729_005`. Settings-template customer lookup is now case-insensitive (`ilike`) so "entyce"/"Entyce"/"ENTYCE" all match.
+- **"Item no." relabelled** to "Item no. (Acumatica code)" for clarity.
+- **Production Manager dashboard gets an "Outstanding today" nudge** — pulls directly from `job_cards_pasteuriser` (no card generated yet today?) and `shift_assignments` (sections not assigned yet today?), each linking straight to the page that fixes it. Not a separately-tracked to-do list, so it can't drift out of sync with the real pages. The BOMs page also now reads a `?workCentre=` deep-link param (Suspense-wrapped, same pattern as the job card page's `?bomId=`) so the dashboard's "Generate job card" link opens straight to the Pasteuriser-filtered view.
+
+**Not done this session:** `next_job_card_no()` returning blank in one screenshot wasn't reproducible (no live access to confirm) — added error logging instead of a blind fix, so a real failure now surfaces in the console instead of silently leaving the field empty.
+
+---
+
 ## 2026-07-29 — Alyssa (AXIS: Intelligence Hub — auto-categorized radial dashboard visualization)
 
 **Files changed:** `app/(app)/axis/page.tsx`, `app/(app)/axis/changelog/page.tsx`, `components/axis/IntelligenceHub.tsx` (new), `lib/axis/hub-taxonomy.ts` (new), `lib/axis/hub-geometry.ts` (new), `lib/axis/categorize.ts` (new), `app/api/axis/categorize/run/route.ts` (new), `app/api/axis/intelligence-hub/route.ts` (new), `.github/workflows/axis-categorize.yml` (new), `supabase/migrations/20260729_006_axis_intelligence_hub.sql` (new)

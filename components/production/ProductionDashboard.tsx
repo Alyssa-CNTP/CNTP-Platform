@@ -15,7 +15,7 @@ import {
 import {
   RefreshCw, Scale, Percent, Activity, CheckCircle2, AlertTriangle,
   Wrench, CalendarRange, ClipboardList, Users, ChevronRight,
-  Map as MapIcon, TrendingUp, Cpu, FlaskConical, Info, Boxes,
+  Map as MapIcon, TrendingUp, Cpu, FlaskConical, Info, Boxes, FileText,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
@@ -170,6 +170,11 @@ export default function ProductionDashboard() {
   const [todayRows, setTodayRows] = useState<any[]>([])
   const [breakdowns, setBreakdowns] = useState<any[]>([])
 
+  // Outstanding tasks — nudges pulled straight from the pages that own them
+  // (job cards, shift assignment), not a separate tracked to-do list.
+  const [todayJobCard, setTodayJobCard] = useState<{ status: string } | null | undefined>(undefined)
+  const [todayAssigned, setTodayAssigned] = useState<boolean | undefined>(undefined)
+
   // Batch-spine analytics (folded in from the old standalone Analytics page):
   // per-product output share + the batch grid linking yield to quality.
   const [outputMix, setOutputMix] = useState<{ productType: string; kg: number; sharePct: number | null }[]>([])
@@ -186,12 +191,16 @@ export default function ProductionDashboard() {
     const db = getDb()
 
     // Fetch KPI data from API + section status + breakdowns in parallel
-    const [kpiRes, { data: sess }, { data: bags }, { data: bd }] = await Promise.all([
+    const [kpiRes, { data: sess }, { data: bags }, { data: bd }, { data: jc }, { data: assigns }] = await Promise.all([
       fetch(`/api/production/manager-kpis?days=${windowDays}`).then(r => r.json()),
       db.schema('production').from('prod_sessions').select('id,section_id,status,date').eq('date', today).is('deleted_at', null),
       db.schema('production').from('bag_tags').select('section_id,weight_kg').gte('created_at', `${today}T00:00:00`),
       db.schema('maintenance').from('job_cards').select('card_no,area,machine,status,raised_at').eq('workflow', 'breakdown').neq('status', 'complete'),
+      db.from('job_cards_pasteuriser').select('status').eq('date_of_card', today).order('created_at', { ascending: false }).limit(1),
+      db.schema('production').from('shift_assignments').select('id').eq('date', today).limit(1),
     ])
+    setTodayJobCard(((jc as any[]) ?? [])[0] ?? null)
+    setTodayAssigned(((assigns as any[]) ?? []).length > 0)
 
     // KPI API data
     if (!kpiRes.error) {
@@ -960,6 +969,39 @@ export default function ProductionDashboard() {
           </>
         )}
       </div>
+
+      {/* Outstanding tasks — pulled straight from the pages that own them, not a
+          separately-tracked to-do list, so it can never drift out of sync. */}
+      {(todayJobCard === null || todayAssigned === false) && (
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={15} className="text-warn" />
+            <h3 className="text-sm font-semibold text-text">Outstanding today</h3>
+          </div>
+          <div className="space-y-2">
+            {todayJobCard === null && (
+              <Link href="/production/blends?workCentre=06-PASTEURISING"
+                className="flex items-center justify-between rounded-lg border border-warn/25 bg-warn/5 px-3 py-2.5 hover:border-warn/40 transition">
+                <div className="flex items-center gap-2">
+                  <FileText size={14} className="text-warn shrink-0" />
+                  <span className="text-[13px] text-text">No Pasteuriser job card generated for today</span>
+                </div>
+                <span className="text-[11px] font-medium text-warn shrink-0">Generate now →</span>
+              </Link>
+            )}
+            {todayAssigned === false && (
+              <Link href="/production/capture/assign"
+                className="flex items-center justify-between rounded-lg border border-warn/25 bg-warn/5 px-3 py-2.5 hover:border-warn/40 transition">
+                <div className="flex items-center gap-2">
+                  <Users size={14} className="text-warn shrink-0" />
+                  <span className="text-[13px] text-text">Sections not yet assigned for today's shift</span>
+                </div>
+                <span className="text-[11px] font-medium text-warn shrink-0">Assign now →</span>
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Quick links */}
       <div className="flex flex-wrap items-center gap-2">
