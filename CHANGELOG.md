@@ -5,6 +5,19 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Supervisor Hub: fixed archived-session data leak, SAST date consistency, job cards surfaced before Assign)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/timesheets/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `lib/production/shifts.ts`, `components/production/JobCardApprovalsPanel.tsx` (new), `components/supervisor/PendingSignOffs.tsx` (new)
+
+Reported: "supervisor hub is not rendering properly... the information isn't correct... job cards will also now be something they need to review before assigning sections."
+
+- **Fixed a real data-correctness bug**: the Sign-off tab's "needs your sign-off" queue and today's line-status/kg figures, plus the Productions tab's session list, count and CSV export, were all missing `.is('deleted_at', null)` on their `prod_sessions` queries — an archived/soft-deleted session could still show up as awaiting sign-off or counted in production totals.
+- **Unified "today" on SAST** (`lib/production/shifts.ts:sastToday()`) across every Hub tab — Sign-off, Productions, Analytics and Timesheets previously computed "today" from the browser's own local clock/timezone instead of SAST explicitly (only the Roster tab did this correctly), which could silently disagree on a misconfigured device.
+- **Job card approvals now surface on the Hub landing tab**, above the Staffing/Today's-sections toggle — a supervisor reviews and approves pending Pasteuriser job cards before assigning sections against them, not after. Extracted the existing approve/reject widget from `/job-cards/pasteuriser` into a shared `JobCardApprovalsPanel` component (one query, one implementation, used in both places) instead of duplicating it.
+- **Pending sign-offs are now bold and prominent on the landing tab too** (`PendingSignOffs`, also extracted/shared with the Sign-off tab) — the thing a supervisor most needs to act on today is the first thing they see, not something found after navigating to a separate tab.
+
+---
+
 ## 2026-07-02 — Gustav (Annual register → readable card layout that fits the screen)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`

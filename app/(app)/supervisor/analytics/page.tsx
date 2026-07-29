@@ -8,9 +8,10 @@ import {
 import { Clock, Scale, Factory, AlertTriangle, Users, Loader2, TrendingUp } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 
-const todayStr = () => format(new Date(), 'yyyy-MM-dd')
+const todayStr = sastToday
 const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
 const AXIS = { fontSize: 11, fill: '#637056' }
 const GRID = '#F0F2F5'
