@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Signatures moved to the Staff Directory — "Verify & Sign", no more drawing)
+
+**Files changed:** `supabase/migrations/20260729_007_employee_signatures.sql` (new), `lib/auth/server-helpers.ts`, `lib/production/employee-signature.ts` (new, replaces `lib/production/user-signature.ts`), `app/api/me/signature/route.ts` (new), `app/api/staff/[id]/signature/route.ts` (new), `app/api/production/job-cards/[id]/send-for-approval/route.ts`, `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/[id]/quality-sign/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`
+
+Redesigned per feedback: signatures should live on a person's Staff Directory profile, not be drawn (even from a "remembered" cache) on every job card.
+
+- **New `production.employee_signatures`** (keyed on `employee_id`, the Staff Directory record) supersedes last session's `public.user_signatures` (keyed on the raw login id, with fully-open RLS — any authenticated user could read/write anyone else's row via the client). The new table has no write policy for `authenticated` at all; every write goes through a server route.
+- **Identity resolved server-side, never trusted from the client** — `resolveEmployeeId()` (new, `lib/auth/server-helpers.ts`) walks the same chain Training's identity-attestation check already uses: `auth.users.id` → `shared.app_roles.user_id` → `shared.app_roles.employee_id` → `production.employees.id`. The Supervisor `decide` route previously accepted a `supervisorSignature` string straight from the request body and stamped it as-is — a real gap (anyone could have submitted any image as "the" approval signature). Both `send-for-approval` and `decide` now resolve and stamp the caller's own on-file signature server-side; a new `quality-sign` route does the same for Quality, gated on `department === 'Quality'`.
+- **"Signature on file" on the Staff Directory profile** (`/production/staff/[id]`) — draw it once here; settable by the person themselves (server-verified) or anyone with `can_edit_staff_profiles` (HR onboarding). New `quality_signed_by`/`quality_signed_at` columns give Quality the same who+when attestation Manager (`created_by`/`sent_for_approval_at`) and Supervisor (`approved_by`/`approved_at`) already had.
+- **Job card sign-offs are now one-click, not draw-every-time**: sending to the Supervisor IS the Manager's Verify & Sign, approving IS the Supervisor's, and a new "Verify & Sign" button handles Quality once a card is approved — each disabled with a link to the Staff Directory profile if that person has no signature on file yet.
+- Also fixed while in these files: `getCallerPermissions()` doesn't return a `name` field (`caller.name` in the two job-card routes was always `undefined`, silently falling back to generic notification text) — now resolves the real employee name for notifications.
+
+**Not done this session:** migration `20260729_007` not yet run against Supabase — copied to `C:\Users\Alyssa\Documents\Supabase Scripts` (file `7 -`).
+
+---
+
 ## 2026-07-29 — Alyssa (Job card floor feedback: visible fields, sequential sign-off with remembered signatures, seeded settings, dashboard outstanding-tasks nudge)
 
 **Files changed:** `app/globals.css`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`, `components/production/ProductionDashboard.tsx`, `lib/production/user-signature.ts` (new), `supabase/migrations/20260729_005_job_card_settings_seed.sql` (new), `supabase/migrations/20260729_006_user_signatures.sql` (new)

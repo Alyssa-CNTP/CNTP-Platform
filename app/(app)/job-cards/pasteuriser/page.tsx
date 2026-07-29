@@ -2,17 +2,17 @@
 
 import { Fragment, Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { Save, Send, CheckCircle2, XCircle, Clock, ThumbsUp, ThumbsDown, Layers, Printer, Download } from 'lucide-react'
 import clsx from 'clsx'
 import { jsPDF } from 'jspdf'
-import SignaturePad from '@/components/ui/SignaturePad'
 import { useAuth } from '@/lib/auth/context'
 import { listBoms, getBomComponents, findParentBlendBom, type BomSummary } from '@/lib/production/bom'
 import { upperCode } from '@/lib/production/normalize-code'
 import { loadImage } from '@/lib/pdf/load-image'
-import { loadMySignature, saveMySignature } from '@/lib/production/user-signature'
+import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 
 interface RatioLine { componentItemId: string; label: string; pct: number }
 interface PackagingLine { componentItemId: string; label: string; kgPerUnit: number }
@@ -95,24 +95,43 @@ function RatioTable({ lines }: { lines: RatioLine[] }) {
   )
 }
 
-// Quality's own sign-off, appearing once a card is approved — auto-loads/saves
-// the signer's remembered signature the same way the Production Manager's does.
-function QualitySignOff({ onSign }: { onSign: (signature: string) => void }) {
-  const { userId } = useAuth()
-  const [signature, setSignature] = useState<string | null>(null)
-  const [signed, setSigned] = useState(false)
+// Quality's own sign-off, appearing once a card is approved. No drawing — the
+// signature already on file (Staff Directory profile) is stamped server-side
+// the moment they click; the click itself IS the identity verification.
+function QualitySignOff({ cardId, onSigned }: { cardId: string; onSigned: (record: any) => void }) {
+  const [status, setStatus] = useState<MySignatureStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { loadMySignature(userId).then(setSignature) }, [userId])
+  useEffect(() => { getMySignatureStatus().then(setStatus) }, [])
 
+  async function sign() {
+    setBusy(true); setError(null)
+    const res = await fetch(`/api/production/job-cards/${cardId}/quality-sign`, { method: 'POST' })
+    const body = await res.json().catch(() => ({}))
+    if (res.ok) onSigned(body.record)
+    else setError(body.error || 'Could not sign')
+    setBusy(false)
+  }
+
+  if (!status) return null
+  if (!status.hasSignature) {
+    return (
+      <p className="text-[11px] text-warn">
+        No signature on file — {status.employeeId
+          ? <Link href={`/production/staff/${status.employeeId}`} className="underline">set one up on your Staff Directory profile</Link>
+          : 'ask IT to link your login to your Staff Directory profile'} first.
+      </p>
+    )
+  }
   return (
-    <div className="space-y-2">
-      <SignaturePad label="Quality Officer / Controller" name="Quality Officer / Controller" value={signature} onChange={setSignature} />
-      <button disabled={!signature || signed}
-        onClick={() => { if (signature) { saveMySignature(userId, signature); onSign(signature); setSigned(true) } }}
-        className={clsx('px-3 py-2 rounded-lg text-[13px] font-semibold',
-          signature && !signed ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
-        {signed ? 'Signed ✓' : 'Sign off'}
+    <div className="space-y-1.5">
+      <button disabled={busy}
+        onClick={sign}
+        className="px-3 py-2 rounded-lg text-[13px] font-semibold bg-brand text-white hover:opacity-90 disabled:opacity-60">
+        {busy ? 'Signing…' : `Verify & Sign as ${status.employeeName ?? 'you'}`}
       </button>
+      {error && <p className="text-[11px] text-err">{error}</p>}
     </div>
   )
 }
@@ -183,7 +202,7 @@ function PendingApprovals() {
   }
   useEffect(() => { reload() }, [])
 
-  async function decide(id: string, decision: 'approved' | 'rejected', extra: { reason?: string; supervisorSignature?: string }) {
+  async function decide(id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) {
     const res = await fetch(`/api/production/job-cards/${id}/decide`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision, ...extra }),
@@ -209,14 +228,13 @@ function PendingApprovals() {
 
 function PendingCardRow({ c, expanded, onToggle, onDecide }: {
   c: PendingCard; expanded: boolean; onToggle: () => void
-  onDecide: (id: string, decision: 'approved' | 'rejected', extra: { reason?: string; supervisorSignature?: string }) => Promise<void>
+  onDecide: (id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) => Promise<void>
 }) {
-  const { userId } = useAuth()
-  const [signature, setSignature] = useState<string | null>(null)
+  const [status, setStatus] = useState<MySignatureStatus | null>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => { loadMySignature(userId).then(setSignature) }, [userId])
+  useEffect(() => { getMySignatureStatus().then(setStatus) }, [])
 
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
@@ -242,13 +260,20 @@ function PendingCardRow({ c, expanded, onToggle, onDecide }: {
             </div>
           ) : null}
 
-          <SignaturePad label="Supervisor signature" name="Supervisor signature" value={signature} onChange={setSignature} />
-          <button disabled={!signature || busy}
-            onClick={async () => { setBusy(true); saveMySignature(userId, signature!); await onDecide(c.id, 'approved', { supervisorSignature: signature! }); setBusy(false) }}
-            className={clsx('w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5',
-              signature ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
-            <ThumbsUp className="w-4 h-4" /> {signature ? 'Approve' : 'Sign to approve'}
-          </button>
+          {status && !status.hasSignature ? (
+            <p className="text-[11px] text-warn">
+              No signature on file — {status.employeeId
+                ? <Link href={`/production/staff/${status.employeeId}`} className="underline">set one up on your Staff Directory profile</Link>
+                : 'ask IT to link your login to your Staff Directory profile'} before you can approve.
+            </p>
+          ) : (
+            <button disabled={!status?.hasSignature || busy}
+              onClick={async () => { setBusy(true); await onDecide(c.id, 'approved', {}); setBusy(false) }}
+              className={clsx('w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5',
+                status?.hasSignature ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
+              <ThumbsUp className="w-4 h-4" /> {busy ? 'Signing…' : `Verify & Sign as ${status?.employeeName ?? 'you'} to Approve`}
+            </button>
+          )}
 
           <div className="flex gap-2 items-center pt-1 border-t border-surface-rule/60">
             <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason for rejection…"
@@ -267,7 +292,7 @@ function PendingCardRow({ c, expanded, onToggle, onDecide }: {
 
 function PasteuriserJobCardScreen() {
   const db = getDb()
-  const { p, isFullAdmin, isQuality, userId } = useAuth()
+  const { p, isFullAdmin, isQuality } = useAuth()
   const canGenerate = isFullAdmin || p('can_generate_job_cards')
   const canApprove = isFullAdmin || p('can_approve_job_cards')
   const searchParams = useSearchParams()
@@ -278,6 +303,7 @@ function PasteuriserJobCardScreen() {
   const [sending, setSending] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(null)
   const [bomLoading, setBomLoading] = useState(false)
+  const [myStatus, setMyStatus] = useState<MySignatureStatus | null>(null)
 
   // Locked once sent for approval or approved — the manager's job is done;
   // a supervisor either approves it (via the panel above) or rejects it back
@@ -307,15 +333,9 @@ function PasteuriserJobCardScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkBomId])
 
-  // The manager only ever draws their signature once — after that it's
-  // remembered (public.user_signatures) and reused on every new draft.
-  useEffect(() => {
-    if (form.sig_production_manager || savedId) return
-    loadMySignature(userId).then(sig => {
-      if (sig) setForm(f => (f.sig_production_manager ? f : { ...f, sig_production_manager: sig }))
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId])
+  // No drawing here — "Send to Supervisor" IS the manager's Verify & Sign;
+  // this just tells the UI whether they have a signature on file yet.
+  useEffect(() => { getMySignatureStatus().then(setMyStatus) }, [])
 
   async function save(patch?: Partial<Form>): Promise<string | null> {
     setSaving(true)
@@ -442,8 +462,9 @@ function PasteuriserJobCardScreen() {
     const id = await save()
     if (id) {
       const res = await fetch(`/api/production/job-cards/${id}/send-for-approval`, { method: 'POST' })
-      if (res.ok) setForm(f => ({ ...f, status: 'sent_for_approval' }))
-      else { const body = await res.json().catch(() => ({})); alert(body.error || 'Could not send for approval') }
+      const body = await res.json().catch(() => ({}))
+      if (res.ok) setForm(f => ({ ...f, status: 'sent_for_approval', sig_production_manager: body.record?.sig_production_manager ?? f.sig_production_manager }))
+      else alert(body.error || 'Could not send for approval')
     }
     setSending(false)
   }
@@ -584,11 +605,22 @@ function PasteuriserJobCardScreen() {
 
       <div className="card p-4 space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold">Sign-offs</p>
-        <p className="text-[11px] text-text-faint -mt-2">Sequential: Production Manager signs here to send it, the Supervisor signs to approve it, then Quality signs off once approved. Each signature is drawn once and remembered for next time.</p>
+        <p className="text-[11px] text-text-faint -mt-2">Sequential, no drawing: sending this card IS the Production Manager's Verify &amp; Sign, approving is the Supervisor's, and Quality signs once approved — each stamped from the signature already on file on their Staff Directory profile.</p>
 
-        <SignaturePad label="Production Manager" name="Production Manager" value={form.sig_production_manager}
-          onChange={(val: string | null) => { setForm(f => ({ ...f, sig_production_manager: val })); if (val) saveMySignature(userId, val) }}
-          disabled={locked} />
+        {form.sig_production_manager ? (
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Production Manager</p>
+            <img src={form.sig_production_manager} alt="Production manager signature" style={{ height: 40 }} />
+          </div>
+        ) : !locked && myStatus && !myStatus.hasSignature ? (
+          <p className="text-[11px] text-warn">
+            No signature on file — {myStatus.employeeId
+              ? <Link href={`/production/staff/${myStatus.employeeId}`} className="underline">set one up on your Staff Directory profile</Link>
+              : 'ask IT to link your login to your Staff Directory profile'} before you can send this for approval.
+          </p>
+        ) : !locked && myStatus?.hasSignature ? (
+          <p className="text-[11px] text-text-faint">Ready to sign as {myStatus.employeeName} — click "Send to Supervisor" below.</p>
+        ) : null}
 
         {form.sig_production_supervisor ? (
           <div>
@@ -605,8 +637,8 @@ function PasteuriserJobCardScreen() {
               <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Quality Officer / Controller</p>
               <img src={form.sig_quality_officer} alt="Quality officer signature" style={{ height: 40 }} />
             </div>
-          ) : (isFullAdmin || isQuality) ? (
-            <QualitySignOff onSign={sig => save({ sig_quality_officer: sig })} />
+          ) : (isFullAdmin || isQuality) && savedId ? (
+            <QualitySignOff cardId={savedId} onSigned={rec => setForm(f => ({ ...f, sig_quality_officer: rec?.sig_quality_officer ?? f.sig_quality_officer }))} />
           ) : (
             <p className="text-[11px] text-text-faint">Awaiting the Quality Officer's sign-off.</p>
           )
@@ -758,9 +790,9 @@ function PasteuriserJobCardScreen() {
             <Save size={16} /> {saving ? 'Saving…' : 'Save draft'}
           </button>
           {!locked && (form.status === 'draft' || form.status === 'rejected') && (
-            <button onClick={sendForApproval} disabled={sending}
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-base bg-brand text-white hover:opacity-90 disabled:opacity-60">
-              <Send size={16} /> {sending ? 'Sending…' : form.status === 'rejected' ? 'Resend to Supervisor' : 'Send to Supervisor'}
+            <button onClick={sendForApproval} disabled={sending || !myStatus?.hasSignature}
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-base bg-brand text-white hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed">
+              <Send size={16} /> {sending ? 'Signing & sending…' : !myStatus?.hasSignature ? 'Signature required to send' : form.status === 'rejected' ? 'Verify & Sign to Resend' : 'Verify & Sign to Send'}
             </button>
           )}
         </div>

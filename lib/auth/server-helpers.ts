@@ -101,6 +101,19 @@ export async function getCallerPermissions() {
   }
 }
 
+// The Staff Directory identity chain: auth.users.id (the caller's session) ->
+// shared.app_roles.user_id -> shared.app_roles.employee_id ->
+// production.employees.id. Same link Training's "attest your identity" check
+// (app/api/training/attempts/route.ts) already relies on. Used server-side
+// wherever an action must be tied to a specific Staff Directory person (job
+// card sign-offs) rather than just "any authenticated user."
+export async function resolveEmployeeId(userId: string): Promise<string | null> {
+  const admin = getAdminClient()
+  const { data } = await admin.schema('shared' as any).from('app_roles')
+    .select('employee_id').eq('user_id', userId).maybeSingle()
+  return (data as any)?.employee_id ?? null
+}
+
 export function getAdminClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
