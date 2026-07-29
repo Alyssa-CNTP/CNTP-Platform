@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
+import SignaturePad from '@/components/ui/SignaturePad'
+import { getMySignatureStatus, setEmployeeSignature, loadEmployeeSignature } from '@/lib/production/employee-signature'
 import { StaffTabs } from '@/components/production/StaffTabs'
 import { SKILL_TAGS, tagLabel, categoryMeta } from '@/lib/production/roster-config'
 import { SOP_AREAS, sopAreaMeta, statusMeta, COMPETENCY_STATUSES } from '@/lib/production/competency-config'
@@ -78,14 +80,39 @@ export default function StaffProfilePage() {
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [trainingCourses, setTrainingCourses] = useState<any[]>([])
   const [assigningTraining, setAssigningTraining] = useState(false)
+  const [mySignatureEmployeeId, setMySignatureEmployeeId] = useState<string | null | undefined>(undefined)
+  const [signature, setSignature] = useState<string | null>(null)
+  const [signatureDraft, setSignatureDraft] = useState<string | null>(null)
+  const [savingSignature, setSavingSignature] = useState(false)
+  const [signatureError, setSignatureError] = useState<string | null>(null)
 
   const canEdit = p('can_manage_competencies')
   const canAssignPin = p('can_reset_operator_pin')
   const canAssignTraining = p('can_assign_training')
+  const isSelf = mySignatureEmployeeId === id
+  const canEditSignature = isSelf || p('can_edit_staff_profiles')
 
   async function loadIdentities() {
     const res = await fetch(`/api/staff/${id}/identities`)
     if (res.ok) setIdentities(await res.json())
+  }
+
+  useEffect(() => {
+    getMySignatureStatus().then(s => setMySignatureEmployeeId(s.employeeId))
+  }, [])
+
+  useEffect(() => {
+    if (!id) return
+    loadEmployeeSignature(id).then(setSignature)
+  }, [id])
+
+  async function saveSignature() {
+    if (!signatureDraft) return
+    setSavingSignature(true); setSignatureError(null)
+    const res = await setEmployeeSignature(id, signatureDraft)
+    if (res.ok) { setSignature(signatureDraft); setSignatureDraft(null) }
+    else setSignatureError(res.error ?? 'Could not save signature')
+    setSavingSignature(false)
   }
 
   useEffect(() => {
@@ -353,6 +380,37 @@ export default function StaffProfilePage() {
           {identityError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {identityError}</p>}
         </div>
       </div>
+      </div>
+
+      {/* Signature on file — drawn ONCE here, then reused everywhere a
+          sign-off needs it (e.g. Pasteuriser job cards' "Verify & Sign").
+          Only the person themselves can set it, unless an HR/admin with
+          can_edit_staff_profiles is doing it on their behalf. */}
+      <div className="space-y-2">
+        <h2 className="font-display font-semibold text-[15px] text-text">Signature on file</h2>
+        {signature && !signatureDraft ? (
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg border border-surface-rule bg-white px-3 py-2">
+              <img src={signature} alt="Signature on file" style={{ height: 36 }} />
+            </div>
+            {canEditSignature && (
+              <button onClick={() => setSignatureDraft('__redraw__')} className="text-[12px] text-brand font-medium hover:underline">Redraw →</button>
+            )}
+          </div>
+        ) : canEditSignature ? (
+          <div className="space-y-2">
+            <SignaturePad label={isSelf ? 'Your signature' : `${employee?.display_name || employee?.name}'s signature`}
+              name={employee?.display_name || employee?.name || 'Signature'}
+              value={signatureDraft === '__redraw__' ? null : signatureDraft} onChange={setSignatureDraft} />
+            <button onClick={saveSignature} disabled={!signatureDraft || signatureDraft === '__redraw__' || savingSignature}
+              className="text-[12px] font-semibold px-3 py-1.5 rounded-lg bg-brand text-white disabled:opacity-40 disabled:cursor-not-allowed">
+              {savingSignature ? 'Saving…' : 'Save signature'}
+            </button>
+            {signatureError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {signatureError}</p>}
+          </div>
+        ) : (
+          <p className="text-[12px] text-text-muted">No signature on file yet.</p>
+        )}
       </div>
 
       {/* Training portfolio — courses assigned/completed, feeding the competency matrix below.
