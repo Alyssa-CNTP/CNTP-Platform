@@ -1,5 +1,4 @@
 import type { OutputBag } from './live-types'
-import { VARIANT_LABELS } from './live-types'
 
 const GRADE_SHORT: Record<string, string> = {
   A: 'Export',
@@ -22,7 +21,6 @@ function clean(s: string): string {
  */
 export function buildLabelZpl(bag: OutputBag): string {
   const gradeShort = GRADE_SHORT[bag.grade] ?? bag.grade
-  const variant    = VARIANT_LABELS[bag.variant] ?? bag.variant
 
   const dateFormatted = new Date(bag.created_at).toLocaleDateString('en-ZA', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -45,10 +43,20 @@ export function buildLabelZpl(bag: OutputBag): string {
     `^FO20,16^A0N,34,34^FD${productName}^FS`,
     `^FO20,58^A0N,20,20^FD${sectionName}^FS`,
 
-    // Variant/grade badge — box top-right
-    '^FO560,8^GB235,68,2^FS',
-    `^FO572,16^A0N,26,26^FD${clean(variant)}^FS`,
-    `^FO572,48^A0N,18,18^FD${clean(gradeShort)}^FS`,
+    // Type (CON/ORG/RA CON/RA ORG) and Grade (A/B/C + word) — two clearly
+    // captioned rows, not one cramped unlabelled badge. Grade shows the
+    // LETTER as well as the word (previously dropped) since that's what a
+    // floor operator sorts pallets by at a glance. Values use the existing
+    // short codes (bag.variant/bag.grade) rather than long descriptive
+    // names — comfortably fits this box width; a full name like "RA
+    // Conventional" would not. Exact dot positions are conservative but not
+    // yet confirmed against a physical print (no printer has been tested
+    // end-to-end — see the print-system health page).
+    '^FO560,8^GB235,80,2^FS',
+    `^FO568,11^A0N,12,12^FDTYPE^FS`,
+    `^FO568,25^A0N,22,22^FD${clean(bag.variant)}^FS`,
+    `^FO568,50^A0N,12,12^FDGRADE^FS`,
+    `^FO568,64^A0N,17,17^FD${clean(bag.grade)} ${clean(gradeShort)}^FS`,
 
     // Barcode — Code 128, height 90 dots, no ZPL-drawn text (serial printed below)
     `^FO20,92^BY2^BCN,90,N,N,N^FD${serial}^FS`,
