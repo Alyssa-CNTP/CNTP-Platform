@@ -97,8 +97,11 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
         ] },
       { key: 'production.inventory', label: 'Master Inventory',
         read: 'can_view_inventory', write: 'can_edit_inventory', delete: 'can_delete_inventory' },
-      { key: 'production.blends', label: 'Blends (BOM)',
+      { key: 'production.blends', label: 'BOMs (all work centres)',
         read: 'can_view_blends', write: 'can_edit_blends', delete: 'can_delete_blends' },
+      { key: 'production.job_cards', label: 'Pasteuriser job cards',
+        read: 'can_view_blends', write: 'can_generate_job_cards',
+        manage: [{ key: 'can_approve_job_cards', label: 'Approve or reject a job card sent for approval' }] },
     ],
   },
   {

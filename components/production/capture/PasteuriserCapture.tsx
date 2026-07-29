@@ -148,6 +148,11 @@ const DEBAG_COLOR = '#be185d'   // rose — matches SECTION_CONFIG.pasteuriser
 const BAG_COLOR   = '#0d9488'   // teal
 
 const OUTPUT_KINDS = ['Final Product', 'High Moisture', 'Refill'] as const
+// Granule Line's finished output items — what "post-sieve blending" actually
+// consumes (the granule material folded in at the post-sieve stage), matching
+// SECTION_CONFIG.granule.outputTypes minus its SG/SF Dust by-products (those
+// aren't fed to the pasteuriser).
+const GRANULE_OUTPUT_TYPES = ['SG Granules', 'SG Granules 002', 'SF Granules', 'SF Granules 002', 'Export Granules', 'Export Granules 002']
 // By-products off the pasteuriser, from the PR-FM-005 by-product summary.
 const BYPRODUCT_TYPES = ['Brown Dust', 'First Cut', 'Alt', 'Extraction Dust', 'Purge Material'] as const
 // Packaging reconciliation types (boxes + the foils/quad-seal the paper lists).
@@ -169,59 +174,76 @@ interface SystemBag {
   acumatica_id: string | null
 }
 
-// Blender output bags carry product_type "Blend {code}" and acumatica_id = the
-// blend code. Filter to in-stock blend bags, newest first. When a blend code is
-// known we narrow by it; otherwise we surface all blend bags so the operator is
-// never blocked by a mis-typed job card.
-function useSystemBlendBags(blendCode: string): SystemBag[] {
+// Main debagging (D) consumes Blender output ("Blend {code}" product_type) AND
+// High Moisture rework bags (bagged as a by-product of an earlier run, fed back
+// in later) — both are legitimate inputs on the SAME table on the paper form.
+// Post-sieve blending (E) consumes Granule Line output specifically — the
+// material folded in at the post-sieve stage — NOT blender output; a different
+// pool of bags entirely. Whole-bag pick throughout, matching every other
+// section: the operator consumes one complete in-stock bag at a time.
+function useSystemBagsForStream(stream: 'main' | 'postsieve', blendCode: string): SystemBag[] {
   const [bags, setBags] = useState<SystemBag[]>([])
   useEffect(() => {
     let q = getDb().schema('production').from('bag_tags')
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at, acumatica_id')
       .eq('status', 'in_stock')
-      .ilike('product_type', '%blend%')
       .order('created_at', { ascending: false })
       .limit(80)
+    q = stream === 'postsieve'
+      ? q.in('product_type', GRANULE_OUTPUT_TYPES)
+      : q.or('product_type.ilike.%blend%,product_type.eq.High Moisture')
     q.then(({ data }: { data: SystemBag[] | null }) => {
       let rows = data ?? []
-      if (blendCode.trim()) {
+      if (stream === 'main' && blendCode.trim()) {
         const bc = blendCode.trim().toLowerCase()
+        // Narrow to the chosen blend when one's set, but keep High Moisture bags
+        // visible regardless — they aren't tied to any particular blend code.
         const narrowed = rows.filter(b =>
+          b.product_type === 'High Moisture' ||
           (b.acumatica_id ?? '').toLowerCase() === bc ||
           (b.product_type ?? '').toLowerCase().includes(bc))
         if (narrowed.length) rows = narrowed
       }
       setBags(rows)
     })
-  }, [blendCode])
+  }, [stream, blendCode])
   return bags
 }
 
-function SystemPickList({ blendCode, onPick, onClose }: {
+function SystemPickList({ stream, blendCode, onPick, onClose }: {
+  stream: 'main' | 'postsieve'
   blendCode: string
   onPick: (b: SystemBag) => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
-  const bags = useSystemBlendBags(blendCode)
-  const filtered = query.trim()
-    ? bags.filter(b => b.serial_number.toLowerCase().includes(query.toLowerCase()) || (b.product_type ?? '').toLowerCase().includes(query.toLowerCase()))
+  const bags = useSystemBagsForStream(stream, blendCode)
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? bags.filter(b =>
+        b.serial_number.toLowerCase().includes(q) ||
+        (b.product_type ?? '').toLowerCase().includes(q) ||
+        (b.lot_number ?? '').toLowerCase().includes(q))
     : bags
+  const title = stream === 'postsieve' ? 'Pick a granule lot from the system' : 'Pick a blend or rework bag from the system'
   return (
     <div className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: DEBAG_COLOR + '40' }}>
       <div className="flex items-center gap-2 px-4 py-3 border-b border-stone-100">
-        <span className="font-semibold text-[15px] text-text flex-1">Pick a blend bag from the system</span>
+        <span className="font-semibold text-[15px] text-text flex-1">{title}</span>
         <button onClick={onClose} className="text-stone-400 hover:text-text p-1"><X size={18} /></button>
       </div>
       <div className="p-3 space-y-2">
         <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200">
           <Search size={15} className="text-stone-400" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search serial or blend…"
+          <input value={query} onChange={e => setQuery(e.target.value)}
+            placeholder={stream === 'postsieve' ? 'Search lot number…' : 'Search serial, blend or lot…'}
             className="flex-1 py-2 text-[13px] outline-none bg-transparent" />
         </div>
         {filtered.length === 0 ? (
           <p className="text-[12px] text-stone-400 text-center py-4">
-            {bags.length === 0 ? 'No in-stock blend bags found. Scan or enter manually.' : 'No matches.'}
+            {bags.length === 0
+              ? (stream === 'postsieve' ? 'No in-stock granule bags found. Scan or enter manually.' : 'No in-stock blend or rework bags found. Scan or enter manually.')
+              : 'No matches.'}
           </p>
         ) : (
           <div className="max-h-64 overflow-y-auto divide-y divide-stone-100">
@@ -257,7 +279,7 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
   onDelete?: () => void
 }) {
   const [serial, setSerial] = useState(editingRow?.serial ?? '')
-  const [productType, setProductType] = useState(editingRow?.productType ?? (blendCode ? `Blend ${blendCode}` : ''))
+  const [productType, setProductType] = useState(editingRow?.productType ?? (stream === 'main' && blendCode ? `Blend ${blendCode}` : ''))
   const [weight, setWeight] = useState(editingRow?.weight ?? '')
   const [lot, setLot] = useState(editingRow?.lot ?? '')
   const [variant, setVariant] = useState(editingRow?.variant ?? variantWord)
@@ -272,8 +294,10 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
   async function triggerLookup() {
     if (!serial.trim()) return
     setLooking(true)
-    // Pasteuriser consumes BLENDER OUTPUT — so blockFinishedProducts must be off,
-    // otherwise validateBagScan rejects every legitimate blend bag as "finished".
+    // Both streams consume FINISHED intermediate product (blender/granule output,
+    // or a recycled High Moisture bag) — never a raw material — so
+    // blockFinishedProducts must stay off, otherwise validateBagScan rejects every
+    // legitimate bag as "finished".
     const result = await validateBagScan(serial, { sessionVariant: variantWord, blockFinishedProducts: false })
     setLooking(false)
     if (result.status === 'ok' && result.tag) {
@@ -282,9 +306,13 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
       setVariant(result.tag.variant || variantWord || '')
       if (result.tag.lot_number && result.tag.lot_number !== 'NOT TRACKED') setLot(result.tag.lot_number)
       setNotInSystem(false); setInputMode('scan')
-      // Smart flag (non-blocking): warn if this bag's blend doesn't look like the chosen one.
-      const looksLikeBlend = blendCode && (result.tag.acumatica_id ?? result.tag.product_type ?? '').toLowerCase().includes(blendCode.toLowerCase())
-      setScanMsg(blendCode && !looksLikeBlend
+      // Smart flag (non-blocking) — only meaningful on the main stream, where the
+      // job card names a specific blend; post-sieve accepts any granule lot and
+      // High Moisture bags aren't tied to a blend code at all.
+      const type = (result.tag.product_type ?? '').toLowerCase()
+      const looksLikeBlend = stream === 'main' && blendCode && type !== 'high moisture'
+        && (result.tag.acumatica_id ?? result.tag.product_type ?? '').toLowerCase().includes(blendCode.toLowerCase())
+      setScanMsg(stream === 'main' && blendCode && type !== 'high moisture' && !looksLikeBlend
         ? { kind: 'warn', text: `⚠ This bag is "${result.tag.product_type}" — the job card blend is ${blendCode}. Add it if correct, but double-check the batch.` }
         : { kind: 'ok', text: result.message })
     } else if (result.status === 'not_found') {
@@ -330,7 +358,7 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
 
         <div className="p-5 space-y-3 overflow-y-auto">
           {browsing ? (
-            <SystemPickList blendCode={blendCode} onPick={pickSystemBag} onClose={() => setBrowsing(false)} />
+            <SystemPickList stream={stream} blendCode={blendCode} onPick={pickSystemBag} onClose={() => setBrowsing(false)} />
           ) : (
             <>
               <div className="space-y-1">
@@ -351,13 +379,15 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
                     <AlertTriangle size={12} className="shrink-0 mt-0.5" /> {scanMsg.text}
                   </p>
                 )}
-                <button onClick={() => setBrowsing(true)} className="text-[11px] text-brand hover:underline">or pick from in-stock blend bags</button>
+                <button onClick={() => setBrowsing(true)} className="text-[11px] text-brand hover:underline">
+                  {stream === 'postsieve' ? 'or pick a granule lot from stock' : 'or pick a blend / rework bag from stock'}
+                </button>
               </div>
 
               <div className="space-y-1">
                 <label className={LBL}>Input product type</label>
                 <input type="text" value={productType} onChange={e => setProductType(e.target.value)}
-                  placeholder={blendCode ? `Blend ${blendCode}` : 'e.g. Blend SFC-KUN25-C'} className={INP} />
+                  placeholder={stream === 'postsieve' ? 'e.g. SG Granules' : (blendCode ? `Blend ${blendCode}` : 'e.g. Blend SFC-KUN25-C or High Moisture')} className={INP} />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -537,6 +567,7 @@ export function PasteuriserCapture({
   useEffect(() => {
     getDb().from('job_cards_pasteuriser')
       .select('id, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
+      .eq('status', 'approved')
       .order('date_of_card', { ascending: false }).limit(40)
       .then(({ data }: any) => setJobCards(data ?? []))
       .catch(() => setJobCards([]))
@@ -732,13 +763,13 @@ export function PasteuriserCapture({
       {tab === 'debag' && (
         <>
           <p className="text-[12px] text-stone-500 px-1">
-            Consume every blend bag fed into the pasteuriser. Scan the barcode, pick it from the system, or register a bag written on a paper tag.
+            Consume every bag fed into the pasteuriser. Scan the barcode, pick it from the system, or register a bag written on a paper tag.
           </p>
-          <DebagStream stream="main" title="Debagging" hint="Blend bags fed to the steriliser" letter="D"
+          <DebagStream stream="main" title="Debagging" hint="Blend bags fed to the steriliser, plus any High Moisture rework bag being fed back in" letter="D"
             rows={mainRows} total={t.D} locked={locked}
             onAdd={() => setBagModal({ stream: 'main', editing: null })}
             onEdit={r => setBagModal({ stream: 'main', editing: r })} />
-          <DebagStream stream="postsieve" title="Debagging — Post-sieve blending" hint="Material blended in after the post-sieve" letter="E"
+          <DebagStream stream="postsieve" title="Debagging — Post-sieve blending" hint="Granule Line output folded in at the post-sieve stage" letter="E"
             rows={postRows} total={t.E} locked={locked}
             onAdd={() => setBagModal({ stream: 'postsieve', editing: null })}
             onEdit={r => setBagModal({ stream: 'postsieve', editing: r })} />

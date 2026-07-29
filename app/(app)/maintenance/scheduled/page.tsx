@@ -6,12 +6,14 @@
 // calibration registers, and Readings & Trends (water, IP, diesel, loadshedding,
 // run-hours, boiler starts) with the Excel database history and due-date formulas.
 
-import { useState } from 'react'
-import { Printer } from 'lucide-react'
+import { useState, Fragment } from 'react'
+import { Printer, Users } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { useAuth } from '@/lib/auth/context'
+import { getDb } from '@/lib/supabase/db'
 import { deriveMaintRole } from '@/lib/maintenance/roles'
 import { calClass, calBadge, fmtD, fmtT, addDays, diffDays } from '@/lib/maintenance/helpers'
+import { allocateWeekly, allocateMonthly, isoWeekNumber, monthIndexOf } from '@/lib/maintenance/allocation'
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
@@ -28,7 +30,7 @@ const BTN_OK = 'bg-ok text-white rounded-lg px-3 py-2 text-[12px] font-semibold 
 const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md px-2.5 py-1.5 text-[11px] font-semibold hover:border-text/25 transition'
 
 export default function ScheduledPage() {
-  const { loading, data, actions, derived, ui, weekKey, moKey, actor } = useMaintenanceContext()
+  const { loading, data, actions, derived, ui, weekKey, moKey, actor, reload } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
   const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const auth = useAuth()
@@ -46,6 +48,9 @@ export default function ScheduledPage() {
   const [rd, setRd] = useState<Record<string, string>>({})
   // Per-row calibrate form for the editable annual register (date · interval · who).
   const [calForm, setCalForm] = useState<Record<number, { date?: string; interval?: string; by?: string }>>({})
+  // Which annual row's "mark calibrated" panel is expanded (keeps the table compact
+  // so full asset / serial / supplier names fit on one line without scrolling).
+  const [calPanel, setCalPanel] = useState<number | null>(null)
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
@@ -79,6 +84,41 @@ export default function ScheduledPage() {
 
   const techNames = staff.length ? staff.map(s => s.name) : TECHS
   const lastOf = <T,>(arr: T[]) => arr[arr.length - 1]
+
+  // Auto-allocate the weekly / monthly checklists to technicians from the OPERATIONS
+  // SHIFT ROSTER (read-only — no roster logic is changed here). Weekly goes to the
+  // morning-shift maintenance techs and rotates by ISO week; monthly goes across all
+  // maintenance techs on the roster with the heavy lines (granule / sieving /
+  // pasteurizer) rotating month-to-month (see lib/maintenance/allocation.ts).
+  // Manager-triggered; writes via the existing client-side allocateChecklist. A lazy
+  // alternative to a server cron: click on Monday morning / after the 5th.
+  const autoAllocate = async (freq: 'weekly' | 'monthly') => {
+    const db = getDb()
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' })
+    const { data: periods } = await db.schema('production' as any).from('roster_periods')
+      .select('id').lte('start_date', today).gte('end_date', today)
+    if (!periods?.length) { setPopup('No shift-roster period covers today — set the roster up in Operations first.'); return }
+    const { data: entries } = await db.schema('production' as any).from('roster_entries')
+      .select('person_name, role_key, shift').in('period_id', (periods as any[]).map(p => p.id))
+      .in('role_key', ['maintenance_tech', 'maintenance_asst'])
+    const rows = (entries ?? []) as { person_name: string; role_key: string; shift: string }[]
+    const uniq = (arr: string[]) => Array.from(new Set(arr.map(x => (x ?? '').trim()).filter(Boolean)))
+    // Weekly → morning (day) shift; monthly → everyone on the roster this month.
+    const techs = freq === 'weekly'
+      ? uniq(rows.filter(r => r.shift === 'day').map(r => r.person_name))
+      : uniq(rows.map(r => r.person_name))
+    if (!techs.length) { setPopup(`No maintenance technicians on the ${freq === 'weekly' ? 'morning shift this week' : 'roster this month'} — check the shift roster in Operations.`); return }
+    const tpls = templates.filter(t => t.frequency === freq)
+    const allocTpls = tpls.map(t => ({ id: t.id, area: t.area, sort_order: t.sort_order }))
+    const now = new Date()
+    const map = freq === 'weekly'
+      ? allocateWeekly(allocTpls, techs, isoWeekNumber(now))
+      : allocateMonthly(allocTpls, techs, monthIndexOf(now))
+    let n = 0
+    for (const t of tpls) { const who = map[t.id]; if (who) { await allocateChecklist(t, who); n++ } }
+    reload() // refresh so every allocation shows immediately
+    setPopup(`Auto-allocated ${n} ${freq} checklist${n === 1 ? '' : 's'} across ${techs.length} technician${techs.length === 1 ? '' : 's'} (${techs.join(', ')}) from the shift roster.\n\nWeekly is due before 10:00 on Monday; monthly is due by the 15th.`)
+  }
 
   if (loading) {
     return <div className="p-4 sm:p-6 max-w-[1400px] mx-auto"><div className="card p-6 text-text-muted text-sm">Loading…</div></div>
@@ -195,6 +235,13 @@ export default function ScheduledPage() {
                   </label>
                 )}
                 {auditView && <span className="badge badge-gray">Audit view</span>}
+                {/* Manager UX: auto-allocate from the shift roster (reads it only). */}
+                {canManage && !auditView && (
+                  <button onClick={() => autoAllocate(freq)} title={freq === 'weekly' ? 'Allocate weekly checklists to the morning-shift technicians (rotates weekly)' : 'Allocate monthly checklists across the roster (heavy lines rotate monthly)'}
+                    className="inline-flex items-center gap-1.5 bg-brand text-white rounded-lg px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition">
+                    <Users size={14} /> Auto-allocate from roster
+                  </button>
+                )}
                 <button onClick={() => printChecklists(freq, period)}
                   className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition">
                   <Printer size={14} /> Print / export
@@ -217,13 +264,18 @@ export default function ScheduledPage() {
                 const assignedToMe = !!assigned && assigned === actor
                 // Suggest the on-duty technician first, then the rest of the team.
                 const techOptions = [...dutyNow, ...allTechs.filter(t => !dutyNow.includes(t))]
+                // Reading checklists capture NUMBERS, not fault/no-fault: the JoJo tanks
+                // (two % values, averaged) and the meter-reading sheets (IP, Generator,
+                // Water — doc_ref 'Database').
+                const isJojo = cl.area === 'JoJo Tanks Water'
+                const isReading = isJojo || cl.doc_ref === 'Database'
                 return (
                   <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
                     <div className="p-3 cursor-pointer flex justify-between items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
                       <div className="flex items-center gap-2 min-w-0">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
                         <div className="min-w-0">
-                          <div className="text-[13px] font-semibold text-text truncate">{cl.area}</div>
+                          <div className="text-[13px] font-semibold text-text leading-tight">{cl.area}</div>
                           <div className="text-[11px] text-text-faint">{cl.doc_ref} · {cl.tasks.length} tasks</div>
                           <div className={`text-[10px] mt-0.5 ${prev || done ? 'text-text-muted' : 'text-err'}`}>
                             {done && comp ? <>✓ Completed by <strong className="text-ok">{comp.completed_by || '—'}</strong> ({fmtD(comp.updated_at ?? null)})</>
@@ -236,7 +288,7 @@ export default function ScheduledPage() {
                       <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
                         {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
                         {canManage && (
-                          <select className={`${INP} w-28 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                          <select className={`${INP} w-44 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
                             value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
                             <option value="">Allocate…</option>
                             {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
@@ -251,7 +303,40 @@ export default function ScheduledPage() {
                     </div>
                     {isOpen && (
                       <div className="px-3 pb-3 border-t border-surface-rule pt-2.5 max-h-[400px] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        {cl.tasks.map((task, ti) => {
+                        {/* Reading checklists — numeric entry per task (not fault/no-fault),
+                            with the previous period's value shown as a hint. Saving stores
+                            each value + marks the entered tasks done. JoJo also averages. */}
+                        {isReading && (() => {
+                          const prevComp = lastComp(cl.id)
+                          const valOf = (ti: number) => drafts['t' + cl.id + '-' + ti] ?? st[ti]?.notes ?? ''
+                          const jojoNums = isJojo ? [0, 1].map(ti => parseFloat(valOf(ti))) : []
+                          const avg = isJojo && jojoNums.every(n => !isNaN(n)) ? (jojoNums[0] + jojoNums[1]) / 2 : null
+                          return (
+                            <div className="space-y-1.5 mb-2">
+                              {cl.tasks.map((task, ti) => {
+                                const prevVal = prevComp?.task_states?.[ti]?.notes
+                                return (
+                                  <div key={ti} className="flex items-center gap-2">
+                                    <span className="text-[12px] flex-1 min-w-0 text-text-muted">{task}</span>
+                                    <input className={`${INP} w-28 text-[12px] py-1 min-h-0 text-right`} type="number" inputMode="decimal"
+                                      placeholder={prevVal ? 'prev: ' + prevVal : 'value'}
+                                      value={valOf(ti)}
+                                      onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
+                                      onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
+                                  </div>
+                                )
+                              })}
+                              <div className="flex items-center gap-2 rounded-lg bg-brand/5 border border-brand/20 px-3 py-2">
+                                {isJojo
+                                  ? <><span className="text-[12px] font-semibold text-text">Average</span><span className="text-[15px] font-semibold text-brand tabular-nums">{avg != null ? avg.toFixed(1) + ' %' : '—'}</span></>
+                                  : <span className="text-[11px] text-text-muted">Enter this week's readings.</span>}
+                                <button className={BTN_OK + ' ml-auto'}
+                                  onClick={() => cl.tasks.forEach((_, ti) => { if (valOf(ti) !== '' && !st[ti]?.done) toggleTask(cl, ti) })}>Save readings</button>
+                              </div>
+                            </div>
+                          )
+                        })()}
+                        {!isReading && cl.tasks.map((task, ti) => {
                           const s = st[ti] ?? {}
                           // The Fault / No-fault SELECT is the check itself — choosing a
                           // value records the answer AND marks the item done (no tick box).
@@ -340,33 +425,35 @@ export default function ScheduledPage() {
 
           <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="data-table">
+              <table className="data-table w-full">
                 <thead><tr>
                   <th>Status</th>
                   <th><select className={`${INP} text-[11px] py-1 min-h-0 font-semibold ${annualCat !== 'all' ? 'text-brand' : ''}`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
                     <option value="all">Category ▾</option>
                     {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
                   </select></th>
-                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', 'Mark calibrated', 'Email', 'Notes'].map(h => <th key={h}>{h}</th>)}
+                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', ''].map((h, i) => <th key={i}>{h}</th>)}
                 </tr></thead>
                 <tbody>{annualRows
                   .filter(a => (annualCat === 'all' || a.category === annualCat)
                     && (!annualSearch || `${a.asset} ${a.serial_no} ${a.category} ${a.supplier}`.toLowerCase().includes(annualSearch.toLowerCase())))
                   .map(a => {
                   const cf = calForm[a.id] ?? {}
+                  const open = calPanel === a.id
                   return (
-                  <tr key={a.id}>
+                  <Fragment key={a.id}>
+                  <tr>
                     <td><span className={`badge ${calClass(a.days)}`} title={a.days <= 0 ? `overdue by ${Math.abs(a.days)}d` : `due in ${a.days}d`}>{calBadge(a.days)}</span></td>
-                    <td><input className={`${INP} w-24 text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
+                    <td><input className={`${INP} w-full min-w-[100px] text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
                       onChange={e => setDrafts(p => ({ ...p, ['ac' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.category && updateAnnual(a.id, { category: e.target.value })} /></td>
-                    <td><input className={`${INP} w-40 text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
+                    <td><input className={`${INP} w-full min-w-[200px] text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
                       onChange={e => setDrafts(p => ({ ...p, ['aa' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.asset && updateAnnual(a.id, { asset: e.target.value })} /></td>
-                    <td><input className={`${INP} w-28 text-[10px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
+                    <td><input className={`${INP} w-full min-w-[120px] text-[11px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
                       onChange={e => setDrafts(p => ({ ...p, ['as' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.serial_no && updateAnnual(a.id, { serial_no: e.target.value })} /></td>
-                    <td><input className={`${INP} w-28 text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
+                    <td><input className={`${INP} w-full min-w-[130px] text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
                       onChange={e => setDrafts(p => ({ ...p, ['au' + a.id]: e.target.value }))}
                       onBlur={e => e.target.value !== a.supplier && updateAnnual(a.id, { supplier: e.target.value })} /></td>
                     <td className="text-[11px] whitespace-nowrap">{a.last_done
@@ -382,7 +469,7 @@ export default function ScheduledPage() {
                         const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
                         const patch: any = { interval_days: v }
                         if (v && anchor) patch.next_due = addDays(anchor, v).toISOString().slice(0, 10)
-                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n }) // let the recomputed date show
+                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n })
                         updateAnnual(a.id, patch)
                       }} /></td>
                     {/* Next due → recomputes Cycle (days) from the anchor. Bidirectional. */}
@@ -395,33 +482,45 @@ export default function ScheduledPage() {
                         const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
                         const patch: any = { next_due: nd }
                         if (nd) patch.interval_days = Math.max(0, diffDays(anchor, nd))
-                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n }) // let the recomputed cycle show
+                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n })
                         updateAnnual(a.id, patch)
                       }} /></td>
-                    <td>
-                      <div className="flex gap-1 items-center">
-                        <input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date" title="Date the calibration was done"
-                          value={cf.date ?? new Date().toISOString().slice(0, 10)}
-                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} />
-                        <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${cf.by ? '' : 'border-warn'}`} title="Who did the calibration (required)"
-                          value={cf.by ?? ''}
-                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
-                          <option value="">Who?…</option>
-                          {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
-                          <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
-                        </select>
-                        <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by} title="Record who calibrated it and when, then recompute next due from the cycle"
-                          onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
-                            (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days) ?? null,
-                            cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
-                      </div>
-                    </td>
-                    <td>{a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>Email</button>}</td>
-                    <td><input className={`${INP} w-28 text-[11px] py-1 min-h-0`} placeholder="Notes…"
-                      value={drafts['a' + a.id] ?? a.notes}
-                      onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
-                      onBlur={e => saveAnnualNotes(a.id, e.target.value)} /></td>
+                    <td><button className={BTN_SM} onClick={() => setCalPanel(open ? null : a.id)}>{open ? 'Close' : 'Calibrate ▾'}</button></td>
                   </tr>
+                  {open && (
+                    <tr>
+                      <td colSpan={9} className="bg-surface-raised/40">
+                        <div className="flex gap-2 flex-wrap items-center p-2">
+                          <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">Mark calibrated:</span>
+                          <label className="text-[11px] text-text-muted">Date <input className={`${INP} w-36 text-[11px] py-1 min-h-0 ml-1`} type="date"
+                            value={cf.date ?? new Date().toISOString().slice(0, 10)}
+                            onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} /></label>
+                          <label className="text-[11px] text-text-muted">Cycle (d) <input className={`${INP} w-20 text-[11px] py-1 min-h-0 ml-1`} type="number" inputMode="numeric"
+                            title="The next-due date is set this many days forward from the calibration date"
+                            placeholder={a.interval_days != null ? `${a.interval_days}` : 'days'}
+                            value={cf.interval ?? (a.interval_days != null ? String(a.interval_days) : '')}
+                            onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], interval: e.target.value } }))} /></label>
+                          <label className="text-[11px] text-text-muted">By <select className={`${INP} w-36 text-[11px] py-1 min-h-0 ml-1 ${cf.by ? '' : 'border-warn'}`}
+                            value={cf.by ?? ''} onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
+                            <option value="">Who?…</option>
+                            {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                            <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
+                          </select></label>
+                          <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by}
+                            title="Record who calibrated it and when; the next-due date is set forward by the cycle days"
+                            onClick={() => { calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
+                              (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
+                              cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!); setCalPanel(null) }}>✓ Calibrated</button>
+                          {a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>✉ Email supplier</button>}
+                          <label className="text-[11px] text-text-muted flex-1 min-w-[160px]">Notes <input className={`${INP} w-full text-[11px] py-1 min-h-0 mt-0.5`} placeholder="Notes…"
+                            value={drafts['a' + a.id] ?? a.notes}
+                            onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
+                            onBlur={e => saveAnnualNotes(a.id, e.target.value)} /></label>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )})}</tbody>
               </table>
             </div>

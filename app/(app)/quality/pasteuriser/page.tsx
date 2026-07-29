@@ -918,25 +918,26 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             </div>
           )}
 
-          {/* Flowability Test — QC enters the time (s); mass flow rate is calculated
-              as mass ÷ time. Bulk density is carried over from Customer BD (cc/100g). */}
+          {/* Flowability Test — a fixed 400 g sample is always used; QC enters the
+              time (s) and the QC-measured bulk density (Untapped BD) above. Mass
+              flow rate is calculated as 400 g ÷ time. */}
           {row.has_mb && (() => {
-            const fMass = parseFloat(row.flow_mass)
+            const fMass = parseFloat(row.flow_mass) || 400
             const fTime = parseFloat(row.flow_time)
-            const flowRate = !isNaN(fMass) && !isNaN(fTime) && fTime > 0 ? fMass / fTime : null
+            const flowRate = !isNaN(fTime) && fTime > 0 ? fMass / fTime : null
             return (
               <div className="bg-teal-50 border-2 border-teal-200 rounded-xl p-4">
                 <div className="font-bold text-[12px] text-teal-700 mb-3">⏱️ Flowability Test</div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
                   <div>
                     <label className={lbl}>Mass of Tea (g)</label>
-                    <input type="number" min="0" inputMode="decimal" step="1" value={row.flow_mass}
-                      onChange={e => set('flow_mass', e.target.value)} className={`${inp} w-full`} />
+                    <input type="number" value="400" readOnly title="Standard flowability sample is always 400 g"
+                      className={`${inp} w-full bg-surface/60 text-text-muted cursor-not-allowed`} />
                   </div>
                   <div>
                     <label className={lbl}>Bulk Density (cc/100g)</label>
-                    <input type="number" value={row.customer_bd} readOnly title="Carried over from Customer BD"
-                      placeholder="— enter Customer BD above"
+                    <input type="number" value={row.untapped_bd} readOnly title="Carried over from the QC-measured Untapped BD"
+                      placeholder="— enter Untapped BD above"
                       className={`${inp} w-full bg-surface/60 text-text-muted cursor-not-allowed`} />
                   </div>
                   <div>
@@ -952,7 +953,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                     </div>
                   </div>
                 </div>
-                <div className="text-[10px] text-text-muted mt-2">Mass flow rate = mass ÷ time, calculated automatically per sample.</div>
+                <div className="text-[10px] text-text-muted mt-2">Mass flow rate = 400 g ÷ time, calculated automatically per sample.</div>
               </div>
             )
           })()}
@@ -1701,8 +1702,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     })()}
                                     {/* Flowability — mass flow rate (mass ÷ time) */}
                                     {(() => {
-                                      const m = parseFloat((s as any).flow_mass), t = parseFloat((s as any).flow_time)
-                                      const rate = !isNaN(m) && !isNaN(t) && t > 0 ? (m / t).toFixed(1) : null
+                                      const m = parseFloat((s as any).flow_mass) || 400, t = parseFloat((s as any).flow_time)
+                                      const rate = !isNaN(t) && t > 0 ? (m / t).toFixed(1) : null
                                       return <td className="px-2 py-2.5 text-center font-mono text-[11px]" style={{ color: rate!=null?'var(--color-text)':'var(--color-text-faint)', fontWeight: rate!=null?700:400 }}>{rate ?? (s.has_mb?'—':'')}</td>
                                     })()}
                                     <td className="px-2 py-2.5 text-center text-[10px] text-text-muted border-r-2 border-surface-rule">

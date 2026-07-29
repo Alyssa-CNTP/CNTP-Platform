@@ -14,7 +14,7 @@ import {
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
-import { WORK_CENTRE_FOR_SECTION } from '@/components/production/capture/BlenderCapture'
+import { WORK_CENTRE_FOR_SECTION, autoLot, resolveExistingBlendRunNo } from '@/components/production/capture/BlenderCapture'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
@@ -71,11 +71,21 @@ function AssignScreen() {
   const [drafts, setDrafts]       = useState<Record<string, SectionDraft>>({})
   const [loading, setLoading]     = useState(true)
   const [savingSection, setSavingSection] = useState<string | null>(null)
-  const [savedSection, setSavedSection]   = useState<string | null>(null)
+  // Persists as "Saved" until the draft actually changes again — not a timed
+  // flash. A 2-second auto-clear read as "did that even save?" the moment the
+  // supervisor looked away and back.
+  const [savedSections, setSavedSections] = useState<Set<string>>(new Set())
+  const markDirty = (sectionId: string) =>
+    setSavedSections(s => { if (!s.has(sectionId)) return s; const n = new Set(s); n.delete(sectionId); return n })
   const [error, setError]         = useState<string | null>(null)
   const [onLeaveOps, setOnLeaveOps] = useState<Set<string>>(new Set())
   const [filling, setFilling]     = useState(false)
   const [fillNote, setFillNote]   = useState<string | null>(null)
+  // Preview of what Blender/Small Blender's lot will auto-become if the
+  // supervisor leaves it blank — shown as the field's placeholder so it reads
+  // as "already handled" without writing a value that could go stale (the
+  // real run number is only final once Capture actually creates a bag).
+  const [lotPreview, setLotPreview] = useState<Record<string, string>>({})
 
   // Load operators once
   useEffect(() => {
@@ -89,6 +99,7 @@ function AssignScreen() {
   useEffect(() => {
     setLoading(true)
     setFillNote(null)
+    setSavedSections(new Set())
     getDb().schema('production').from('shift_assignments')
       .select('*').eq('date', date).eq('shift', shift)
       .then(async ({ data }: any) => {
@@ -113,6 +124,22 @@ function AssignScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, shift])
 
+  // Live preview of Blender/Small Blender's auto lot — same call Capture itself
+  // makes (resolveExistingBlendRunNo) so the number shown here matches what
+  // actually gets written, not a guess. Recomputes when the date or either
+  // section's selected blend code changes.
+  const blenderBomKey = ['blender', 'smallblender'].map(id => drafts[id]?.prodOrders?.[0] ?? '').join('|')
+  useEffect(() => {
+    ;['blender', 'smallblender'].forEach(sectionId => {
+      const bomId = drafts[sectionId]?.prodOrders?.[0]
+      if (!bomId) { setLotPreview(p => ({ ...p, [sectionId]: '' })); return }
+      resolveExistingBlendRunNo(bomId, date).then(existing => {
+        setLotPreview(p => ({ ...p, [sectionId]: autoLot(date, (existing ?? 0) + 1) }))
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, blenderBomKey])
+
   // Who's on leave for the selected date — flagged in the operator picker so a
   // stand-in can be rostered instead. (Best-effort; ignores if the view is absent.)
   useEffect(() => {
@@ -125,6 +152,7 @@ function AssignScreen() {
   }, [date])
 
   function toggleProdOrder(sectionId: string, code: string) {
+    markDirty(sectionId)
     setDrafts(d => {
       const cur = d[sectionId] ?? emptyDraft()
       const has = cur.prodOrders.includes(code)
@@ -133,6 +161,7 @@ function AssignScreen() {
   }
 
   function toggleOperator(sectionId: string, opId: string) {
+    markDirty(sectionId)
     setDrafts(d => {
       const cur = d[sectionId] ?? emptyDraft()
       const has = cur.operatorIds.includes(opId)
@@ -147,6 +176,7 @@ function AssignScreen() {
   }
 
   function setField(sectionId: string, key: keyof SectionDraft, value: any) {
+    markDirty(sectionId)
     setDrafts(d => ({ ...d, [sectionId]: { ...(d[sectionId] ?? emptyDraft()), [key]: value } }))
   }
 
@@ -202,6 +232,7 @@ function AssignScreen() {
         })
         if (ids.length) { sectionFills[sectionId] = ids; filled += ids.length }
       })
+      Object.keys(sectionFills).forEach(markDirty)
       setDrafts(prev => {
         const next = { ...prev }
         Object.entries(sectionFills).forEach(([sectionId, ids]) => {
@@ -235,8 +266,7 @@ function AssignScreen() {
           assigned_by:       user?.id ?? null,
         } as any, { onConflict: 'date,shift,section_id' })
       }
-      setSavedSection(sectionId)
-      setTimeout(() => setSavedSection(s => s === sectionId ? null : s), 2000)
+      setSavedSections(s => new Set(s).add(sectionId))
     } catch (e: any) {
       setError(`${sectionId}: ${e.message}`)
     }
@@ -291,6 +321,8 @@ function AssignScreen() {
         </div>
       )}
 
+      <TodaysRoster date={date} operators={operators} />
+
       {error && <p className="text-[12px] text-err px-1">{error}</p>}
 
       {loading ? (
@@ -302,13 +334,13 @@ function AssignScreen() {
             const draft  = drafts[sectionId] ?? emptyDraft()
             const ops    = operators
             const saving = savingSection === sectionId
-            const saved  = savedSection === sectionId
-            // Granule and Blender/Small Blender's lot number silently defaults to
-            // blank if skipped here — Granule's serial numbering + QC linking and
-            // Blender's Fine/Coarse Leaf batch tracking both key off it, and the
-            // supervisor doesn't find out until later. Require it up front.
-            const lotMissing = (sectionId === 'granule' || isBlenderSection(sectionId))
-              && draft.operatorIds.length > 0 && !draft.lotNumber.trim()
+            const saved  = savedSections.has(sectionId)
+            // Granule's lot number silently defaults to blank if skipped here —
+            // every output bag tag depends on it, and the supervisor doesn't find
+            // out until later. Require it up front. Blender/Small Blender don't
+            // need this: their lot is auto-derived (date + run number) in Capture
+            // if the supervisor doesn't set one, so there's nothing to forget.
+            const lotMissing = sectionId === 'granule' && draft.operatorIds.length > 0 && !draft.lotNumber.trim()
 
             return (
               <div key={sectionId} className="bg-white border border-stone-200 rounded-2xl overflow-hidden"
@@ -326,6 +358,12 @@ function AssignScreen() {
                 </div>
 
                 <div className="px-4 py-4 space-y-4">
+                  {sectionId === 'pasteuriser' && (
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Today's digital job card</label>
+                      <PasteuriserJobCardPanel date={date} />
+                    </div>
+                  )}
                   {/* Operators */}
                   {ops.length === 0 ? (
                     <p className="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -361,19 +399,17 @@ function AssignScreen() {
                       {NEEDS_LOT.has(sectionId) && (
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
-                            Lot / Batch{(sectionId === 'granule' || isBlenderSection(sectionId)) && <span className="text-err"> *</span>}
+                            Lot / Batch{sectionId === 'granule' && <span className="text-err"> *</span>}
                           </label>
                           <input
                             value={draft.lotNumber} onChange={e => setField(sectionId, 'lotNumber', e.target.value)}
-                            placeholder="e.g. GS-2026-001"
+                            placeholder={isBlenderSection(sectionId) ? (lotPreview[sectionId] || 'Auto — date/run number') : 'e.g. GS-2026-001'}
                             className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] text-text outline-none focus:border-brand ${lotMissing ? 'border-err' : 'border-stone-200'}`}
                           />
-                          {lotMissing && (
-                            <p className="text-[11px] text-err px-0.5">
-                              {sectionId === 'granule'
-                                ? 'Required — every output bag tag is stamped with this lot, and QC readings link to it.'
-                                : 'Required — every output bag tag (the finished blend label) is stamped with this lot number.'}
-                            </p>
+                          {lotMissing ? (
+                            <p className="text-[11px] text-err px-0.5">Required — every output bag tag is stamped with this lot, and QC readings link to it.</p>
+                          ) : isBlenderSection(sectionId) && (
+                            <p className="text-[11px] text-stone-400 px-0.5">Already handled — leave blank to use the auto lot shown above, or type one to override.</p>
                           )}
                         </div>
                       )}
@@ -432,6 +468,127 @@ function AssignScreen() {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// Flattened list of the roster role keys that feed a Production capture
+// section — used to scope "today's roster" to floor roles the supervisor
+// actually needs here, not the full multi-department roster.
+const ALL_SECTION_ROLE_KEYS = Object.values(SECTION_ROLES).flat()
+
+// Quick "who's rostered today" reference so a supervisor doesn't have to open
+// the full Shift Roster just to see names — resolves operator_id/employee_id
+// entries to a display name the same way fillFromRoster() does, but read-only.
+function TodaysRoster({ date, operators }: { date: string; operators: Operator[] }) {
+  const [rows, setRows] = useState<{ role_key: string; shift: 'day' | 'night'; name: string }[]>([])
+  const [periodName, setPeriodName] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const pdb = getDb().schema('production')
+    pdb.from('roster_periods').select('id,name').lte('start_date', date).gte('end_date', date)
+      .order('start_date', { ascending: false }).limit(1)
+      .then(async ({ data }: any) => {
+        const period = ((data as any[]) ?? [])[0]
+        if (!period) { if (!cancelled) { setRows([]); setPeriodName(null); setLoading(false) } return }
+        const { data: entries } = await pdb.from('roster_entries')
+          .select('role_key,operator_id,employee_id,person_name,shift')
+          .eq('period_id', period.id).in('role_key', ALL_SECTION_ROLE_KEYS)
+        const list = (entries as any[]) ?? []
+        const empIds = [...new Set(list.filter(e => !e.operator_id && !e.person_name && e.employee_id).map(e => e.employee_id))]
+        const empName = new Map<string, string>()
+        if (empIds.length) {
+          const { data: emps } = await pdb.from('employees').select('id,operator_id,name,display_name').in('id', empIds)
+          const opById = new Map(operators.map(o => [o.id, o.name]))
+          ;(emps as any[] ?? []).forEach(e => empName.set(e.id, (e.operator_id && opById.get(e.operator_id)) || e.display_name || e.name || ''))
+        }
+        const opById = new Map(operators.map(o => [o.id, o.name]))
+        const resolved = list.map(e => ({
+          role_key: e.role_key, shift: e.shift as 'day' | 'night',
+          name: e.person_name || (e.operator_id && opById.get(e.operator_id)) || (e.employee_id && empName.get(e.employee_id)) || '',
+        })).filter(e => e.name)
+        if (!cancelled) { setRows(resolved); setPeriodName(period.name); setLoading(false) }
+      })
+    return () => { cancelled = true }
+  }, [date, operators])
+
+  if (loading || rows.length === 0) return null
+
+  const day = rows.filter(r => r.shift === 'day')
+  const night = rows.filter(r => r.shift === 'night')
+
+  return (
+    <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
+      <p className="text-[11px] font-semibold text-stone-500 uppercase tracking-widest flex items-center gap-1.5">
+        <Users size={13} /> Today's roster{periodName ? ` — ${periodName}` : ''}
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[12px]">
+        <div>
+          <p className="text-[10px] text-stone-400 uppercase mb-1">Morning</p>
+          {day.length ? day.map((r, i) => (
+            <div key={i} className="text-text">{r.name} <span className="text-stone-400">— {r.role_key}</span></div>
+          )) : <p className="text-stone-400">Nobody rostered</p>}
+        </div>
+        <div>
+          <p className="text-[10px] text-stone-400 uppercase mb-1">Afternoon / Night</p>
+          {night.length ? night.map((r, i) => (
+            <div key={i} className="text-text">{r.name} <span className="text-stone-400">— {r.role_key}</span></div>
+          )) : <p className="text-stone-400">Nobody rostered</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Read-only summary of today's approved digital Pasteuriser job card(s), so a
+// supervisor sees exactly what's being produced and how it should be packed
+// without leaving Assign. Blank until the production manager has generated one
+// and it's been approved — matches the manager-generates/supervisor-approves
+// flow (see app/(app)/job-cards/pasteuriser).
+function PasteuriserJobCardPanel({ date }: { date: string }) {
+  const [cards, setCards] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    getDb().from('job_cards_pasteuriser')
+      .select('id, job_card_no, item_no, product_name, customer, batch_number, blend_description, packaging, total_mass, no_of_bags, special_instructions, status')
+      .eq('status', 'approved').eq('date_of_card', date)
+      .then(({ data }: any) => { if (!cancelled) { setCards((data as any[]) ?? []); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [date])
+
+  if (loading) return null
+  if (cards.length === 0) {
+    return (
+      <p className="text-[12px] text-stone-400 bg-stone-50 border border-stone-200 rounded-xl px-3 py-2.5">
+        No approved job card for {date} yet — the production manager generates one from the BOM catalogue and a supervisor approves it on the Job Card page.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {cards.map(c => (
+        <div key={c.id} className="rounded-xl border border-brand/20 bg-accent-bg/30 p-3 text-[12px] space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-text truncate">{c.product_name || c.item_no}</span>
+            {c.job_card_no && <span className="font-mono text-[11px] text-text-muted shrink-0">{c.job_card_no}</span>}
+          </div>
+          <div className="text-text-muted font-mono truncate">{c.item_no} {c.blend_description ? `· ${c.blend_description}` : ''}</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-text-muted">
+            <span>Customer: {c.customer || '—'}</span>
+            <span>Batch: {c.batch_number || '—'}</span>
+            <span>Packaging: {c.packaging || '—'}</span>
+            <span>{c.total_mass ? `${c.total_mass} kg` : '—'} · {c.no_of_bags || '—'} bags</span>
+          </div>
+          {c.special_instructions && <div className="text-[11px] text-warn">⚠ {c.special_instructions}</div>}
+        </div>
+      ))}
     </div>
   )
 }
