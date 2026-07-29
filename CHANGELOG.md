@@ -5,6 +5,41 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Supervisor Hub: fixed archived-session data leak, SAST date consistency, job cards surfaced before Assign)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/timesheets/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `lib/production/shifts.ts`, `components/production/JobCardApprovalsPanel.tsx` (new), `components/supervisor/PendingSignOffs.tsx` (new)
+
+Reported: "supervisor hub is not rendering properly... the information isn't correct... job cards will also now be something they need to review before assigning sections."
+
+- **Fixed a real data-correctness bug**: the Sign-off tab's "needs your sign-off" queue and today's line-status/kg figures, plus the Productions tab's session list, count and CSV export, were all missing `.is('deleted_at', null)` on their `prod_sessions` queries — an archived/soft-deleted session could still show up as awaiting sign-off or counted in production totals.
+- **Unified "today" on SAST** (`lib/production/shifts.ts:sastToday()`) across every Hub tab — Sign-off, Productions, Analytics and Timesheets previously computed "today" from the browser's own local clock/timezone instead of SAST explicitly (only the Roster tab did this correctly), which could silently disagree on a misconfigured device.
+- **Job card approvals now surface on the Hub landing tab**, above the Staffing/Today's-sections toggle — a supervisor reviews and approves pending Pasteuriser job cards before assigning sections against them, not after. Extracted the existing approve/reject widget from `/job-cards/pasteuriser` into a shared `JobCardApprovalsPanel` component (one query, one implementation, used in both places) instead of duplicating it.
+- **Pending sign-offs are now bold and prominent on the landing tab too** (`PendingSignOffs`, also extracted/shared with the Sign-off tab) — the thing a supervisor most needs to act on today is the first thing they see, not something found after navigating to a separate tab.
+
+---
+
+## 2026-07-02 — Gustav (Annual register → readable card layout that fits the screen)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
+
+- **Annual / calibration is now a card grid** (one card per asset) instead of a wide table that ran off-screen and hid columns. Every field — full Asset name, Serial, Supplier, Cycle, Next due, calibrate date/who, Notes — is on its own line inside the card, so nothing is hidden and there's no horizontal scrolling. Responsive 1 / 2 / 3 columns. Search + category filter sit above the grid.
+- The **cycle → forward next-due** logic and the bidirectional cycle↔date editing are unchanged; calibrate (date + who) is right in the card.
+- Calmed the Scheduled tab buttons (removed the hover/transition effect) for a steadier read.
+
+## 2026-07-29 — Alyssa (Approved job card now drives Assign + Capture — eliminates duplicate entry)
+
+**Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `lib/production/bom.ts`
+
+Traced the actual data flow before touching anything (not guessed): `shift_assignments.lot_number` for Pasteuriser was never read by Capture (only a last-resort fallback, `[section]/page.tsx:838,928,939`), `production_orders` was already always empty for this section (dead UI), and `variant` was only ever used for a post-hoc mismatch warning, never inherited. Confirmed the plan with the user before changing floor-facing screens: (1) Assign drops the dead fields for Pasteuriser, (2) Capture locks the job-card-sourced fields once one auto-applies, with an escape hatch, (3) no job card yet = today's exact behaviour, never a blocker.
+
+- **Assign screen** — the Pasteuriser section now shows only Operators + the existing read-only job-card panel. Dropped the Variant select, the Lot/Batch input (confirmed dead — Capture never read it), and the Production Orders picker (always empty for this section anyway).
+- **Capture auto-applies today's approved job card** — scoped by date (matching the Assign panel's own query) instead of requiring a manual pick from an unscoped list of the last 40 approved cards company-wide. If exactly one exists for today, it applies automatically on load.
+- **Job-card-sourced fields now lock** (item, item code, batch number, blend code, packaging, weight/bag) once applied — closes a real gap where these stayed silently editable with nothing marking them as authoritative. A "Not this batch? Change" link unlocks them and reveals the manual picker/free-typing, so nothing is a hard wall.
+- **Variant gets a suggested default, never a silent one** — derived from the job card's item code suffix (reusing `variantFromSuffix`, now exported from `lib/production/bom.ts` instead of duplicated), pre-filling the operator's own variant selector but leaving it an active, changeable choice — preserves the existing "capture never silently defaults" floor-safety behaviour (`[section]/page.tsx:73-75`) while cutting the lookup work.
+- **No approved job card for the day** → both screens behave exactly as before (manual entry, nothing locked) — this is a strict upgrade, never a blocker on starting a shift.
+
+---
+
 ## 2026-07-24 — Gustav (Pasteuriser New Run: data-driven Grade/Family/Variant dropdowns)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`

@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
-import { Save, Send, CheckCircle2, XCircle, Clock, ThumbsUp, ThumbsDown, Layers, Printer, Download } from 'lucide-react'
+import { Save, Send, CheckCircle2, XCircle, Clock, Printer, Download } from 'lucide-react'
 import clsx from 'clsx'
 import { jsPDF } from 'jspdf'
 import { useAuth } from '@/lib/auth/context'
@@ -13,6 +13,7 @@ import { listBoms, getBomComponents, findParentBlendBom, type BomSummary } from 
 import { upperCode } from '@/lib/production/normalize-code'
 import { loadImage } from '@/lib/pdf/load-image'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
+import { JobCardApprovalsPanel } from '@/components/production/JobCardApprovalsPanel'
 
 interface RatioLine { componentItemId: string; label: string; pct: number }
 interface PackagingLine { componentItemId: string; label: string; kgPerUnit: number }
@@ -174,117 +175,6 @@ function BomPicker({ onPick, disabled }: { onPick: (b: BomSummary) => void; disa
       {open && (
         <button type="button" onClick={() => setOpen(false)}
           className="fixed inset-0 z-[5] cursor-default" style={{ background: 'transparent' }} aria-hidden />
-      )}
-    </div>
-  )
-}
-
-interface PendingCard {
-  id: string
-  job_card_no: string | null; item_no: string | null; product_name: string | null
-  batch_number: string | null; customer: string | null; blend_description: string | null
-  blend_ratio_lines: RatioLine[] | null; final_ratio_lines: RatioLine[] | null
-  sent_for_approval_at: string | null
-}
-
-function PendingApprovals() {
-  const db = getDb()
-  const [cards, setCards] = useState<PendingCard[]>([])
-  const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState<string | null>(null)
-
-  async function reload() {
-    const { data } = await db.from('job_cards_pasteuriser')
-      .select('id, job_card_no, item_no, product_name, batch_number, customer, blend_description, blend_ratio_lines, final_ratio_lines, sent_for_approval_at')
-      .eq('status', 'sent_for_approval').order('sent_for_approval_at', { ascending: true })
-    setCards((data as PendingCard[]) ?? [])
-    setLoading(false)
-  }
-  useEffect(() => { reload() }, [])
-
-  async function decide(id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) {
-    const res = await fetch(`/api/production/job-cards/${id}/decide`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, ...extra }),
-    })
-    if (res.ok) { setCards(cs => cs.filter(c => c.id !== id)); setExpanded(null) }
-    else { const body = await res.json().catch(() => ({})); alert(body.error || 'Could not save decision') }
-  }
-
-  if (loading || cards.length === 0) return null
-
-  return (
-    <div className="card p-4 space-y-2 border-2 border-brand/30">
-      <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold flex items-center gap-1.5">
-        <Layers className="w-3.5 h-3.5" /> Pending your approval ({cards.length})
-      </p>
-      {cards.map(c => (
-        <PendingCardRow key={c.id} c={c} expanded={expanded === c.id}
-          onToggle={() => setExpanded(expanded === c.id ? null : c.id)} onDecide={decide} />
-      ))}
-    </div>
-  )
-}
-
-function PendingCardRow({ c, expanded, onToggle, onDecide }: {
-  c: PendingCard; expanded: boolean; onToggle: () => void
-  onDecide: (id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) => Promise<void>
-}) {
-  const [status, setStatus] = useState<MySignatureStatus | null>(null)
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => { getMySignatureStatus().then(setStatus) }, [])
-
-  return (
-    <div className="rounded-xl border border-surface-rule overflow-hidden">
-      <button onClick={onToggle} className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-surface-dim/40">
-        <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-text truncate">{c.product_name || c.item_no || 'Job card'}</div>
-          <div className="text-[11px] text-text-muted font-mono truncate">{c.item_no} · batch {c.batch_number || '—'} · {c.customer || 'no customer'}</div>
-        </div>
-        <span className="text-[10px] text-text-faint shrink-0">{expanded ? 'Hide' : 'Review'}</span>
-      </button>
-      {expanded && (
-        <div className="border-t border-surface-rule bg-surface-dim/20 p-3 space-y-3">
-          {c.blend_ratio_lines?.length ? (
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Blend ratio (before granules) — {c.blend_description}</p>
-              <RatioTable lines={c.blend_ratio_lines} />
-            </div>
-          ) : null}
-          {c.final_ratio_lines?.length ? (
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Final product ratio</p>
-              <RatioTable lines={c.final_ratio_lines} />
-            </div>
-          ) : null}
-
-          {status && !status.hasSignature ? (
-            <p className="text-[11px] text-warn">
-              No signature on file — {status.employeeId
-                ? <Link href={`/production/staff/${status.employeeId}`} className="underline">set one up on your Staff Directory profile</Link>
-                : 'ask IT to link your login to your Staff Directory profile'} before you can approve.
-            </p>
-          ) : (
-            <button disabled={!status?.hasSignature || busy}
-              onClick={async () => { setBusy(true); await onDecide(c.id, 'approved', {}); setBusy(false) }}
-              className={clsx('w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5',
-                status?.hasSignature ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
-              <ThumbsUp className="w-4 h-4" /> {busy ? 'Signing…' : `Verify & Sign as ${status?.employeeName ?? 'you'} to Approve`}
-            </button>
-          )}
-
-          <div className="flex gap-2 items-center pt-1 border-t border-surface-rule/60">
-            <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason for rejection…"
-              className="input flex-1 text-[12px]" />
-            <button disabled={!reason.trim() || busy}
-              onClick={async () => { setBusy(true); await onDecide(c.id, 'rejected', { reason }); setBusy(false) }}
-              className="px-3 py-2 rounded-lg text-[13px] font-semibold border border-err text-err hover:bg-err/10 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0">
-              <ThumbsDown className="w-3.5 h-3.5" /> Reject
-            </button>
-          </div>
-        </div>
       )}
     </div>
   )
@@ -501,7 +391,7 @@ function PasteuriserJobCardScreen() {
         <h1 className="font-display font-extrabold text-2xl">Pasteuriser Line Job Card</h1>
       </div>
 
-      {canApprove && <div className="no-print"><PendingApprovals /></div>}
+      {canApprove && <div className="no-print"><JobCardApprovalsPanel /></div>}
 
       {canGenerate && !locked && (
         <div className="card p-4 space-y-2 border-2 border-brand/20 no-print">
