@@ -5,6 +5,14 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-02 — Gustav (Annual register → readable card layout that fits the screen)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`
+
+- **Annual / calibration is now a card grid** (one card per asset) instead of a wide table that ran off-screen and hid columns. Every field — full Asset name, Serial, Supplier, Cycle, Next due, calibrate date/who, Notes — is on its own line inside the card, so nothing is hidden and there's no horizontal scrolling. Responsive 1 / 2 / 3 columns. Search + category filter sit above the grid.
+- The **cycle → forward next-due** logic and the bidirectional cycle↔date editing are unchanged; calibrate (date + who) is right in the card.
+- Calmed the Scheduled tab buttons (removed the hover/transition effect) for a steadier read.
+
 ## 2026-07-29 — Alyssa (Approved job card now drives Assign + Capture — eliminates duplicate entry)
 
 **Files changed:** `app/(app)/production/capture/assign/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `lib/production/bom.ts`
