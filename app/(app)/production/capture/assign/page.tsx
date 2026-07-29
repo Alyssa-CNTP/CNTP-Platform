@@ -14,7 +14,7 @@ import {
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
-import { WORK_CENTRE_FOR_SECTION } from '@/components/production/capture/BlenderCapture'
+import { WORK_CENTRE_FOR_SECTION, autoLot, resolveExistingBlendRunNo } from '@/components/production/capture/BlenderCapture'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
@@ -71,11 +71,21 @@ function AssignScreen() {
   const [drafts, setDrafts]       = useState<Record<string, SectionDraft>>({})
   const [loading, setLoading]     = useState(true)
   const [savingSection, setSavingSection] = useState<string | null>(null)
-  const [savedSection, setSavedSection]   = useState<string | null>(null)
+  // Persists as "Saved" until the draft actually changes again — not a timed
+  // flash. A 2-second auto-clear read as "did that even save?" the moment the
+  // supervisor looked away and back.
+  const [savedSections, setSavedSections] = useState<Set<string>>(new Set())
+  const markDirty = (sectionId: string) =>
+    setSavedSections(s => { if (!s.has(sectionId)) return s; const n = new Set(s); n.delete(sectionId); return n })
   const [error, setError]         = useState<string | null>(null)
   const [onLeaveOps, setOnLeaveOps] = useState<Set<string>>(new Set())
   const [filling, setFilling]     = useState(false)
   const [fillNote, setFillNote]   = useState<string | null>(null)
+  // Preview of what Blender/Small Blender's lot will auto-become if the
+  // supervisor leaves it blank — shown as the field's placeholder so it reads
+  // as "already handled" without writing a value that could go stale (the
+  // real run number is only final once Capture actually creates a bag).
+  const [lotPreview, setLotPreview] = useState<Record<string, string>>({})
 
   // Load operators once
   useEffect(() => {
@@ -89,6 +99,7 @@ function AssignScreen() {
   useEffect(() => {
     setLoading(true)
     setFillNote(null)
+    setSavedSections(new Set())
     getDb().schema('production').from('shift_assignments')
       .select('*').eq('date', date).eq('shift', shift)
       .then(async ({ data }: any) => {
@@ -113,6 +124,22 @@ function AssignScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, shift])
 
+  // Live preview of Blender/Small Blender's auto lot — same call Capture itself
+  // makes (resolveExistingBlendRunNo) so the number shown here matches what
+  // actually gets written, not a guess. Recomputes when the date or either
+  // section's selected blend code changes.
+  const blenderBomKey = ['blender', 'smallblender'].map(id => drafts[id]?.prodOrders?.[0] ?? '').join('|')
+  useEffect(() => {
+    ;['blender', 'smallblender'].forEach(sectionId => {
+      const bomId = drafts[sectionId]?.prodOrders?.[0]
+      if (!bomId) { setLotPreview(p => ({ ...p, [sectionId]: '' })); return }
+      resolveExistingBlendRunNo(bomId, date).then(existing => {
+        setLotPreview(p => ({ ...p, [sectionId]: autoLot(date, (existing ?? 0) + 1) }))
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, blenderBomKey])
+
   // Who's on leave for the selected date — flagged in the operator picker so a
   // stand-in can be rostered instead. (Best-effort; ignores if the view is absent.)
   useEffect(() => {
@@ -125,6 +152,7 @@ function AssignScreen() {
   }, [date])
 
   function toggleProdOrder(sectionId: string, code: string) {
+    markDirty(sectionId)
     setDrafts(d => {
       const cur = d[sectionId] ?? emptyDraft()
       const has = cur.prodOrders.includes(code)
@@ -133,6 +161,7 @@ function AssignScreen() {
   }
 
   function toggleOperator(sectionId: string, opId: string) {
+    markDirty(sectionId)
     setDrafts(d => {
       const cur = d[sectionId] ?? emptyDraft()
       const has = cur.operatorIds.includes(opId)
@@ -147,6 +176,7 @@ function AssignScreen() {
   }
 
   function setField(sectionId: string, key: keyof SectionDraft, value: any) {
+    markDirty(sectionId)
     setDrafts(d => ({ ...d, [sectionId]: { ...(d[sectionId] ?? emptyDraft()), [key]: value } }))
   }
 
@@ -202,6 +232,7 @@ function AssignScreen() {
         })
         if (ids.length) { sectionFills[sectionId] = ids; filled += ids.length }
       })
+      Object.keys(sectionFills).forEach(markDirty)
       setDrafts(prev => {
         const next = { ...prev }
         Object.entries(sectionFills).forEach(([sectionId, ids]) => {
@@ -235,8 +266,7 @@ function AssignScreen() {
           assigned_by:       user?.id ?? null,
         } as any, { onConflict: 'date,shift,section_id' })
       }
-      setSavedSection(sectionId)
-      setTimeout(() => setSavedSection(s => s === sectionId ? null : s), 2000)
+      setSavedSections(s => new Set(s).add(sectionId))
     } catch (e: any) {
       setError(`${sectionId}: ${e.message}`)
     }
@@ -304,7 +334,7 @@ function AssignScreen() {
             const draft  = drafts[sectionId] ?? emptyDraft()
             const ops    = operators
             const saving = savingSection === sectionId
-            const saved  = savedSection === sectionId
+            const saved  = savedSections.has(sectionId)
             // Granule's lot number silently defaults to blank if skipped here —
             // every output bag tag depends on it, and the supervisor doesn't find
             // out until later. Require it up front. Blender/Small Blender don't
@@ -373,13 +403,13 @@ function AssignScreen() {
                           </label>
                           <input
                             value={draft.lotNumber} onChange={e => setField(sectionId, 'lotNumber', e.target.value)}
-                            placeholder={isBlenderSection(sectionId) ? 'Auto — date/run number, unless set here' : 'e.g. GS-2026-001'}
+                            placeholder={isBlenderSection(sectionId) ? (lotPreview[sectionId] || 'Auto — date/run number') : 'e.g. GS-2026-001'}
                             className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] text-text outline-none focus:border-brand ${lotMissing ? 'border-err' : 'border-stone-200'}`}
                           />
                           {lotMissing ? (
                             <p className="text-[11px] text-err px-0.5">Required — every output bag tag is stamped with this lot, and QC readings link to it.</p>
                           ) : isBlenderSection(sectionId) && (
-                            <p className="text-[11px] text-stone-400 px-0.5">Optional override — Capture auto-generates one (date/run number) if left blank.</p>
+                            <p className="text-[11px] text-stone-400 px-0.5">Already handled — leave blank to use the auto lot shown above, or type one to override.</p>
                           )}
                         </div>
                       )}
