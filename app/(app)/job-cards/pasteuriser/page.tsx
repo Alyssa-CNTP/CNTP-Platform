@@ -12,6 +12,7 @@ import { useAuth } from '@/lib/auth/context'
 import { listBoms, getBomComponents, findParentBlendBom, type BomSummary } from '@/lib/production/bom'
 import { upperCode } from '@/lib/production/normalize-code'
 import { loadImage } from '@/lib/pdf/load-image'
+import { loadMySignature, saveMySignature } from '@/lib/production/user-signature'
 
 interface RatioLine { componentItemId: string; label: string; pct: number }
 interface PackagingLine { componentItemId: string; label: string; kgPerUnit: number }
@@ -90,6 +91,28 @@ function RatioTable({ lines }: { lines: RatioLine[] }) {
         </tbody>
       </table>
       <p className={clsx('font-mono text-[10px] mt-1 text-right', outOfRange ? 'text-warn' : 'text-text-faint')}>Total: {total.toFixed(1)}%</p>
+    </div>
+  )
+}
+
+// Quality's own sign-off, appearing once a card is approved — auto-loads/saves
+// the signer's remembered signature the same way the Production Manager's does.
+function QualitySignOff({ onSign }: { onSign: (signature: string) => void }) {
+  const { userId } = useAuth()
+  const [signature, setSignature] = useState<string | null>(null)
+  const [signed, setSigned] = useState(false)
+
+  useEffect(() => { loadMySignature(userId).then(setSignature) }, [userId])
+
+  return (
+    <div className="space-y-2">
+      <SignaturePad label="Quality Officer / Controller" name="Quality Officer / Controller" value={signature} onChange={setSignature} />
+      <button disabled={!signature || signed}
+        onClick={() => { if (signature) { saveMySignature(userId, signature); onSign(signature); setSigned(true) } }}
+        className={clsx('px-3 py-2 rounded-lg text-[13px] font-semibold',
+          signature && !signed ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
+        {signed ? 'Signed ✓' : 'Sign off'}
+      </button>
     </div>
   )
 }
@@ -188,9 +211,12 @@ function PendingCardRow({ c, expanded, onToggle, onDecide }: {
   c: PendingCard; expanded: boolean; onToggle: () => void
   onDecide: (id: string, decision: 'approved' | 'rejected', extra: { reason?: string; supervisorSignature?: string }) => Promise<void>
 }) {
+  const { userId } = useAuth()
   const [signature, setSignature] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => { loadMySignature(userId).then(setSignature) }, [userId])
 
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
@@ -218,7 +244,7 @@ function PendingCardRow({ c, expanded, onToggle, onDecide }: {
 
           <SignaturePad label="Supervisor signature" name="Supervisor signature" value={signature} onChange={setSignature} />
           <button disabled={!signature || busy}
-            onClick={async () => { setBusy(true); await onDecide(c.id, 'approved', { supervisorSignature: signature! }); setBusy(false) }}
+            onClick={async () => { setBusy(true); saveMySignature(userId, signature!); await onDecide(c.id, 'approved', { supervisorSignature: signature! }); setBusy(false) }}
             className={clsx('w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5',
               signature ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
             <ThumbsUp className="w-4 h-4" /> {signature ? 'Approve' : 'Sign to approve'}
@@ -241,7 +267,7 @@ function PendingCardRow({ c, expanded, onToggle, onDecide }: {
 
 function PasteuriserJobCardScreen() {
   const db = getDb()
-  const { p, isFullAdmin } = useAuth()
+  const { p, isFullAdmin, isQuality, userId } = useAuth()
   const canGenerate = isFullAdmin || p('can_generate_job_cards')
   const canApprove = isFullAdmin || p('can_approve_job_cards')
   const searchParams = useSearchParams()
@@ -263,7 +289,8 @@ function PasteuriserJobCardScreen() {
   // (public.next_job_card_no(), a DB sequence), never hand-typed.
   useEffect(() => {
     if (savedId || form.job_card_no) return
-    db.rpc('next_job_card_no' as any).then(({ data }: any) => {
+    db.rpc('next_job_card_no' as any).then(({ data, error }: any) => {
+      if (error) { console.error('next_job_card_no() failed — is migration 20260729_003 applied?', error); return }
       if (data) setForm(f => (f.job_card_no ? f : { ...f, job_card_no: data as string }))
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -279,6 +306,16 @@ function PasteuriserJobCardScreen() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkBomId])
+
+  // The manager only ever draws their signature once — after that it's
+  // remembered (public.user_signatures) and reused on every new draft.
+  useEffect(() => {
+    if (form.sig_production_manager || savedId) return
+    loadMySignature(userId).then(sig => {
+      if (sig) setForm(f => (f.sig_production_manager ? f : { ...f, sig_production_manager: sig }))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId])
 
   async function save(patch?: Partial<Form>): Promise<string | null> {
     setSaving(true)
@@ -323,7 +360,7 @@ function PasteuriserJobCardScreen() {
     const cust = customer.trim()
     if (!item || !cust) return
     const { data } = await db.from('job_card_settings_templates')
-      .select('*').eq('item_no', item).eq('customer', cust).maybeSingle()
+      .select('*').eq('item_no', item).ilike('customer', cust).maybeSingle()
     if (!data) return
     const t = data as any
     // Only fill fields the manager hasn't already touched this session — never
@@ -415,7 +452,7 @@ function PasteuriserJobCardScreen() {
     <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5 pb-24">
       <style>{`@media print { body * { visibility: hidden; } .jobcard-print, .jobcard-print * { visibility: visible; } .jobcard-print { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } }`}</style>
 
-      <div className="card p-4 bg-brand text-white no-print">
+      <div className="rounded-2xl p-4 bg-brand text-white no-print">
         <p className="font-mono text-[10px] uppercase tracking-widest text-white/50 mb-1">PR-FM-013/1 · Cape Natural Tea Products</p>
         <h1 className="font-display font-extrabold text-2xl">Pasteuriser Line Job Card</h1>
       </div>
@@ -439,7 +476,7 @@ function PasteuriserJobCardScreen() {
           <F label="Expected commencement"><input type="date" className="input" value={form.expected_commencement} onChange={set('expected_commencement')} disabled={locked} /></F>
           <F label="Job card no."><input className="input font-mono" value={form.job_card_no} onChange={set('job_card_no')} disabled={locked} /></F>
         </div>
-        <F label="Item no."><input className="input font-mono" value={form.item_no} onChange={set('item_no')} disabled={locked || !!form.bom_output_item_id} /></F>
+        <F label="Item no. (Acumatica code)"><input className="input font-mono" value={form.item_no} onChange={set('item_no')} disabled={locked || !!form.bom_output_item_id} /></F>
       </div>
 
       <div className="card p-4 space-y-3">
@@ -547,15 +584,33 @@ function PasteuriserJobCardScreen() {
 
       <div className="card p-4 space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold">Sign-offs</p>
-        {[
-          { label: 'Production Coordinator', key: 'sig_production_coordinator' },
-          { label: 'Production Supervisor',  key: 'sig_production_supervisor' },
-          { label: 'Quality Officer / Controller', key: 'sig_quality_officer' },
-          { label: 'Production Manager',     key: 'sig_production_manager' },
-        ].map(s => (
-          <SignaturePad key={s.key} label={s.label} name={s.label} value={(form as any)[s.key]}
-            onChange={(val: string | null) => setForm(f => ({ ...f, [s.key]: val }))} disabled={locked} />
-        ))}
+        <p className="text-[11px] text-text-faint -mt-2">Sequential: Production Manager signs here to send it, the Supervisor signs to approve it, then Quality signs off once approved. Each signature is drawn once and remembered for next time.</p>
+
+        <SignaturePad label="Production Manager" name="Production Manager" value={form.sig_production_manager}
+          onChange={(val: string | null) => { setForm(f => ({ ...f, sig_production_manager: val })); if (val) saveMySignature(userId, val) }}
+          disabled={locked} />
+
+        {form.sig_production_supervisor ? (
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Production Supervisor</p>
+            <img src={form.sig_production_supervisor} alt="Supervisor signature" style={{ height: 40 }} />
+          </div>
+        ) : (form.status === 'sent_for_approval' || form.status === 'approved') && (
+          <p className="text-[11px] text-text-faint">Awaiting the Supervisor's sign-off.</p>
+        )}
+
+        {form.status === 'approved' && (
+          form.sig_quality_officer ? (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Quality Officer / Controller</p>
+              <img src={form.sig_quality_officer} alt="Quality officer signature" style={{ height: 40 }} />
+            </div>
+          ) : (isFullAdmin || isQuality) ? (
+            <QualitySignOff onSign={sig => save({ sig_quality_officer: sig })} />
+          ) : (
+            <p className="text-[11px] text-text-faint">Awaiting the Quality Officer's sign-off.</p>
+          )
+        )}
       </div>
 
       {form.status === 'sent_for_approval' && (
@@ -674,12 +729,11 @@ function PasteuriserJobCardScreen() {
           <div className="mb-3"><div className="font-bold text-[11px] uppercase">Re-work material</div><div className="text-[11px]">{form.rework_material}</div></div>
         )}
 
-        <div className="grid grid-cols-2 gap-x-8 gap-y-6 mt-6">
+        <div className="grid grid-cols-3 gap-x-6 gap-y-6 mt-6">
           {[
-            { label: 'Production Coordinator', sig: form.sig_production_coordinator },
+            { label: 'Production Manager', sig: form.sig_production_manager },
             { label: 'Production Supervisor', sig: form.sig_production_supervisor },
             { label: 'Quality Officer / Controller', sig: form.sig_quality_officer },
-            { label: 'Production Manager', sig: form.sig_production_manager },
           ].map(s => (
             <div key={s.label}>
               <div style={{ height: 30 }}>{s.sig && <img src={s.sig} alt="" style={{ height: 28 }} />}</div>
@@ -853,33 +907,32 @@ async function exportJobCardPdf(form: Form) {
     doc.text(lines, margin, y); y += lines.length * 10 + 8
   }
 
-  // Signatures — four slots, two per row (already base64 data URLs from
-  // SignaturePad, so loadImage just needs to read their natural size).
+  // Signatures — three slots in one row (Manager → Supervisor → Quality, the
+  // actual sign-off order; already base64 data URLs from SignaturePad, so
+  // loadImage just needs to read their natural size).
   const sigs = [
-    { title: 'Production Coordinator', signature: form.sig_production_coordinator },
+    { title: 'Production Manager', signature: form.sig_production_manager },
     { title: 'Production Supervisor', signature: form.sig_production_supervisor },
     { title: 'Quality Officer / Controller', signature: form.sig_quality_officer },
-    { title: 'Production Manager', signature: form.sig_production_manager },
   ]
   y += 16
-  const sigW = 170
-  const sigX = [margin + 10, pageW - margin - 10 - sigW]
-  for (let row = 0; row < 2; row++) {
-    for (let col = 0; col < 2; col++) {
-      const s = sigs[row * 2 + col]; if (!s) continue
-      const x = sigX[col]
-      if (s.signature) {
-        const img = await loadImage(s.signature)
-        if (img) {
-          const h = 28, w = Math.min(140, img.w * (h / img.h))
-          try { doc.addImage(img.dataUrl, 'PNG', x, y - h - 2, w, h) } catch { /* ignore bad image */ }
-        }
+  const sigW = 150
+  const gap = (pageW - 2 * margin - 3 * sigW) / 2
+  const sigX = [margin, margin + sigW + gap, margin + 2 * (sigW + gap)]
+  for (let col = 0; col < 3; col++) {
+    const s = sigs[col]
+    const x = sigX[col]
+    if (s.signature) {
+      const img = await loadImage(s.signature)
+      if (img) {
+        const h = 28, w = Math.min(sigW - 10, img.w * (h / img.h))
+        try { doc.addImage(img.dataUrl, 'PNG', x, y - h - 2, w, h) } catch { /* ignore bad image */ }
       }
-      doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title, x, y + 12)
     }
-    y += 50
+    doc.setDrawColor(17); doc.setLineWidth(0.8); doc.line(x, y, x + sigW, y)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(s.title, x, y + 12)
   }
+  y += 50
 
   doc.save(`JobCard_${upperCode(form.batch_number) || form.item_no || 'pasteuriser'}.pdf`)
 }

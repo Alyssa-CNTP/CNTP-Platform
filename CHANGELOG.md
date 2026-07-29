@@ -5,6 +5,67 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Job card floor feedback: visible fields, sequential sign-off with remembered signatures, seeded settings, dashboard outstanding-tasks nudge)
+
+**Files changed:** `app/globals.css`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`, `components/production/ProductionDashboard.tsx`, `lib/production/user-signature.ts` (new), `supabase/migrations/20260729_005_job_card_settings_seed.sql` (new), `supabase/migrations/20260729_006_user_signatures.sql` (new)
+
+Real screenshots from the floor surfaced concrete bugs and workflow mismatches, several of them pre-existing (not introduced this session, just never caught):
+
+- **Fixed: fields were unreadable.** No `.input` CSS class was ever defined anywhere in the repo — every page using `className="input"` (this one, plus `job-cards/granule`, `hs`, `cleaning`) was silently falling back to bare browser-default input styling with a near-invisible border. Added a real `.input` class to `globals.css` (border, background, focus ring, disabled state) — fixes all four pages at once.
+- **Fixed: the header card rendered blank.** `<div className="card p-4 bg-brand ...">` — the shared `.card` class hardcodes a translucent white background in plain CSS, which won the cascade over the `bg-brand` Tailwind utility stacked on the same element, so the header rendered white-on-white. Pre-existing bug (present before this session's edits); switched the header to a plain `rounded-2xl` div instead of `.card` so `bg-brand` actually applies.
+- **Sign-off flow now matches the real process.** Was 4 equally-editable signature pads with no sequencing. Now: Production Manager signs to send it (their own signature only, at the top) → Supervisor signs to approve (unchanged mechanism, just tidied) → Quality Officer signs once approved (new, gated to Quality/admin). Dropped Production Coordinator from the flow — the user's described process only has these three. Print view and PDF export updated to the same 3-signature layout.
+- **Signatures are now remembered per person** (new `public.user_signatures`, one row per user) — Manager, Supervisor, and Quality Officer each draw their signature once; every later job card auto-loads and reuses it instead of asking them to redraw it.
+- **Seeded the two known (item, customer) plant-settings/instructions pairs** transcribed off the paper cards already reviewed this session (Entyce/`30FPSG-NAT26-1-C`, Kunitaro/`30FPSFC-KUN25-C`) — `supabase/migrations/20260729_005`. Settings-template customer lookup is now case-insensitive (`ilike`) so "entyce"/"Entyce"/"ENTYCE" all match.
+- **"Item no." relabelled** to "Item no. (Acumatica code)" for clarity.
+- **Production Manager dashboard gets an "Outstanding today" nudge** — pulls directly from `job_cards_pasteuriser` (no card generated yet today?) and `shift_assignments` (sections not assigned yet today?), each linking straight to the page that fixes it. Not a separately-tracked to-do list, so it can't drift out of sync with the real pages. The BOMs page also now reads a `?workCentre=` deep-link param (Suspense-wrapped, same pattern as the job card page's `?bomId=`) so the dashboard's "Generate job card" link opens straight to the Pasteuriser-filtered view.
+
+**Not done this session:** `next_job_card_no()` returning blank in one screenshot wasn't reproducible (no live access to confirm) — added error logging instead of a blind fix, so a real failure now surfaces in the console instead of silently leaving the field empty.
+
+---
+
+## 2026-07-29 — Alyssa (AXIS: Intelligence Hub — auto-categorized radial dashboard visualization)
+
+**Files changed:** `app/(app)/axis/page.tsx`, `app/(app)/axis/changelog/page.tsx`, `components/axis/IntelligenceHub.tsx` (new), `lib/axis/hub-taxonomy.ts` (new), `lib/axis/hub-geometry.ts` (new), `lib/axis/categorize.ts` (new), `app/api/axis/categorize/run/route.ts` (new), `app/api/axis/intelligence-hub/route.ts` (new), `.github/workflows/axis-categorize.yml` (new), `supabase/migrations/20260729_006_axis_intelligence_hub.sql` (new)
+
+- **New "Intelligence Hub" radial visualization** on the AXIS dashboard — a strategic overview layer inspired by a board-briefing deck (AI-native organization vision), sitting above the existing operational KPI/project/changelog sections (which are unchanged). Crosses 8 business-function wedges (Sales/Marketing/Production/Quality/Supply/Finance/Logistics/HR) with 6 "Intelligence Stack" capability-layer rings (Sense/Interpret/Decide/Orchestrate/Learn/Govern), wrapped by a manager ring and a Board/MD/FD ring. Uses a deliberate new navy palette, distinct from the rest of AXIS's green/white operational pages.
+- **Fully auto-populated, never hand-tagged**: every `axis.change_logs` entry (manual IT entries + auto-ingested GitHub PRs) is classified onto both axes by Gemini in a background job — cells grow in color intensity as real categorized activity accumulates, with a faint always-visible floor so the full 48-cell structure never has a "missing" gap. Classification never blocks the dashboard — a slow/misconfigured/failing Gemini call just leaves rows uncategorized (visible in a "N of M classified" caption) rather than erroring the page.
+- **Categorization pipeline**: `lib/axis/categorize.ts` (Gemini call, JSON-skeleton prompt, paced to avoid rate limits), `app/api/axis/categorize/run/route.ts` (dual-gated — `CRON_SECRET` for the new 4-hourly GitHub Actions cron, or an authenticated IT caller for the dashboard's "Recategorize now" button — mirrors the existing `eu-mrl-sync` pattern), with a run-log table (`axis.change_log_categorization_log`) for observability.
+- **Click a cell to drill in**: navigates to `/axis/changelog?business_function=X&capability_layer=Y`, which now accepts and applies these as filters (with a clear-filter banner) alongside the existing category/environment filters.
+- Counts are all-time (a dedicated `GROUP BY` aggregate endpoint), not the operational dashboard's recent-200-row window — a wedge only ever grows as more gets built, never shrinks as older entries age out of a rolling window.
+- IT-only for now (matches the existing AXIS dashboard gate); extending to Management is a one-line follow-up if wanted.
+- **Verified**: `tsc --noEmit` and lint show zero new issues (only pre-existing, unrelated errors elsewhere). SVG geometry verified via a temporary unauthenticated preview route with fake data — confirmed 48 well-formed cells (no NaN coordinates, no degenerate/zero-size paths), correct large-arc-flag behavior on the >180° Board segment, and correct label text on all 11 curved labels — then the scaffold and its temporary middleware allowance were both removed before committing. **Could not click-through the live authenticated dashboard or run a real categorize/cron pass — no IT/SSO credentials available in this environment.** Please verify on staging: load `/axis`, confirm the Hub renders with real (likely all-empty-floor, pre-categorization) data, click "Recategorize now", confirm cells populate, click a populated cell and confirm the changelog filters correctly.
+- **Migration must be run manually** (Supabase SQL editor, staging then production) per this repo's established practice.
+
+---
+
+## 2026-07-28 — Alyssa (Trustworthy KPIs: full-day rollup failures surfaced; production↔warehouse stock link; clearer barcode labels; print health page)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/logistics/actions.ts` (+80 lines), `lib/logistics/types.ts`, `app/(app)/logistics/receiving/page.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx` (new), `lib/production/label-zpl.ts`, `lib/production/label-pplb.ts`, `components/stock-control/PrintHealthModule.tsx` (new), `app/(app)/stock-control/page.tsx`, `supabase/migrations/20260728_002_logistics_production_link.sql` (new)
+
+Investigated three asks this session — barcode printing, stock counts, dashboard filtering — before touching code, since two of the three revealed real structural gaps that would have produced actively wrong numbers if built naively. Dashboard day/hourly/pivot filtering was explicitly **deferred** — nothing changed there this session.
+
+- **Full-day KPI rollup no longer fails silently.** `persist()`'s `production_runs` total_input_kg/total_output_kg rollup was wrapped in a bare `catch {}` — if it failed, the supervisor got zero indication the full-day total might be stale. Now surfaces a non-blocking amber banner ("Full-day total may be out of date") without affecting the core per-session save, which was already reliable.
+- **Closed the gap between production and the warehouse — the actual blocker on trustworthy stock counts.** Investigation found `logistics.units` (the warehouse/dispatch lifecycle) was created ONLY from supplier GRNs — nothing ever created a unit from a finished production bag, so `production.bag_tags.status` never learns a bag left the building (dispatch marks a totally separate table). A naive stock count from `bag_tags` alone would count shipped goods as "in stock" forever.
+  - New **"Receive from production"** flow (`/logistics/receiving/from-production`, linked from the Receiving hub) — scan a `bag_tags.serial_number` directly; that serial becomes the new `logistics.units.barcode` (one physical bag, one identity, across both schemas — no separate mapping column).
+  - `receiveProductionUnit()` (`lib/logistics/actions.ts`) creates the unit AND retires the source `bag_tags` row via the existing `markBagConsumed()` (section `'logistics'`) in the same call — so a bag is represented in exactly one of the two systems at any moment, never both (avoids a double-count window that a "mark dispatched at dispatch time" design would have left open).
+  - Migration `20260728_002`: `logistics.units.grn_id` now nullable, new `source`/`source_section_id` columns, and a new `production.v_stock_on_hand` view (floor stock ∪ warehoused-not-dispatched stock, grouped by product/variant) — the actual trustworthy number this whole thread was about, ready for a future dashboard to query without reinventing the aggregation.
+  - Dispatch itself needed no changes — its existing `status='dispatched'` update on `logistics.units` was already sufficient once bag_tags is retired at warehouse-receipt time instead of at dispatch time.
+- **Barcode labels: Type/Grade redesign extended to the thermal printers.** The HTML label already showed Type and Grade as clearly captioned fields; the Zebra (ZPL) and Argox (PPLB) renderers still crammed both into one small unlabelled badge and dropped the grade letter entirely. Both now show two captioned rows ("TYPE" / "GRADE"), and grade shows the letter alongside the word (e.g. "B Export Blend"), matching what an operator actually sorts pallets by. Barcode payload is unchanged (serial-only). Exact dot positions are conservative but not yet confirmed against a physical print.
+- **New "Print health" page** (`/stock-control` → Print health tab) — since this session can't SSH into the VPS or reach the factory LAN to confirm the print-relay agent is actually running, this surfaces what IS observable from the database: `production.print_jobs` status breakdown, recent errors, and last-successful-print per section, plus a clear note when `LABEL_PRINTING_ENABLED` is off (so "untested" doesn't read as "broken").
+
+**Not done this session (explicit scope decisions):** dashboard day-picker/hourly/pivot-table work (deferred entirely); actually enabling label printing (`LABEL_PRINTING_ENABLED`) — still blocked on physical/operational steps only IT/the floor can do (confirm `PRINT_RELAY` env vars on the VPS, stand up the relay-agent PC on the factory LAN, run a real test print on the Argox).
+
+---
+
+## 2026-07-28 — Alyssa (Shift Roster: pin an individual to their shift; replaces hardcoded fixed-shift people)
+
+**Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
+
+Requires migration `20260729_004` on both Supabase projects.
+
+- **Pin a person to their shift.** A pin icon on each person's chip (hover to reveal; pinned stays visible) keeps that individual on their current day/night shift through the weekly rotation — everyone else still flips, and the pin carries forward each week. Weekly roster only (the manual Saturday sheet doesn't rotate). Persists with the section's Save; pinned chips are highlighted with a pin badge.
+- **Replaces the hardcoded fixed-shift people.** `roster-rotate.ts` no longer lists `store_supervisor`/`forklift_driver` in `FIXED_SHIFT_ROLE_KEYS` — those individuals are now data-pinned (the migration pins their existing entries so behaviour is unchanged and now visible/editable). Only the structurally day-only roles (`refining_2`, `rosehip`) remain role-level in code. `rotateEntries()` now keeps a shift when the entry is pinned OR its role is day-only, and carries the pin forward. The "Generate next week" preview mirrors this so it matches what actually happens.
+
 ## 2026-07-28 — Alyssa ("Generate job card" button on the BOMs page, deep-linked into the job card)
 
 **Files changed:** `app/(app)/production/blends/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`
