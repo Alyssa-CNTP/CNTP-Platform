@@ -10,8 +10,9 @@
 // Acumatica code and blend/final ratios actually live now, filterable by work
 // centre and free-text search.
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Plus, Search, Check, X, ChevronDown, ChevronRight, Trash2, Layers, AlertTriangle, ArrowUpRight, FileText } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -64,17 +65,19 @@ function variantFromSuffix(itemId: string): string | null {
   return null
 }
 
-export default function BlendsPage() {
+function BlendsScreen() {
   const { p, isFullAdmin } = useAuth()
   const canEdit = isFullAdmin || p('can_edit_blends')
   const canDelete = isFullAdmin || p('can_delete_blends')
   const canGenerateJobCards = isFullAdmin || p('can_generate_job_cards')
+  const searchParams = useSearchParams()
+  const deepLinkWorkCentre = searchParams.get('workCentre')
 
   const [rows, setRows] = useState<BomRow[]>([])
   const [items, setItems] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
-  const [workCentreFilter, setWorkCentreFilter] = useState<string>('all')
+  const [workCentreFilter, setWorkCentreFilter] = useState<string>(deepLinkWorkCentre ?? 'all')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [addingBlend, setAddingBlend] = useState(false)
 
@@ -225,6 +228,14 @@ export default function BlendsPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function BlendsPage() {
+  return (
+    <Suspense fallback={<div className="p-4 sm:p-6 text-sm text-text-muted">Loading…</div>}>
+      <BlendsScreen />
+    </Suspense>
   )
 }
 
