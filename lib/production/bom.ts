@@ -46,7 +46,7 @@ export function matchColumn(description: string | null | undefined): string {
 // ── Variant derivation from an Acumatica item code suffix ────────────────────
 // Used only as a fallback when the item isn't in inventory_items yet (itemFound
 // false) so the picker still has something reasonable to filter/display by.
-function variantFromSuffix(itemId: string): DbVariant | null {
+export function variantFromSuffix(itemId: string): DbVariant | null {
   if (itemId.endsWith('-RO')) return 'RA-Organic'
   if (itemId.endsWith('-RC')) return 'RA-Conventional'
   if (itemId.endsWith('-FO')) return 'FT-ORG'
