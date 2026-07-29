@@ -11,7 +11,10 @@ import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { ROSTER_ROLE_SEED, type RosterRole } from '@/lib/production/roster-config'
 import { nextPeriodConfig } from '@/lib/production/roster-rotate'
+import { sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
+import { JobCardApprovalsPanel } from '@/components/production/JobCardApprovalsPanel'
+import { PendingSignOffs } from '@/components/supervisor/PendingSignOffs'
 // The daily "Assign sections" tool (operators + variant + lot + PO per section,
 // per shift) is embedded here as a second view of the Roster tab. It is
 // imported UNCHANGED — its own logic, save behaviour and capture-unlock stay
@@ -47,15 +50,11 @@ interface Employee { id: string; name: string; display_name: string | null; oper
 
 const db = () => getDb().schema('production')
 
-// Today's date in SAST (Africa/Johannesburg), independent of the browser's timezone.
-function sastToday(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
-}
-
 export default function SupervisorRoster() {
   const { user, p, isFullAdmin } = useAuth()
-  const canEdit   = isFullAdmin || p('can_edit_roster_production')
-  const canSubmit = isFullAdmin || p('can_submit_roster_production')
+  const canEdit    = isFullAdmin || p('can_edit_roster_production')
+  const canSubmit  = isFullAdmin || p('can_submit_roster_production')
+  const canApprove = isFullAdmin || p('can_approve_job_cards')
 
   const [period, setPeriod]     = useState<Period | null>(null)
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -294,6 +293,16 @@ export default function SupervisorRoster() {
             )
             : undefined}
         />
+      </div>
+
+      {/* "Needs your attention today" — job cards awaiting approval and sessions
+          awaiting sign-off, both bold and above the fold, deliberately placed
+          before the Staffing/Today's-sections toggle below: a supervisor should
+          review and approve a job card BEFORE assigning sections against it,
+          not discover it was pending after the fact. */}
+      <div className="no-print space-y-3">
+        {canApprove && <JobCardApprovalsPanel />}
+        <PendingSignOffs />
       </div>
 
       {/* Sub-view toggle — the fortnightly staffing grid vs today's per-section

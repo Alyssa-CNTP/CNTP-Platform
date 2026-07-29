@@ -10,7 +10,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { sectionMeta, SECTION_ORDER } from '@/lib/production/capture-config'
-import { SHIFT_LABEL } from '@/lib/production/shifts'
+import { SHIFT_LABEL, sastToday } from '@/lib/production/shifts'
 import type { TimesheetBreak } from '@/lib/production/timesheet'
 import { downloadCsv } from '@/lib/utils/csv-export'
 import { HubHeader } from '@/components/supervisor/HubTabs'
@@ -28,7 +28,7 @@ interface Row {
   worked_minutes: number | null
 }
 
-const todayStr = () => format(new Date(), 'yyyy-MM-dd')
+const todayStr = sastToday
 const timeOf = (iso: string | null) => { if (!iso) return '—'; try { return format(parseISO(iso), 'HH:mm') } catch { return '—' } }
 const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
 const breakMins = (bs: TimesheetBreak[]) =>

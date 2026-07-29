@@ -34,3 +34,14 @@ export function currentShift(at: Date = new Date()): Shift {
   const h = at.getHours()
   return h >= 7 && h < 16 ? 'morning' : 'afternoon'
 }
+
+/**
+ * Today's date in SAST (Africa/Johannesburg), independent of the device's own
+ * timezone/clock — the single source of truth for "today" across the
+ * Supervisor Hub. Several tabs used to compute "today" from the browser's
+ * local `new Date()` instead, which silently disagreed with this one on any
+ * device not actually set to SAST.
+ */
+export function sastToday(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+}
