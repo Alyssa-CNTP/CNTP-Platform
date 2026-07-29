@@ -103,6 +103,12 @@ export interface Unit {
   supplier_id: string | null
   customer_id: string | null
   grn_id: string | null
+  // 'grn' = received from a supplier GRN; 'production' = created by scanning a
+  // production.bag_tags serial into the warehouse (receiveProductionUnit()).
+  // The bag's serial_number IS this row's `barcode` when source === 'production'
+  // — a value-based join, not a hard FK (see migration 20260728_002).
+  source: 'grn' | 'production'
+  source_section_id: string | null
   product_type: string | null
   variant: string | null
   weight_kg: number | null

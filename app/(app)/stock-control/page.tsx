@@ -7,11 +7,13 @@
 // gated in app/(app)/layout.tsx (Production + Management).
 
 import { useState } from 'react'
-import { Printer } from 'lucide-react'
+import { Printer, Radio } from 'lucide-react'
 import PrintersModule from '@/components/stock-control/PrintersModule'
+import PrintHealthModule from '@/components/stock-control/PrintHealthModule'
 
 const MODULES = [
   { id: 'printers', label: 'Printers', Icon: Printer, Component: PrintersModule },
+  { id: 'print-health', label: 'Print health', Icon: Radio, Component: PrintHealthModule },
 ] as const
 
 export default function StockControlPage() {

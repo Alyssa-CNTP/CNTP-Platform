@@ -5,6 +5,25 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Trustworthy KPIs: full-day rollup failures surfaced; production↔warehouse stock link; clearer barcode labels; print health page)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/logistics/actions.ts` (+80 lines), `lib/logistics/types.ts`, `app/(app)/logistics/receiving/page.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx` (new), `lib/production/label-zpl.ts`, `lib/production/label-pplb.ts`, `components/stock-control/PrintHealthModule.tsx` (new), `app/(app)/stock-control/page.tsx`, `supabase/migrations/20260728_002_logistics_production_link.sql` (new)
+
+Investigated three asks this session — barcode printing, stock counts, dashboard filtering — before touching code, since two of the three revealed real structural gaps that would have produced actively wrong numbers if built naively. Dashboard day/hourly/pivot filtering was explicitly **deferred** — nothing changed there this session.
+
+- **Full-day KPI rollup no longer fails silently.** `persist()`'s `production_runs` total_input_kg/total_output_kg rollup was wrapped in a bare `catch {}` — if it failed, the supervisor got zero indication the full-day total might be stale. Now surfaces a non-blocking amber banner ("Full-day total may be out of date") without affecting the core per-session save, which was already reliable.
+- **Closed the gap between production and the warehouse — the actual blocker on trustworthy stock counts.** Investigation found `logistics.units` (the warehouse/dispatch lifecycle) was created ONLY from supplier GRNs — nothing ever created a unit from a finished production bag, so `production.bag_tags.status` never learns a bag left the building (dispatch marks a totally separate table). A naive stock count from `bag_tags` alone would count shipped goods as "in stock" forever.
+  - New **"Receive from production"** flow (`/logistics/receiving/from-production`, linked from the Receiving hub) — scan a `bag_tags.serial_number` directly; that serial becomes the new `logistics.units.barcode` (one physical bag, one identity, across both schemas — no separate mapping column).
+  - `receiveProductionUnit()` (`lib/logistics/actions.ts`) creates the unit AND retires the source `bag_tags` row via the existing `markBagConsumed()` (section `'logistics'`) in the same call — so a bag is represented in exactly one of the two systems at any moment, never both (avoids a double-count window that a "mark dispatched at dispatch time" design would have left open).
+  - Migration `20260728_002`: `logistics.units.grn_id` now nullable, new `source`/`source_section_id` columns, and a new `production.v_stock_on_hand` view (floor stock ∪ warehoused-not-dispatched stock, grouped by product/variant) — the actual trustworthy number this whole thread was about, ready for a future dashboard to query without reinventing the aggregation.
+  - Dispatch itself needed no changes — its existing `status='dispatched'` update on `logistics.units` was already sufficient once bag_tags is retired at warehouse-receipt time instead of at dispatch time.
+- **Barcode labels: Type/Grade redesign extended to the thermal printers.** The HTML label already showed Type and Grade as clearly captioned fields; the Zebra (ZPL) and Argox (PPLB) renderers still crammed both into one small unlabelled badge and dropped the grade letter entirely. Both now show two captioned rows ("TYPE" / "GRADE"), and grade shows the letter alongside the word (e.g. "B Export Blend"), matching what an operator actually sorts pallets by. Barcode payload is unchanged (serial-only). Exact dot positions are conservative but not yet confirmed against a physical print.
+- **New "Print health" page** (`/stock-control` → Print health tab) — since this session can't SSH into the VPS or reach the factory LAN to confirm the print-relay agent is actually running, this surfaces what IS observable from the database: `production.print_jobs` status breakdown, recent errors, and last-successful-print per section, plus a clear note when `LABEL_PRINTING_ENABLED` is off (so "untested" doesn't read as "broken").
+
+**Not done this session (explicit scope decisions):** dashboard day-picker/hourly/pivot-table work (deferred entirely); actually enabling label printing (`LABEL_PRINTING_ENABLED`) — still blocked on physical/operational steps only IT/the floor can do (confirm `PRINT_RELAY` env vars on the VPS, stand up the relay-agent PC on the factory LAN, run a real test print on the Argox).
+
+---
+
 ## 2026-07-28 — Alyssa (Shift Roster: pin an individual to their shift; replaces hardcoded fixed-shift people)
 
 **Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
