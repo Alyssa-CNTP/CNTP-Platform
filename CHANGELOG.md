@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (BOM page redesign: master-detail layout + rich Master Inventory search)
+
+**Files changed:** `app/(app)/production/blends/page.tsx`, `components/production/InventoryPickerModal.tsx` (new)
+
+- **Feedback:** the BOM UI was hard to navigate, and creating a new BOM couldn't show everything or search Master Inventory properly.
+- **Master-detail layout** replaces the single-page accordion (only one BOM could be expanded at a time, squeezed in among every other BOM). The list is now a sticky sidebar; the selected BOM gets a full-width detail pane. Mobile collapses to list-then-detail with a back affordance. Selection syncs to `?bomId=`, deep-linkable like the existing `?workCentre=` filter.
+- **New `InventoryPickerModal`** — a full search + filter modal (item class, group, grade, variant, plus free text) showing every match in a scrollable table with a "showing X of Y" count, instead of the old 30-result-capped, empty-until-you-type 224px dropdown. The lightweight `ItemPicker` used during live production capture is untouched — its quick single-lookup UX is fine there.
+- **"Add blend"** now supports adding every initial component in one sitting (repeatable rows) instead of only a first component.
+- **New "Unresolved item links" quick filter** — click the existing stat tile to filter the list to BOMs with an item that doesn't resolve in Master Inventory.
+
 ## 2026-07-29 — Alyssa (Job card: resumable drafts — there was previously no way back into a saved draft)
 
 **Files changed:** `app/(app)/job-cards/pasteuriser/page.tsx`
