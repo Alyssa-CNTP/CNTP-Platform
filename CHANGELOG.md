@@ -5,6 +5,28 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Alyssa (Assign screen: live lot preview for Blender; "Saved" no longer auto-reverts after 2s)
+
+**Files:** `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/BlenderCapture.tsx`
+
+**Lot preview.** Since Blender/Small Blender's lot is auto-generated (see the earlier
+`autoLot` entry today), the Assign screen's Lot/Batch field for those sections now shows
+the actual value it'll become — as a live placeholder, not a generic hint — computed via
+the same `resolveExistingBlendRunNo()` call Capture itself uses, so it matches what
+actually gets written rather than guessing. It's a placeholder (not the field's real
+value) deliberately: writing a snapshotted guess into `lotNumber` would freeze it as a
+manual override, and the real run number is only final once Capture actually creates a
+bag. Exported `autoLot()` from `BlenderCapture.tsx` so both screens use one
+implementation.
+
+**"Saved" persistence.** `savedSection` used a 2-second `setTimeout` to flash "Saved ✓"
+then revert to "Save assignment" — reading as "did that even go through?" the moment a
+supervisor glanced away. Replaced with `savedSections: Set<string>`, cleared only when
+that section's draft actually changes again (operator toggle, lot/variant edit, PO pick,
+or a bulk roster autofill) — so it now stays "Saved ✓" for as long as it's actually true.
+
+---
+
 ## 2026-07-29 — Alyssa (Job card floor feedback: visible fields, sequential sign-off with remembered signatures, seeded settings, dashboard outstanding-tasks nudge)
 
 **Files changed:** `app/globals.css`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`, `components/production/ProductionDashboard.tsx`, `lib/production/user-signature.ts` (new), `supabase/migrations/20260729_005_job_card_settings_seed.sql` (new), `supabase/migrations/20260729_006_user_signatures.sql` (new)
