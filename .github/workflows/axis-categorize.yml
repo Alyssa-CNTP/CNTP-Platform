@@ -1,0 +1,30 @@
+name: AXIS Intelligence Hub categorize
+
+# Classifies uncategorized axis.change_logs rows onto the Intelligence Hub's
+# business-function x capability-layer axes via Gemini, in small batches
+# (see app/api/axis/categorize/run/route.ts for the batch size). Runs
+# frequently since each invocation only processes a handful of rows.
+#
+# Requires:
+#   secrets.CRON_SECRET         — must match the CRON_SECRET env var on the server
+#   vars.AXIS_CATEGORIZE_URL    — (optional) base URL to hit; defaults to staging
+# The server itself needs GEMINI_API_KEY set.
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # every 4 hours
+  workflow_dispatch: {}
+
+jobs:
+  categorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping AXIS categorize endpoint
+        env:
+          BASE_URL: ${{ vars.AXIS_CATEGORIZE_URL || 'https://cntpplatform-staging.rooibostea.co.za' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${BASE_URL}/api/axis/categorize/run"

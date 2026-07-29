@@ -2,10 +2,15 @@
 
 // app/(app)/axis/changelog/page.tsx
 
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import { CommentThread } from '@/components/axis/CommentThread'
+import {
+  FUNCTION_LABEL, LAYER_LABEL,
+  isBusinessFunction, isCapabilityLayer,
+  type BusinessFunction, type CapabilityLayer,
+} from '@/lib/axis/hub-taxonomy'
 import {
   Loader2, Plus, Lock, Clock, ChevronDown, ChevronUp,
   X, CornerDownRight, Code2, Cpu, Package, Server,
@@ -135,6 +140,8 @@ interface ChangeLog {
   github_author?: string | null
   github_avatar_url?: string | null
   github_diff_stat?: { additions: number | null; deletions: number | null; changed_files: number | null } | null
+  business_function?: string | null
+  capability_layer?: string | null
 }
 
 interface Update {
@@ -431,8 +438,31 @@ function LogRow({ log, projects }: { log: ChangeLog; projects: Project[] }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ChangelogPage() {
+  return (
+    <Suspense fallback={
+      <div className="p-6 flex justify-center">
+        <Loader2 size={18} className="animate-spin text-text-faint" />
+      </div>
+    }>
+      <ChangelogPageBody />
+    </Suspense>
+  )
+}
+
+function ChangelogPageBody() {
   const { isIT, loading: al } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // Deep-link filter from the AXIS dashboard's Intelligence Hub — clicking a
+  // cell navigates here with these two params to show just that cell's entries.
+  const hubFnParam = searchParams.get('business_function')
+  const hubLayerParam = searchParams.get('capability_layer')
+  const [hubFilter, setHubFilter] = useState<{ fn: BusinessFunction; layer: CapabilityLayer } | null>(() =>
+    isBusinessFunction(hubFnParam) && isCapabilityLayer(hubLayerParam)
+      ? { fn: hubFnParam, layer: hubLayerParam }
+      : null
+  )
 
   const [logs,     setLogs]     = useState<ChangeLog[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -549,6 +579,7 @@ export default function ChangelogPage() {
     }
     if (filterFolder !== 'all' && (l.sub_folder ?? '') !== filterFolder) return false
     if (filterEnv !== 'all' && l.environment !== filterEnv) return false
+    if (hubFilter && (l.business_function !== hubFilter.fn || l.capability_layer !== hubFilter.layer)) return false
     return true
   })
 
@@ -568,6 +599,21 @@ export default function ChangelogPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">
+
+      {/* ── Intelligence Hub deep-link filter banner ── */}
+      {hubFilter && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-info/10 border border-info/20">
+          <span className="text-[12px] text-text">
+            Filtered from the Intelligence Hub: <strong>{FUNCTION_LABEL[hubFilter.fn]}</strong> · <strong>{LAYER_LABEL[hubFilter.layer]}</strong>
+          </span>
+          <button
+            onClick={() => setHubFilter(null)}
+            className="ml-auto text-[11px] font-semibold text-info hover:underline"
+          >
+            Clear filter
+          </button>
+        </div>
+      )}
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-2 flex-wrap">

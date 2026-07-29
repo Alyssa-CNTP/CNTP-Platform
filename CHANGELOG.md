@@ -5,6 +5,21 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (AXIS: Intelligence Hub — auto-categorized radial dashboard visualization)
+
+**Files changed:** `app/(app)/axis/page.tsx`, `app/(app)/axis/changelog/page.tsx`, `components/axis/IntelligenceHub.tsx` (new), `lib/axis/hub-taxonomy.ts` (new), `lib/axis/hub-geometry.ts` (new), `lib/axis/categorize.ts` (new), `app/api/axis/categorize/run/route.ts` (new), `app/api/axis/intelligence-hub/route.ts` (new), `.github/workflows/axis-categorize.yml` (new), `supabase/migrations/20260729_006_axis_intelligence_hub.sql` (new)
+
+- **New "Intelligence Hub" radial visualization** on the AXIS dashboard — a strategic overview layer inspired by a board-briefing deck (AI-native organization vision), sitting above the existing operational KPI/project/changelog sections (which are unchanged). Crosses 8 business-function wedges (Sales/Marketing/Production/Quality/Supply/Finance/Logistics/HR) with 6 "Intelligence Stack" capability-layer rings (Sense/Interpret/Decide/Orchestrate/Learn/Govern), wrapped by a manager ring and a Board/MD/FD ring. Uses a deliberate new navy palette, distinct from the rest of AXIS's green/white operational pages.
+- **Fully auto-populated, never hand-tagged**: every `axis.change_logs` entry (manual IT entries + auto-ingested GitHub PRs) is classified onto both axes by Gemini in a background job — cells grow in color intensity as real categorized activity accumulates, with a faint always-visible floor so the full 48-cell structure never has a "missing" gap. Classification never blocks the dashboard — a slow/misconfigured/failing Gemini call just leaves rows uncategorized (visible in a "N of M classified" caption) rather than erroring the page.
+- **Categorization pipeline**: `lib/axis/categorize.ts` (Gemini call, JSON-skeleton prompt, paced to avoid rate limits), `app/api/axis/categorize/run/route.ts` (dual-gated — `CRON_SECRET` for the new 4-hourly GitHub Actions cron, or an authenticated IT caller for the dashboard's "Recategorize now" button — mirrors the existing `eu-mrl-sync` pattern), with a run-log table (`axis.change_log_categorization_log`) for observability.
+- **Click a cell to drill in**: navigates to `/axis/changelog?business_function=X&capability_layer=Y`, which now accepts and applies these as filters (with a clear-filter banner) alongside the existing category/environment filters.
+- Counts are all-time (a dedicated `GROUP BY` aggregate endpoint), not the operational dashboard's recent-200-row window — a wedge only ever grows as more gets built, never shrinks as older entries age out of a rolling window.
+- IT-only for now (matches the existing AXIS dashboard gate); extending to Management is a one-line follow-up if wanted.
+- **Verified**: `tsc --noEmit` and lint show zero new issues (only pre-existing, unrelated errors elsewhere). SVG geometry verified via a temporary unauthenticated preview route with fake data — confirmed 48 well-formed cells (no NaN coordinates, no degenerate/zero-size paths), correct large-arc-flag behavior on the >180° Board segment, and correct label text on all 11 curved labels — then the scaffold and its temporary middleware allowance were both removed before committing. **Could not click-through the live authenticated dashboard or run a real categorize/cron pass — no IT/SSO credentials available in this environment.** Please verify on staging: load `/axis`, confirm the Hub renders with real (likely all-empty-floor, pre-categorization) data, click "Recategorize now", confirm cells populate, click a populated cell and confirm the changelog filters correctly.
+- **Migration must be run manually** (Supabase SQL editor, staging then production) per this repo's established practice.
+
+---
+
 ## 2026-07-28 — Alyssa (Shift Roster: pin an individual to their shift; replaces hardcoded fixed-shift people)
 
 **Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
