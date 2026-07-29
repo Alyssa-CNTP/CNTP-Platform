@@ -17,6 +17,7 @@ import {
   CartesianGrid, Tooltip, ResponsiveContainer, Cell,
   PieChart, Pie,
 } from 'recharts'
+import IntelligenceHub, { type HubCell } from '@/components/axis/IntelligenceHub'
 
 // ─── Category taxonomy (mirrors /axis/changelog) ──────────────────────────────
 
@@ -221,6 +222,16 @@ export default function AxisDashboard() {
   const [allReqs,        setAllReqs]        = useState<ProjectRequest[]>([])
   const [loading,        setLoading]        = useState(true)
 
+  // Intelligence Hub — separate fetch from the operational dashboard data
+  // above, since its counts must be all-time (not the 200-row recent window
+  // /api/axis/dashboard uses for the operational charts).
+  const [hubCells,       setHubCells]       = useState<HubCell[]>([])
+  const [hubCategorized, setHubCategorized] = useState(0)
+  const [hubTotal,       setHubTotal]       = useState(0)
+  const [hubLastRun,     setHubLastRun]     = useState<string | null>(null)
+  const [hubExpanded,    setHubExpanded]    = useState(true)
+  const [hubRecategorizing, setHubRecategorizing] = useState(false)
+
   // Project grid sorting
   type ProjectSortKey = 'name' | 'priority' | 'progress' | 'due'
   const [pSortKey, setPSortKey] = useState<ProjectSortKey>('progress')
@@ -234,7 +245,44 @@ export default function AxisDashboard() {
   useEffect(() => { if (!al && !isIT) router.replace('/dashboard') }, [isIT, al, router])
 
   useEffect(() => {
+    const stored = window.localStorage.getItem('axis-hub-expanded')
+    if (stored !== null) setHubExpanded(stored === 'true')
+  }, [])
+
+  function loadHub() {
+    fetch('/api/axis/intelligence-hub')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return
+        setHubCells(d.cells ?? [])
+        setHubCategorized(d.categorizedCount ?? 0)
+        setHubTotal(d.totalCount ?? 0)
+        setHubLastRun(d.lastRunAt ?? null)
+      })
+      .catch(() => {})
+  }
+
+  async function handleRecategorize() {
+    setHubRecategorizing(true)
+    try {
+      await fetch('/api/axis/categorize/run', { method: 'POST' })
+      loadHub()
+    } finally {
+      setHubRecategorizing(false)
+    }
+  }
+
+  function toggleHubExpanded() {
+    setHubExpanded(v => {
+      const next = !v
+      window.localStorage.setItem('axis-hub-expanded', String(next))
+      return next
+    })
+  }
+
+  useEffect(() => {
     if (al || !isIT) return
+    loadHub()
     // All axis.* tables are RLS-locked for the anon client.
     // The /api/axis/dashboard route fetches everything via admin client behind an IT check.
     fetch('/api/axis/dashboard')
@@ -478,6 +526,27 @@ export default function AxisDashboard() {
             <Send size={13} /> New request
           </button>
         </div>
+      </div>
+
+      {/* ── Intelligence Hub ── */}
+      <div>
+        <button
+          onClick={toggleHubExpanded}
+          className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text transition-colors mb-2"
+        >
+          {hubExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {hubExpanded ? 'Hide' : 'Show'} Intelligence Hub
+        </button>
+        {hubExpanded && (
+          <IntelligenceHub
+            cells={hubCells}
+            categorizedCount={hubCategorized}
+            totalCount={hubTotal}
+            lastRunAt={hubLastRun}
+            onRecategorize={handleRecategorize}
+            recategorizing={hubRecategorizing}
+          />
+        )}
       </div>
 
       {/* ── KPI row ── */}
