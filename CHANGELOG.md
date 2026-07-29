@@ -5,6 +5,22 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Job card round 2: PDF text overlap, scroll room, sticky per-customer blend, resilient auto-numbering)
+
+**Files changed:** `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`
+
+More floor feedback after a real draft was created:
+
+- **PDF text overlap fixed.** The `kv()` layout drew label and value on the same baseline with a hardcoded 120pt gap — long labels ("Debagging hopper speed inverter setting") ran straight into the value. Rewrote it label-above-value (matching the on-screen form), so label length can never collide with the value regardless of how long it is.
+- **Couldn't scroll to the sign-off buttons.** Bumped bottom padding (`pb-24` → `pb-48`) so the Sign-offs card — which has grown since the Verify & Sign redesign — always clears the fixed action bar.
+- **Blend now suggested per customer.** Blurring the Customer field (if no BOM picked yet this session) looks up that customer's most recent job card and auto-fills the same Acumatica code/blend — "a customer usually reorders the same thing" — with a visible note and the picker still there to override for a different run.
+- **Job card number generation is now visible when it fails**, not silently console-only — an inline error + manual Retry button next to the field.
+- **BOMs page blend-resolution panel no longer renders nothing when it can't find a match** — distinguishes "still loading" from "no matching Blender BOM found" so a genuine gap is visible instead of looking identical to a bug. Investigated one reported case (`30FPFSE15-001A-RO` / `25BLSFC-KUN23-RO`) — the BOM data and lookup logic both check out on inspection; flagged as unresolved pending a live repro, since this session has no way to click through the authenticated app.
+
+**Not done this session:** the bigger ask — auto-filling batch/blend data downstream into Assign/Capture so the supervisor only confirms shift staffing, plus linking job cards to Sales/CRM for per-customer margin — needs a scoped conversation before touching Pasteuriser capture; margin visibility is still blocked on a cost-data source (see the earlier BOM-catalogue entry).
+
+---
+
 ## 2026-07-29 — Alyssa (Signatures moved to the Staff Directory — "Verify & Sign", no more drawing)
 
 **Files changed:** `supabase/migrations/20260729_007_employee_signatures.sql` (new), `lib/auth/server-helpers.ts`, `lib/production/employee-signature.ts` (new, replaces `lib/production/user-signature.ts`), `app/api/me/signature/route.ts` (new), `app/api/staff/[id]/signature/route.ts` (new), `app/api/production/job-cards/[id]/send-for-approval/route.ts`, `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/[id]/quality-sign/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`

@@ -304,6 +304,8 @@ function PasteuriserJobCardScreen() {
   const [savedId, setSavedId] = useState<string | null>(null)
   const [bomLoading, setBomLoading] = useState(false)
   const [myStatus, setMyStatus] = useState<MySignatureStatus | null>(null)
+  const [jobCardNoError, setJobCardNoError] = useState<string | null>(null)
+  const [lastOrderNote, setLastOrderNote] = useState<string | null>(null)
 
   // Locked once sent for approval or approved — the manager's job is done;
   // a supervisor either approves it (via the panel above) or rejects it back
@@ -312,13 +314,19 @@ function PasteuriserJobCardScreen() {
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
 
   // A fresh draft gets its number the moment the page opens — auto, atomic
-  // (public.next_job_card_no(), a DB sequence), never hand-typed.
-  useEffect(() => {
-    if (savedId || form.job_card_no) return
+  // (public.next_job_card_no(), a DB sequence), never hand-typed. Surfaced
+  // in the UI (not just console) if it fails, with a manual retry — a silent
+  // failure here just looked like the feature didn't exist.
+  function generateJobCardNo() {
+    setJobCardNoError(null)
     db.rpc('next_job_card_no' as any).then(({ data, error }: any) => {
-      if (error) { console.error('next_job_card_no() failed — is migration 20260729_003 applied?', error); return }
+      if (error) { setJobCardNoError('Could not auto-generate a number — is migration 20260729_003 applied?'); return }
       if (data) setForm(f => (f.job_card_no ? f : { ...f, job_card_no: data as string }))
     })
+  }
+  useEffect(() => {
+    if (savedId || form.job_card_no) return
+    generateJobCardNo()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -453,8 +461,23 @@ function PasteuriserJobCardScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.total_mass, form.weight_per_bulk_bag])
 
-  function onCustomerBlur() {
+  async function onCustomerBlur() {
     if (form.item_no.trim()) applySettingsTemplate(form.item_no, form.customer)
+    // A customer usually reorders the same thing — if no BOM has been picked
+    // yet this session, default to whatever we last generated for them
+    // (still fully overridable via the picker above).
+    if (!form.bom_output_item_id && form.customer.trim()) {
+      const { data } = await db.from('job_cards_pasteuriser')
+        .select('bom_output_item_id').eq('customer', form.customer.trim())
+        .not('bom_output_item_id', 'is', null)
+        .order('date_of_card', { ascending: false }).limit(1).maybeSingle()
+      const lastItemId = (data as any)?.bom_output_item_id
+      if (lastItemId) {
+        const all = await listBoms('06-PASTEURISING')
+        const match = all.find(b => b.outputItemId === lastItemId)
+        if (match && !form.bom_output_item_id) { setLastOrderNote(match.outputItemId); await pickBom(match) }
+      }
+    }
   }
 
   async function sendForApproval() {
@@ -470,7 +493,7 @@ function PasteuriserJobCardScreen() {
   }
 
   return (
-    <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5 pb-24">
+    <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5 pb-48">
       <style>{`@media print { body * { visibility: hidden; } .jobcard-print, .jobcard-print * { visibility: visible; } .jobcard-print { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } }`}</style>
 
       <div className="rounded-2xl p-4 bg-brand text-white no-print">
@@ -483,8 +506,11 @@ function PasteuriserJobCardScreen() {
       {canGenerate && !locked && (
         <div className="card p-4 space-y-2 border-2 border-brand/20 no-print">
           <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold">Generate from BOM</p>
-          <BomPicker onPick={pickBom} disabled={bomLoading} />
+          <BomPicker onPick={b => { setLastOrderNote(null); pickBom(b) }} disabled={bomLoading} />
           <p className="text-[11px] text-text-faint">Picks up the Acumatica code, blend ratio and final product ratio straight from the BOM catalogue — nothing here needs re-typing. Batch details, plant settings and special instructions below are still yours to fill in.</p>
+          {lastOrderNote && (
+            <p className="text-[11px] text-brand">Auto-filled <span className="font-mono">{lastOrderNote}</span> — {form.customer}'s last order. Search above to pick something different for this run.</p>
+          )}
         </div>
       )}
 
@@ -495,7 +521,15 @@ function PasteuriserJobCardScreen() {
           <F label="Customer"><input className="input" value={form.customer} onChange={set('customer')} onBlur={onCustomerBlur} disabled={locked} /></F>
           <F label="Date of job card"><input type="date" className="input" value={form.date_of_card} onChange={set('date_of_card')} disabled={locked} /></F>
           <F label="Expected commencement"><input type="date" className="input" value={form.expected_commencement} onChange={set('expected_commencement')} disabled={locked} /></F>
-          <F label="Job card no."><input className="input font-mono" value={form.job_card_no} onChange={set('job_card_no')} disabled={locked} /></F>
+          <F label="Job card no. (auto)">
+            <div className="flex items-center gap-1.5">
+              <input className="input font-mono" value={form.job_card_no} onChange={set('job_card_no')} disabled={locked} placeholder={jobCardNoError ? '—' : 'Generating…'} />
+              {!locked && !form.job_card_no && (
+                <button type="button" onClick={generateJobCardNo} className="shrink-0 text-[11px] font-semibold text-brand hover:underline whitespace-nowrap">Retry</button>
+              )}
+            </div>
+            {jobCardNoError && <p className="text-[10px] text-err mt-1">{jobCardNoError}</p>}
+          </F>
         </div>
         <F label="Item no. (Acumatica code)"><input className="input font-mono" value={form.item_no} onChange={set('item_no')} disabled={locked || !!form.bom_output_item_id} /></F>
       </div>
@@ -861,22 +895,30 @@ async function exportJobCardPdf(form: Form) {
   doc.setLineWidth(1.2); doc.line(margin, y + 24, pageW - margin, y + 24)
   y += 46
 
+  // Label above value (not side-by-side) — a fixed label/value split column
+  // overlapped on long labels ("Debagging hopper speed inverter setting" etc.)
+  // since the value always started at a hardcoded +120pt regardless of how
+  // wide the label actually was. Stacking removes the overlap entirely: label
+  // and value never share a baseline, so label length can never collide with it.
   const kv = (rows: [string, string][]) => {
-    doc.setFontSize(8)
-    const colX = [margin, pageW / 2 + 10]
-    const colEnd = [pageW / 2 - 10, pageW - margin]
+    const gap = 16
+    const colW = (pageW - 2 * margin - gap) / 2
+    const colX = [margin, margin + colW + gap]
     for (let i = 0; i < rows.length; i += 2) {
       for (let c = 0; c < 2; c++) {
         const item = rows[i + c]; if (!item) continue
-        const x = colX[c]; const valX = x + 120
-        doc.setFont('helvetica', 'bold'); doc.text(item[0], x, y)
-        doc.setFont('helvetica', 'normal'); doc.text(String(item[1] || '—'), valX, y)
-        doc.setDrawColor(180); doc.setLineWidth(0.5); doc.setLineDashPattern([1.5, 1.5], 0)
-        doc.line(valX, y + 2, colEnd[c], y + 2); doc.setLineDashPattern([], 0)
+        const x = colX[c]
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5)
+        doc.text(item[0].toUpperCase(), x, y)
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
+        const valueLines = doc.splitTextToSize(String(item[1] || '—'), colW)
+        doc.text(valueLines, x, y + 10)
+        doc.setDrawColor(200); doc.setLineWidth(0.5)
+        doc.line(x, y + 13, x + colW, y + 13)
       }
-      y += 15
+      y += 20
     }
-    y += 8
+    y += 6
   }
 
   const drawTable = (title: string, rows: [string, string][]) => {
