@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
-import { Save, Send, CheckCircle2, XCircle, Clock, Printer, Download } from 'lucide-react'
+import { Save, Send, CheckCircle2, XCircle, Clock, Printer, Download, FileClock, Plus } from 'lucide-react'
 import clsx from 'clsx'
 import { jsPDF } from 'jspdf'
 import { useAuth } from '@/lib/auth/context'
@@ -180,6 +180,67 @@ function BomPicker({ onPick, disabled }: { onPick: (b: BomSummary) => void; disa
   )
 }
 
+interface DraftRow {
+  id: string; job_card_no: string | null; item_no: string | null
+  product_name: string | null; customer: string | null; date_of_card: string | null; created_at: string
+}
+
+// A saved draft previously had no way back into the UI at all — the form's
+// savedId only ever lived in React state, so navigating away (or refreshing)
+// lost the trail entirely and finding it meant querying Supabase directly.
+// This lists every draft-status card so a manager can resume one with a
+// click, and excludes whichever draft is currently open in the form.
+function DraftsPanel({ excludeId, refreshToken, onResume }: {
+  excludeId: string | null; refreshToken: number; onResume: (id: string) => void
+}) {
+  const db = getDb()
+  const [drafts, setDrafts] = useState<DraftRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    db.from('job_cards_pasteuriser')
+      .select('id, job_card_no, item_no, product_name, customer, date_of_card, created_at')
+      .eq('status', 'draft').order('created_at', { ascending: false }).limit(20)
+      .then(({ data }: any) => { if (!cancelled) { setDrafts((data as DraftRow[]) ?? []); setLoading(false) } })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken])
+
+  const visible = drafts.filter(d => d.id !== excludeId)
+  if (loading || visible.length === 0) return null
+
+  return (
+    <div className="card p-4 space-y-2 border border-surface-rule no-print">
+      <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold flex items-center gap-1.5">
+          <FileClock className="w-3.5 h-3.5" /> Saved drafts ({visible.length})
+        </span>
+        <span className="text-[10px] text-text-faint">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className="divide-y divide-surface-rule -mx-4 -mb-4 mt-1">
+          {visible.map(d => (
+            <button key={d.id} type="button" onClick={() => onResume(d.id)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-surface-dim/40">
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-text truncate">{d.product_name || d.item_no || d.job_card_no || 'Untitled draft'}</div>
+                <div className="text-[11px] text-text-muted font-mono truncate">
+                  {d.job_card_no || '—'} · {d.customer || 'no customer'}
+                  {d.date_of_card ? ` · ${format(new Date(d.date_of_card + 'T12:00:00'), 'd MMM')}` : ''}
+                </div>
+              </div>
+              <span className="text-[10px] text-brand font-semibold shrink-0">Resume →</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PasteuriserJobCardScreen() {
   const db = getDb()
   const { p, isFullAdmin, isQuality } = useAuth()
@@ -196,6 +257,7 @@ function PasteuriserJobCardScreen() {
   const [myStatus, setMyStatus] = useState<MySignatureStatus | null>(null)
   const [jobCardNoError, setJobCardNoError] = useState<string | null>(null)
   const [lastOrderNote, setLastOrderNote] = useState<string | null>(null)
+  const [draftsRefresh, setDraftsRefresh] = useState(0)
 
   // Locked once sent for approval or approved — the manager's job is done;
   // a supervisor either approves it (via the panel above) or rejects it back
@@ -243,7 +305,7 @@ function PasteuriserJobCardScreen() {
     if (id) { await db.from('job_cards_pasteuriser').update(payload).eq('id', id) }
     else {
       const { data } = await db.from('job_cards_pasteuriser').insert(payload).select('id').single()
-      if (data) { id = (data as any).id; setSavedId(id) }
+      if (data) { id = (data as any).id; setSavedId(id); setDraftsRefresh(x => x + 1) }
     }
     setSaving(false)
     setForm(f => ({ ...f, ...(patch ?? {}), batch_number: payload.batch_number }))
@@ -382,16 +444,55 @@ function PasteuriserJobCardScreen() {
     setSending(false)
   }
 
+  // Loads a previously saved draft back into the form — the only way back in
+  // before this was querying Supabase directly, since savedId only ever lived
+  // in React state. Missing/null columns fall back to empty()'s defaults so a
+  // partially-filled draft doesn't render undefined into a controlled input.
+  async function resumeDraft(id: string) {
+    const { data } = await db.from('job_cards_pasteuriser').select('*').eq('id', id).single()
+    if (!data) return
+    const row = data as any
+    const base = empty()
+    const next: any = { ...base }
+    for (const key of Object.keys(base)) {
+      if (row[key] !== undefined && row[key] !== null) next[key] = row[key]
+    }
+    setForm(next as Form)
+    setSavedId(id)
+    setJobCardNoError(null)
+    setLastOrderNote(null)
+  }
+
+  function startNew() {
+    setForm(empty())
+    setSavedId(null)
+    setJobCardNoError(null)
+    setLastOrderNote(null)
+    generateJobCardNo()
+  }
+
   return (
     <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5 pb-48">
       <style>{`@media print { body * { visibility: hidden; } .jobcard-print, .jobcard-print * { visibility: visible; } .jobcard-print { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } }`}</style>
 
-      <div className="rounded-2xl p-4 bg-brand text-white no-print">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-white/50 mb-1">PR-FM-013/1 · Cape Natural Tea Products</p>
-        <h1 className="font-display font-extrabold text-2xl">Pasteuriser Line Job Card</h1>
+      <div className="rounded-2xl p-4 bg-brand text-white no-print flex items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-widest text-white/50 mb-1">PR-FM-013/1 · Cape Natural Tea Products</p>
+          <h1 className="font-display font-extrabold text-2xl">Pasteuriser Line Job Card</h1>
+        </div>
+        {canGenerate && (savedId || form.job_card_no) && (
+          <button type="button" onClick={startNew}
+            className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-[12px] font-semibold transition-colors">
+            <Plus size={14} /> New job card
+          </button>
+        )}
       </div>
 
       {canApprove && <div className="no-print"><JobCardApprovalsPanel /></div>}
+
+      {canGenerate && (
+        <DraftsPanel excludeId={savedId} refreshToken={draftsRefresh} onResume={resumeDraft} />
+      )}
 
       {canGenerate && !locked && (
         <div className="card p-4 space-y-2 border-2 border-brand/20 no-print">
