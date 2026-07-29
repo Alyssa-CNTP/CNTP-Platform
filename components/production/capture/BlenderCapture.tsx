@@ -134,7 +134,7 @@ function productionDayRange(date: string): { start: string; end: string } {
 // the "supervisor forgot to set it" failure mode entirely, since there's
 // nothing left to forget. An explicit assignment.lot_number (a manual
 // rework/override case) still wins if a supervisor sets one anyway.
-function autoLot(date: string, runNo: number): string {
+export function autoLot(date: string, runNo: number): string {
   const [y, m, d] = date.split('-')
   return `${d}-${m}-${y.slice(2)}/${runNo}`
 }
