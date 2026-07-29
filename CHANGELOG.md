@@ -5,6 +5,18 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Job card: resumable drafts — there was previously no way back into a saved draft)
+
+**Files changed:** `app/(app)/job-cards/pasteuriser/page.tsx`
+
+Reported: a manager saved a draft job card and found it "difficult to navigate to" afterwards. Confirmed: there was genuinely no path back — a saved draft's id only ever lived in React component state, so navigating away or refreshing lost it completely; the only way to find it again was querying `public.job_cards_pasteuriser` directly.
+
+- Added a **"Saved drafts" panel** (new `DraftsPanel` component on the page) listing every draft-status card — job card no., product/item, customer, date — click one to resume editing it right where it was left off. Excludes whichever draft is currently open.
+- Added a **"New job card" button** in the header (visible once a draft exists or has a number assigned) to deliberately start a fresh card — previously the only way to get a blank form back was a full page reload, which silently burned a job-card-number from the sequence.
+- Resuming maps the saved row back into the form defensively (`empty()`'s defaults fill in for any null/missing column) so a partially-filled draft never renders undefined into a controlled input.
+
+---
+
 ## 2026-07-29 — Alyssa (Supervisor Hub: fixed archived-session data leak, SAST date consistency, job cards surfaced before Assign)
 
 **Files changed:** `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/signoff/page.tsx`, `app/(app)/supervisor/productions/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/timesheets/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `lib/production/shifts.ts`, `components/production/JobCardApprovalsPanel.tsx` (new), `components/supervisor/PendingSignOffs.tsx` (new)
