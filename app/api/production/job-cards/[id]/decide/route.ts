@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, getAdminClient, resolveEmployeeId } from '@/lib/auth/server-helpers'
 import { notify } from '@/lib/notifications'
 import { resolveRecipients } from '@/lib/notifications/recipients'
 
 // A production supervisor approves or rejects a job card a manager sent for
-// approval. Mirrors reopen-request's PATCH decision handler.
+// approval. Approving IS the supervisor's "Verify & Sign" — their signature is
+// resolved server-side from production.employee_signatures (their own Staff
+// Directory record), never accepted from the client. Mirrors reopen-request's
+// PATCH decision handler otherwise.
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: cardId } = await params
@@ -16,7 +19,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
   const decision: string = body?.decision
   const reason = typeof body?.reason === 'string' ? body.reason.trim() || null : null
-  const supervisorSignature = typeof body?.supervisorSignature === 'string' ? body.supervisorSignature : null
   if (decision !== 'approved' && decision !== 'rejected') {
     return NextResponse.json({ error: 'decision must be "approved" or "rejected"' }, { status: 400 })
   }
@@ -25,6 +27,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const admin = getAdminClient() as any
+  const employeeId = await resolveEmployeeId(caller.userId)
+
+  let supervisorSignature: string | null = null
+  if (decision === 'approved') {
+    const { data: sigRow } = employeeId
+      ? await admin.schema('production').from('employee_signatures').select('signature').eq('employee_id', employeeId).maybeSingle()
+      : { data: null }
+    if (!sigRow?.signature) {
+      return NextResponse.json({ error: 'No signature on file — set one up on your Staff Directory profile first.' }, { status: 400 })
+    }
+    supervisorSignature = sigRow.signature
+  }
+
   const { data: card, error: cErr } = await admin.from('job_cards_pasteuriser')
     .select('id, status, item_no, batch_number, product_name, created_by').eq('id', cardId).maybeSingle()
   if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
@@ -36,7 +51,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const now = new Date().toISOString()
   const patch: any = decision === 'approved'
     ? { status: 'approved', approved_by: caller.userId, approved_at: now, rejected_reason: null,
-        ...(supervisorSignature ? { sig_production_supervisor: supervisorSignature } : {}) }
+        sig_production_supervisor: supervisorSignature }
     : { status: 'rejected', rejected_reason: reason }
 
   const { data: updated, error: uErr } = await admin.from('job_cards_pasteuriser')
@@ -45,6 +60,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   try {
     if (card.created_by) {
+      const { data: emp } = employeeId
+        ? await admin.schema('production').from('employees').select('name, display_name').eq('id', employeeId).maybeSingle()
+        : { data: null }
+      const supervisorName = emp?.display_name || emp?.name || 'A supervisor'
       const recipients = await resolveRecipients([card.created_by])
       const label = card.item_no || card.product_name || 'Pasteuriser'
       await notify({
@@ -52,8 +71,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         refTable: 'job_cards_pasteuriser', refId: String(cardId),
         title: decision === 'approved' ? `Job card approved — ${label}` : `Job card rejected — ${label}`,
         body: decision === 'approved'
-          ? `${caller.name || 'A supervisor'} approved the job card${card.batch_number ? ` for batch ${card.batch_number}` : ''}.`
-          : `${caller.name || 'A supervisor'} rejected the job card${card.batch_number ? ` for batch ${card.batch_number}` : ''}: "${reason}"`,
+          ? `${supervisorName} approved the job card${card.batch_number ? ` for batch ${card.batch_number}` : ''}.`
+          : `${supervisorName} rejected the job card${card.batch_number ? ` for batch ${card.batch_number}` : ''}: "${reason}"`,
         url: '/job-cards/pasteuriser',
         channels: ['inApp'],
       })

@@ -322,11 +322,16 @@ function ParentBlendPanel({ bomId, itemsById }: { bomId: string; itemsById: Map<
     let cancelled = false
     setState('loading')
     findParentBlendBom(bomId).then(res => { if (!cancelled) setState(res ?? 'none') })
+      .catch(err => { console.error(`findParentBlendBom(${bomId}) failed`, err); if (!cancelled) setState('none') })
     return () => { cancelled = true }
   }, [bomId])
 
   if (state === 'loading') return <div className="text-[11px] text-text-faint pt-2 px-1">Resolving parent blend…</div>
-  if (state === 'none') return null
+  if (state === 'none') return (
+    <div className="text-[11px] text-text-faint pt-2 px-1">
+      No matching Blender BOM found for this item's components — either it bags straight off a blend not imported as its own BOM, or the component code doesn't match a Blender output exactly.
+    </div>
+  )
 
   const parent = state as ParentBlendBom
   const total = parent.components.reduce((s, c) => s + c.qtyRequired, 0) * 100

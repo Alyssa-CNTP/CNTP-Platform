@@ -5,6 +5,47 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Gustav (Pasteuriser New Run: data-driven Grade/Family/Variant dropdowns)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- The New Pasteuriser Run modal's **Product Family / Grade / Variant** dropdowns are now **data-driven** — merged from the hardcoded defaults *plus* every distinct value that exists in `qms.customer_specs`. Any spec the lab creates in the Customer Specs (sieving) tab is now immediately selectable here, and its spec pulls through automatically. Fixes the reported case where a new **Pure Leaf** product couldn't be selected and its spec wouldn't load.
+- No hardcoded grade list to maintain going forward; new products/grades appear the moment their spec is saved.
+- (Staging only: seeded a Rooibos / Pure Leaf / Organic test spec so it's selectable for building the spec from samples. Production already has the real Pure Leaf spec.)
+
+---
+
+## 2026-07-29 — Alyssa (Job card round 2: PDF text overlap, scroll room, sticky per-customer blend, resilient auto-numbering)
+
+**Files changed:** `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`
+
+More floor feedback after a real draft was created:
+
+- **PDF text overlap fixed.** The `kv()` layout drew label and value on the same baseline with a hardcoded 120pt gap — long labels ("Debagging hopper speed inverter setting") ran straight into the value. Rewrote it label-above-value (matching the on-screen form), so label length can never collide with the value regardless of how long it is.
+- **Couldn't scroll to the sign-off buttons.** Bumped bottom padding (`pb-24` → `pb-48`) so the Sign-offs card — which has grown since the Verify & Sign redesign — always clears the fixed action bar.
+- **Blend now suggested per customer.** Blurring the Customer field (if no BOM picked yet this session) looks up that customer's most recent job card and auto-fills the same Acumatica code/blend — "a customer usually reorders the same thing" — with a visible note and the picker still there to override for a different run.
+- **Job card number generation is now visible when it fails**, not silently console-only — an inline error + manual Retry button next to the field.
+- **BOMs page blend-resolution panel no longer renders nothing when it can't find a match** — distinguishes "still loading" from "no matching Blender BOM found" so a genuine gap is visible instead of looking identical to a bug. Investigated one reported case (`30FPFSE15-001A-RO` / `25BLSFC-KUN23-RO`) — the BOM data and lookup logic both check out on inspection; flagged as unresolved pending a live repro, since this session has no way to click through the authenticated app.
+
+**Not done this session:** the bigger ask — auto-filling batch/blend data downstream into Assign/Capture so the supervisor only confirms shift staffing, plus linking job cards to Sales/CRM for per-customer margin — needs a scoped conversation before touching Pasteuriser capture; margin visibility is still blocked on a cost-data source (see the earlier BOM-catalogue entry).
+
+---
+
+## 2026-07-29 — Alyssa (Signatures moved to the Staff Directory — "Verify & Sign", no more drawing)
+
+**Files changed:** `supabase/migrations/20260729_007_employee_signatures.sql` (new), `lib/auth/server-helpers.ts`, `lib/production/employee-signature.ts` (new, replaces `lib/production/user-signature.ts`), `app/api/me/signature/route.ts` (new), `app/api/staff/[id]/signature/route.ts` (new), `app/api/production/job-cards/[id]/send-for-approval/route.ts`, `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/[id]/quality-sign/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`
+
+Redesigned per feedback: signatures should live on a person's Staff Directory profile, not be drawn (even from a "remembered" cache) on every job card.
+
+- **New `production.employee_signatures`** (keyed on `employee_id`, the Staff Directory record) supersedes last session's `public.user_signatures` (keyed on the raw login id, with fully-open RLS — any authenticated user could read/write anyone else's row via the client). The new table has no write policy for `authenticated` at all; every write goes through a server route.
+- **Identity resolved server-side, never trusted from the client** — `resolveEmployeeId()` (new, `lib/auth/server-helpers.ts`) walks the same chain Training's identity-attestation check already uses: `auth.users.id` → `shared.app_roles.user_id` → `shared.app_roles.employee_id` → `production.employees.id`. The Supervisor `decide` route previously accepted a `supervisorSignature` string straight from the request body and stamped it as-is — a real gap (anyone could have submitted any image as "the" approval signature). Both `send-for-approval` and `decide` now resolve and stamp the caller's own on-file signature server-side; a new `quality-sign` route does the same for Quality, gated on `department === 'Quality'`.
+- **"Signature on file" on the Staff Directory profile** (`/production/staff/[id]`) — draw it once here; settable by the person themselves (server-verified) or anyone with `can_edit_staff_profiles` (HR onboarding). New `quality_signed_by`/`quality_signed_at` columns give Quality the same who+when attestation Manager (`created_by`/`sent_for_approval_at`) and Supervisor (`approved_by`/`approved_at`) already had.
+- **Job card sign-offs are now one-click, not draw-every-time**: sending to the Supervisor IS the Manager's Verify & Sign, approving IS the Supervisor's, and a new "Verify & Sign" button handles Quality once a card is approved — each disabled with a link to the Staff Directory profile if that person has no signature on file yet.
+- Also fixed while in these files: `getCallerPermissions()` doesn't return a `name` field (`caller.name` in the two job-card routes was always `undefined`, silently falling back to generic notification text) — now resolves the real employee name for notifications.
+
+**Not done this session:** migration `20260729_007` not yet run against Supabase — copied to `C:\Users\Alyssa\Documents\Supabase Scripts` (file `7 -`).
+---
+
 ## 2026-07-28 — Alyssa (PRODUCTION: Shift Roster — pin an individual to their shift)
 
 **Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
@@ -257,7 +298,6 @@ Replaces the fragmented notification storage (maintenance.notifications + axis.n
 - **Manager checklist-verify pop-up.** When a technician sends a completed weekly/monthly checklist for verification, the maintenance manager gets a corner pop-up ("N checklists to verify → Open to sign off").
 - **Annual calibration cycle → forward date.** Added a **cycle-days input right in the "Mark calibrated" cluster**; clicking Calibrated sets the next-due date forward by that cycle from the calibration date (the calc already existed — now it's easy to enter).
 - Auto-allocate now calls `reload()` so every allocation shows immediately (all monthly checklists verified allocated in the DB).
-
 ## 2026-07-24 — Gustav (COA signatures: drag to move / resize)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
