@@ -24,6 +24,15 @@ Investigated three asks this session — barcode printing, stock counts, dashboa
 
 ---
 
+## 2026-07-28 — Alyssa (Shift Roster: pin an individual to their shift; replaces hardcoded fixed-shift people)
+
+**Files changed:** `supabase/migrations/20260729_004_roster_entry_pinned.sql` (new), `lib/production/roster-rotate.ts`, `app/(app)/production/roster/page.tsx`
+
+Requires migration `20260729_004` on both Supabase projects.
+
+- **Pin a person to their shift.** A pin icon on each person's chip (hover to reveal; pinned stays visible) keeps that individual on their current day/night shift through the weekly rotation — everyone else still flips, and the pin carries forward each week. Weekly roster only (the manual Saturday sheet doesn't rotate). Persists with the section's Save; pinned chips are highlighted with a pin badge.
+- **Replaces the hardcoded fixed-shift people.** `roster-rotate.ts` no longer lists `store_supervisor`/`forklift_driver` in `FIXED_SHIFT_ROLE_KEYS` — those individuals are now data-pinned (the migration pins their existing entries so behaviour is unchanged and now visible/editable). Only the structurally day-only roles (`refining_2`, `rosehip`) remain role-level in code. `rotateEntries()` now keeps a shift when the entry is pinned OR its role is day-only, and carries the pin forward. The "Generate next week" preview mirrors this so it matches what actually happens.
+
 ## 2026-07-28 — Alyssa ("Generate job card" button on the BOMs page, deep-linked into the job card)
 
 **Files changed:** `app/(app)/production/blends/page.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`

@@ -6,7 +6,7 @@ import {
   CalendarRange, Loader2, Plus, X, Check, Trash2, Pencil,
   ChevronDown, AlertTriangle, Sun, Moon, Search, Users,
   RefreshCw, Send, CheckCircle2, ArrowRight, Lock, Unlock, Download, Printer,
-  Info, Eye, Edit3, ShieldCheck, Database,
+  Info, Eye, Edit3, ShieldCheck, Database, Pin,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -18,13 +18,13 @@ import {
 } from '@/lib/production/roster-config'
 import { rosterPerm, ROSTER_SECTION_LABEL, type RosterSectionKey } from '@/lib/auth/permissions'
 import { exportRosterPeriod } from '@/lib/utils/exportExcel'
-import { rotateEntries } from '@/lib/production/roster-rotate'
+import { rotateEntries, FIXED_SHIFT_ROLE_KEYS } from '@/lib/production/roster-rotate'
 
 // Columns selected for a Period everywhere in this page.
 const PERIOD_SELECT = 'id,name,start_date,end_date,day_label,night_label,notes,status,published_at,kind'
 // Columns selected for a roster Entry everywhere in this page.
-const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order,days'
-// Same, minus `days` — used as a graceful fallback if that column isn't migrated yet.
+const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order,days,pinned'
+// Same, minus `days`/`pinned` — a graceful fallback if those columns aren't migrated yet.
 const ENTRY_SELECT_BASE = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
 
 interface Period {
@@ -37,6 +37,7 @@ interface Entry {
   id: string; period_id: string; role_key: string; shift: RosterShift
   employee_id: string | null; operator_id: string | null; person_name: string; tags: string[]; sort_order: number
   days: string[]   // weekdays this person works, e.g. ['mon','tue','wed','thu','fri']
+  pinned: boolean  // stays on this shift through the weekly day↔night rotation
 }
 
 // The working week for per-person day assignment (Mon–Fri; Saturday is its own
@@ -254,7 +255,7 @@ export default function RosterPage() {
     // Tolerant of the `days` column not being migrated yet: retry without it and
     // default to the full week, so the roster still loads pre-migration.
     const mapEntries = (rows: any[]) =>
-      setEntries(rows.map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS })) as Entry[])
+      setEntries(rows.map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS, pinned: r.pinned ?? false })) as Entry[])
     db().from('roster_entries').select(ENTRY_SELECT)
       .eq('period_id', periodId).order('sort_order')
       .then(({ data, error }: any) => {
@@ -328,9 +329,19 @@ export default function RosterPage() {
     const sort = cellEntries(roleKey, shift).length
     const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const emp = employees.find(e => e.id === employeeId)
-    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags, sort_order: sort, days: days.length ? days : ALL_WEEKDAYS }])
+    setEntries(es => [...es, { id: tempId, period_id: periodId, role_key: roleKey, shift, employee_id: employeeId, operator_id: emp?.operator_id ?? null, person_name: name.trim(), tags, sort_order: sort, days: days.length ? days : ALL_WEEKDAYS, pinned: false }])
     markDirty(cat)
     setEditing(null)
+  }
+  // Pin/unpin a person to their current shift — stays put through the weekly
+  // rotation while everyone else flips. Staged like every other edit; persists
+  // on the section's Save.
+  function togglePin(id: string) {
+    const entry = entries.find(e => e.id === id)
+    if (!entry) return
+    const cat = roleCategory.get(entry.role_key) ?? ''
+    setEntries(es => es.map(e => e.id === id ? { ...e, pinned: !e.pinned } : e))
+    markDirty(cat)
   }
   function updateEntry(id: string, employeeId: string | null, name: string, tags: string[], days: string[]) {
     if (!name.trim()) return
@@ -383,17 +394,18 @@ export default function RosterPage() {
           employee_id: e.employee_id, operator_id: e.operator_id ?? null,
           person_name: e.person_name, tags: e.tags, sort_order: i,
           days: e.days?.length ? e.days : ALL_WEEKDAYS,
+          pinned: !!e.pinned,
         }))
       let fresh: Entry[] = []
       if (toInsert.length > 0) {
-        // Tolerant of the `days` column not being migrated yet.
+        // Tolerant of the `days`/`pinned` columns not being migrated yet.
         let res = await db().from('roster_entries').insert(toInsert as any).select(ENTRY_SELECT)
         if (res.error) {
           res = await db().from('roster_entries')
-            .insert(toInsert.map(({ days, ...rest }) => rest) as any).select(ENTRY_SELECT_BASE)
+            .insert(toInsert.map(({ days, pinned, ...rest }) => rest) as any).select(ENTRY_SELECT_BASE)
         }
         if (res.error) throw res.error
-        fresh = ((res.data as any[]) ?? []).map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS })) as Entry[]
+        fresh = ((res.data as any[]) ?? []).map(r => ({ ...r, days: r.days ?? ALL_WEEKDAYS, pinned: r.pinned ?? false })) as Entry[]
       }
       setEntries(es => [...es.filter(e => !catRoleKeys.includes(e.role_key)), ...fresh])
       setDirtyCategories(s => { const n = new Set(s); n.delete(categoryKey); return n })
@@ -483,10 +495,10 @@ export default function RosterPage() {
         period_id: mapped.id, role_key: e.role_key, shift: e.shift,
         employee_id: e.employee_id, operator_id: e.operator_id ?? null,
         person_name: e.person_name, tags: e.tags, sort_order: e.sort_order,
-        days: e.days?.length ? e.days : ALL_WEEKDAYS,
+        days: e.days?.length ? e.days : ALL_WEEKDAYS, pinned: !!e.pinned,
       }))
       let insErr = (await db().from('roster_entries').insert(toInsert as any)).error
-      if (insErr) insErr = (await db().from('roster_entries').insert(toInsert.map(({ days, ...rest }) => rest) as any)).error
+      if (insErr) insErr = (await db().from('roster_entries').insert(toInsert.map(({ days, pinned, ...rest }) => rest) as any)).error
       if (insErr) {
         setActionError(`Period created, but pre-fill failed: ${insErr.message}. The period is empty — add people manually, or delete it and try again.`)
       }
@@ -966,7 +978,7 @@ export default function RosterPage() {
             leaveEmpIds={leaveEmpIds}
             cellEntries={cellEntries}
             editing={editing} setEditing={setEditing}
-            onAdd={addEntry} onUpdate={updateEntry} onDelete={deleteEntry}
+            onAdd={addEntry} onUpdate={updateEntry} onDelete={deleteEntry} onTogglePin={togglePin}
             dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
             dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
             onMove={moveEntry}
@@ -996,6 +1008,10 @@ export default function RosterPage() {
         <p className="text-[10px] text-stone-400 mt-2.5 flex items-center gap-1.5">
           <span className="w-4 h-4 rounded bg-stone-100 border border-stone-200 inline-flex items-center justify-center text-[8px]">⠿</span>
           Drag a person chip to move them to a different role or shift.
+        </p>
+        <p className="text-[10px] text-stone-400 mt-1.5 flex items-center gap-1.5">
+          <Pin size={11} className="text-brand fill-brand/20 shrink-0" />
+          Pin a person (hover their chip) to keep them on this shift — everyone else still rotates day↔night each week.
         </p>
       </div>
 
@@ -1470,7 +1486,7 @@ function OnDutyCard({ period, entries, roleCategory, leaveEmpIds }: {
 // ── The grid: categories → role rows × Day/Night columns ──────────────────────
 function RosterGrid({
   period, shifts = ROSTER_SHIFTS, rolesByCategory, employees, leaveEmpIds, cellEntries, editing, setEditing,
-  onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove,
+  onAdd, onUpdate, onDelete, onTogglePin, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove,
   dirtyCategories, savingCategory, onSaveDept,
   canEdit, canSubmit, sectionStatus, submittingSection, onSubmitSection, currentUserId,
 }: {
@@ -1485,6 +1501,7 @@ function RosterGrid({
   onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[], days: string[]) => void
   onUpdate: (id: string, employeeId: string | null, name: string, tags: string[], days: string[]) => void
   onDelete: (id: string) => void
+  onTogglePin: (id: string) => void
   dragEntryId: string | null
   setDragEntryId: (id: string | null) => void
   dragOverCell: string | null
@@ -1526,7 +1543,7 @@ function RosterGrid({
           {rolesByCategory.map(({ cat, items }) => (
             <CategoryGroup key={cat.key} cat={cat} items={items} shifts={shifts} employees={employees} leaveEmpIds={leaveEmpIds}
               cellEntries={cellEntries} editing={editing} setEditing={setEditing}
-              onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
+              onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete} onTogglePin={onTogglePin}
               dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
               dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
               onMove={onMove}
@@ -1545,7 +1562,7 @@ function RosterGrid({
   )
 }
 
-function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave, canEdit, canSubmit, status, isSubmitting, onSubmit, currentUserId }: any) {
+function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmpIds, cellEntries, editing, setEditing, onAdd, onUpdate, onDelete, onTogglePin, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, isDirty, isSaving, onSave, canEdit, canSubmit, status, isSubmitting, onSubmit, currentUserId }: any) {
   const isSubmitted = status?.status === 'submitted'
   const submittedByYou = isSubmitted && status?.submitted_by && status.submitted_by === currentUserId
   return (
@@ -1605,7 +1622,7 @@ function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmp
             <RosterCell key={s.key} roleKey={role.key} shift={s.key} showDays={(shifts?.length ?? 2) > 1} employees={employees} leaveEmpIds={leaveEmpIds}
               entries={cellEntries(role.key, s.key)}
               editing={editing} setEditing={setEditing}
-              onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete}
+              onAdd={onAdd} onUpdate={onUpdate} onDelete={onDelete} onTogglePin={onTogglePin}
               dragEntryId={dragEntryId} setDragEntryId={setDragEntryId}
               dragOverCell={dragOverCell} setDragOverCell={setDragOverCell}
               onMove={onMove} canEdit={canEdit} />
@@ -1616,12 +1633,13 @@ function CategoryGroup({ cat, items, shifts = ROSTER_SHIFTS, employees, leaveEmp
   )
 }
 
-function RosterCell({ roleKey, shift, showDays = true, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, canEdit }: {
+function RosterCell({ roleKey, shift, showDays = true, employees, leaveEmpIds, entries, editing, setEditing, onAdd, onUpdate, onDelete, onTogglePin, dragEntryId, setDragEntryId, dragOverCell, setDragOverCell, onMove, canEdit }: {
   roleKey: string; shift: RosterShift; showDays?: boolean; employees: Employee[]; leaveEmpIds: Set<string>; entries: Entry[]
   editing: string | null; setEditing: (v: string | null) => void
   onAdd: (roleKey: string, shift: RosterShift, employeeId: string | null, name: string, tags: string[], days: string[]) => void
   onUpdate: (id: string, employeeId: string | null, name: string, tags: string[], days: string[]) => void
   onDelete: (id: string) => void
+  onTogglePin: (id: string) => void
   dragEntryId: string | null; setDragEntryId: (id: string | null) => void
   dragOverCell: string | null; setDragOverCell: (key: string | null) => void
   onMove: (id: string, roleKey: string, shift: RosterShift) => void
@@ -1653,8 +1671,8 @@ function RosterCell({ roleKey, shift, showDays = true, employees, leaveEmpIds, e
             onDelete={() => onDelete(e.id)} />
         ) : (
           <PersonChip key={e.id} entry={e} away={!!e.employee_id && leaveEmpIds.has(e.employee_id)}
-            canEdit={canEdit} showDays={showDays}
-            onEdit={() => setEditing(e.id)}
+            canEdit={canEdit} showDays={showDays} showPin={showDays}
+            onEdit={() => setEditing(e.id)} onTogglePin={() => onTogglePin(e.id)}
             onDragStart={id => { setDragEntryId(id) }}
             onDragEnd={() => { setDragEntryId(null); setDragOverCell(null) }} />
         ))}
@@ -1673,11 +1691,13 @@ function RosterCell({ roleKey, shift, showDays = true, employees, leaveEmpIds, e
   )
 }
 
-function PersonChip({ entry, away, canEdit = true, showDays = true, onEdit, onDragStart, onDragEnd }: {
-  entry: Entry; away?: boolean; canEdit?: boolean; showDays?: boolean; onEdit: () => void
+function PersonChip({ entry, away, canEdit = true, showDays = true, showPin = true, onEdit, onTogglePin, onDragStart, onDragEnd }: {
+  entry: Entry; away?: boolean; canEdit?: boolean; showDays?: boolean; showPin?: boolean; onEdit: () => void
+  onTogglePin?: () => void
   onDragStart?: (id: string) => void; onDragEnd?: () => void
 }) {
   const daysLabel = showDays ? fmtDays(entry.days) : ''
+  const pinned = showPin && entry.pinned
   return (
     <div
       draggable={canEdit}
@@ -1685,9 +1705,12 @@ function PersonChip({ entry, away, canEdit = true, showDays = true, onEdit, onDr
       onDragEnd={canEdit ? (() => onDragEnd?.()) : undefined}
       className={`group inline-flex items-center gap-1.5 self-start max-w-full px-3 py-2 rounded-lg border transition-colors
         ${canEdit ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}
-        ${away ? 'bg-amber-50 border-amber-200 hover:border-amber-300' : 'bg-stone-50 border-stone-200 hover:border-brand/40 hover:bg-white'}`}
-      title={!canEdit ? 'View only' : away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
+        ${pinned ? 'bg-brand/5 border-brand/40 hover:border-brand/60'
+          : away ? 'bg-amber-50 border-amber-200 hover:border-amber-300'
+          : 'bg-stone-50 border-stone-200 hover:border-brand/40 hover:bg-white'}`}
+      title={!canEdit ? 'View only' : pinned ? 'Pinned to this shift — stays put when the roster rotates' : away ? 'On leave this period — consider a stand-in' : 'Drag to move to another cell'}
     >
+      {pinned && <Pin size={11} className="text-brand shrink-0 fill-brand/20" />}
       {away && <span title="On leave" className="text-amber-600 shrink-0">✈</span>}
       <span className={`text-[13px] font-medium truncate ${away ? 'text-amber-700' : 'text-text'}`}>{entry.person_name}</span>
       {entry.tags.map(code => (
@@ -1698,12 +1721,25 @@ function PersonChip({ entry, away, canEdit = true, showDays = true, onEdit, onDr
         <span title={`Works ${daysLabel}`} className="font-mono font-semibold text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">{daysLabel}</span>
       )}
       {canEdit && (
-        <button
-          onClick={e => { e.stopPropagation(); onEdit() }}
-          className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 shrink-0 no-print"
-        >
-          <Pencil size={11} className="text-stone-300" />
-        </button>
+        <span className="inline-flex items-center ml-0.5 shrink-0 no-print">
+          {/* Pin toggle — pinned always visible; unpinned reveals on hover.
+              Only shown on the weekly (rotating) roster. */}
+          {showPin && onTogglePin && (
+            <button
+              onClick={e => { e.stopPropagation(); onTogglePin() }}
+              title={pinned ? 'Unpin — allow this person to rotate' : 'Pin to this shift — stays put when the roster rotates'}
+              className={`transition-opacity ${pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+            >
+              <Pin size={11} className={pinned ? 'text-brand fill-brand/20' : 'text-stone-300 hover:text-brand'} />
+            </button>
+          )}
+          <button
+            onClick={e => { e.stopPropagation(); onEdit() }}
+            className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5"
+          >
+            <Pencil size={11} className="text-stone-300" />
+          </button>
+        </span>
       )}
     </div>
   )
@@ -2049,13 +2085,19 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const _employees = employees  // retained for future leave lookup by name
-  // Who is being rotated and what their new shift will be
+  // Who is being rotated and what their new shift will be. Pinned people (and
+  // structurally day-only roles) stay on their current shift — mirror the real
+  // rotateEntries() rule so the preview matches what actually happens.
   const rotated = useMemo(() => {
-    return currentEntries.map(e => ({
-      ...e,
-      newShift:      e.shift === 'day' ? 'night' as RosterShift : 'day' as RosterShift,
-      newShiftLabel: e.shift === 'day' ? nextNightLabel : nextDayLabel,
-    }))
+    return currentEntries.map(e => {
+      const stays = e.pinned || FIXED_SHIFT_ROLE_KEYS.includes(e.role_key)
+      const newShift: RosterShift = stays ? e.shift : (e.shift === 'day' ? 'night' : 'day')
+      return {
+        ...e,
+        newShift,
+        newShiftLabel: newShift === 'day' ? nextDayLabel : nextNightLabel,
+      }
+    })
   }, [currentEntries, nextDayLabel, nextNightLabel])
 
   // Check leave for the new period dates using what we already have
