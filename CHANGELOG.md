@@ -5,6 +5,16 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-24 — Gustav (Pasteuriser New Run: data-driven Grade/Family/Variant dropdowns)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+- The New Pasteuriser Run modal's **Product Family / Grade / Variant** dropdowns are now **data-driven** — merged from the hardcoded defaults *plus* every distinct value that exists in `qms.customer_specs`. Any spec the lab creates in the Customer Specs (sieving) tab is now immediately selectable here, and its spec pulls through automatically. Fixes the reported case where a new **Pure Leaf** product couldn't be selected and its spec wouldn't load.
+- No hardcoded grade list to maintain going forward; new products/grades appear the moment their spec is saved.
+- (Staging only: seeded a Rooibos / Pure Leaf / Organic test spec so it's selectable for building the spec from samples. Production already has the real Pure Leaf spec.)
+
+---
+
 ## 2026-07-29 — Alyssa (Job card round 2: PDF text overlap, scroll room, sticky per-customer blend, resilient auto-numbering)
 
 **Files changed:** `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/production/blends/page.tsx`
@@ -241,7 +251,6 @@ First round of floor feedback on the Pasteuriser build (#424): two of its debagg
 - **Manager checklist-verify pop-up.** When a technician sends a completed weekly/monthly checklist for verification, the maintenance manager gets a corner pop-up ("N checklists to verify → Open to sign off").
 - **Annual calibration cycle → forward date.** Added a **cycle-days input right in the "Mark calibrated" cluster**; clicking Calibrated sets the next-due date forward by that cycle from the calibration date (the calc already existed — now it's easy to enter).
 - Auto-allocate now calls `reload()` so every allocation shows immediately (all monthly checklists verified allocated in the DB).
-
 ## 2026-07-24 — Gustav (COA signatures: drag to move / resize)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
