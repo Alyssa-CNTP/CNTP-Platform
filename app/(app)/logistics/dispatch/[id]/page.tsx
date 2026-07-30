@@ -9,6 +9,7 @@ import Link from 'next/link'
 import { logisticsDb } from '@/lib/logistics/db'
 import { recordEvent, setUnitStage } from '@/lib/logistics/actions'
 import ScanInput from '@/components/logistics/ScanInput'
+import SignatureCapture, { type SignatureAudit } from '@/components/esign/SignatureCapture'
 import { useAuth } from '@/lib/auth/context'
 import type {
   Dispatch, DispatchDocument, DispatchDocCode, Unit, SalesOrder,
@@ -34,9 +35,17 @@ interface PickedUnit {
   load_slot?:   string | null
 }
 
+// Per-document esign status, keyed by dispatch_documents.id — derived from
+// esign's own audit trail (source of truth), not from the legacy
+// signed_by/signed_at columns which are only a best-effort convenience mirror.
+interface DocSigInfo {
+  pendingExternal?: { requestId: string; signerName: string | null }
+  signedAudit?: SignatureAudit
+}
+
 export default function DispatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: dispatchId } = use(params)
-  const { user, displayName } = useAuth()
+  const { user, displayName, p } = useAuth()
 
   const [tab, setTab]   = useState<Tab>('pick')
   const [dsp, setDsp]   = useState<DispatchFull | null>(null)
@@ -45,6 +54,7 @@ export default function DispatchDetailPage({ params }: { params: Promise<{ id: s
   const [fefoSuggestions, setFefoSuggestions] = useState<Unit[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  const [sigInfo, setSigInfo] = useState<Record<string, DocSigInfo>>({})
 
   useEffect(() => { void load() }, [dispatchId])
 
@@ -66,13 +76,14 @@ export default function DispatchDetailPage({ params }: { params: Promise<{ id: s
       const existing = ((docsRes.data as DispatchDocument[]) ?? [])
       const have = new Set(existing.map(x => x.doc_code))
       const missing = DISPATCH_DOC_CODES.filter(c => !have.has(c))
+      let finalDocs = existing
       if (missing.length) {
         await db.from('dispatch_documents').insert(missing.map(c => ({ dispatch_id: dispatchId, doc_code: c, status: 'pending' })))
         const reload = await db.from('dispatch_documents').select('*').eq('dispatch_id', dispatchId)
-        setDocs((reload.data as DispatchDocument[]) ?? [])
-      } else {
-        setDocs(existing)
+        finalDocs = (reload.data as DispatchDocument[]) ?? []
       }
+      setDocs(finalDocs)
+      void loadSignatures(finalDocs.map(d => d.id))
 
       // Picked units = unit_events of type pick_for_order for this dispatch
       const { data: pickEvs } = await db
@@ -212,6 +223,80 @@ export default function DispatchDetailPage({ params }: { params: Promise<{ id: s
   async function patchDoc(code: DispatchDocCode, patch: Partial<DispatchDocument>) {
     const db = logisticsDb()
     await db.from('dispatch_documents').update(patch).eq('dispatch_id', dispatchId).eq('doc_code', code)
+    await load()
+  }
+
+  async function loadSignatures(docIds: string[]) {
+    const entries = await Promise.all(docIds.map(async (id): Promise<[string, DocSigInfo]> => {
+      const res = await fetch(`/api/esign/subjects/dispatch_document/${id}`)
+      if (!res.ok) return [id, {}]
+      const { history } = await res.json()
+      const latest = history?.[0]
+      if (!latest) return [id, {}]
+      if (latest.status === 'pending' && latest.signer_kind === 'external') {
+        return [id, { pendingExternal: { requestId: latest.id, signerName: latest.signer_name } }]
+      }
+      if (latest.status === 'signed' && latest.signature) {
+        return [id, { signedAudit: {
+          signerName: latest.signature.signer_name,
+          signedAt:   latest.signature.signed_at,
+          ipAddress:  latest.signature.ip_address,
+          userAgent:  latest.signature.user_agent,
+        } }]
+      }
+      return [id, {}]
+    }))
+    setSigInfo(Object.fromEntries(entries))
+  }
+
+  function docTitle(doc: DispatchDocument, code: DispatchDocCode) {
+    return `${DISPATCH_DOC_LABELS[code]} — ${dsp?.dispatch_code ?? doc.dispatch_id}`
+  }
+
+  async function signNow(doc: DispatchDocument, code: DispatchDocCode): Promise<{ ok: boolean; error?: string }> {
+    const createRes = await fetch('/api/esign/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subjectType: 'dispatch_document', subjectId: doc.id, title: docTitle(doc, code), signerKind: 'internal' }),
+    })
+    const created = await createRes.json().catch(() => ({}))
+    if (!createRes.ok) return { ok: false, error: created.error }
+
+    const signRes = await fetch('/api/esign/staff-sign', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: created.id }),
+    })
+    const signed = await signRes.json().catch(() => ({}))
+    if (!signRes.ok) return { ok: false, error: signed.error }
+
+    await load()
+    return { ok: true }
+  }
+
+  async function sendExternalLink(doc: DispatchDocument, code: DispatchDocCode) {
+    setError(null)
+    const name = prompt('Recipient name (driver/customer)?')
+    if (!name?.trim()) return
+    const contact = prompt('Email or phone (optional, for your reference)?') ?? ''
+
+    const res = await fetch('/api/esign/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subjectType: 'dispatch_document', subjectId: doc.id, title: docTitle(doc, code),
+        signerKind: 'external', signerName: name.trim(), signerContact: contact.trim() || null,
+      }),
+    })
+    const created = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(created.error || 'Could not create a signing link'); return }
+
+    const fullUrl = `${window.location.origin}${created.signUrl}`
+    try { await navigator.clipboard.writeText(fullUrl) } catch { /* clipboard may be unavailable */ }
+    alert(`Signing link created and copied to your clipboard — share it with ${name.trim()}:\n\n${fullUrl}`)
+    await load()
+  }
+
+  async function cancelSignatureRequest(requestId: string) {
+    if (!confirm('Cancel this signing request?')) return
+    await fetch(`/api/esign/requests/${requestId}/void`, { method: 'POST' })
     await load()
   }
 
@@ -467,6 +552,8 @@ export default function DispatchDetailPage({ params }: { params: Promise<{ id: s
               {DISPATCH_DOC_CODES.map(code => {
                 const d = docsByCode.get(code)
                 if (!d) return null
+                const sig = sigInfo[d.id] ?? {}
+                const readyToSign = (d.status === 'pending' || d.status === 'uploaded') && !sig.pendingExternal
                 return (
                   <li key={code} className="rounded-lg border border-surface-rule p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -476,20 +563,62 @@ export default function DispatchDetailPage({ params }: { params: Promise<{ id: s
                       </div>
                       <div className="flex items-center gap-2">
                         <select value={d.status} disabled={isSealed}
-                          onChange={e => patchDoc(code, {
-                            status: e.target.value as any,
-                            verified_at: e.target.value === 'verified' ? new Date().toISOString() : null,
-                            verified_by: e.target.value === 'verified' ? (user?.id ?? null) : null,
-                          })}
+                          onChange={e => {
+                            const next = e.target.value as DispatchDocument['status']
+                            if (next === 'verified' && d.status !== 'signed') {
+                              setError('Sign this document (in-app or via an external link) before verifying it.')
+                              return
+                            }
+                            if (next === 'verified' && !p('can_verify_dispatch_doc')) {
+                              setError('You do not have permission to verify dispatch documents.')
+                              return
+                            }
+                            patchDoc(code, {
+                              status: next,
+                              verified_at: next === 'verified' ? new Date().toISOString() : null,
+                              verified_by: next === 'verified' ? (user?.id ?? null) : null,
+                            })
+                          }}
                           className="px-2 py-1 border border-surface-rule rounded-md text-xs bg-white">
                           <option value="pending">Pending</option>
                           <option value="uploaded">Uploaded</option>
-                          <option value="signed">Signed</option>
+                          {d.status === 'signed' && <option value="signed">Signed</option>}
                           <option value="verified">Verified</option>
                           <option value="na">N/A</option>
                         </select>
                       </div>
                     </div>
+
+                    {!isSealed && readyToSign && (
+                      <div className="mt-3 pt-3 border-t border-surface-rule space-y-2">
+                        <SignatureCapture
+                          mode="internal"
+                          documentLabel={DISPATCH_DOC_LABELS[code]}
+                          onSignInternal={() => signNow(d, code)}
+                        />
+                        <button onClick={() => sendExternalLink(d, code)}
+                          className="text-[11px] text-text-muted underline hover:text-text">
+                          Send for external signature instead
+                        </button>
+                      </div>
+                    )}
+
+                    {!isSealed && sig.pendingExternal && (
+                      <div className="mt-3 pt-3 border-t border-surface-rule flex flex-wrap items-center gap-2 text-[11px] text-info">
+                        <span>Sent to {sig.pendingExternal.signerName ?? 'recipient'} — awaiting signature</span>
+                        <button onClick={() => cancelSignatureRequest(sig.pendingExternal!.requestId)}
+                          className="underline text-text-muted hover:text-text">Cancel</button>
+                        <button onClick={() => loadSignatures([d.id])}
+                          className="underline text-text-muted hover:text-text">Refresh status</button>
+                      </div>
+                    )}
+
+                    {d.status === 'signed' && sig.signedAudit && (
+                      <div className="mt-3 pt-3 border-t border-surface-rule">
+                        <SignatureCapture mode="internal" documentLabel={DISPATCH_DOC_LABELS[code]} audit={sig.signedAudit} />
+                      </div>
+                    )}
+
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                       <input value={d.file_url ?? ''} placeholder="File URL (paste a link to the signed PDF)"
                         disabled={isSealed}

@@ -5,6 +5,24 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-29 — Alyssa (Internal e-signature platform + dispatch/delivery document signing)
+
+**Files changed:** `supabase/migrations/20260729_008_esign_schema.sql` (new), `lib/esign/subjects.ts` (new), `lib/esign/request.ts` (new), `lib/esign/capture.ts` (new), `app/api/esign/requests/route.ts` (new), `app/api/esign/requests/[id]/void/route.ts` (new), `app/api/esign/sign/[token]/route.ts` (new), `app/api/esign/staff-sign/route.ts` (new), `app/api/esign/subjects/[type]/[id]/route.ts` (new), `components/esign/SignatureCapture.tsx` (new), `app/sign/[token]/page.tsx` (new), `app/sign/[token]/SignClient.tsx` (new), `app/middleware.ts`, `app/(app)/logistics/dispatch/[id]/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+New polymorphic `esign` schema (`signature_requests` + append-only `signatures`) so any feature can request a signature against any record (`subject_type`/`subject_id`) with a real audit trail — signer, timestamp, IP, user-agent, and a tamper-evidence hash — instead of the three incompatible ad hoc patterns that existed before (`user_signatures`/`employee_signatures`, `production.session_signatures`, `qms.coa_signatories`). A captured signature is immutable: a DB trigger blocks every `UPDATE`/`DELETE` except the one legal `active → voided` transition, so a correction is always a new signature, never an edit.
+
+- **Two signer kinds.** Internal staff sign in-app with no drawing — same "Verify & Sign" trust model shipped last session for job cards, stamping the signature already on file in `production.employee_signatures`. External signers (a driver/customer with no CNTP account) get a one-time link (`/sign/[token]`, SHA-256-hashed token, 72h expiry, single-use) to draw their signature on their own device — added to `PUBLIC_ROUTES` in `app/middleware.ts`, fully outside the authenticated app.
+- **First consumer: dispatch/delivery documents.** `logistics.dispatch_documents.signed_by`/`signed_at` existed in the schema but nothing ever wrote them — the Checklist tab's status dropdown was purely manual. It now has real "Sign now" (in-app) and "Send for external signature" actions per document, shows live audit info once signed, and blocks marking a document "Verified" until it's actually been signed.
+- **New permissions:** `can_sign_dispatch_doc`, `can_request_external_signature`, `can_verify_dispatch_doc` (Users & Roles → Logistics → Dispatch document signing).
+- Deliberately **not** touched this session: job card / COA / cleaning signature UIs — they work today and were just reworked last session; migrating them onto `esign` is a separate future pass.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260729_007_employee_signatures.sql` (still pending from last session — this migration's `production.employee_signatures` is a hard dependency for internal signing) then `supabase/migrations/20260729_008_esign_schema.sql`, in that order, in the **staging** Supabase SQL editor.
+2. Add `esign` to **Exposed schemas** (Supabase dashboard → Project Settings → API) on staging — PostgREST can't reach a schema that isn't exposed, same requirement as `hr`/`maintenance`/`shared` before it.
+3. Promote both migrations + the schema exposure to production separately, once verified on staging.
+
+---
+
 ## 2026-07-29 — Alyssa (BOM page redesign: master-detail layout + rich Master Inventory search)
 
 **Files changed:** `app/(app)/production/blends/page.tsx`, `components/production/InventoryPickerModal.tsx` (new)
