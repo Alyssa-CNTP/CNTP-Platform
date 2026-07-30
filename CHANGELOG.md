@@ -5,6 +5,15 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (PRODUCTION: PIN sign-ins linked to Staff Directory by ID; shown as PIN on the profile)
+
+**Files changed:** migration `20260729_006_lab_auth_employee_link.sql` (new), `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`, `app/api/quality/lab-assistants/manage/route.ts`, `app/api/quality/lab-assistants/route.ts`, `app/(app)/quality/lab-manager/page.tsx`
+
+Requires migration `20260729_006` on both projects (adds `qms.lab_auth.employee_id` + a one-time unambiguous name-match back-fill — verified 12/12 clean on prod).
+
+- Lab/QC PIN accounts were keyed by NAME with no link to the person's Staff Directory profile. Now linked by `employee_id`: the lab-manager list carries each person's ID and assigning a PIN stores it on `lab_auth` (and `app_roles`), so a PIN is one identity tied to the profile by ID, not matched by name.
+- The linked PIN now surfaces as the person's **PIN** sign-in on their Staff Directory profile + list (via the identities routes), so the profile is the single source of truth for how someone signs in. Graceful if the column/qms schema isn't reachable.
+
 ## 2026-07-28 — Alyssa (PRODUCTION: Staff sign-in badges: Microsoft SSO only, not supabase/PIN accounts)
 
 **Files changed:** `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`

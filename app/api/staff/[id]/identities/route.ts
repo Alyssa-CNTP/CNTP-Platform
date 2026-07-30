@@ -42,6 +42,14 @@ export async function GET(
     .eq('employee_id', id).maybeSingle()
   const operatorLinked = !opErr && !!operator
 
+  // Lab/QC PIN sign-in linked to this person (qms.lab_auth.employee_id). Surfaced
+  // as a PIN identity so the profile shows one identity per person.
+  const { data: labPinRow } = await (admin as any)
+    .schema('qms').from('lab_auth')
+    .select('active, section_ids')
+    .eq('employee_id', id).maybeSingle()
+  const labPin = labPinRow ? { active: (labPinRow as any).active !== false, section_ids: (labPinRow as any).section_ids ?? [] } : null
+
   const { data: appRole, error: roleErr } = await (admin as any)
     .schema('shared').from('app_roles')
     .select('user_id,department,role,is_active,employee_id')
@@ -74,6 +82,7 @@ export async function GET(
       role: (operator as any).role, section_ids: (operator as any).section_ids,
       active: (operator as any).active,
     } : null,
+    labPin,
     login,
     // True once the people-links migration has run on this environment —
     // lets the UI explain a blank panel instead of implying "nothing linked".

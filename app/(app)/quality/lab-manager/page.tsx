@@ -77,8 +77,8 @@ export default function LabManagerPage() {
   const [tab, setTab] = useState<'approvals' | 'daily' | 'history' | 'pins'>('approvals')
 
   // ── Lab assistant PINs ─────────────────────────────────────────────────────
-  interface LabAsst { full_name: string; role: string; has_pin: boolean; pin: string | null; section_ids: string[]; is_active: boolean; user_id: string | null }
-  interface PinForm { full_name: string; pin: string; section_ids: string[] }
+  interface LabAsst { full_name: string; role: string; has_pin: boolean; pin: string | null; section_ids: string[]; is_active: boolean; user_id: string | null; employee_id: string | null }
+  interface PinForm { full_name: string; pin: string; section_ids: string[]; employee_id: string | null }
   const [labAsstList,  setLabAsstList]  = useState<LabAsst[]>([])
   const [labAsstLoad,  setLabAsstLoad]  = useState(false)
   const [pinEditing,   setPinEditing]   = useState<PinForm | null>(null)
@@ -111,7 +111,7 @@ export default function LabManagerPage() {
       const res = await fetch('/api/quality/lab-assistants', {
         method: pinEditing.pin ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: pinEditing.full_name, ...(pinEditing.pin ? { pin: pinEditing.pin } : {}), section_ids: pinEditing.section_ids }),
+        body: JSON.stringify({ full_name: pinEditing.full_name, ...(pinEditing.pin ? { pin: pinEditing.pin } : {}), section_ids: pinEditing.section_ids, ...(pinEditing.employee_id ? { employee_id: pinEditing.employee_id } : {}) }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Save failed')
@@ -686,7 +686,7 @@ export default function LabManagerPage() {
                       {asst.is_active ? <UserCheck size={16} className="text-ok" /> : <UserX size={16} />}
                     </button>
                   )}
-                  <button onClick={() => { setPinError(null); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [] }) }} className="p-2 text-stone-400 hover:text-brand">
+                  <button onClick={() => { setPinError(null); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [], employee_id: asst.employee_id ?? null }) }} className="p-2 text-stone-400 hover:text-brand">
                     <Pencil size={15} />
                   </button>
                 </div>
