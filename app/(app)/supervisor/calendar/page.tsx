@@ -104,7 +104,7 @@ export default function ShiftCalendar() {
 
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <HubHeader subtitle="Master shift calendar — who's rostered, and the technician on duty" />
+      <HubHeader title="Calendar" subtitle="Master shift calendar — who's rostered, and the technician on duty" />
 
       {/* Nav + view toggle */}
       <div className="flex items-center gap-2 flex-wrap">

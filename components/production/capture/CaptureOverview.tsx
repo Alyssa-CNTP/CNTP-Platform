@@ -319,6 +319,22 @@ export function CaptureOverview({
         </div>
       </div>
 
+      {/* Yield & throughput — the numbers this record is actually judged on.
+          They were only visible by leaving capture for /traceability, which is
+          how "yields are hiding" became true: the line that produced the figures
+          couldn't see them. Computed here from the same totals the tables below
+          show, so the strip can never disagree with the detail under it. */}
+      {hasData && (
+        <YieldStrip
+          sectionId={sectionId} inKg={totalIncl} outKg={totalOut} bags={totalBags}
+          variance={variance} withinTol={withinTol} tolKg={balanceTolKg}
+          topProducts={productGroups
+            .map(g => ({ product: g.product, kg: g.totalKg, sharePct: totalOut > 0 ? (g.totalKg / totalOut) * 100 : 0 }))
+            .sort((a, b) => b.kg - a.kg).slice(0, 4)}
+          lot={productions.map(p => p.lot).find(l => !!l) ?? null}
+        />
+      )}
+
       {/* Filter panel */}
       {showFilters && (
         <div className="px-5 py-3 bg-stone-50 border-b border-stone-100">
@@ -572,3 +588,77 @@ export function CaptureOverview({
 }
 
 export default CaptureOverview
+
+// ── Yield & throughput strip ─────────────────────────────────────────────────
+// One row of the figures that describe the record: kg in, kg out, yield, tons,
+// bags, mass-balance variance, and how the output split across products. The
+// deep links go to the two places that hold the wider picture — the analytics
+// view of Production Orders filtered to this line, and full batch traceability
+// for this lot — so "where do I see this over time" has an answer from the
+// capture screen instead of being something you have to already know.
+function YieldStrip({ sectionId, inKg, outKg, bags, variance, withinTol, tolKg, topProducts, lot }: {
+  sectionId?: string
+  inKg: number; outKg: number; bags: number
+  variance: number; withinTol: boolean; tolKg: number
+  topProducts: { product: string; kg: number; sharePct: number }[]
+  lot: string | null
+}) {
+  const yieldPct = inKg > 0 ? Math.round((outKg / inKg) * 1000) / 10 : null
+  // Sign convention matches the mass-balance row below: in − out.
+  const balance = -variance
+
+  const tiles = [
+    { label: 'kg in',   value: inKg.toFixed(1) },
+    { label: 'kg out',  value: outKg.toFixed(1) },
+    { label: 'yield',   value: yieldPct != null ? `${yieldPct}%` : '—' },
+    { label: 'tons out',value: (outKg / 1000).toFixed(2) },
+    { label: 'bags',    value: String(bags) },
+    {
+      label: `balance ±${tolKg}`,
+      value: `${balance > 0 ? '+' : ''}${balance.toFixed(1)}`,
+      warn: !withinTol,
+    },
+  ]
+
+  return (
+    <div className="px-5 py-3 border-b border-stone-100 bg-white space-y-2.5">
+      <div className="flex items-stretch gap-4 overflow-x-auto">
+        {tiles.map((t, i) => (
+          <div key={t.label} className="flex items-stretch gap-4 shrink-0">
+            {i > 0 && <div className="w-px bg-stone-200" />}
+            <div>
+              <div className={`font-mono font-bold text-[16px] leading-tight ${t.warn ? 'text-warn' : 'text-stone-800'}`}>{t.value}</div>
+              <div className="text-[9px] text-stone-400 uppercase tracking-wide">{t.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Output split — which product this record actually made, and how much of
+          it, without expanding the tables below. Identity is on the label, never
+          on colour alone. */}
+      {topProducts.length > 1 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {topProducts.map(p => (
+            <span key={p.product} className="inline-flex items-center gap-1.5 text-[11px] text-stone-500">
+              <span className="inline-block w-10 h-1.5 rounded-full bg-stone-100 overflow-hidden">
+                <span className="block h-full" style={{ width: `${Math.min(100, p.sharePct)}%`, background: BAG_ORANGE }} />
+              </span>
+              <span className="text-stone-700 font-medium">{p.product}</span>
+              <span className="font-mono">{Math.round(p.sharePct)}% · {p.kg.toFixed(0)} kg</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3 text-[11px]">
+        <a href={`/production/orders?view=analytics${sectionId ? `&section=${sectionId}` : ''}`}
+          className="text-brand hover:underline">Yield &amp; throughput over time →</a>
+        {lot && (
+          <a href={`/traceability?batch=${encodeURIComponent(lot)}`}
+            className="text-brand hover:underline">Full traceability for {lot} →</a>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -150,8 +150,10 @@ const ROUTE_META: Record<string, {
 
   // Supervisor hub
   '/supervisor':             { title: 'Supervisor Hub',         variant: 'default', chips: [{ label: 'Production', color: 'green' }] },
-  '/supervisor/timesheets':  { title: 'Timesheets',             variant: 'default' },
-  '/supervisor/productions': { title: 'Productions',            variant: 'default' },
+  '/supervisor/roster':      { title: 'Roster',                 variant: 'default' },
+  '/supervisor/signoff':     { title: 'Sign-off',               variant: 'default' },
+  '/supervisor/report':      { title: 'Shift Report',           variant: 'default' },
+  '/supervisor/team':        { title: 'Team',                   variant: 'default' },
   '/supervisor/calendar':    { title: 'Shift Calendar',         variant: 'default' },
   '/supervisor/messages':    { title: 'Messages',               variant: 'default' },
   '/supervisor/analytics':   { title: 'Analytics',              variant: 'default' },
