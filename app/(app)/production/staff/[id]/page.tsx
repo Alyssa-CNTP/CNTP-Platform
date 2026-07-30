@@ -54,6 +54,7 @@ interface LinkedLogin {
 }
 interface Identities {
   operator: LinkedOperator | null
+  labPin: { active: boolean; section_ids?: string[] } | null
   login: LinkedLogin | null
   linksAvailable: boolean
 }
@@ -291,11 +292,11 @@ export default function StaffProfilePage() {
       <div className="space-y-2">
         <div className="flex items-center gap-2 flex-wrap">
           <h2 className="font-display font-semibold text-[15px] text-text">How they sign in</h2>
-          <SignInBadge kind="PIN" set={!!identities?.operator} active={!!identities?.operator?.active} />
+          <SignInBadge kind="PIN" set={!!identities?.operator || !!identities?.labPin} active={identities?.operator ? !!identities?.operator?.active : !!identities?.labPin?.active} />
           {identities?.login?.sso && <SSOBadge active={!!identities?.login?.is_active} />}
         </div>
 
-        {!identities?.operator && !identities?.login && (canAssignPin || isIT || !requestSent) && (
+        {!identities?.operator && !identities?.labPin && !identities?.login && (canAssignPin || isIT || !requestSent) && (
           <div className="flex items-center gap-2 flex-wrap px-4 py-3 bg-warn-bg border border-warn/30 rounded-xl text-[12px] text-warn">
             <AlertTriangle size={14} className="shrink-0" />
             <span className="flex-1 min-w-[160px]">No sign-in method set up yet — this person can&rsquo;t sign in to Capture or the app.</span>
