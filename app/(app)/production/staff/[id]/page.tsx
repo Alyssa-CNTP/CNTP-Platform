@@ -59,6 +59,9 @@ export default function StaffProfilePage() {
   const [requestingLogin, setRequestingLogin] = useState(false)
   const [requestSent, setRequestSent] = useState<string | null>(null)
   const [identityError, setIdentityError] = useState<string | null>(null)
+  const [linking, setLinking] = useState(false)
+  const [linkCandidates, setLinkCandidates] = useState<any[]>([])
+  const [linkLoading, setLinkLoading] = useState(false)
   const [trainingCourses, setTrainingCourses] = useState<any[]>([])
   const [assigningTraining, setAssigningTraining] = useState(false)
   const [mySignatureEmployeeId, setMySignatureEmployeeId] = useState<string | null | undefined>(undefined)
@@ -75,6 +78,36 @@ export default function StaffProfilePage() {
   async function loadIdentities() {
     const res = await fetch(`/api/staff/${id}/identities`)
     if (res.ok) setIdentities(await res.json())
+  }
+
+  // Manual login linking (IT): open a picker of unlinked accounts, link one to
+  // this person by ID (the API suggests the likely name match), or unlink.
+  async function openLinkPicker() {
+    setLinking(true); setLinkLoading(true); setIdentityError(null)
+    try {
+      const r = await fetch(`/api/staff/${id}/link-login`)
+      const d = await r.json()
+      if (!r.ok) throw new Error(d?.error || 'Could not load accounts')
+      setLinkCandidates(d.candidates ?? [])
+    } catch (e: any) {
+      setIdentityError(e?.message || 'Could not load accounts'); setLinking(false)
+    } finally { setLinkLoading(false) }
+  }
+  async function linkLogin(userId: string) {
+    setIdentityError(null)
+    const r = await fetch(`/api/staff/${id}/link-login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }),
+    })
+    if (r.ok) { setLinking(false); await loadIdentities() }
+    else { const d = await r.json().catch(() => ({})); setIdentityError(d?.error || 'Could not link this login') }
+  }
+  async function unlinkLogin(userId: string) {
+    if (!confirm('Unlink this login account from this person?')) return
+    const r = await fetch(`/api/staff/${id}/link-login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId, unlink: true }),
+    })
+    if (r.ok) await loadIdentities()
+    else { const d = await r.json().catch(() => ({})); setIdentityError(d?.error || 'Could not unlink') }
   }
 
   useEffect(() => {
@@ -276,14 +309,21 @@ export default function StaffProfilePage() {
               )}
               {!identities.login.is_active && <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-500">Inactive</span>}
               {isIT && (
-                <Link href="/users" className="ml-2 text-[11px] text-brand font-medium hover:underline">Manage →</Link>
+                <>
+                  <Link href="/users" className="ml-2 text-[11px] text-brand font-medium hover:underline">Manage →</Link>
+                  {identities.login.user_id && (
+                    <button onClick={() => unlinkLogin(identities.login!.user_id!)} className="ml-2 text-[11px] text-stone-400 hover:text-err font-medium">Unlink</button>
+                  )}
+                </>
               )}
             </div>
           ) : isIT ? (
             <p className="text-[12px] text-text-muted">
-              No login yet.{' '}
+              No login linked.{' '}
+              <button onClick={openLinkPicker} className="text-brand font-medium hover:underline">Link an existing login →</button>
+              <span className="text-stone-300"> · </span>
               <Link href={`/users?newFor=${employee.id}&name=${encodeURIComponent(employee.display_name || employee.name)}${employee.email ? `&email=${encodeURIComponent(employee.email)}` : ''}`}
-                className="text-brand font-medium hover:underline">Create one →</Link>
+                className="text-brand font-medium hover:underline">Create new →</Link>
             </p>
           ) : requestSent ? (
             <p className="flex items-center gap-1.5 text-[12px] text-ok">
@@ -397,6 +437,40 @@ export default function StaffProfilePage() {
           onClose={() => setAssigningPin(false)}
           onDone={() => { setAssigningPin(false); loadIdentities() }}
         />
+      )}
+
+      {/* Link an existing login account to this person (IT) */}
+      {linking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 overflow-y-auto" onClick={() => setLinking(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[460px] my-8 p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-display font-bold text-[16px] text-text">Link a login account</h3>
+                <p className="text-[12px] text-text-muted mt-0.5">Pick the account that belongs to {employee?.display_name || employee?.name}. A suggested name match is highlighted.</p>
+              </div>
+              <button onClick={() => setLinking(false)} className="p-1.5 rounded-lg text-stone-400 hover:text-text"><X size={16} /></button>
+            </div>
+            {linkLoading ? (
+              <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-stone-300" /></div>
+            ) : linkCandidates.length === 0 ? (
+              <p className="text-[12px] text-text-muted py-4 text-center">No unlinked login accounts available.</p>
+            ) : (
+              <div className="max-h-[50vh] overflow-y-auto divide-y divide-stone-100 border border-stone-200 rounded-xl">
+                {linkCandidates.map(c => (
+                  <button key={c.user_id} onClick={() => linkLogin(c.user_id)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-brand/5 ${c.suggested ? 'bg-brand/5' : ''}`}>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[13px] font-medium text-text truncate">{c.full_name || c.email || '(unnamed account)'}</span>
+                      <span className="block text-[11px] text-text-muted truncate">{(c.role || '—').replace(/_/g, ' ')}{c.email ? ` · ${c.email}` : ''}{c.sso ? ' · Microsoft SSO' : ''}</span>
+                    </span>
+                    {c.suggested && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-brand/10 text-brand shrink-0">suggested</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {identityError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {identityError}</p>}
+          </div>
+        </div>
       )}
     </div>
   )

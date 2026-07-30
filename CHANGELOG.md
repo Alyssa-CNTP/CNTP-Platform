@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-30 — Alyssa (Manually link an existing login account to a Staff Directory profile)
+
+**Files changed:** `app/api/staff/[id]/link-login/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`
+
+41 of 53 logins weren't linked to a profile (so no connections showed, incl. IT's own account). IT can now link an existing login to a person from the profile's Login panel: "Link an existing login" opens a picker of unlinked, active accounts with the likely name match highlighted as "suggested" — one click links it by ID (sets `app_roles.employee_id`). Nothing auto-links. An "Unlink" action is provided when one is linked. New account creation stays available too.
+
 ## 2026-07-30 — Alyssa (Staff profile: show digital training only — removed the full SOP competency flood)
 
 **Files changed:** `app/(app)/production/staff/[id]/page.tsx`
