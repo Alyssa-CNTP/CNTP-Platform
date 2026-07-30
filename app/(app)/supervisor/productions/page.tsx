@@ -10,7 +10,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS } from '@/lib/production/capture-config'
-import { SHIFT_LABEL } from '@/lib/production/shifts'
+import { SHIFT_LABEL, sastToday } from '@/lib/production/shifts'
 import { downloadCsv } from '@/lib/utils/csv-export'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 
@@ -33,7 +33,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   submitted: { label: 'Submitted',  cls: 'bg-info/10 text-info' },
   approved:  { label: 'Signed off', cls: 'bg-ok/10 text-ok' },
 }
-const todayStr = () => format(new Date(), 'yyyy-MM-dd')
+const todayStr = sastToday
 
 interface ReopenReq {
   id: string; session_id: string; section_id: string; date: string; shift: string
@@ -114,7 +114,7 @@ export default function SupervisorProductions() {
       const db = getDb()
       const { data: sessions } = await db.schema('production').from('prod_sessions')
         .select('id,section_id,date,shift,status,operator_names,variant,lot_number,comments')
-        .gte('date', start).lte('date', end).order('date', { ascending: false })
+        .gte('date', start).lte('date', end).is('deleted_at', null).order('date', { ascending: false })
       const sess = (sessions as any[]) ?? []
       const ids = sess.map(s => s.id)
       let mb: any[] = []
