@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-30 — Alyssa (Staff profile: show digital training only — removed the full SOP competency flood)
+
+**Files changed:** `app/(app)/production/staff/[id]/page.tsx`
+
+The profile listed every SOP under "Competency by SOP" (plus an X/Y SOPs-competent header stat), which flooded the page. Removed that section (and its history + inline edit modal + the header stat) from the profile so it shows only the **digital Training portfolio** (assigned courses). The full competency matrix still lives on the Skills Matrix page. Also pruned the now-unused state, fetches, memos and imports.
+
 ## 2026-07-28 — Alyssa (PIN sign-ins linked to Staff Directory by ID; shown as PIN on the profile)
 
 **Files changed:** migration `20260729_006_lab_auth_employee_link.sql` (new), `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`, `app/api/quality/lab-assistants/manage/route.ts`, `app/api/quality/lab-assistants/route.ts`, `app/(app)/quality/lab-manager/page.tsx`
