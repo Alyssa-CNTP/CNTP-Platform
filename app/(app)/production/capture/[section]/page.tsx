@@ -1665,6 +1665,8 @@ function CaptureScreen() {
                         sectionId={sectionId}
                         assignment={assignment}
                         variantWord={active.variant}
+                        onVariantSuggestion={v => { if (!active.variant) updateActiveMeta('variant', v) }}
+                        date={dateParam}
                         locked={locked}
                         value={active.data as PasteuriserData}
                         onChange={updateActiveData}

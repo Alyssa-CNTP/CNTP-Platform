@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
-import { Save, Send, CheckCircle2, XCircle, Clock, ThumbsUp, ThumbsDown, Layers, Printer, Download } from 'lucide-react'
+import { Save, Send, CheckCircle2, XCircle, Clock, Printer, Download, FileClock, Plus } from 'lucide-react'
 import clsx from 'clsx'
 import { jsPDF } from 'jspdf'
 import { useAuth } from '@/lib/auth/context'
@@ -13,6 +13,7 @@ import { listBoms, getBomComponents, findParentBlendBom, type BomSummary } from 
 import { upperCode } from '@/lib/production/normalize-code'
 import { loadImage } from '@/lib/pdf/load-image'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
+import { JobCardApprovalsPanel } from '@/components/production/JobCardApprovalsPanel'
 
 interface RatioLine { componentItemId: string; label: string; pct: number }
 interface PackagingLine { componentItemId: string; label: string; kgPerUnit: number }
@@ -179,111 +180,61 @@ function BomPicker({ onPick, disabled }: { onPick: (b: BomSummary) => void; disa
   )
 }
 
-interface PendingCard {
-  id: string
-  job_card_no: string | null; item_no: string | null; product_name: string | null
-  batch_number: string | null; customer: string | null; blend_description: string | null
-  blend_ratio_lines: RatioLine[] | null; final_ratio_lines: RatioLine[] | null
-  sent_for_approval_at: string | null
+interface DraftRow {
+  id: string; job_card_no: string | null; item_no: string | null
+  product_name: string | null; customer: string | null; date_of_card: string | null; created_at: string
 }
 
-function PendingApprovals() {
-  const db = getDb()
-  const [cards, setCards] = useState<PendingCard[]>([])
-  const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState<string | null>(null)
-
-  async function reload() {
-    const { data } = await db.from('job_cards_pasteuriser')
-      .select('id, job_card_no, item_no, product_name, batch_number, customer, blend_description, blend_ratio_lines, final_ratio_lines, sent_for_approval_at')
-      .eq('status', 'sent_for_approval').order('sent_for_approval_at', { ascending: true })
-    setCards((data as PendingCard[]) ?? [])
-    setLoading(false)
-  }
-  useEffect(() => { reload() }, [])
-
-  async function decide(id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) {
-    const res = await fetch(`/api/production/job-cards/${id}/decide`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, ...extra }),
-    })
-    if (res.ok) { setCards(cs => cs.filter(c => c.id !== id)); setExpanded(null) }
-    else { const body = await res.json().catch(() => ({})); alert(body.error || 'Could not save decision') }
-  }
-
-  if (loading || cards.length === 0) return null
-
-  return (
-    <div className="card p-4 space-y-2 border-2 border-brand/30">
-      <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold flex items-center gap-1.5">
-        <Layers className="w-3.5 h-3.5" /> Pending your approval ({cards.length})
-      </p>
-      {cards.map(c => (
-        <PendingCardRow key={c.id} c={c} expanded={expanded === c.id}
-          onToggle={() => setExpanded(expanded === c.id ? null : c.id)} onDecide={decide} />
-      ))}
-    </div>
-  )
-}
-
-function PendingCardRow({ c, expanded, onToggle, onDecide }: {
-  c: PendingCard; expanded: boolean; onToggle: () => void
-  onDecide: (id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) => Promise<void>
+// A saved draft previously had no way back into the UI at all — the form's
+// savedId only ever lived in React state, so navigating away (or refreshing)
+// lost the trail entirely and finding it meant querying Supabase directly.
+// This lists every draft-status card so a manager can resume one with a
+// click, and excludes whichever draft is currently open in the form.
+function DraftsPanel({ excludeId, refreshToken, onResume }: {
+  excludeId: string | null; refreshToken: number; onResume: (id: string) => void
 }) {
-  const [status, setStatus] = useState<MySignatureStatus | null>(null)
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
+  const db = getDb()
+  const [drafts, setDrafts] = useState<DraftRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
 
-  useEffect(() => { getMySignatureStatus().then(setStatus) }, [])
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    db.from('job_cards_pasteuriser')
+      .select('id, job_card_no, item_no, product_name, customer, date_of_card, created_at')
+      .eq('status', 'draft').order('created_at', { ascending: false }).limit(20)
+      .then(({ data }: any) => { if (!cancelled) { setDrafts((data as DraftRow[]) ?? []); setLoading(false) } })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken])
+
+  const visible = drafts.filter(d => d.id !== excludeId)
+  if (loading || visible.length === 0) return null
 
   return (
-    <div className="rounded-xl border border-surface-rule overflow-hidden">
-      <button onClick={onToggle} className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-surface-dim/40">
-        <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-text truncate">{c.product_name || c.item_no || 'Job card'}</div>
-          <div className="text-[11px] text-text-muted font-mono truncate">{c.item_no} · batch {c.batch_number || '—'} · {c.customer || 'no customer'}</div>
-        </div>
-        <span className="text-[10px] text-text-faint shrink-0">{expanded ? 'Hide' : 'Review'}</span>
+    <div className="card p-4 space-y-2 border border-surface-rule no-print">
+      <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold flex items-center gap-1.5">
+          <FileClock className="w-3.5 h-3.5" /> Saved drafts ({visible.length})
+        </span>
+        <span className="text-[10px] text-text-faint">{open ? 'Hide' : 'Show'}</span>
       </button>
-      {expanded && (
-        <div className="border-t border-surface-rule bg-surface-dim/20 p-3 space-y-3">
-          {c.blend_ratio_lines?.length ? (
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Blend ratio (before granules) — {c.blend_description}</p>
-              <RatioTable lines={c.blend_ratio_lines} />
-            </div>
-          ) : null}
-          {c.final_ratio_lines?.length ? (
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted mb-1">Final product ratio</p>
-              <RatioTable lines={c.final_ratio_lines} />
-            </div>
-          ) : null}
-
-          {status && !status.hasSignature ? (
-            <p className="text-[11px] text-warn">
-              No signature on file — {status.employeeId
-                ? <Link href={`/production/staff/${status.employeeId}`} className="underline">set one up on your Staff Directory profile</Link>
-                : 'ask IT to link your login to your Staff Directory profile'} before you can approve.
-            </p>
-          ) : (
-            <button disabled={!status?.hasSignature || busy}
-              onClick={async () => { setBusy(true); await onDecide(c.id, 'approved', {}); setBusy(false) }}
-              className={clsx('w-full py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5',
-                status?.hasSignature ? 'bg-brand text-white hover:opacity-90' : 'bg-surface-rule text-text-faint cursor-not-allowed')}>
-              <ThumbsUp className="w-4 h-4" /> {busy ? 'Signing…' : `Verify & Sign as ${status?.employeeName ?? 'you'} to Approve`}
+      {open && (
+        <div className="divide-y divide-surface-rule -mx-4 -mb-4 mt-1">
+          {visible.map(d => (
+            <button key={d.id} type="button" onClick={() => onResume(d.id)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-surface-dim/40">
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-text truncate">{d.product_name || d.item_no || d.job_card_no || 'Untitled draft'}</div>
+                <div className="text-[11px] text-text-muted font-mono truncate">
+                  {d.job_card_no || '—'} · {d.customer || 'no customer'}
+                  {d.date_of_card ? ` · ${format(new Date(d.date_of_card + 'T12:00:00'), 'd MMM')}` : ''}
+                </div>
+              </div>
+              <span className="text-[10px] text-brand font-semibold shrink-0">Resume →</span>
             </button>
-          )}
-
-          <div className="flex gap-2 items-center pt-1 border-t border-surface-rule/60">
-            <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason for rejection…"
-              className="input flex-1 text-[12px]" />
-            <button disabled={!reason.trim() || busy}
-              onClick={async () => { setBusy(true); await onDecide(c.id, 'rejected', { reason }); setBusy(false) }}
-              className="px-3 py-2 rounded-lg text-[13px] font-semibold border border-err text-err hover:bg-err/10 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0">
-              <ThumbsDown className="w-3.5 h-3.5" /> Reject
-            </button>
-          </div>
+          ))}
         </div>
       )}
     </div>
@@ -304,6 +255,9 @@ function PasteuriserJobCardScreen() {
   const [savedId, setSavedId] = useState<string | null>(null)
   const [bomLoading, setBomLoading] = useState(false)
   const [myStatus, setMyStatus] = useState<MySignatureStatus | null>(null)
+  const [jobCardNoError, setJobCardNoError] = useState<string | null>(null)
+  const [lastOrderNote, setLastOrderNote] = useState<string | null>(null)
+  const [draftsRefresh, setDraftsRefresh] = useState(0)
 
   // Locked once sent for approval or approved — the manager's job is done;
   // a supervisor either approves it (via the panel above) or rejects it back
@@ -312,13 +266,19 @@ function PasteuriserJobCardScreen() {
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
 
   // A fresh draft gets its number the moment the page opens — auto, atomic
-  // (public.next_job_card_no(), a DB sequence), never hand-typed.
-  useEffect(() => {
-    if (savedId || form.job_card_no) return
+  // (public.next_job_card_no(), a DB sequence), never hand-typed. Surfaced
+  // in the UI (not just console) if it fails, with a manual retry — a silent
+  // failure here just looked like the feature didn't exist.
+  function generateJobCardNo() {
+    setJobCardNoError(null)
     db.rpc('next_job_card_no' as any).then(({ data, error }: any) => {
-      if (error) { console.error('next_job_card_no() failed — is migration 20260729_003 applied?', error); return }
+      if (error) { setJobCardNoError('Could not auto-generate a number — is migration 20260729_003 applied?'); return }
       if (data) setForm(f => (f.job_card_no ? f : { ...f, job_card_no: data as string }))
     })
+  }
+  useEffect(() => {
+    if (savedId || form.job_card_no) return
+    generateJobCardNo()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -345,7 +305,7 @@ function PasteuriserJobCardScreen() {
     if (id) { await db.from('job_cards_pasteuriser').update(payload).eq('id', id) }
     else {
       const { data } = await db.from('job_cards_pasteuriser').insert(payload).select('id').single()
-      if (data) { id = (data as any).id; setSavedId(id) }
+      if (data) { id = (data as any).id; setSavedId(id); setDraftsRefresh(x => x + 1) }
     }
     setSaving(false)
     setForm(f => ({ ...f, ...(patch ?? {}), batch_number: payload.batch_number }))
@@ -453,8 +413,23 @@ function PasteuriserJobCardScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.total_mass, form.weight_per_bulk_bag])
 
-  function onCustomerBlur() {
+  async function onCustomerBlur() {
     if (form.item_no.trim()) applySettingsTemplate(form.item_no, form.customer)
+    // A customer usually reorders the same thing — if no BOM has been picked
+    // yet this session, default to whatever we last generated for them
+    // (still fully overridable via the picker above).
+    if (!form.bom_output_item_id && form.customer.trim()) {
+      const { data } = await db.from('job_cards_pasteuriser')
+        .select('bom_output_item_id').eq('customer', form.customer.trim())
+        .not('bom_output_item_id', 'is', null)
+        .order('date_of_card', { ascending: false }).limit(1).maybeSingle()
+      const lastItemId = (data as any)?.bom_output_item_id
+      if (lastItemId) {
+        const all = await listBoms('06-PASTEURISING')
+        const match = all.find(b => b.outputItemId === lastItemId)
+        if (match && !form.bom_output_item_id) { setLastOrderNote(match.outputItemId); await pickBom(match) }
+      }
+    }
   }
 
   async function sendForApproval() {
@@ -469,22 +444,64 @@ function PasteuriserJobCardScreen() {
     setSending(false)
   }
 
+  // Loads a previously saved draft back into the form — the only way back in
+  // before this was querying Supabase directly, since savedId only ever lived
+  // in React state. Missing/null columns fall back to empty()'s defaults so a
+  // partially-filled draft doesn't render undefined into a controlled input.
+  async function resumeDraft(id: string) {
+    const { data } = await db.from('job_cards_pasteuriser').select('*').eq('id', id).single()
+    if (!data) return
+    const row = data as any
+    const base = empty()
+    const next: any = { ...base }
+    for (const key of Object.keys(base)) {
+      if (row[key] !== undefined && row[key] !== null) next[key] = row[key]
+    }
+    setForm(next as Form)
+    setSavedId(id)
+    setJobCardNoError(null)
+    setLastOrderNote(null)
+  }
+
+  function startNew() {
+    setForm(empty())
+    setSavedId(null)
+    setJobCardNoError(null)
+    setLastOrderNote(null)
+    generateJobCardNo()
+  }
+
   return (
-    <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5 pb-24">
+    <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5 pb-48">
       <style>{`@media print { body * { visibility: hidden; } .jobcard-print, .jobcard-print * { visibility: visible; } .jobcard-print { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } }`}</style>
 
-      <div className="rounded-2xl p-4 bg-brand text-white no-print">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-white/50 mb-1">PR-FM-013/1 · Cape Natural Tea Products</p>
-        <h1 className="font-display font-extrabold text-2xl">Pasteuriser Line Job Card</h1>
+      <div className="rounded-2xl p-4 bg-brand text-white no-print flex items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-widest text-white/50 mb-1">PR-FM-013/1 · Cape Natural Tea Products</p>
+          <h1 className="font-display font-extrabold text-2xl">Pasteuriser Line Job Card</h1>
+        </div>
+        {canGenerate && (savedId || form.job_card_no) && (
+          <button type="button" onClick={startNew}
+            className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-[12px] font-semibold transition-colors">
+            <Plus size={14} /> New job card
+          </button>
+        )}
       </div>
 
-      {canApprove && <div className="no-print"><PendingApprovals /></div>}
+      {canApprove && <div className="no-print"><JobCardApprovalsPanel /></div>}
+
+      {canGenerate && (
+        <DraftsPanel excludeId={savedId} refreshToken={draftsRefresh} onResume={resumeDraft} />
+      )}
 
       {canGenerate && !locked && (
         <div className="card p-4 space-y-2 border-2 border-brand/20 no-print">
           <p className="font-mono text-[10px] uppercase tracking-wide text-text-muted font-semibold">Generate from BOM</p>
-          <BomPicker onPick={pickBom} disabled={bomLoading} />
+          <BomPicker onPick={b => { setLastOrderNote(null); pickBom(b) }} disabled={bomLoading} />
           <p className="text-[11px] text-text-faint">Picks up the Acumatica code, blend ratio and final product ratio straight from the BOM catalogue — nothing here needs re-typing. Batch details, plant settings and special instructions below are still yours to fill in.</p>
+          {lastOrderNote && (
+            <p className="text-[11px] text-brand">Auto-filled <span className="font-mono">{lastOrderNote}</span> — {form.customer}'s last order. Search above to pick something different for this run.</p>
+          )}
         </div>
       )}
 
@@ -495,7 +512,15 @@ function PasteuriserJobCardScreen() {
           <F label="Customer"><input className="input" value={form.customer} onChange={set('customer')} onBlur={onCustomerBlur} disabled={locked} /></F>
           <F label="Date of job card"><input type="date" className="input" value={form.date_of_card} onChange={set('date_of_card')} disabled={locked} /></F>
           <F label="Expected commencement"><input type="date" className="input" value={form.expected_commencement} onChange={set('expected_commencement')} disabled={locked} /></F>
-          <F label="Job card no."><input className="input font-mono" value={form.job_card_no} onChange={set('job_card_no')} disabled={locked} /></F>
+          <F label="Job card no. (auto)">
+            <div className="flex items-center gap-1.5">
+              <input className="input font-mono" value={form.job_card_no} onChange={set('job_card_no')} disabled={locked} placeholder={jobCardNoError ? '—' : 'Generating…'} />
+              {!locked && !form.job_card_no && (
+                <button type="button" onClick={generateJobCardNo} className="shrink-0 text-[11px] font-semibold text-brand hover:underline whitespace-nowrap">Retry</button>
+              )}
+            </div>
+            {jobCardNoError && <p className="text-[10px] text-err mt-1">{jobCardNoError}</p>}
+          </F>
         </div>
         <F label="Item no. (Acumatica code)"><input className="input font-mono" value={form.item_no} onChange={set('item_no')} disabled={locked || !!form.bom_output_item_id} /></F>
       </div>
@@ -861,22 +886,30 @@ async function exportJobCardPdf(form: Form) {
   doc.setLineWidth(1.2); doc.line(margin, y + 24, pageW - margin, y + 24)
   y += 46
 
+  // Label above value (not side-by-side) — a fixed label/value split column
+  // overlapped on long labels ("Debagging hopper speed inverter setting" etc.)
+  // since the value always started at a hardcoded +120pt regardless of how
+  // wide the label actually was. Stacking removes the overlap entirely: label
+  // and value never share a baseline, so label length can never collide with it.
   const kv = (rows: [string, string][]) => {
-    doc.setFontSize(8)
-    const colX = [margin, pageW / 2 + 10]
-    const colEnd = [pageW / 2 - 10, pageW - margin]
+    const gap = 16
+    const colW = (pageW - 2 * margin - gap) / 2
+    const colX = [margin, margin + colW + gap]
     for (let i = 0; i < rows.length; i += 2) {
       for (let c = 0; c < 2; c++) {
         const item = rows[i + c]; if (!item) continue
-        const x = colX[c]; const valX = x + 120
-        doc.setFont('helvetica', 'bold'); doc.text(item[0], x, y)
-        doc.setFont('helvetica', 'normal'); doc.text(String(item[1] || '—'), valX, y)
-        doc.setDrawColor(180); doc.setLineWidth(0.5); doc.setLineDashPattern([1.5, 1.5], 0)
-        doc.line(valX, y + 2, colEnd[c], y + 2); doc.setLineDashPattern([], 0)
+        const x = colX[c]
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5)
+        doc.text(item[0].toUpperCase(), x, y)
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
+        const valueLines = doc.splitTextToSize(String(item[1] || '—'), colW)
+        doc.text(valueLines, x, y + 10)
+        doc.setDrawColor(200); doc.setLineWidth(0.5)
+        doc.line(x, y + 13, x + colW, y + 13)
       }
-      y += 15
+      y += 20
     }
-    y += 8
+    y += 6
   }
 
   const drawTable = (title: string, rows: [string, string][]) => {
