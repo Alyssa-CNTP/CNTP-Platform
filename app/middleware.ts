@@ -14,7 +14,9 @@ import type { NextRequest }   from 'next/server'
 
 // Routes that don't require authentication
 // /scan is the public customer-facing unit lookup page (multi-language).
-const PUBLIC_ROUTES = ['/login', '/reset-password', '/forgot-password', '/scan']
+// /sign + /api/esign/sign are the external e-signature flow — a driver/customer
+// with no app account signs a specific document via a one-time token link.
+const PUBLIC_ROUTES = ['/login', '/reset-password', '/forgot-password', '/scan', '/sign', '/api/esign/sign']
 
 // Routes that are always allowed (Next.js internals, static files)
 const ALWAYS_ALLOW = ['/_next', '/favicon', '/api/upload', '/api/outstanding', '/api/logistics/public']

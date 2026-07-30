@@ -102,6 +102,9 @@ export type PermissionKey =
   | 'can_access_workspace'
   // Logistics
   | 'can_access_logistics'
+  | 'can_sign_dispatch_doc'            // sign a dispatch document in-app (own on-file signature)
+  | 'can_request_external_signature'   // send a driver/customer an external signing link; void/resend
+  | 'can_verify_dispatch_doc'          // mark a signed dispatch document verified
   // Maintenance
   | 'can_access_maintenance'
   | 'can_raise_breakdown'
@@ -155,7 +158,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
-  'can_access_logistics',
+  'can_access_logistics','can_sign_dispatch_doc','can_request_external_signature','can_verify_dispatch_doc',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_access_hr',

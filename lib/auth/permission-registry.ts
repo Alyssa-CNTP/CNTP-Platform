@@ -140,6 +140,12 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     resources: [
       { key: 'logistics.access', label: 'Logistics module', read: 'can_access_logistics',
         note: 'Grant Read to give a non-Production/Quality/Management user the module.' },
+      { key: 'logistics.dispatch_signing', label: 'Dispatch document signing',
+        write: 'can_sign_dispatch_doc',
+        manage: [
+          { key: 'can_request_external_signature', label: 'Send external signing link to driver/customer' },
+          { key: 'can_verify_dispatch_doc', label: 'Verify a signed document' },
+        ] },
     ],
   },
   {
