@@ -56,6 +56,8 @@ export async function POST(req: NextRequest) {
     if (!body?.full_name?.trim()) return NextResponse.json({ error: 'full_name is required' }, { status: 400 })
     if (!/^\d{4}$/.test(body?.pin ?? '')) return NextResponse.json({ error: 'PIN must be exactly 4 digits' }, { status: 400 })
     const sectionIds: string[] = Array.isArray(body?.section_ids) ? body.section_ids : []
+    // Link the PIN to the Staff Directory person by ID (not name), when provided.
+    const employeeId: string | null = typeof body?.employee_id === 'string' && body.employee_id ? body.employee_id : null
 
     const admin   = getAdminClient()
     const session = await getSessionClient()
@@ -79,7 +81,7 @@ export async function POST(req: NextRequest) {
       await admin
         .schema('qms' as any)
         .from('lab_auth')
-        .update({ pin, section_ids: sectionIds, updated_at: new Date().toISOString() })
+        .update({ pin, section_ids: sectionIds, updated_at: new Date().toISOString(), ...(employeeId ? { employee_id: employeeId } : {}) })
         .eq('full_name', name)
       return NextResponse.json({ success: true, updated: true })
     }
@@ -99,7 +101,7 @@ export async function POST(req: NextRequest) {
     const { error: insertErr } = await admin
       .schema('qms' as any)
       .from('lab_auth')
-      .insert({ user_id: userId, auth_email: email, full_name: name, pin, section_ids: sectionIds, active: true })
+      .insert({ user_id: userId, auth_email: email, full_name: name, pin, section_ids: sectionIds, active: true, ...(employeeId ? { employee_id: employeeId } : {}) })
     if (insertErr) {
       await admin.auth.admin.deleteUser(userId).catch(() => {})
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
@@ -116,6 +118,7 @@ export async function POST(req: NextRequest) {
         role:        'quality_lab_assistant',
         permissions: { ...(LAB_ASSISTANT_PERMISSIONS as Record<string, boolean>) },
         is_active:   true,
+        ...(employeeId ? { employee_id: employeeId } : {}),
       }, { onConflict: 'user_id' })
     if (roleErr) return NextResponse.json({ error: roleErr.message }, { status: 500 })
 
@@ -147,6 +150,14 @@ export async function PATCH(req: NextRequest) {
 
     const userId   = (authRow as any).user_id
     const authEmail = (authRow as any).auth_email
+
+    // Link to the Staff Directory person by ID when supplied (idempotent).
+    if (typeof body?.employee_id === 'string' && body.employee_id) {
+      await admin.schema('qms' as any).from('lab_auth')
+        .update({ employee_id: body.employee_id }).eq('full_name', body.full_name.trim())
+      await admin.schema('shared' as any).from('app_roles')
+        .update({ employee_id: body.employee_id }).eq('user_id', userId)
+    }
 
     if (body.pin !== undefined) {
       if (!/^\d{4}$/.test(body.pin)) return NextResponse.json({ error: 'PIN must be exactly 4 digits' }, { status: 400 })

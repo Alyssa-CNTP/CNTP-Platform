@@ -64,13 +64,17 @@ export async function GET() {
     const { data: qcStaff } = await admin
       .schema('production' as any)
       .from('employees')
-      .select('name, display_name, department, active')
+      .select('id, name, display_name, department, active')
       .ilike('department', 'qc')
+    // Employee id by normalised name, so a PIN can be linked to the Staff
+    // Directory profile by ID rather than matched by name later.
+    const empIdByName = new Map<string, string>()
     for (const e of qcStaff ?? []) {
       if (e.active === false) continue
       const display = (e.display_name || e.name || '').trim()
       if (!display || isMicrosoftStaff(display)) continue
       const norm = normName(display)
+      if (e.id && !empIdByName.has(norm)) empIdByName.set(norm, e.id)
       if (!nameMap.has(norm)) nameMap.set(norm, { display, role: 'qc' })
     }
 
@@ -80,7 +84,7 @@ export async function GET() {
     const { data: authRows } = await admin
       .schema('qms' as any)
       .from('lab_auth')
-      .select('user_id, full_name, pin, section_ids, active')
+      .select('user_id, full_name, pin, section_ids, active, employee_id')
     const authByName = new Map<string, any>()
     for (const r of authRows ?? []) {
       if (r.full_name) authByName.set(normName(r.full_name), r)
@@ -97,6 +101,8 @@ export async function GET() {
         section_ids: authRow?.section_ids ?? [],
         is_active:   authRow?.active ?? true,
         user_id:     authRow?.user_id ?? null,
+        // Prefer an existing account's link, else the Staff Directory match.
+        employee_id: authRow?.employee_id ?? empIdByName.get(norm) ?? null,
       }
     }).sort((a, b) => a.full_name.localeCompare(b.full_name))
 

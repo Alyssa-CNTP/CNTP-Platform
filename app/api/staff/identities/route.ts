@@ -48,6 +48,17 @@ export async function GET() {
     for (const o of ops ?? []) operators[o.employee_id] = { operator_code: o.operator_code, active: o.active }
   }
 
+  // Lab/QC PIN sign-ins linked to a person (qms.lab_auth.employee_id) — surfaced
+  // as a PIN on the directory so a lab PIN reads as one identity on the profile.
+  const { data: labRows, error: labErr } = await (admin as any)
+    .schema('qms').from('lab_auth')
+    .select('employee_id, active')
+    .not('employee_id', 'is', null)
+  const labPins: Record<string, { active: boolean }> = {}
+  if (!isMissingColumnError(labErr)) {
+    for (const l of labRows ?? []) labPins[l.employee_id] = { active: l.active !== false }
+  }
+
   const { data: roles, error: roleErr } = await (admin as any)
     .schema('shared').from('app_roles')
     .select('employee_id,user_id,is_active,role')
@@ -72,7 +83,7 @@ export async function GET() {
   }
 
   return NextResponse.json({
-    operators, logins,
+    operators, labPins, logins,
     linksAvailable: !isMissingColumnError(opErr) && !isMissingColumnError(roleErr),
   })
 }

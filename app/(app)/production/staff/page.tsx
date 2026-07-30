@@ -31,9 +31,11 @@ interface Leave {
   kind: string; reason: string | null
 }
 interface OperatorBadge { operator_code: string | null; active: boolean }
+interface LabPinBadge { active: boolean }
 interface LoginBadge { has_login: true; is_active: boolean; sso?: boolean; email?: string | null; role?: string | null }
 interface IdentitiesMap {
   operators: Record<string, OperatorBadge>
+  labPins?: Record<string, LabPinBadge>
   logins: Record<string, LoginBadge>
 }
 
@@ -81,10 +83,13 @@ function SSOBadge({ active, email }: { active: boolean; email?: string | null })
   )
 }
 
-function IdentityBadges({ operator, login }: { operator?: OperatorBadge; login?: LoginBadge }) {
+function IdentityBadges({ operator, labPin, login }: { operator?: OperatorBadge; labPin?: LabPinBadge; login?: LoginBadge }) {
+  // A person has a PIN sign-in via either a Capture operator record or a lab PIN.
+  const hasPin = !!operator || !!labPin
+  const pinActive = operator ? operator.active : !!labPin?.active
   return (
     <div className="flex items-center gap-1.5 mt-0.5">
-      <SignInBadge kind="PIN" set={!!operator} active={!!operator?.active} detail={operator?.operator_code} />
+      <SignInBadge kind="PIN" set={hasPin} active={pinActive} detail={operator?.operator_code} />
       {login?.sso && <SSOBadge active={!!login?.is_active} email={login?.email} />}
     </div>
   )
@@ -137,7 +142,7 @@ export default function StaffDirectoryPage() {
     // Best-effort — a failed identities fetch shouldn't block the directory
     // from loading, it just leaves the PIN/login badges blank.
     fetch('/api/staff/identities').then(res => res.ok ? res.json() : null)
-      .then(data => { if (data) setIdentities({ operators: data.operators ?? {}, logins: data.logins ?? {} }) })
+      .then(data => { if (data) setIdentities({ operators: data.operators ?? {}, labPins: data.labPins ?? {}, logins: data.logins ?? {} }) })
       .catch(() => {})
     setLoading(false)
   }
@@ -399,7 +404,7 @@ export default function StaffDirectoryPage() {
                                   <span className="inline-flex items-center gap-1"><Phone size={9} />{e.phone}</span>
                                 )}
                               </div>
-                              <IdentityBadges operator={identities.operators[e.id]} login={identities.logins[e.id]} />
+                              <IdentityBadges operator={identities.operators[e.id]} labPin={identities.labPins?.[e.id]} login={identities.logins[e.id]} />
                             </div>
                             {/* Competency chip + skill tags */}
                             <div className="flex items-center gap-1.5 shrink-0">
@@ -527,7 +532,7 @@ export default function StaffDirectoryPage() {
                                 {(e.position || e.job_title) && <span className="truncate max-w-[220px]">{e.position || e.job_title}</span>}
                                 {e.employee_code && <span className="font-mono text-[10px] text-stone-400">{e.employee_code}</span>}
                               </div>
-                              <IdentityBadges operator={identities.operators[e.id]} login={identities.logins[e.id]} />
+                              <IdentityBadges operator={identities.operators[e.id]} labPin={identities.labPins?.[e.id]} login={identities.logins[e.id]} />
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
                               {comp && comp.total > 0 && (
