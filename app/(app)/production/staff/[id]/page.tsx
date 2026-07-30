@@ -50,6 +50,7 @@ interface LinkedLogin {
   has_login?: boolean
   user_id?: string; email?: string | null; department?: string | null; role?: string | null
   is_active: boolean
+  sso?: boolean
 }
 interface Identities {
   operator: LinkedOperator | null
@@ -291,7 +292,7 @@ export default function StaffProfilePage() {
         <div className="flex items-center gap-2 flex-wrap">
           <h2 className="font-display font-semibold text-[15px] text-text">How they sign in</h2>
           <SignInBadge kind="PIN" set={!!identities?.operator} active={!!identities?.operator?.active} />
-          <SignInBadge kind="EMAIL" set={!!identities?.login} active={!!identities?.login?.is_active} />
+          {identities?.login?.sso && <SSOBadge active={!!identities?.login?.is_active} />}
         </div>
 
         {!identities?.operator && !identities?.login && (canAssignPin || isIT || !requestSent) && (
@@ -880,6 +881,16 @@ function SignInBadge({ kind, set, active }: { kind: 'PIN' | 'EMAIL'; set: boolea
   return (
     <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${cls}`}>
       <Icon size={10} /> {kind}
+    </span>
+  )
+}
+
+// Microsoft SSO (orange) — only for genuine Azure-AD accounts.
+function SSOBadge({ active }: { active: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${active ? 'bg-amber-100 text-amber-700' : 'bg-warn/15 text-warn'}`}
+      title={`Microsoft SSO sign-in${active ? '' : ' — inactive'}`}>
+      <KeyRound size={10} /> Microsoft
     </span>
   )
 }

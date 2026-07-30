@@ -9,6 +9,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { isMicrosoftSSO } from '@/app/api/staff/identities/route'
 
 // See app/api/production/operators/route.ts — same reasoning: the linking
 // columns land in a separate migration and may not exist yet on every
@@ -49,17 +50,21 @@ export async function GET(
 
   let login: any = null
   if (loginLinked) {
+    // Fetch the auth user regardless of IT status so we can classify the
+    // provider (Microsoft SSO vs supabase/PIN); email stays IT-only.
+    const { data: authUser } = await admin.auth.admin.getUserById((appRole as any).user_id)
+    const sso = isMicrosoftSSO(authUser?.user)
     if (isIT) {
-      const { data } = await admin.auth.admin.getUserById((appRole as any).user_id)
       login = {
         user_id:   (appRole as any).user_id,
-        email:     data?.user?.email ?? null,
+        email:     authUser?.user?.email ?? null,
         department:(appRole as any).department,
         role:      (appRole as any).role,
         is_active: (appRole as any).is_active,
+        sso,
       }
     } else {
-      login = { has_login: true, is_active: (appRole as any).is_active }
+      login = { has_login: true, is_active: (appRole as any).is_active, sso }
     }
   }
 

@@ -31,7 +31,7 @@ interface Leave {
   kind: string; reason: string | null
 }
 interface OperatorBadge { operator_code: string | null; active: boolean }
-interface LoginBadge { has_login: true; is_active: boolean; email?: string | null; role?: string | null }
+interface LoginBadge { has_login: true; is_active: boolean; sso?: boolean; email?: string | null; role?: string | null }
 interface IdentitiesMap {
   operators: Record<string, OperatorBadge>
   logins: Record<string, LoginBadge>
@@ -70,11 +70,22 @@ function SignInBadge({ kind, set, active, detail }: { kind: 'PIN' | 'EMAIL'; set
   )
 }
 
+// The Microsoft SSO badge (orange) — shown ONLY for genuine Azure-AD sign-in,
+// never for supabase password/PIN accounts (which use a synthetic email).
+function SSOBadge({ active, email }: { active: boolean; email?: string | null }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${active ? 'bg-amber-100 text-amber-700' : 'bg-warn/15 text-warn'}`}
+      title={`Microsoft SSO sign-in${active ? '' : ' — inactive'}${email ? ` · ${email}` : ''}`}>
+      <KeyRound size={9} /> Microsoft
+    </span>
+  )
+}
+
 function IdentityBadges({ operator, login }: { operator?: OperatorBadge; login?: LoginBadge }) {
   return (
     <div className="flex items-center gap-1.5 mt-0.5">
       <SignInBadge kind="PIN" set={!!operator} active={!!operator?.active} detail={operator?.operator_code} />
-      <SignInBadge kind="EMAIL" set={!!login} active={!!login?.is_active} detail={login?.email} />
+      {login?.sso && <SSOBadge active={!!login?.is_active} email={login?.email} />}
     </div>
   )
 }
