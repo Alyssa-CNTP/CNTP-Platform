@@ -13,6 +13,18 @@ function isMissingColumnError(error: { code?: string } | null | undefined) {
   return error?.code === '42703'
 }
 
+// True only for genuine Microsoft SSO accounts (Azure AD). Supabase
+// email/password accounts — including the PIN-based lab/floor logins that use a
+// synthetic email — are NOT SSO and must not get the Microsoft badge.
+export function isMicrosoftSSO(user: any): boolean {
+  const provider  = user?.app_metadata?.provider
+  const providers = user?.app_metadata?.providers
+  const identities = user?.identities
+  return provider === 'azure'
+    || (Array.isArray(providers) && providers.includes('azure'))
+    || (Array.isArray(identities) && identities.some((i: any) => i?.provider === 'azure'))
+}
+
 export async function GET() {
   const caller = await getCallerPermissions()
   if (!caller.userId)
@@ -41,17 +53,19 @@ export async function GET() {
     .select('employee_id,user_id,is_active,role')
     .not('employee_id', 'is', null)
 
-  const logins: Record<string, { has_login: true; is_active: boolean; email?: string | null; role?: string | null }> = {}
+  const logins: Record<string, { has_login: true; is_active: boolean; sso: boolean; email?: string | null; role?: string | null }> = {}
   if (!isMissingColumnError(roleErr) && (roles ?? []).length > 0) {
-    let emailByUserId = new Map<string, string | null>()
-    if (isIT) {
-      const { data: listResult } = await admin.auth.admin.listUsers({ perPage: 1000 })
-      emailByUserId = new Map((listResult?.users ?? []).map(u => [u.id, u.email ?? null]))
-    }
+    // We need the auth provider for every linked login (to tell genuine
+    // Microsoft SSO from supabase password/PIN accounts), so always list users
+    // here — email is still only surfaced to IT.
+    const { data: listResult } = await admin.auth.admin.listUsers({ perPage: 1000 })
+    const emailByUserId = new Map((listResult?.users ?? []).map(u => [u.id, u.email ?? null]))
+    const ssoByUserId   = new Map((listResult?.users ?? []).map(u => [u.id, isMicrosoftSSO(u)]))
     for (const r of roles as any[]) {
       logins[r.employee_id] = {
         has_login: true,
         is_active: r.is_active,
+        sso: ssoByUserId.get(r.user_id) ?? false,
         ...(isIT ? { email: emailByUserId.get(r.user_id) ?? null, role: r.role } : {}),
       }
     }
