@@ -6,13 +6,14 @@ import Link from 'next/link'
 import { format, parseISO, differenceInYears, isPast } from 'date-fns'
 import {
   ArrowLeft, Loader2, Phone, Calendar, Award,
-  AlertTriangle, Check, X, KeyRound, IdCard, GraduationCap, Plus, CalendarClock,
+  AlertTriangle, Check, X, KeyRound, IdCard, GraduationCap, Plus, CalendarClock, Pencil,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import SignaturePad from '@/components/ui/SignaturePad'
 import { getMySignatureStatus, setEmployeeSignature, loadEmployeeSignature } from '@/lib/production/employee-signature'
 import { StaffTabs } from '@/components/production/StaffTabs'
+import { EmployeeModal, type Leave } from '@/components/production/EmployeeModal'
 import { tagLabel, categoryMeta } from '@/lib/production/roster-config'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
 
@@ -50,10 +51,12 @@ const LBL = 'block text-[10px] font-semibold text-stone-500 uppercase tracking-w
 export default function StaffProfilePage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const { p, isIT } = useAuth()
+  const { p, isIT, user } = useAuth()
 
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const [leave, setLeave] = useState<Leave[]>([])
   const [identities, setIdentities] = useState<Identities | null>(null)
   const [assigningPin, setAssigningPin] = useState(false)
   const [requestingLogin, setRequestingLogin] = useState(false)
@@ -70,6 +73,7 @@ export default function StaffProfilePage() {
   const [savingSignature, setSavingSignature] = useState(false)
   const [signatureError, setSignatureError] = useState<string | null>(null)
 
+  const canEditProfile = p('can_edit_staff_profiles')
   const canAssignPin = p('can_reset_operator_pin')
   const canAssignTraining = p('can_assign_training')
   const isSelf = mySignatureEmployeeId === id
@@ -128,6 +132,13 @@ export default function StaffProfilePage() {
     setSavingSignature(false)
   }
 
+  async function loadLeave() {
+    const { data } = await db().from('employee_leave')
+      .select('id,employee_id,start_date,end_date,kind,reason').eq('employee_id', id)
+      .order('start_date', { ascending: false })
+    setLeave((data as Leave[]) ?? [])
+  }
+
   useEffect(() => {
     async function load() {
       const empRes = await db().from('employees').select('*').eq('id', id).single()
@@ -135,8 +146,38 @@ export default function StaffProfilePage() {
       setEmployee(empRes.data as Employee)
       setLoading(false)
     }
-    if (id) { load(); loadIdentities() }
+    if (id) { load(); loadIdentities(); loadLeave() }
   }, [id, router])
+
+  // Save edits to this person (all the same fields as the Add form) + manage
+  // their leave — the profile is now the single place to edit everything.
+  async function saveProfile(emp: any) {
+    const payload = {
+      name: emp.name?.trim(), display_name: emp.display_name?.trim() || null,
+      department: emp.department, job_title: emp.job_title?.trim() || null,
+      skills: emp.skills ?? [], phone: emp.phone?.trim() || null, active: emp.active ?? true,
+      position: emp.position?.trim() || null, position_code: emp.position_code?.trim() || null,
+      employee_code: emp.employee_code?.trim() || null, start_date: emp.start_date || null,
+    }
+    const res = await fetch(`/api/staff/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data?.error || 'Could not save this person')
+    setEmployee(e => e ? { ...e, ...(data as Employee) } : e)
+    setEditing(false)
+  }
+  async function addLeave(employeeId: string, l: { start: string; end: string; kind: string; reason: string }) {
+    const { data } = await db().from('employee_leave').insert({
+      employee_id: employeeId, start_date: l.start, end_date: l.end,
+      kind: l.kind, reason: l.reason.trim() || null, created_by: user?.id ?? null,
+    } as any).select('id,employee_id,start_date,end_date,kind,reason').single()
+    if (data) setLeave(ls => [data as Leave, ...ls])
+  }
+  async function removeLeave(lid: string) {
+    await db().from('employee_leave').delete().eq('id', lid)
+    setLeave(ls => ls.filter(l => l.id !== lid))
+  }
 
   const loadTraining = useCallback(() => {
     if (!id) return
@@ -177,9 +218,17 @@ export default function StaffProfilePage() {
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
       <div>
-        <Link href="/production/staff" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand mb-3">
-          <ArrowLeft size={13} /> Staff & Skills
-        </Link>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <Link href="/production/staff" className="inline-flex items-center gap-1.5 text-[12px] text-text-muted hover:text-brand">
+            <ArrowLeft size={13} /> Staff & Skills
+          </Link>
+          {canEditProfile && (
+            <button onClick={() => setEditing(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[12px] font-medium text-stone-600 hover:border-brand hover:text-brand transition-colors">
+              <Pencil size={13} /> Edit details
+            </button>
+          )}
+        </div>
         <StaffTabs />
       </div>
 
@@ -436,6 +485,18 @@ export default function StaffProfilePage() {
           defaultName={employee.display_name || employee.name}
           onClose={() => setAssigningPin(false)}
           onDone={() => { setAssigningPin(false); loadIdentities() }}
+        />
+      )}
+
+      {/* Edit everything about this person — the same form as "Add person". */}
+      {editing && employee && (
+        <EmployeeModal
+          employee={employee as any}
+          leave={leave}
+          onClose={() => setEditing(false)}
+          onSave={(emp) => saveProfile(emp)}
+          onAddLeave={addLeave}
+          onRemoveLeave={removeLeave}
         />
       )}
 

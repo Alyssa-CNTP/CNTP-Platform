@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-30 — Alyssa (Staff Directory: edit a person from their profile; one action per list row)
+
+**Files changed:** `components/production/EmployeeModal.tsx` (new, shared), `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
+
+The list row had two controls (a quick-edit pencil AND an arrow to the profile). Consolidated to one: the row now just opens the profile, and **all fields are editable on the profile** via an "Edit details" button. Extracted the Add/Edit person form (fields + skills + leave + login block) into a shared `EmployeeModal` component so the list ("Add person") and the profile ("Edit details") use the exact same editor. Removed the list pencil; offboard/reactivate stay as their own icons.
+
 ## 2026-07-30 — Alyssa (Manually link an existing login account to a Staff Directory profile)
 
 **Files changed:** `app/api/staff/[id]/link-login/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`
