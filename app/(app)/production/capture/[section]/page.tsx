@@ -132,6 +132,19 @@ function CaptureScreen() {
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
 
+  // Where "back" goes. Capture is reached from several places — the capture
+  // landing page, Production Orders (with filters applied), the Supervisor Hub's
+  // Sign-off queue and Shift Report — and it used to always return to the capture
+  // landing page, dumping a supervisor reviewing a filtered order list back to
+  // the operator's start screen. Callers pass their own URL as `return`, and only
+  // an app-internal path is honoured so the parameter can't be used to bounce
+  // someone off-site.
+  const returnParam = sp.get('return')
+  const backHref = returnParam && returnParam.startsWith('/') && !returnParam.startsWith('//')
+    ? returnParam
+    : '/production/capture'
+  const goBack = () => router.push(backHref)
+
   const [loading, setLoading]     = useState(true)
   const [assignment, setAssignment] = useState<ShiftAssignment | null>(null)
   const [opNames, setOpNames]     = useState<string[]>([])
@@ -1255,7 +1268,7 @@ function CaptureScreen() {
         <AlertTriangle size={24} className="text-warn" />
         <p className="text-[14px] font-medium text-text">No assignment for this section</p>
         <p className="text-[12px] text-text-muted max-w-sm">A supervisor needs to roster operators onto {meta.name} for the {shift} shift before capture can start.</p>
-        <button onClick={() => router.push('/production/capture')} className="text-[12px] text-brand hover:underline">← Back</button>
+        <button onClick={goBack} className="text-[12px] text-brand hover:underline">← Back</button>
       </div>
     )
   }
@@ -1266,7 +1279,7 @@ function CaptureScreen() {
         <ClipboardList size={24} className="text-stone-400" />
         <p className="text-[14px] font-medium text-text">{meta.name} capture is coming soon</p>
         <p className="text-[12px] text-text-muted max-w-sm">The Sieving Tower flow is the proven template; this section will follow the same pattern.</p>
-        <button onClick={() => router.push('/production/capture')} className="text-[12px] text-brand hover:underline">← Back</button>
+        <button onClick={goBack} className="text-[12px] text-brand hover:underline">← Back</button>
       </div>
     )
   }
@@ -1387,7 +1400,7 @@ function CaptureScreen() {
           sectionName={meta.name}
           hasRoster={afternoonOps.length > 0}
           onConfirm={confirmChangeover}
-          onBack={() => router.push('/production/capture')}
+          onBack={goBack}
         />
       )}
 
@@ -1420,7 +1433,7 @@ function CaptureScreen() {
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
         style={{ background: `linear-gradient(180deg, ${meta.colorHex}12, transparent)` }}>
-        <button onClick={() => router.push('/production/capture')} className="p-2 -ml-1 rounded-lg hover:bg-black/5 text-stone-500"><ChevronLeft size={18} /></button>
+        <button onClick={goBack} className="p-2 -ml-1 rounded-lg hover:bg-black/5 text-stone-500"><ChevronLeft size={18} /></button>
         <div className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-sm" style={{ background: meta.colorHex }}>
           <span className="font-mono font-bold text-[12px] text-white">{meta.code}</span>
         </div>

@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     const params = new URLSearchParams({ tab: 'messages' })
     if (b.date)  params.set('date', b.date)
     if (b.shift) params.set('shift', b.shift)
-    const url = sectionId ? `/production/capture/${sectionId}?${params.toString()}` : '/supervisor/productions'
+    const url = sectionId ? `/production/capture/${sectionId}?${params.toString()}` : '/production/orders'
 
     const result = await notify({
       recipients,

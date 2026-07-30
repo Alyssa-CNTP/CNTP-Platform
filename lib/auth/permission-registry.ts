@@ -102,6 +102,15 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
       { key: 'production.job_cards', label: 'Pasteuriser job cards',
         read: 'can_view_blends', write: 'can_generate_job_cards',
         manage: [{ key: 'can_approve_job_cards', label: 'Approve or reject a job card sent for approval' }] },
+      { key: 'production.shift_report', label: 'Shift report (end-of-shift record)',
+        read: 'can_view_shift_report', write: 'can_edit_shift_report',
+        manage: [
+          { key: 'can_submit_shift_report',  label: 'Send the report to the Production Manager' },
+          { key: 'can_approve_shift_report', label: 'Sign the report off (Production Manager)' },
+        ],
+        note: 'Content is generated from capture, checks, timesheets and maintenance — Write covers regenerating and adding notes.' },
+      { key: 'production.capture_ratings', label: 'Capture ratings (performance & accuracy)',
+        read: 'can_view_capture_ratings', write: 'can_rate_capture', delete: 'can_delete_capture_rating' },
     ],
   },
   {

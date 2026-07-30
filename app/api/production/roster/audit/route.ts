@@ -20,6 +20,7 @@ import { ROSTER_SECTION_KEYS, rosterPerm } from '@/lib/auth/permissions'
 // arbitrary strings being written from the client.
 const ALLOWED_ACTIONS = new Set([
   'roster_edit',      // a department section was saved
+  'roster_change',    // a day-to-day staff change made AFTER the roster was published
   'roster_submit',    // a section was signed off
   'roster_publish',   // the period was published (only fires automatically now)
   'roster_unpublish', // an admin reopened a published period
@@ -30,6 +31,7 @@ const ALLOWED_ACTIONS = new Set([
 // Which production table each action best maps to, for the audit record.
 const ACTION_TABLE: Record<string, string> = {
   roster_edit:      'roster_entries',
+  roster_change:    'roster_change_log',
   roster_submit:    'roster_section_status',
   roster_publish:   'roster_periods',
   roster_unpublish: 'roster_periods',

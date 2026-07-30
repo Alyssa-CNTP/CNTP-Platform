@@ -108,7 +108,7 @@ export default function SupervisorAnalytics() {
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5">
-      <HubHeader subtitle="Full analytics — hours, output and balance over time" />
+      <HubHeader title="Analytics" subtitle="Hours, output and balance over time" />
 
       {/* Range */}
       <div className="flex items-center gap-2 flex-wrap">
