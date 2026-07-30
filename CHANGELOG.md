@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-29 — Gustav (Micro extraction: reliably capture E. coli O157 + every organism)
+
+**Files changed:** `app/api/upload/route.ts`
+
+- Rewrote the microbiology extraction prompt so it reliably captures **every organism** on the report, including **E. coli O157**, which was intermittently missed. The prompt now tells the model the report can span **multiple pages** with **one column per organism** (method codes like MIC-201/MIC-218) and to read every page and every column.
+- Explicit column-heading → field mapping for TPC, E. coli, **E. coli O157**, coliforms, Enterobacteriaceae, Staph. aureus, yeast, mould, Listeria, Salmonella (25/125/375 g), Bacillus cereus, Clostridium perfringens.
+- Values must be copied **exactly as printed** — counts keep their operator ("<10", "6300"), detection tests keep "Not Detected"/"Detected"/"Absent"/"Present"; null only when an organism has no column. Verified against the Assurecloud 986249 report (26244-CON-SFC): TPC 6300, E. coli <10, E. coli O157 Not Detected, Listeria Not Detected, Salmonella Not Detected, Staph <10, Yeast 40, Mould <10.
+- Display already supports O157 (lab-results, COA, spec tab) — the column shows automatically once a value is extracted.
+
 ---
 
 ## 2026-07-30 — Alyssa (Staff Directory: edit a person from their profile; one action per list row)
