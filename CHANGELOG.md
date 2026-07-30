@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Staff sign-in badges: Microsoft SSO only, not supabase/PIN accounts)
+
+**Files changed:** `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
+
+The staff directory showed an "EMAIL" badge for any linked login account — including the supabase password/PIN accounts (lab/floor) that use a synthetic email, so they wrongly read as email sign-ins. The identities routes now classify each login's auth provider; the badge shows as **"Microsoft" (orange)** ONLY for genuine Azure-AD SSO accounts (`isMicrosoftSSO`). Supabase/PIN accounts no longer get it. No migration.
+
 ## 2026-07-28 — Alyssa (Lab-manager PINs: include QC Staff Directory people, not just rostered)
 
 **Files changed:** `app/api/quality/lab-assistants/manage/route.ts`
