@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Lab-manager PINs: include QC Staff Directory people, not just rostered)
+
+**Files changed:** `app/api/quality/lab-assistants/manage/route.ts`
+
+The lab-manager PIN list was built only from people already placed on the shift roster in a QC role, so a newly-added QC person didn't appear until they were rostered. The list now also includes everyone in the Staff Directory (`production.employees`) under the QC department (active, Microsoft-SSO staff still excluded), so the lab manager can assign them a sign-in PIN as soon as they're added. Roster entries still take precedence for role; staff-directory-only people show as generic QC. No migration.
+
 ## 2026-07-29 — Alyssa (BOM page redesign: master-detail layout + rich Master Inventory search)
 
 **Files changed:** `app/(app)/production/blends/page.tsx`, `components/production/InventoryPickerModal.tsx` (new)
