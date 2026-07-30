@@ -1,7 +1,9 @@
 // app/api/quality/lab-assistants/manage/route.ts
 // Quality manager / lab manager / IT only.
-// Returns all lab assistants sourced from the shift roster (qc category roles),
-// excluding staff who sign in with Microsoft, enriched with PIN + section_ids.
+// Returns all lab assistants sourced from BOTH the shift roster (qc category
+// roles) AND the Staff Directory (production.employees, department = QC) — so a
+// newly-added QC person appears here for a PIN even before they're rostered.
+// Microsoft-SSO staff are excluded; each row is enriched with PIN + section_ids.
 
 import { NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
@@ -54,6 +56,24 @@ export async function GET() {
         nameMap.set(norm, { display: r.person_name, role: r.role_key })
       }
     }
+
+    // Also include everyone in the Staff Directory under the QC department, even
+    // if not yet placed on the shift roster — so the lab manager can assign a PIN
+    // the moment a QC person is added. Roster entries take precedence (they carry
+    // a specific role); staff-directory-only people show as generic 'qc'.
+    const { data: qcStaff } = await admin
+      .schema('production' as any)
+      .from('employees')
+      .select('name, display_name, department, active')
+      .ilike('department', 'qc')
+    for (const e of qcStaff ?? []) {
+      if (e.active === false) continue
+      const display = (e.display_name || e.name || '').trim()
+      if (!display || isMicrosoftStaff(display)) continue
+      const norm = normName(display)
+      if (!nameMap.has(norm)) nameMap.set(norm, { display, role: 'qc' })
+    }
+
     if (!nameMap.size) return NextResponse.json([])
 
     // 2. lab_auth rows — keyed by full_name (normalised).

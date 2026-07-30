@@ -5,6 +5,12 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-07-28 — Alyssa (Lab-manager PINs: include QC Staff Directory people, not just rostered)
+
+**Files changed:** `app/api/quality/lab-assistants/manage/route.ts`
+
+The lab-manager PIN list was built only from people already placed on the shift roster in a QC role, so a newly-added QC person didn't appear until they were rostered. The list now also includes everyone in the Staff Directory (`production.employees`) under the QC department (active, Microsoft-SSO staff still excluded), so the lab manager can assign them a sign-in PIN as soon as they're added. Roster entries still take precedence for role; staff-directory-only people show as generic QC. No migration.
+
 ## 2026-07-29 — Alyssa (Internal e-signature platform + dispatch/delivery document signing)
 
 **Files changed:** `supabase/migrations/20260729_008_esign_schema.sql` (new), `lib/esign/subjects.ts` (new), `lib/esign/request.ts` (new), `lib/esign/capture.ts` (new), `app/api/esign/requests/route.ts` (new), `app/api/esign/requests/[id]/void/route.ts` (new), `app/api/esign/sign/[token]/route.ts` (new), `app/api/esign/staff-sign/route.ts` (new), `app/api/esign/subjects/[type]/[id]/route.ts` (new), `components/esign/SignatureCapture.tsx` (new), `app/sign/[token]/page.tsx` (new), `app/sign/[token]/SignClient.tsx` (new), `app/middleware.ts`, `app/(app)/logistics/dispatch/[id]/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
