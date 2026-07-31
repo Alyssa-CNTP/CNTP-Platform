@@ -15,6 +15,24 @@ import { notify } from '@/lib/notifications'
 import { resolveRecipients } from '@/lib/notifications/recipients'
 import { classifyManager, resolveCoaManagers } from '@/lib/quality/coa-managers'
 
+// Notify the Staff-Directory Quality manager that a COA is ready for sign-off.
+async function notifyQaManager(admin: any, batchNo: string, labName: string | null) {
+  try {
+    const { qa } = await resolveCoaManagers(admin)
+    if (!qa?.employeeId) return
+    const { data: roleRow } = await admin.schema('shared').from('app_roles')
+      .select('user_id').eq('employee_id', qa.employeeId).maybeSingle()
+    if (!roleRow?.user_id) return
+    const recipients = await resolveRecipients([roleRow.user_id])
+    if (recipients.length) await notify({
+      recipients, kind: 'coa_signoff',
+      title: `COA ready for your sign-off — ${batchNo}`,
+      body: `${labName || 'The lab manager'} has signed the COA for batch ${batchNo}. Open the COA Generator's "Awaiting QA sign-off" list to review and sign.`,
+      url: '/quality/coa', channels: ['inApp'],
+    })
+  } catch { /* best-effort */ }
+}
+
 // Resolve the caller: their employee id, name, COA role (lab/qa/null) and their
 // own on-file signature.
 async function caller(admin: any) {
@@ -62,24 +80,7 @@ export async function POST(req: NextRequest) {
 
     await admin.schema('qms').from('coa_signoffs')
       .update({ status: 'sent_to_qa', sent_to_qa_at: nowIso, updated_at: nowIso }).eq('batch_no', batch_no)
-
-    // Notify the Staff-Directory QA manager (best-effort).
-    try {
-      const { qa } = await resolveCoaManagers(admin)
-      if (qa?.employeeId) {
-        const { data: roleRow } = await admin.schema('shared').from('app_roles')
-          .select('user_id').eq('employee_id', qa.employeeId).maybeSingle()
-        if (roleRow?.user_id) {
-          const recipients = await resolveRecipients([roleRow.user_id])
-          if (recipients.length) await notify({
-            recipients, kind: 'coa_signoff',
-            title: `COA ready for your sign-off — ${batch_no}`,
-            body: `${me.name || 'The lab manager'} has signed the COA for batch ${batch_no}. Open the COA Generator, look up ${batch_no}, and sign off.`,
-            url: '/quality/coa', channels: ['inApp'],
-          })
-        }
-      }
-    } catch { /* best-effort */ }
+    await notifyQaManager(admin, batch_no, me.name)
 
     const { data: updated } = await admin.schema('qms').from('coa_signoffs').select('*').eq('batch_no', batch_no).maybeSingle()
     return NextResponse.json({ signoff: updated })
@@ -101,13 +102,16 @@ export async function POST(req: NextRequest) {
 
   const patch: any = { batch_no, customer: body.customer ?? null, grade: body.grade ?? null, updated_at: nowIso }
   if (slot === 1) {
+    // Signing IS the hand-off: mark it sent and notify the QA manager right away
+    // so the COA pops up for her (and lands in her "Awaiting QA sign-off" list).
     patch.lab_name = me.name; patch.lab_signed_by = me.userId; patch.lab_signature = me.signature; patch.lab_signed_at = nowIso
-    patch.status = 'lab_signed'
+    patch.status = 'sent_to_qa'; patch.sent_to_qa_at = nowIso
   } else {
     patch.qa_name = me.name; patch.qa_signed_by = me.userId; patch.qa_signature = me.signature; patch.qa_signed_at = nowIso
     patch.status = 'complete'
   }
   await admin.schema('qms').from('coa_signoffs').upsert(patch, { onConflict: 'batch_no' })
+  if (slot === 1) await notifyQaManager(admin, batch_no, me.name)
 
   const { data: updated } = await admin.schema('qms').from('coa_signoffs').select('*').eq('batch_no', batch_no).maybeSingle()
   return NextResponse.json({ signoff: updated })
