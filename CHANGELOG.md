@@ -3,6 +3,36 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-29 — Gustav (COA sign-off: persisted lab → QA hand-off)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts` (new), `app/api/me/signature/route.ts`, `supabase/migrations/20260729_021_coa_signoffs.sql` (new, applied to staging)
+
+- COA sign-offs are now **saved to the batch** (`qms.coa_signoffs`), so the lab manager and quality manager can sign the **same COA from their own logins at different times**.
+- Flow: the **lab manager signs** (server stamps her own Staff Directory signature) → **"📤 Send to Quality Manager"** notifies the QA manager → the **QA manager opens the same batch and signs**. Both signatures then appear on the COA / print / PDF.
+- All enforcement is server-side (`/api/quality/coa-signoff`): a slot can only be signed by the person whose designated login matches, and the applied signature is always the caller's **own** Staff Directory signature — never supplied by the client.
+- **No signature on file?** The sign-off panel shows a prompt linking to the person's Staff Directory profile to create one, and signing is blocked until they do.
+
+---
+
+## 2026-07-29 — Gustav (COA sign-off: signatures pulled from Staff Directory, self-only)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/me/signature/route.ts`, `supabase/migrations/20260729_020_coa_signatories_drop_stored_signature.sql` (new, applied to staging); removed `public/signatures/monique-gordon.png`, `public/signatures/michelle-brown.png`
+
+- COA sign-off now stamps the **logged-in person's own signature**, fetched from their **Staff Directory** record (`production.employee_signatures`) via `/api/me/signature` — which only ever returns the caller's own signature (resolved server-side from their session). **A signature can never be applied by anyone but the person logged in.**
+- Each slot is signable **only by its designated person** (matched on login email set under ✍ Signatories): the Lab Manager slot only by the lab manager from their own login, the QA slot only by the QA manager from theirs. Removed the previous "QA can apply the lab manager's signature" override — it's incompatible with self-only signing.
+- **Removed the old stored lab/QA signatures:** dropped `qms.coa_signatories.signature` and deleted the `public/signatures/*.png` files. Signatures live only in the Staff Directory now; the Signatories panel keeps just slot title/name/login-email (no more drawing here).
+
+---
+
+## 2026-07-29 — Gustav (Micro extraction: reliably capture E. coli O157 + every organism)
+
+**Files changed:** `app/api/upload/route.ts`
+
+- Rewrote the microbiology extraction prompt so it reliably captures **every organism** on the report, including **E. coli O157**, which was intermittently missed. The prompt now tells the model the report can span **multiple pages** with **one column per organism** (method codes like MIC-201/MIC-218) and to read every page and every column.
+- Explicit column-heading → field mapping for TPC, E. coli, **E. coli O157**, coliforms, Enterobacteriaceae, Staph. aureus, yeast, mould, Listeria, Salmonella (25/125/375 g), Bacillus cereus, Clostridium perfringens.
+- Values must be copied **exactly as printed** — counts keep their operator ("<10", "6300"), detection tests keep "Not Detected"/"Detected"/"Absent"/"Present"; null only when an organism has no column. Verified against the Assurecloud 986249 report (26244-CON-SFC): TPC 6300, E. coli <10, E. coli O157 Not Detected, Listeria Not Detected, Salmonella Not Detected, Staph <10, Yeast 40, Mould <10.
+- Display already supports O157 (lab-results, COA, spec tab) — the column shows automatically once a value is extracted.
+
 ---
 
 ## 2026-07-30 — Alyssa (PRODUCTION: Staff Directory: edit a person from their profile; one action per list row)

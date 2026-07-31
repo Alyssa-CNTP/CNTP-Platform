@@ -279,11 +279,34 @@ Fields: batch_no, report_reference, lab, sample_date, date_issued, analytes ([] 
 
 Example: {"batch_no":"26103-ORG-LC","report_reference":"345271","lab":"Hearshaw and Kinnes Analytical Laboratory (Pty) Ltd.","sample_date":"03/12/2025","date_issued":"03/03/2026","analytes":[],"overall_status":"Pass"}`,
 
-  micro: `INSTRUCTIONS: Extract data from this microbiology COA. Output ONLY a single raw JSON object. Do NOT use markdown. Start with { end with }.
+  micro: `INSTRUCTIONS: Extract data from this microbiology Certificate of Analysis. Output ONLY a single raw JSON object. Do NOT use markdown. Start with { and end with }.
 
-Extract: lab, lab_no, order_no, batch_no, sample_description, production_date, date_received, date_issued, ecoli, mould, staph, tpc, yeast, salmonella_25g, salmonella_125g, salmonella_375g, bacillus_cereus, clostridium_perfringens, ecoli_o157, listeria, coliforms, enterobacteriaceae, overall_status.
+CRITICAL: The report often spans MULTIPLE PAGES, and each organism/test is a COLUMN (with a method code such as MIC-201 and a unit row). You MUST read EVERY page and EVERY analysis column and return a result for EVERY organism the report tests — do not stop after the first page or the first few columns, and never omit a column that is present.
 
-Keep values like "<10" as strings. null if not tested. overall_status: "Pass" unless limits exceeded.`,
+Top-level fields: lab, lab_no, order_no, batch_no, sample_description, production_date, date_received, date_issued, overall_status.
+
+Organism result fields — map each column heading in the report (wording varies by lab) to these keys:
+- tpc                     ← "Total Plate Count" / "Aerobic Plate Count" / "TPC" (e.g. MIC-201)
+- ecoli                   ← "E. coli Count" / "E. coli" (e.g. MIC-208)
+- ecoli_o157              ← "E. coli O157" detection (e.g. MIC-218) — ALWAYS include this whenever the report has an O157 column; do NOT skip it
+- coliforms               ← "Coliforms"
+- enterobacteriaceae      ← "Enterobacteriaceae"
+- staph                   ← "Staphylococcus aureus" (e.g. MIC-210)
+- yeast                   ← "Yeast Count" (e.g. MIC-204)
+- mould                   ← "Mould Count" / "Mold" (e.g. MIC-204)
+- listeria                ← "Listeria monocytogenes" detection (e.g. MIC-237)
+- salmonella_25g          ← "Salmonella" detection stated per 25 g (e.g. MIC-209)
+- salmonella_125g         ← "Salmonella" detection stated per 125 g (only if the report says 125 g)
+- salmonella_375g         ← "Salmonella" detection stated per 375 g (only if the report says 375 g)
+- bacillus_cereus         ← "Bacillus cereus"
+- clostridium_perfringens ← "Clostridium perfringens"
+
+VALUES — copy EXACTLY what is printed in that sample's Result cell. Do NOT round, convert, average, or interpret:
+- Count results: keep the string verbatim including any operator — "<10", "<100", "6300", "40".
+- Detection/absence results: keep as printed — "Not Detected", "Detected", "Absent", or "Present".
+- Use null ONLY for an organism that has no column in this report. Never invent or guess a value.
+
+overall_status: "Pass" unless a printed result exceeds a stated limit.`,
 
   heavy_metals: `INSTRUCTIONS: Extract ALL heavy metals data from this COA. Output ONLY raw JSON. No markdown.
 Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status for EVERY metal listed in the document, including Lead, Cadmium, Mercury, Arsenic, Aluminum, Copper and any others present), overall_status.
