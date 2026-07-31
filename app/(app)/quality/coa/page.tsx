@@ -203,16 +203,11 @@ export default function CoaGeneratorPage() {
   const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; email: string }[]>([])
   const [showSigEditor, setShowSigEditor] = useState(false)
   const [savingSig, setSavingSig]   = useState(false)
-  // COA sign-off: lab manager signs first, then a pop-up asks the QA manager to
-  // sign off above her name. Keyed by signatory slot.
-  const [verified, setVerified]     = useState<Record<number, boolean>>({})
-  const [showQaSignoff, setShowQaSignoff] = useState(false)
-  // The signature actually stamped per slot — always the signer's OWN signature,
-  // captured at the moment they sign off.
-  const [signedWith, setSignedWith] = useState<Record<number, string>>({})
-  // The logged-in user's own Staff Directory signature (server-resolved — a
-  // client can only ever fetch its own). This is the only signature this session
-  // can apply to a COA.
+  // Persisted sign-off row for the current batch (loaded from the server) — this
+  // is what makes the lab → QA hand-off work across separate logins/sessions.
+  const [signoff, setSignoff] = useState<any>(null)
+  const [signoffBusy, setSignoffBusy] = useState(false)
+  // The logged-in user's own Staff Directory signature status (server-resolved).
   const [me, setMe] = useState<{ employeeId: string | null; employeeName: string | null; hasSignature: boolean; signature: string | null }>({ employeeId: null, employeeName: null, hasSignature: false, signature: null })
   // Per-signatory position/size adjustment (drag to move, handle to resize).
   const [sigAdjust, setSigAdjust]   = useState<Record<number, { dx: number; dy: number; scale: number }>>({})
@@ -224,13 +219,19 @@ export default function CoaGeneratorPage() {
   const orderedSigs = [...signatories].sort((a, b) => a.slot - b.slot)
   const labSig = orderedSigs[0]
   const qaSig  = orderedSigs[1]
+  // Sign-off state derived from the persisted row.
+  const labSigned = !!signoff?.lab_signed_at
+  const qaSigned  = !!signoff?.qa_signed_at
+  const sentToQa  = signoff?.status === 'sent_to_qa' || qaSigned
+  const signedSigFor = (slot?: number) => slot === labSig?.slot ? signoff?.lab_signature : slot === qaSig?.slot ? signoff?.qa_signature : null
+  const verifiedFor  = (slot?: number) => slot === labSig?.slot ? labSigned : slot === qaSig?.slot ? qaSigned : false
   // For print/preview/PDF a signature only appears once that person has signed
-  // off — and it is always the signature that person signed with (their own).
-  const signatoriesForOutput = signatories.map(s => ({ ...s, signature: verified[s.slot] ? (signedWith[s.slot] || '') : '' }))
+  // off — always the signature that person signed with (their own).
+  const signatoriesForOutput = signatories.map(s => ({ ...s, signature: verifiedFor(s.slot) ? (signedSigFor(s.slot) || '') : '' }))
 
   // Identity gating — a slot can be signed ONLY by the person logged in as that
-  // signatory (matched on login email), and the stamped signature is always that
-  // logged-in person's own Staff Directory signature. No cross-signing.
+  // signatory (matched on login email); the server stamps that person's own
+  // Staff Directory signature. No cross-signing.
   const myEmail = (session?.user?.email || '').toLowerCase()
   const eq = (a?: string) => !!a && a.toLowerCase() === myEmail
   const iAmLab = eq(labSig?.email)
@@ -239,10 +240,40 @@ export default function CoaGeneratorPage() {
   const canSignQa  = iAmQa  && !!me.signature
   const gatingConfigured = !!(labSig?.email && qaSig?.email)
 
-  // Reset sign-offs whenever a new batch/COA is looked up.
-  useEffect(() => { setVerified({}); setShowQaSignoff(false); setSigAdjust({}); setSignedWith({}) }, [model?.batch])
+  // Load the persisted sign-off for a batch (drives what the two managers see).
+  const loadSignoff = useCallback(async (batch?: string) => {
+    if (!batch) { setSignoff(null); return }
+    try {
+      const res = await fetch(`/api/quality/coa-signoff?batch_no=${encodeURIComponent(batch)}`)
+      const d = await res.json(); setSignoff(d.signoff ?? null)
+    } catch { setSignoff(null) }
+  }, [])
 
-  // Load the logged-in user's own signature (Staff Directory) once.
+  // Reload sign-off + reset drag adjustments whenever a new batch/COA is looked up.
+  useEffect(() => { setSigAdjust({}); loadSignoff(model?.batch) }, [model?.batch, loadSignoff])
+
+  // Persist a sign-off (or the hand-off). The server verifies identity and
+  // stamps the caller's own signature — the client never supplies one.
+  const postSignoff = async (payload: any) => {
+    if (!model?.batch) return
+    setSignoffBusy(true)
+    try {
+      const res = await fetch('/api/quality/coa-signoff', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_no: model.batch, customer: model.matchedDoc?.customer, grade: model.header?.grade, ...payload }),
+      })
+      const d = await res.json()
+      if (!res.ok) {
+        if (d.needSignature) alert(`${d.error}\n\nGo to your Staff Directory profile → "Signature on file" to create one, then sign again.`)
+        else alert(d.error || 'Sign-off failed')
+        return
+      }
+      setSignoff(d.signoff ?? null)
+    } catch (e: any) { alert('Sign-off failed: ' + e.message) }
+    finally { setSignoffBusy(false) }
+  }
+
+  // Load the logged-in user's own signature status (Staff Directory) once.
   useEffect(() => {
     fetch('/api/me/signature').then(r => r.ok ? r.json() : null).then(d => { if (d) setMe(d) }).catch(() => {})
   }, [])
@@ -567,83 +598,57 @@ export default function CoaGeneratorPage() {
             {!showSigEditor && <div className="text-[10px] text-gray-400">{signatories.map(s => `${s.name} (${s.title})${s.email ? '' : ' — no login set'}`).join('  ·  ') || 'No signatories set'}</div>}
           </div>
 
-          {/* COA sign-off — lab manager first, then QA manager pop-up */}
+          {/* COA sign-off — persisted lab → QA hand-off across separate logins */}
           <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
             <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">✔ COA Sign-off</div>
             <div className="flex flex-wrap items-center gap-3">
-              {/* Step 1 — Lab manager: only the person logged in as the lab manager,
-                  stamping their OWN Staff Directory signature */}
-              <button
-                onClick={() => {
-                  if (!labSig) { alert('No lab-manager signatory configured.'); return }
-                  if (!iAmLab) { alert(`Only ${labSig.name} can sign the lab-manager slot, from their own login.`); return }
-                  if (!me.signature) { alert('You have no signature on file. Add it on your Staff Directory profile first.'); return }
-                  setSignedWith(w => ({ ...w, [labSig.slot]: me.signature! }))
-                  setVerified(v => ({ ...v, [labSig.slot]: true }))
-                  setShowQaSignoff(true)
-                }}
-                disabled={!labSig || !canSignLab || !!(labSig && verified[labSig.slot])}
-                title={labSig && !iAmLab ? `Only ${labSig.name} may sign this slot` : (iAmLab && !me.signature ? 'Add your signature on your Staff Directory profile first' : '')}
-                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: '#1f4e79' }}>
-                {labSig && verified[labSig.slot] ? `✔ Signed — ${labSig.name}` : `✔ Lab Manager sign-off${labSig ? ` (${labSig.name})` : ''}`}
-              </button>
-              {/* Step 2 — QA manager: only the person logged in as the QA manager */}
-              <button
-                onClick={() => {
-                  if (!iAmQa) { alert(`Only ${qaSig?.name || 'the Quality manager'} can sign the QA slot, from their own login.`); return }
-                  if (!me.signature) { alert('You have no signature on file. Add it on your Staff Directory profile first.'); return }
-                  setShowQaSignoff(true)
-                }}
-                disabled={!labSig || !verified[labSig.slot] || !canSignQa || !!(qaSig && verified[qaSig.slot])}
-                title={labSig && !verified[labSig.slot] ? 'The lab manager must sign off first' : (!iAmQa ? `Only ${qaSig?.name || 'the Quality manager'} may sign` : (iAmQa && !me.signature ? 'Add your signature on your Staff Directory profile first' : ''))}
-                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: '#7c3aed' }}>
-                {qaSig && verified[qaSig.slot] ? `✔ Signed — ${qaSig.name}` : `✔ Quality Manager sign-off${qaSig ? ` (${qaSig.name})` : ''}`}
-              </button>
-              {labSig && !verified[labSig.slot] && <span className="text-[10px] text-gray-400">Lab manager signs first.</span>}
-              {!gatingConfigured && <span className="text-[10px] text-amber-600">⚠ Set each signatory&apos;s login email under ✍ Signatories so the right person can sign.</span>}
-              {gatingConfigured && (iAmLab || iAmQa) && !me.signature && <span className="text-[10px] text-amber-600">⚠ You have no signature on file — add it on your Staff Directory profile.</span>}
+              {/* Step 1 — Lab manager */}
+              {labSigned
+                ? <span className="px-3 py-2 rounded-lg bg-ok/10 text-ok text-[12px] font-bold">✔ Lab Manager signed — {signoff?.lab_name || labSig?.name} · {String(signoff?.lab_signed_at || '').slice(0, 10)}</span>
+                : <button
+                    onClick={() => postSignoff({ slot: 1 })}
+                    disabled={!labSig || !canSignLab || signoffBusy}
+                    title={labSig && !iAmLab ? `Only ${labSig.name} may sign this slot` : (iAmLab && !me.signature ? 'Add your signature on your Staff Directory profile first' : '')}
+                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ background: '#1f4e79' }}>
+                    {signoffBusy ? 'Signing…' : `✔ Lab Manager sign-off${labSig ? ` (${labSig.name})` : ''}`}
+                  </button>}
+
+              {/* Hand-off — lab manager sends to the QA manager */}
+              {labSigned && !qaSigned && iAmLab && !sentToQa && (
+                <button onClick={() => postSignoff({ action: 'send_to_qa' })} disabled={signoffBusy}
+                  className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50" style={{ background: '#b45309' }}>
+                  📤 Send to Quality Manager
+                </button>
+              )}
+              {sentToQa && !qaSigned && <span className="text-[11px] text-amber-700 font-semibold">📨 Sent to {qaSig?.name || 'Quality Manager'} — awaiting sign-off</span>}
+
+              {/* Step 2 — QA manager */}
+              {qaSigned
+                ? <span className="px-3 py-2 rounded-lg bg-ok/10 text-ok text-[12px] font-bold">✔ Quality Manager signed — {signoff?.qa_name || qaSig?.name} · {String(signoff?.qa_signed_at || '').slice(0, 10)}</span>
+                : <button
+                    onClick={() => postSignoff({ slot: 2 })}
+                    disabled={!labSigned || !canSignQa || signoffBusy}
+                    title={!labSigned ? 'The lab manager must sign off first' : (!iAmQa ? `Only ${qaSig?.name || 'the Quality manager'} may sign` : (iAmQa && !me.signature ? 'Add your signature on your Staff Directory profile first' : ''))}
+                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ background: '#7c3aed' }}>
+                    {signoffBusy ? 'Signing…' : `✔ Quality Manager sign-off${qaSig ? ` (${qaSig.name})` : ''}`}
+                  </button>}
             </div>
-            <div className="text-[10px] text-gray-400 mt-2">Each person signs with their own Staff Directory signature, from their own login. A signature can never be applied by anyone else.</div>
+            {!labSigned && <div className="text-[10px] text-gray-400 mt-1">Lab manager signs first, then sends to the Quality manager.</div>}
+            {!gatingConfigured && <div className="text-[10px] text-amber-600 mt-1">⚠ Set each signatory&apos;s login email under ✍ Signatories so the right person can sign.</div>}
+            {gatingConfigured && (iAmLab || iAmQa) && !me.signature && (
+              <div className="text-[10px] text-amber-600 mt-1">⚠ You have no signature on file — create one on your{' '}
+                <a href={me.employeeId ? `/production/staff/${me.employeeId}` : '/production/staff'} className="underline font-semibold">Staff Directory profile</a>, then sign.
+              </div>
+            )}
+            <div className="text-[10px] text-gray-400 mt-2">Each person signs with their own Staff Directory signature, from their own login — a signature can never be applied by anyone else. Sign-offs are saved to the COA, so the two managers can sign at different times.</div>
           </div>
 
           <div className="flex gap-2 mb-4 no-print">
             <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
             <button onClick={() => { logGeneration(model); exportPdf(model, description, signatoriesForOutput, sigAdjust) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
-
-          {/* QA manager (Michelle) sign-off pop-up — appears above her name */}
-          {showQaSignoff && qaSig && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 no-print" onClick={() => setShowQaSignoff(false)}>
-              <div className="bg-white rounded-xl p-5 w-[min(420px,92vw)] shadow-xl" onClick={e => e.stopPropagation()}>
-                <div className="text-[13px] font-bold text-gray-800 mb-1">Quality Manager Sign-off</div>
-                <div className="text-[11px] text-gray-500 mb-3">{qaSig.title} — {qaSig.name}</div>
-                <div className="border border-gray-200 rounded-lg p-3 mb-3 flex items-end justify-center" style={{ minHeight: 60 }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {iAmQa && me.signature
-                    ? <img src={me.signature} alt="signature" style={{ maxHeight: 48, maxWidth: 220 }} />
-                    : <span className="text-[11px] text-gray-400">{iAmQa ? 'You have no signature on file — add it on your Staff Directory profile.' : `Only ${qaSig.name} can sign, from their own login.`}</span>}
-                </div>
-                <div className="text-[10px] text-gray-500 mb-3 text-center">Signing places <b>your own</b> Staff Directory signature above {qaSig.name}&apos;s name on the COA.</div>
-                <div className="flex justify-end gap-2">
-                  <button onClick={() => setShowQaSignoff(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">Cancel</button>
-                  <button
-                    onClick={() => {
-                      if (!iAmQa) { alert(`Only ${qaSig.name} can sign the QA slot, from their own login.`); return }
-                      if (!me.signature) { alert('You have no signature on file. Add it on your Staff Directory profile first.'); return }
-                      setSignedWith(w => ({ ...w, [qaSig.slot]: me.signature! }))
-                      setVerified(v => ({ ...v, [qaSig.slot]: true }))
-                      setShowQaSignoff(false)
-                    }}
-                    disabled={!iAmQa || !me.signature}
-                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed" style={{ background: '#7c3aed' }}>
-                    ✔ Sign off as {qaSig.name}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* ── COA preview (editable) ── */}
           <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>

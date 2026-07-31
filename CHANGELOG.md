@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-29 — Gustav (COA sign-off: persisted lab → QA hand-off)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts` (new), `app/api/me/signature/route.ts`, `supabase/migrations/20260729_021_coa_signoffs.sql` (new, applied to staging)
+
+- COA sign-offs are now **saved to the batch** (`qms.coa_signoffs`), so the lab manager and quality manager can sign the **same COA from their own logins at different times**.
+- Flow: the **lab manager signs** (server stamps her own Staff Directory signature) → **"📤 Send to Quality Manager"** notifies the QA manager → the **QA manager opens the same batch and signs**. Both signatures then appear on the COA / print / PDF.
+- All enforcement is server-side (`/api/quality/coa-signoff`): a slot can only be signed by the person whose designated login matches, and the applied signature is always the caller's **own** Staff Directory signature — never supplied by the client.
+- **No signature on file?** The sign-off panel shows a prompt linking to the person's Staff Directory profile to create one, and signing is blocked until they do.
+
+---
+
 ## 2026-07-29 — Gustav (COA sign-off: signatures pulled from Staff Directory, self-only)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/me/signature/route.ts`, `supabase/migrations/20260729_020_coa_signatories_drop_stored_signature.sql` (new, applied to staging); removed `public/signatures/monique-gordon.png`, `public/signatures/michelle-brown.png`
