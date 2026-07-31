@@ -17,11 +17,15 @@ export async function GET() {
   const { data: emp } = await admin.schema('production').from('employees')
     .select('name, display_name').eq('id', employeeId).maybeSingle()
   const { data: sig } = await admin.schema('production').from('employee_signatures')
-    .select('employee_id').eq('employee_id', employeeId).maybeSingle()
+    .select('employee_id, signature').eq('employee_id', employeeId).maybeSingle()
 
   return NextResponse.json({
     employeeId,
     employeeName: emp?.display_name || emp?.name || null,
-    hasSignature: !!sig,
+    hasSignature: !!sig?.signature,
+    // The caller's OWN signature only — resolved server-side from their auth
+    // session, so a client can never request anyone else's. Used by the COA
+    // sign-off so a signature can only ever be applied by the person logged in.
+    signature: sig?.signature ?? null,
   })
 }
