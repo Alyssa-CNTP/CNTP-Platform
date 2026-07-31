@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-31 — Gustav (COA History: edit a previously generated COA to fix mistakes)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added an **"✏️ Edit"** action to each row in the COA Generator's **History** tab. It re-opens that generated COA (from its saved snapshot) back into the editable generator so the lab manager / quality manager can correct a mistake and re-print / re-export. Re-printing logs a fresh history entry.
+- The saved snapshot (header + all analysis tables + which sections were included) is restored exactly as it was generated, so nothing has to be re-typed.
+
+---
+
 ## 2026-07-31 — Gustav (COA sign-off: QA "Awaiting sign-off" queue + auto-notify the Quality manager)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
