@@ -200,6 +200,9 @@ export default function CoaGeneratorPage() {
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
+  // Queue of COAs the lab manager has signed that still need the QA sign-off.
+  const [showQueue, setShowQueue]   = useState(false)
+  const [queue, setQueue]           = useState<any[]>([])
   // Persisted sign-off row for the current batch (loaded from the server) — this
   // is what makes the lab → QA hand-off work across separate logins/sessions.
   const [signoff, setSignoff] = useState<any>(null)
@@ -282,6 +285,16 @@ export default function CoaGeneratorPage() {
     setHistory(data ?? [])
   }, [db])
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
+
+  // COAs the lab manager has signed that are still awaiting the QA sign-off.
+  const loadQueue = useCallback(async () => {
+    const { data } = await db.schema('qms').from('coa_signoffs').select('*')
+      .not('lab_signed_at', 'is', null).is('qa_signed_at', null)
+      .order('lab_signed_at', { ascending: false }).limit(200)
+    setQueue(data ?? [])
+  }, [db])
+  // Keep the pending count fresh on load and after each sign-off action.
+  useEffect(() => { loadQueue() }, [loadQueue, signoff])
 
   const lookup = useCallback(async (batchRaw: string) => {
     const batch = batchRaw.trim()
@@ -442,11 +455,50 @@ export default function CoaGeneratorPage() {
           className="px-5 py-2 rounded-lg text-white text-[13px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>
           {loading ? 'Loading…' : 'Generate'}
         </button>
+        <button onClick={() => setShowQueue(q => !q)}
+          className="px-4 py-2 rounded-lg border text-[13px] font-semibold whitespace-nowrap" style={{ borderColor: showQueue ? '#7c3aed' : '#e5e7eb', background: showQueue ? '#f3e8ff' : '#fff', color: showQueue ? '#6b21a8' : '#374151' }}>
+          🖊️ Awaiting QA sign-off{queue.length ? ` (${queue.length})` : ''}
+        </button>
         <button onClick={() => setShowHistory(h => !h)}
           className="px-4 py-2 rounded-lg border text-[13px] font-semibold" style={{ borderColor: showHistory ? '#d97706' : '#e5e7eb', background: showHistory ? '#fef3c7' : '#fff', color: showHistory ? '#92400e' : '#374151' }}>
           🕘 History
         </button>
       </div>
+
+      {/* Awaiting QA sign-off — COAs the lab manager has signed, ready for the Quality manager */}
+      {showQueue && (
+        <div className="mb-4 no-print border border-purple-200 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-purple-50 text-[11px] font-bold uppercase text-purple-800 flex items-center justify-between">
+            <span>🖊️ COAs awaiting Quality Manager sign-off</span>
+            <button onClick={loadQueue} className="text-[10px] font-semibold text-purple-600 hover:underline">↻ Refresh</button>
+          </div>
+          {queue.length === 0 ? (
+            <div className="p-4 text-center text-[12px] text-gray-400">Nothing awaiting sign-off. When the lab manager signs a COA, it appears here.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
+                <thead><tr className="bg-gray-100">{['Batch','Customer','Grade','Signed by (Lab)','Signed on','Status',''].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <tbody>
+                  {queue.map((q, i) => (
+                    <tr key={q.batch_no} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
+                      <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{q.batch_no}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.customer || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.grade || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.lab_name || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap text-gray-500">{String(q.lab_signed_at || '').slice(0, 10)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.status === 'sent_to_qa' ? '📨 Sent to QA' : '🖊️ Lab signed'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <button onClick={() => { setBatchInput(q.batch_no); setShowQueue(false); lookup(q.batch_no) }}
+                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#7c3aed' }}>Open & sign</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Generation history */}
       {showHistory && (
@@ -586,7 +638,7 @@ export default function CoaGeneratorPage() {
                     {signoffBusy ? 'Signing…' : '✔ Quality Manager sign-off'}
                   </button>}
             </div>
-            {!labSigned && <div className="text-[10px] text-gray-400 mt-1">Lab manager signs first, then sends to the Quality manager.</div>}
+            {!labSigned && <div className="text-[10px] text-gray-400 mt-1">Lab manager signs first — the Quality manager is then notified automatically and the COA appears in her &quot;Awaiting QA sign-off&quot; list.</div>}
             {(iAmLab || iAmQa) && !hasSig && (
               <div className="text-[10px] text-amber-600 mt-1">⚠ You have no signature on file — create one on your{' '}
                 <a href={sigInfo.me.employeeId ? `/production/staff/${sigInfo.me.employeeId}` : '/production/staff'} className="underline font-semibold">Staff Directory profile</a>, then sign.

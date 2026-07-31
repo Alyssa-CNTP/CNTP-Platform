@@ -3,6 +3,16 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-31 — Gustav (COA sign-off: QA "Awaiting sign-off" queue + auto-notify the Quality manager)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+
+- Added an **"🖊️ Awaiting QA sign-off"** list to the COA Generator (with a live count) — every COA the lab manager has signed but the Quality manager hasn't. Each row shows batch, customer, grade, who signed, and when; **"Open & sign"** loads that COA (with the lab manager's signature already on it) ready for the QA sign-off. This is how the Quality manager finds the COAs waiting for her — no more typing the exact batch number.
+- **When the lab manager signs, the Quality manager is now notified automatically** (in-app) and the COA is marked sent — signing is the hand-off. (The separate "Send to Quality Manager" step is no longer needed.)
+- **Nothing is lost:** the sign-off (batch, signer, signature, timestamp) persists in `qms.coa_signoffs`; the COA document is regenerated from the batch on lookup.
+
+---
+
 ## 2026-07-31 — Gustav (COA sign-off: managers read from Staff Directory; removed Signatories panel)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signatories/route.ts` (new), `app/api/quality/coa-signoff/route.ts`, `lib/quality/coa-managers.ts` (new)
