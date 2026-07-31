@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-31 — Gustav (COA sign-off: managers read from Staff Directory; removed Signatories panel)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signatories/route.ts` (new), `app/api/quality/coa-signoff/route.ts`, `lib/quality/coa-managers.ts` (new)
+
+- The **Signatories configuration panel was removed** from the COA Generator. The **Lab Manager and Quality Manager are now read from the Staff Directory** (`production.employees`, by job title / position) — nothing is typed on the COA page.
+- Sign-off buttons now read simply **"Lab Manager sign-off"** and **"Quality Manager sign-off"** (no names). The signer's name is taken from the Staff Directory and shown under the signature on the COA.
+- Authorization is by the caller's Staff Directory role (server-side): only the person whose position is Lab Manager can sign the lab slot, only the Quality Manager the QA slot — each with their own signature. The persisted lab → QA hand-off is unchanged.
+- **Note:** identification is by position/job title. On production, **Monique Gordon** already has position "Lab Manager"; **Michelle Brown** has no position/title set yet, so she won't be recognised as the Quality Manager until her Staff Directory record is given a Quality Manager position/title.
+
+---
+
 ## 2026-07-29 — Gustav (COA sign-off: persisted lab → QA hand-off)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts` (new), `app/api/me/signature/route.ts`, `supabase/migrations/20260729_021_coa_signoffs.sql` (new, applied to staging)
