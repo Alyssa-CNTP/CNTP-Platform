@@ -384,6 +384,34 @@ export default function CoaGeneratorPage() {
     setModel(buildModel(sources, spec))
   }
 
+  // Re-open a COA from History for editing (to correct a mistake). Loads the
+  // exact saved snapshot into the editable generator; the header/table fields
+  // are then editable and can be re-printed / re-exported. Re-printing logs a
+  // fresh history entry.
+  const openFromHistory = (h: any) => {
+    const s = h.snapshot || {}
+    if (!s.header) { alert('This history entry has no saved snapshot to edit. Look up the batch number to regenerate it instead.'); return }
+    const sections = s.sections || { micro: true, cutLength: false, residue: false, pa: false, heavyMetals: false, moshMoah: false }
+    setSources(null)
+    setBatchInput(h.batch_no || s.header.batch_number || '')
+    setModel({
+      batch: h.batch_no || s.header.batch_number || '',
+      // mirror the included sections so the data-source panel / outstanding
+      // banner don't flag a historical COA that was already complete.
+      found: { pasteuriser: true, micro: !!sections.micro, sieving: !!sections.cutLength, residue: !!sections.residue, pa: !!sections.pa, heavyMetals: !!sections.heavyMetals, moshMoah: !!sections.moshMoah },
+      isOrganic: !!s.isOrganic,
+      header: s.header,
+      micro: s.micro || [],
+      cutLength: s.cutLength || [],
+      other: s.other || [],
+      sections,
+      matchedDoc: h.doc_no || '',
+      candidateDocs: [],
+    })
+    setShowHistory(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   // Log a generated COA to history (on Print / Export).
   const logGeneration = async (m: CoaModel) => {
     try {
@@ -509,7 +537,7 @@ export default function CoaGeneratorPage() {
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
-                <thead><tr className="bg-gray-100">{['Generated','Batch','Customer','Grade','Spec used','By'].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <thead><tr className="bg-gray-100">{['Generated','Batch','Customer','Grade','Spec used','By',''].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
                 <tbody>
                   {history.map((h, i) => (
                     <tr key={h.id} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
@@ -519,6 +547,10 @@ export default function CoaGeneratorPage() {
                       <td className="px-2 py-1 whitespace-nowrap">{h.grade || '—'}</td>
                       <td className="px-2 py-1 font-mono whitespace-nowrap">{h.doc_no || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">{h.generated_by || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
+                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
