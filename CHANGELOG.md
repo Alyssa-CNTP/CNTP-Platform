@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-03 — Gustav (Maintenance: neat job-card history filter · calibration certificate upload · job-card photo now visible)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `components/maintenance/JobCardItem.tsx`, `lib/maintenance/helpers.ts`, `lib/maintenance/types.ts`, `app/api/maintenance/annual/cert/route.ts` (new), `supabase/migrations/20260803_010_annual_cert_columns.sql` (new)
+
+- **Job-card history filter tidied up.** The History panel's filter bar (search · status · closed-from · closed-to · clear) is now a single neat labelled row that wraps cleanly, instead of controls scattered with `justify-between`. Each control has a small uppercase label so it's clear what each field does.
+- **Removed Gustav Meyer from the annual "By" (calibrated-by) list.** The picker now lists only the maintenance technicians from the Staff Directory (plus the "External / supplier" option) — the logged-in manager is no longer injected into the list.
+- **Calibration certificate upload (proof of external calibration).** Each asset in the Annual / Calibration register now has a **Certificate** row: upload an image or PDF as proof an external party did the calibration, then **View certificate** re-opens it via a short-lived signed URL. Files are stored in the private `maintenance-card-photos` storage bucket under a `cert/annual/<id>/` prefix — **not** in the database — and the row records who uploaded it and when (`cert_path` / `cert_name` / `cert_uploaded_at` / `cert_uploaded_by`, added by migration `20260803_010`). New server route `app/api/maintenance/annual/cert` handles upload (image/PDF, ≤15 MB) and signed-URL viewing.
+- **Job-card creation photo is now visible.** A photo attached when raising a job card was being saved but only shown behind the "More detail" toggle, so it looked missing. The photo now renders as an always-visible, click-to-enlarge thumbnail on the expanded card for both the manager and the technician. To avoid bloating the database (photos are stored inline as base64 in `photo_url`), new photos are downscaled more aggressively (640 px, JPEG q0.55 — typically well under ~40 KB). *Note: moving existing/new photos fully into storage is a recommended larger follow-up.*
+
+---
+
 ## 2026-07-31 — Gustav (COA History: edit a previously generated COA to fix mistakes)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

@@ -80,7 +80,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const netMin = Math.max(0, diffM(timerStart, j.completed_at) - Math.round((j.pause_ms ?? 0) / 60000))
   const lgs = cardLogs(j.id)
   const sps = cardSpares(j.id)
-  const hasDetail = !!(j.long_desc || j.photo_url || j.ai_suggestion)
+  const hasDetail = !!(j.long_desc || j.ai_suggestion)
 
   const canManage = roles.canManage
   const isTech = roles.isTech || canManage
@@ -225,6 +225,16 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
+          {/* Photo attached at creation — always visible to manager & technician, click to enlarge */}
+          {j.photo_url && (
+            <div className="mt-2.5">
+              <div className="text-[10px] text-text-muted uppercase tracking-wide mb-1">Photo</div>
+              <a href={j.photo_url} target="_blank" rel="noreferrer" title="Open full size">
+                <img src={j.photo_url} className="max-h-[160px] rounded-lg border border-surface-rule hover:brightness-110 transition cursor-zoom-in" alt="Job card photo" />
+              </a>
+            </div>
+          )}
+
           {hasDetail && (
             <>
               <button onClick={() => setShowDetail(s => !s)}
@@ -235,7 +245,6 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               {showDetail && (
                 <div className="mt-1.5 space-y-1.5">
                   {j.long_desc && <div className="text-[12px] text-text-muted whitespace-pre-wrap">{j.long_desc}</div>}
-                  {j.photo_url && <img src={j.photo_url} className="max-h-[120px] rounded-lg" alt="" />}
                   {j.ai_suggestion && (
                     <div className="rounded-lg border border-accent/20 bg-accent/5 p-2 text-[12px]">
                       <span className="text-accent font-semibold text-[10px] uppercase tracking-wide">AI · </span>

@@ -56,6 +56,39 @@ export default function ScheduledPage() {
   // Annual register header filters.
   const [annualSearch, setAnnualSearch] = useState('')
   const [annualCat, setAnnualCat] = useState('all')
+  // Calibration-certificate upload state (per annual item id).
+  const [certBusy, setCertBusy] = useState<number | null>(null)
+
+  // Upload a calibration certificate (image or PDF) as external-party proof.
+  // Stored in storage (not the DB) via /api/maintenance/annual/cert.
+  const uploadCert = async (id: number, file: File) => {
+    setCertBusy(id)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('id', String(id))
+      const res = await fetch('/api/maintenance/annual/cert', { method: 'POST', body: fd })
+      const j = await res.json()
+      if (!res.ok) { setPopup('Certificate upload failed: ' + (j.error ?? res.statusText)); return }
+      await reload()
+    } catch (e: any) {
+      setPopup('Certificate upload failed: ' + (e?.message ?? 'network error'))
+    } finally {
+      setCertBusy(null)
+    }
+  }
+
+  // Open a stored certificate via a short-lived signed URL.
+  const viewCert = async (path: string) => {
+    try {
+      const res = await fetch('/api/maintenance/annual/cert?path=' + encodeURIComponent(path))
+      const j = await res.json()
+      if (res.ok && j.url) window.open(j.url, '_blank', 'noopener')
+      else setPopup('Could not open certificate: ' + (j.error ?? res.statusText))
+    } catch (e: any) {
+      setPopup('Could not open certificate: ' + (e?.message ?? 'network error'))
+    }
+  }
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
   const eqOrdered = [...eqLatest].sort((a, b) => {
     const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
@@ -494,7 +527,7 @@ export default function ScheduledPage() {
                         <select className={`${INP} w-32 text-[11px] py-1 min-h-0 mt-0.5 ${cf.by ? '' : 'border-warn'}`}
                           value={cf.by ?? ''} onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
                           <option value="">Who?…</option>
-                          {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                          {techNames.filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
                           <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
                         </select></label>
                       <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by}
@@ -503,6 +536,27 @@ export default function ScheduledPage() {
                           (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
                           cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
                       {a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>✉ Email</button>}
+                    </div>
+                    {/* Calibration certificate — proof of external calibration (image / PDF, stored in storage not the DB) */}
+                    <div className="border-t border-surface-rule pt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-text-muted uppercase tracking-wide">Certificate</span>
+                      {a.cert_path ? (
+                        <>
+                          <button className={BTN_SM} onClick={() => viewCert(a.cert_path!)} title={a.cert_name ?? 'View certificate'}>
+                            📄 View certificate
+                          </button>
+                          <span className="text-[10px] text-text-faint">
+                            {a.cert_uploaded_by ? `by ${a.cert_uploaded_by}` : ''}{a.cert_uploaded_at ? ` · ${fmtD(a.cert_uploaded_at)}` : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-text-faint">None uploaded</span>
+                      )}
+                      <label className={`${BTN_SM} cursor-pointer ${certBusy === a.id ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {certBusy === a.id ? 'Uploading…' : (a.cert_path ? 'Replace…' : 'Upload proof…')}
+                        <input type="file" accept="image/*,application/pdf" className="hidden"
+                          onChange={e => { const f = e.target.files?.[0]; if (f) uploadCert(a.id, f); e.target.value = '' }} />
+                      </label>
                     </div>
                     <input className={`${INP} w-full text-[11px] py-1 min-h-0`} placeholder="Notes…"
                       value={drafts['a' + a.id] ?? a.notes}
