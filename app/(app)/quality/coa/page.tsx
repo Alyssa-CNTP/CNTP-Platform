@@ -200,64 +200,101 @@ export default function CoaGeneratorPage() {
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
-  const [signatories, setSignatories] = useState<{ slot: number; title: string; name: string; signature: string; email: string }[]>([])
-  const [showSigEditor, setShowSigEditor] = useState(false)
-  const [savingSig, setSavingSig]   = useState(false)
-  // COA sign-off: lab manager (Monique) signs first, then a pop-up asks the
-  // QA manager (Michelle) to sign off above her name. Keyed by signatory slot.
-  const [verified, setVerified]     = useState<Record<number, boolean>>({})
-  const [showQaSignoff, setShowQaSignoff] = useState(false)
+  // Queue of COAs the lab manager has signed that still need the QA sign-off.
+  const [showQueue, setShowQueue]   = useState(false)
+  const [queue, setQueue]           = useState<any[]>([])
+  // Persisted sign-off row for the current batch (loaded from the server) — this
+  // is what makes the lab → QA hand-off work across separate logins/sessions.
+  const [signoff, setSignoff] = useState<any>(null)
+  const [signoffBusy, setSignoffBusy] = useState(false)
+  // Who the Lab/QA manager are (read from the Staff Directory) + whether the
+  // logged-in caller is one of them and has a signature on file. Server-resolved.
+  const [sigInfo, setSigInfo] = useState<{
+    lab: { title: string; name: string | null }
+    qa:  { title: string; name: string | null }
+    me:  { isLab: boolean; isQa: boolean; hasSignature: boolean; employeeId: string | null }
+  }>({
+    lab: { title: 'Laboratory Supervisor', name: null },
+    qa:  { title: 'Quality Assurance Manager', name: null },
+    me:  { isLab: false, isQa: false, hasSignature: false, employeeId: null },
+  })
   // Per-signatory position/size adjustment (drag to move, handle to resize).
   const [sigAdjust, setSigAdjust]   = useState<Record<number, { dx: number; dy: number; scale: number }>>({})
   const adjustOf = (slot: number) => sigAdjust[slot] || { dx: 0, dy: 0, scale: 1 }
   const printRef = useRef<HTMLDivElement>(null)
   const whoAmI = session?.user?.email?.split('@')[0] || 'unknown'
 
-  // Signatories ordered by slot: [0] = lab manager (signs first), [1] = QA manager.
-  const orderedSigs = [...signatories].sort((a, b) => a.slot - b.slot)
-  const labSig = orderedSigs[0]
-  const qaSig  = orderedSigs[1]
-  // For print/preview/PDF a signature only appears once that person has signed off.
-  const signatoriesForOutput = signatories.map(s => ({ ...s, signature: verified[s.slot] ? s.signature : '' }))
+  // Sign-off state derived from the persisted row.
+  const labSigned = !!signoff?.lab_signed_at
+  const qaSigned  = !!signoff?.qa_signed_at
+  const sentToQa  = signoff?.status === 'sent_to_qa' || qaSigned
+  const iAmLab = sigInfo.me.isLab
+  const iAmQa  = sigInfo.me.isQa
+  const hasSig = sigInfo.me.hasSignature
+  const canSignLab = iAmLab && hasSig
+  const canSignQa  = iAmQa  && hasSig
 
-  // Identity gating — a signature can only be applied by the person logged in as
-  // that signatory. Exception: the Quality manager may also apply the Lab
-  // manager's signature. A signatory with no `email` set is unrestricted (so the
-  // feature isn't dead before logins are configured).
-  const myEmail = (session?.user?.email || '').toLowerCase()
-  const eq = (a?: string) => !!a && a.toLowerCase() === myEmail
-  const canSignLab = !labSig?.email || eq(labSig?.email) || eq(qaSig?.email)
-  const canSignQa  = !qaSig?.email  || eq(qaSig?.email)
-  const gatingConfigured = !!(labSig?.email && qaSig?.email)
+  // The two signature blocks for print/preview/PDF: fixed title + the person's
+  // name (from the sign-off when signed, else the current Staff Directory holder)
+  // + the signature they actually signed with (only shown once signed).
+  const outputSigs = [
+    { slot: 1, title: sigInfo.lab.title, name: signoff?.lab_name || sigInfo.lab.name || '', signature: labSigned ? (signoff?.lab_signature || '') : '' },
+    { slot: 2, title: sigInfo.qa.title,  name: signoff?.qa_name  || sigInfo.qa.name  || '', signature: qaSigned  ? (signoff?.qa_signature  || '') : '' },
+  ]
 
-  // Reset sign-offs whenever a new batch/COA is looked up.
-  useEffect(() => { setVerified({}); setShowQaSignoff(false); setSigAdjust({}) }, [model?.batch])
+  // Load the persisted sign-off for a batch (drives what the two managers see).
+  const loadSignoff = useCallback(async (batch?: string) => {
+    if (!batch) { setSignoff(null); return }
+    try {
+      const res = await fetch(`/api/quality/coa-signoff?batch_no=${encodeURIComponent(batch)}`)
+      const d = await res.json(); setSignoff(d.signoff ?? null)
+    } catch { setSignoff(null) }
+  }, [])
 
-  // Load the shared COA signatories (editable names + drawable signatures).
-  useEffect(() => {
-    db.schema('qms').from('coa_signatories').select('*').order('slot')
-      .then(({ data }: { data: any[] | null }) => {
-        setSignatories((data ?? []).map((r: any) => ({ slot: r.slot, title: r.title || '', name: r.name || '', signature: r.signature || '', email: r.email || '' })))
+  // Reload sign-off + reset drag adjustments whenever a new batch/COA is looked up.
+  useEffect(() => { setSigAdjust({}); loadSignoff(model?.batch) }, [model?.batch, loadSignoff])
+
+  // Persist a sign-off (or the hand-off). The server verifies identity and
+  // stamps the caller's own signature — the client never supplies one.
+  const postSignoff = async (payload: any) => {
+    if (!model?.batch) return
+    setSignoffBusy(true)
+    try {
+      const res = await fetch('/api/quality/coa-signoff', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_no: model.batch, customer: model.matchedDoc?.customer, grade: model.header?.grade, ...payload }),
       })
-  }, [db])
-
-  const setSig = (slot: number, field: 'title' | 'name' | 'signature' | 'email', v: string) =>
-    setSignatories(prev => prev.map(s => s.slot === slot ? { ...s, [field]: v } : s))
-
-  const saveSignatories = async () => {
-    setSavingSig(true)
-    const rows = signatories.map(s => ({ slot: s.slot, title: s.title, name: s.name, signature: s.signature || null, email: s.email || null, updated_by: whoAmI, updated_at: new Date().toISOString() }))
-    const { error } = await db.schema('qms').from('coa_signatories').upsert(rows, { onConflict: 'slot' })
-    setSavingSig(false)
-    if (error) { alert('Save failed: ' + error.message); return }
-    alert('Signatories saved.')
+      const d = await res.json()
+      if (!res.ok) {
+        if (d.needSignature) alert(`${d.error}\n\nGo to your Staff Directory profile → "Signature on file" to create one, then sign again.`)
+        else alert(d.error || 'Sign-off failed')
+        return
+      }
+      setSignoff(d.signoff ?? null)
+    } catch (e: any) { alert('Sign-off failed: ' + e.message) }
+    finally { setSignoffBusy(false) }
   }
+
+  // Who the Lab/QA manager are (Staff Directory) + whether I'm one of them.
+  useEffect(() => {
+    fetch('/api/quality/coa-signatories').then(r => r.ok ? r.json() : null).then(d => { if (d) setSigInfo(d) }).catch(() => {})
+  }, [])
 
   const loadHistory = useCallback(async () => {
     const { data } = await db.schema('qms').from('coa_generated').select('*').order('generated_at', { ascending: false }).limit(200)
     setHistory(data ?? [])
   }, [db])
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
+
+  // COAs the lab manager has signed that are still awaiting the QA sign-off.
+  const loadQueue = useCallback(async () => {
+    const { data } = await db.schema('qms').from('coa_signoffs').select('*')
+      .not('lab_signed_at', 'is', null).is('qa_signed_at', null)
+      .order('lab_signed_at', { ascending: false }).limit(200)
+    setQueue(data ?? [])
+  }, [db])
+  // Keep the pending count fresh on load and after each sign-off action.
+  useEffect(() => { loadQueue() }, [loadQueue, signoff])
 
   const lookup = useCallback(async (batchRaw: string) => {
     const batch = batchRaw.trim()
@@ -347,6 +384,34 @@ export default function CoaGeneratorPage() {
     setModel(buildModel(sources, spec))
   }
 
+  // Re-open a COA from History for editing (to correct a mistake). Loads the
+  // exact saved snapshot into the editable generator; the header/table fields
+  // are then editable and can be re-printed / re-exported. Re-printing logs a
+  // fresh history entry.
+  const openFromHistory = (h: any) => {
+    const s = h.snapshot || {}
+    if (!s.header) { alert('This history entry has no saved snapshot to edit. Look up the batch number to regenerate it instead.'); return }
+    const sections = s.sections || { micro: true, cutLength: false, residue: false, pa: false, heavyMetals: false, moshMoah: false }
+    setSources(null)
+    setBatchInput(h.batch_no || s.header.batch_number || '')
+    setModel({
+      batch: h.batch_no || s.header.batch_number || '',
+      // mirror the included sections so the data-source panel / outstanding
+      // banner don't flag a historical COA that was already complete.
+      found: { pasteuriser: true, micro: !!sections.micro, sieving: !!sections.cutLength, residue: !!sections.residue, pa: !!sections.pa, heavyMetals: !!sections.heavyMetals, moshMoah: !!sections.moshMoah },
+      isOrganic: !!s.isOrganic,
+      header: s.header,
+      micro: s.micro || [],
+      cutLength: s.cutLength || [],
+      other: s.other || [],
+      sections,
+      matchedDoc: h.doc_no || '',
+      candidateDocs: [],
+    })
+    setShowHistory(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   // Log a generated COA to history (on Print / Export).
   const logGeneration = async (m: CoaModel) => {
     try {
@@ -418,11 +483,50 @@ export default function CoaGeneratorPage() {
           className="px-5 py-2 rounded-lg text-white text-[13px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>
           {loading ? 'Loading…' : 'Generate'}
         </button>
+        <button onClick={() => setShowQueue(q => !q)}
+          className="px-4 py-2 rounded-lg border text-[13px] font-semibold whitespace-nowrap" style={{ borderColor: showQueue ? '#7c3aed' : '#e5e7eb', background: showQueue ? '#f3e8ff' : '#fff', color: showQueue ? '#6b21a8' : '#374151' }}>
+          🖊️ Awaiting QA sign-off{queue.length ? ` (${queue.length})` : ''}
+        </button>
         <button onClick={() => setShowHistory(h => !h)}
           className="px-4 py-2 rounded-lg border text-[13px] font-semibold" style={{ borderColor: showHistory ? '#d97706' : '#e5e7eb', background: showHistory ? '#fef3c7' : '#fff', color: showHistory ? '#92400e' : '#374151' }}>
           🕘 History
         </button>
       </div>
+
+      {/* Awaiting QA sign-off — COAs the lab manager has signed, ready for the Quality manager */}
+      {showQueue && (
+        <div className="mb-4 no-print border border-purple-200 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-purple-50 text-[11px] font-bold uppercase text-purple-800 flex items-center justify-between">
+            <span>🖊️ COAs awaiting Quality Manager sign-off</span>
+            <button onClick={loadQueue} className="text-[10px] font-semibold text-purple-600 hover:underline">↻ Refresh</button>
+          </div>
+          {queue.length === 0 ? (
+            <div className="p-4 text-center text-[12px] text-gray-400">Nothing awaiting sign-off. When the lab manager signs a COA, it appears here.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
+                <thead><tr className="bg-gray-100">{['Batch','Customer','Grade','Signed by (Lab)','Signed on','Status',''].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <tbody>
+                  {queue.map((q, i) => (
+                    <tr key={q.batch_no} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
+                      <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{q.batch_no}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.customer || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.grade || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.lab_name || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap text-gray-500">{String(q.lab_signed_at || '').slice(0, 10)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.status === 'sent_to_qa' ? '📨 Sent to QA' : '🖊️ Lab signed'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <button onClick={() => { setBatchInput(q.batch_no); setShowQueue(false); lookup(q.batch_no) }}
+                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#7c3aed' }}>Open & sign</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Generation history */}
       {showHistory && (
@@ -433,7 +537,7 @@ export default function CoaGeneratorPage() {
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
-                <thead><tr className="bg-gray-100">{['Generated','Batch','Customer','Grade','Spec used','By'].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <thead><tr className="bg-gray-100">{['Generated','Batch','Customer','Grade','Spec used','By',''].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
                 <tbody>
                   {history.map((h, i) => (
                     <tr key={h.id} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
@@ -443,6 +547,10 @@ export default function CoaGeneratorPage() {
                       <td className="px-2 py-1 whitespace-nowrap">{h.grade || '—'}</td>
                       <td className="px-2 py-1 font-mono whitespace-nowrap">{h.doc_no || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">{h.generated_by || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
+                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -524,105 +632,57 @@ export default function CoaGeneratorPage() {
             <div className="text-[10px] text-gray-400 mt-1">These fill in the header and persist against the batch — logistics can enter them later; they'll pull through next time.</div>
           </div>
 
-          {/* Signatories — editable names + drawable signatures (shared across all COAs) */}
-          <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
-              <button onClick={() => setShowSigEditor(s => !s)} className="text-[11px] font-bold uppercase text-gray-500 flex items-center gap-1">
-                <span>{showSigEditor ? '▼' : '▶'}</span> ✍ Signatories
-              </button>
-              {showSigEditor && <button onClick={saveSignatories} disabled={savingSig}
-                className="px-3 py-1 rounded-lg text-white text-[11px] font-bold disabled:opacity-50" style={{ background: '#1f4e79' }}>{savingSig ? 'Saving…' : '💾 Save signatories'}</button>}
-            </div>
-            {showSigEditor && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {signatories.map(s => (
-                  <div key={s.slot} className="border border-gray-100 rounded-lg p-2">
-                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Title</label>
-                    <input value={s.title} onChange={e => setSig(s.slot, 'title', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
-                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Name</label>
-                    <input value={s.name} onChange={e => setSig(s.slot, 'name', e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
-                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Login email (who may apply this signature)</label>
-                    <input value={s.email} onChange={e => setSig(s.slot, 'email', e.target.value)} type="email" placeholder="name@rooibostea.co.za"
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] mb-1.5" />
-                    <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">Signature (draw below)</label>
-                    <SignaturePad value={s.signature} onChange={v => setSig(s.slot, 'signature', v)} />
-                  </div>
-                ))}
-              </div>
-            )}
-            {!showSigEditor && <div className="text-[10px] text-gray-400">{signatories.map(s => `${s.name} (${s.title})${s.signature ? ' ✍' : ''}`).join('  ·  ') || 'No signatories set'}</div>}
-          </div>
-
-          {/* COA sign-off — lab manager first, then QA manager pop-up */}
+          {/* COA sign-off — Lab Manager then Quality Manager, identities read from
+              the Staff Directory; each signs with their own signature. */}
           <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
             <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">✔ COA Sign-off</div>
             <div className="flex flex-wrap items-center gap-3">
-              {/* Step 1 — Lab manager (Monique) */}
-              <button
-                onClick={() => {
-                  if (!labSig) { alert('No lab-manager signatory configured.'); return }
-                  if (!canSignLab) { alert(`Only ${labSig.name}${qaSig?.name ? ` or ${qaSig.name}` : ''} may apply the lab-manager signature.`); return }
-                  if (!labSig.signature) { alert(`No signature on file for ${labSig.name}. Add it under ✍ Signatories first.`); return }
-                  setVerified(v => ({ ...v, [labSig.slot]: true }))
-                  setShowQaSignoff(true)
-                }}
-                disabled={!labSig || !canSignLab || !!(labSig && verified[labSig.slot])}
-                title={labSig && !canSignLab ? `Only ${labSig.name} or the Quality manager may apply this signature` : ''}
-                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: '#1f4e79' }}>
-                {labSig && verified[labSig.slot] ? `✔ Signed — ${labSig.name}` : `✔ Lab Manager sign-off${labSig ? ` (${labSig.name})` : ''}`}
-              </button>
-              {/* Step 2 — QA manager (Michelle): only after the lab manager */}
-              <button
-                onClick={() => {
-                  if (!canSignQa) { alert(`Only ${qaSig?.name || 'the Quality manager'} may apply this signature.`); return }
-                  setShowQaSignoff(true)
-                }}
-                disabled={!labSig || !verified[labSig.slot] || !canSignQa || !!(qaSig && verified[qaSig.slot])}
-                title={labSig && !verified[labSig.slot] ? 'The lab manager must sign off first' : (!canSignQa ? `Only ${qaSig?.name || 'the Quality manager'} may sign` : '')}
-                className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: '#7c3aed' }}>
-                {qaSig && verified[qaSig.slot] ? `✔ Signed — ${qaSig.name}` : `✔ Quality Manager sign-off${qaSig ? ` (${qaSig.name})` : ''}`}
-              </button>
-              {labSig && !verified[labSig.slot] && <span className="text-[10px] text-gray-400">Lab manager signs first.</span>}
-              {!gatingConfigured && <span className="text-[10px] text-amber-600">⚠ Set each signatory&apos;s login email under ✍ Signatories to restrict who can sign.</span>}
+              {/* Step 1 — Lab manager */}
+              {labSigned
+                ? <span className="px-3 py-2 rounded-lg bg-ok/10 text-ok text-[12px] font-bold">✔ Lab Manager signed{signoff?.lab_name ? ` — ${signoff.lab_name}` : ''} · {String(signoff?.lab_signed_at || '').slice(0, 10)}</span>
+                : <button
+                    onClick={() => postSignoff({ slot: 1 })}
+                    disabled={!canSignLab || signoffBusy}
+                    title={!iAmLab ? 'Only the Lab Manager (per the Staff Directory) may sign this slot' : (iAmLab && !hasSig ? 'Add your signature on your Staff Directory profile first' : '')}
+                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ background: '#1f4e79' }}>
+                    {signoffBusy ? 'Signing…' : '✔ Lab Manager sign-off'}
+                  </button>}
+
+              {/* Hand-off — lab manager sends to the QA manager */}
+              {labSigned && !qaSigned && iAmLab && !sentToQa && (
+                <button onClick={() => postSignoff({ action: 'send_to_qa' })} disabled={signoffBusy}
+                  className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50" style={{ background: '#b45309' }}>
+                  📤 Send to Quality Manager
+                </button>
+              )}
+              {sentToQa && !qaSigned && <span className="text-[11px] text-amber-700 font-semibold">📨 Sent to the Quality Manager — awaiting sign-off</span>}
+
+              {/* Step 2 — QA manager */}
+              {qaSigned
+                ? <span className="px-3 py-2 rounded-lg bg-ok/10 text-ok text-[12px] font-bold">✔ Quality Manager signed{signoff?.qa_name ? ` — ${signoff.qa_name}` : ''} · {String(signoff?.qa_signed_at || '').slice(0, 10)}</span>
+                : <button
+                    onClick={() => postSignoff({ slot: 2 })}
+                    disabled={!labSigned || !canSignQa || signoffBusy}
+                    title={!labSigned ? 'The lab manager must sign off first' : (!iAmQa ? 'Only the Quality Manager (per the Staff Directory) may sign' : (iAmQa && !hasSig ? 'Add your signature on your Staff Directory profile first' : ''))}
+                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ background: '#7c3aed' }}>
+                    {signoffBusy ? 'Signing…' : '✔ Quality Manager sign-off'}
+                  </button>}
             </div>
+            {!labSigned && <div className="text-[10px] text-gray-400 mt-1">Lab manager signs first — the Quality manager is then notified automatically and the COA appears in her &quot;Awaiting QA sign-off&quot; list.</div>}
+            {(iAmLab || iAmQa) && !hasSig && (
+              <div className="text-[10px] text-amber-600 mt-1">⚠ You have no signature on file — create one on your{' '}
+                <a href={sigInfo.me.employeeId ? `/production/staff/${sigInfo.me.employeeId}` : '/production/staff'} className="underline font-semibold">Staff Directory profile</a>, then sign.
+              </div>
+            )}
+            <div className="text-[10px] text-gray-400 mt-2">The Lab Manager and Quality Manager are read from the Staff Directory. Each signs with their own Staff Directory signature, from their own login — a signature can never be applied by anyone else. Sign-offs are saved to the COA, so the two managers can sign at different times.</div>
           </div>
 
           <div className="flex gap-2 mb-4 no-print">
             <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => { logGeneration(model); exportPdf(model, description, signatoriesForOutput, sigAdjust) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description, outputSigs, sigAdjust) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
-
-          {/* QA manager (Michelle) sign-off pop-up — appears above her name */}
-          {showQaSignoff && qaSig && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 no-print" onClick={() => setShowQaSignoff(false)}>
-              <div className="bg-white rounded-xl p-5 w-[min(420px,92vw)] shadow-xl" onClick={e => e.stopPropagation()}>
-                <div className="text-[13px] font-bold text-gray-800 mb-1">Quality Manager Sign-off</div>
-                <div className="text-[11px] text-gray-500 mb-3">{qaSig.title} — {qaSig.name}</div>
-                <div className="border border-gray-200 rounded-lg p-3 mb-3 flex items-end justify-center" style={{ minHeight: 60 }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {qaSig.signature
-                    ? <img src={qaSig.signature} alt="signature" style={{ maxHeight: 48, maxWidth: 220 }} />
-                    : <span className="text-[11px] text-gray-400">No signature on file — add it under ✍ Signatories first.</span>}
-                </div>
-                <div className="text-[10px] text-gray-500 mb-3 text-center">Signing places <b>{qaSig.name}</b>&apos;s signature above her name on the COA.</div>
-                <div className="flex justify-end gap-2">
-                  <button onClick={() => setShowQaSignoff(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">Cancel</button>
-                  <button
-                    onClick={() => {
-                      if (!canSignQa) { alert(`Only ${qaSig.name} may apply this signature.`); return }
-                      if (!qaSig.signature) { alert(`No signature on file for ${qaSig.name}. Add it under ✍ Signatories first.`); return }
-                      setVerified(v => ({ ...v, [qaSig.slot]: true }))
-                      setShowQaSignoff(false)
-                    }}
-                    className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#7c3aed' }}>
-                    ✔ Sign off as {qaSig.name}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* ── COA preview (editable) ── */}
           <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>
@@ -692,10 +752,10 @@ export default function CoaGeneratorPage() {
                 if (realIdx >= 0) setLine('other', realIdx, f, v)
               }} />
 
-            {/* Signatures — editable names + drawn signature images */}
+            {/* Signatures — Staff-Directory names, signed with each person's own signature */}
             <div className="flex justify-between gap-8 mt-10">
-              {(signatoriesForOutput.length ? signatoriesForOutput : COA_WORDING.signatories.map((s, i) => ({ slot: i, ...s, signature: '' }))).map((s: any, i: number) => (
-                <div key={i} style={{ flex: 1, maxWidth: 260 }}>
+              {outputSigs.map((s) => (
+                <div key={s.slot} style={{ flex: 1, maxWidth: 260 }}>
                   {s.signature
                     ? <DraggableSignature src={s.signature} adjust={adjustOf(s.slot)} onChange={a => setSigAdjust(p => ({ ...p, [s.slot]: a }))} />
                     : <div style={{ height: 40 }} />}
@@ -923,45 +983,6 @@ function DraggableSignature({ src, adjust, onChange }: {
           onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={endHandle} onPointerCancel={endHandle}
           style={{ position: 'absolute', right: -6, top: -6, width: 12, height: 12, background: '#1f4e79', border: '2px solid #fff', borderRadius: 3, cursor: 'nesw-resize', touchAction: 'none' }} />
       </div>
-    </div>
-  )
-}
-
-function SignaturePad({ value, onChange }: { value: string; onChange: (dataUrl: string) => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const drawing = useRef(false)
-  const last = useRef<{ x: number; y: number } | null>(null)
-
-  // Paint an existing signature into the canvas on mount / when value changes externally.
-  useEffect(() => {
-    const c = canvasRef.current; if (!c) return
-    const ctx = c.getContext('2d'); if (!ctx) return
-    ctx.clearRect(0, 0, c.width, c.height)
-    if (value) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, c.width, c.height); img.src = value }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const pos = (e: React.PointerEvent) => {
-    const c = canvasRef.current!; const r = c.getBoundingClientRect()
-    return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) }
-  }
-  const start = (e: React.PointerEvent) => { drawing.current = true; last.current = pos(e); (e.target as Element).setPointerCapture(e.pointerId) }
-  const move = (e: React.PointerEvent) => {
-    if (!drawing.current) return
-    const c = canvasRef.current!; const ctx = c.getContext('2d')!; const p = pos(e)
-    ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
-    ctx.beginPath(); ctx.moveTo(last.current!.x, last.current!.y); ctx.lineTo(p.x, p.y); ctx.stroke()
-    last.current = p
-  }
-  const end = () => { if (!drawing.current) return; drawing.current = false; const c = canvasRef.current!; onChange(c.toDataURL('image/png')) }
-  const clear = () => { const c = canvasRef.current!; c.getContext('2d')!.clearRect(0, 0, c.width, c.height); onChange('') }
-
-  return (
-    <div>
-      <canvas ref={canvasRef} width={280} height={70}
-        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end}
-        style={{ border: '1px dashed #9ca3af', borderRadius: 6, background: '#fff', touchAction: 'none', cursor: 'crosshair', width: 280, height: 70 }} />
-      <button onClick={clear} className="text-[10px] text-gray-500 mt-0.5">Clear signature</button>
     </div>
   )
 }

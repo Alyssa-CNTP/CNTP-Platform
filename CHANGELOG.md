@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-03 — Gustav (Maintenance: neat job-card history filter · calibration certificate upload · job-card photo now visible)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `components/maintenance/JobCardItem.tsx`, `lib/maintenance/helpers.ts`, `lib/maintenance/types.ts`, `app/api/maintenance/annual/cert/route.ts` (new), `supabase/migrations/20260803_010_annual_cert_columns.sql` (new)
+
+- **Job-card history filter tidied up.** The History panel's filter bar (search · status · closed-from · closed-to · clear) is now a single neat labelled row that wraps cleanly, instead of controls scattered with `justify-between`. Each control has a small uppercase label so it's clear what each field does.
+- **Removed Gustav Meyer from the annual "By" (calibrated-by) list.** The picker now lists only the maintenance technicians from the Staff Directory (plus the "External / supplier" option) — the logged-in manager is no longer injected into the list.
+- **Calibration certificate upload (proof of external calibration).** Each asset in the Annual / Calibration register now has a **Certificate** row: upload an image or PDF as proof an external party did the calibration, then **View certificate** re-opens it via a short-lived signed URL. Files are stored in the private `maintenance-card-photos` storage bucket under a `cert/annual/<id>/` prefix — **not** in the database — and the row records who uploaded it and when (`cert_path` / `cert_name` / `cert_uploaded_at` / `cert_uploaded_by`, added by migration `20260803_010`). New server route `app/api/maintenance/annual/cert` handles upload (image/PDF, ≤15 MB) and signed-URL viewing.
+- **Job-card creation photo is now visible.** A photo attached when raising a job card was being saved but only shown behind the "More detail" toggle, so it looked missing. The photo now renders as an always-visible, click-to-enlarge thumbnail on the expanded card for both the manager and the technician. To avoid bloating the database (photos are stored inline as base64 in `photo_url`), new photos are downscaled more aggressively (640 px, JPEG q0.55 — typically well under ~40 KB). *Note: moving existing/new photos fully into storage is a recommended larger follow-up.*
+
 ---
 
 ## 2026-08-04 — Alyssa (Cleaning split + cleaner sign-in, bag numbering, granule carry-over, checks cleanup, analytics, job cards nav)
@@ -32,6 +41,68 @@ Requires migrations `20260804_001` and `20260804_002` (see manual steps at the e
 2. Run `supabase/migrations/20260804_002_dust_carryover.sql` on **staging** (creates `production.dust_carryover_log`). Until applied, the Carry-over confirm/add-to-blend actions will fail to save.
 3. Both migrations need applying to **production** separately when this is promoted.
 4. `npm run build` passes cleanly with these changes (verified this session); live browser verification of the new UI (cleaner sign-in flow, carry-over flow) should still be done against staging once migrations are applied.
+
+---
+
+## 2026-07-31 — Gustav (COA History: edit a previously generated COA to fix mistakes)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added an **"✏️ Edit"** action to each row in the COA Generator's **History** tab. It re-opens that generated COA (from its saved snapshot) back into the editable generator so the lab manager / quality manager can correct a mistake and re-print / re-export. Re-printing logs a fresh history entry.
+- The saved snapshot (header + all analysis tables + which sections were included) is restored exactly as it was generated, so nothing has to be re-typed.
+
+---
+
+## 2026-07-31 — Gustav (COA sign-off: QA "Awaiting sign-off" queue + auto-notify the Quality manager)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+
+- Added an **"🖊️ Awaiting QA sign-off"** list to the COA Generator (with a live count) — every COA the lab manager has signed but the Quality manager hasn't. Each row shows batch, customer, grade, who signed, and when; **"Open & sign"** loads that COA (with the lab manager's signature already on it) ready for the QA sign-off. This is how the Quality manager finds the COAs waiting for her — no more typing the exact batch number.
+- **When the lab manager signs, the Quality manager is now notified automatically** (in-app) and the COA is marked sent — signing is the hand-off. (The separate "Send to Quality Manager" step is no longer needed.)
+- **Nothing is lost:** the sign-off (batch, signer, signature, timestamp) persists in `qms.coa_signoffs`; the COA document is regenerated from the batch on lookup.
+
+---
+
+## 2026-07-31 — Gustav (COA sign-off: managers read from Staff Directory; removed Signatories panel)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signatories/route.ts` (new), `app/api/quality/coa-signoff/route.ts`, `lib/quality/coa-managers.ts` (new)
+
+- The **Signatories configuration panel was removed** from the COA Generator. The **Lab Manager and Quality Manager are now read from the Staff Directory** (`production.employees`, by job title / position) — nothing is typed on the COA page.
+- Sign-off buttons now read simply **"Lab Manager sign-off"** and **"Quality Manager sign-off"** (no names). The signer's name is taken from the Staff Directory and shown under the signature on the COA.
+- Authorization is by the caller's Staff Directory role (server-side): only the person whose position is Lab Manager can sign the lab slot, only the Quality Manager the QA slot — each with their own signature. The persisted lab → QA hand-off is unchanged.
+- **Note:** identification is by position/job title. On production, **Monique Gordon** already has position "Lab Manager"; **Michelle Brown** has no position/title set yet, so she won't be recognised as the Quality Manager until her Staff Directory record is given a Quality Manager position/title.
+
+---
+
+## 2026-07-29 — Gustav (COA sign-off: persisted lab → QA hand-off)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts` (new), `app/api/me/signature/route.ts`, `supabase/migrations/20260729_021_coa_signoffs.sql` (new, applied to staging)
+
+- COA sign-offs are now **saved to the batch** (`qms.coa_signoffs`), so the lab manager and quality manager can sign the **same COA from their own logins at different times**.
+- Flow: the **lab manager signs** (server stamps her own Staff Directory signature) → **"📤 Send to Quality Manager"** notifies the QA manager → the **QA manager opens the same batch and signs**. Both signatures then appear on the COA / print / PDF.
+- All enforcement is server-side (`/api/quality/coa-signoff`): a slot can only be signed by the person whose designated login matches, and the applied signature is always the caller's **own** Staff Directory signature — never supplied by the client.
+- **No signature on file?** The sign-off panel shows a prompt linking to the person's Staff Directory profile to create one, and signing is blocked until they do.
+
+---
+
+## 2026-07-29 — Gustav (COA sign-off: signatures pulled from Staff Directory, self-only)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/me/signature/route.ts`, `supabase/migrations/20260729_020_coa_signatories_drop_stored_signature.sql` (new, applied to staging); removed `public/signatures/monique-gordon.png`, `public/signatures/michelle-brown.png`
+
+- COA sign-off now stamps the **logged-in person's own signature**, fetched from their **Staff Directory** record (`production.employee_signatures`) via `/api/me/signature` — which only ever returns the caller's own signature (resolved server-side from their session). **A signature can never be applied by anyone but the person logged in.**
+- Each slot is signable **only by its designated person** (matched on login email set under ✍ Signatories): the Lab Manager slot only by the lab manager from their own login, the QA slot only by the QA manager from theirs. Removed the previous "QA can apply the lab manager's signature" override — it's incompatible with self-only signing.
+- **Removed the old stored lab/QA signatures:** dropped `qms.coa_signatories.signature` and deleted the `public/signatures/*.png` files. Signatures live only in the Staff Directory now; the Signatories panel keeps just slot title/name/login-email (no more drawing here).
+
+---
+
+## 2026-07-29 — Gustav (Micro extraction: reliably capture E. coli O157 + every organism)
+
+**Files changed:** `app/api/upload/route.ts`
+
+- Rewrote the microbiology extraction prompt so it reliably captures **every organism** on the report, including **E. coli O157**, which was intermittently missed. The prompt now tells the model the report can span **multiple pages** with **one column per organism** (method codes like MIC-201/MIC-218) and to read every page and every column.
+- Explicit column-heading → field mapping for TPC, E. coli, **E. coli O157**, coliforms, Enterobacteriaceae, Staph. aureus, yeast, mould, Listeria, Salmonella (25/125/375 g), Bacillus cereus, Clostridium perfringens.
+- Values must be copied **exactly as printed** — counts keep their operator ("<10", "6300"), detection tests keep "Not Detected"/"Detected"/"Absent"/"Present"; null only when an organism has no column. Verified against the Assurecloud 986249 report (26244-CON-SFC): TPC 6300, E. coli <10, E. coli O157 Not Detected, Listeria Not Detected, Salmonella Not Detected, Staph <10, Yeast 40, Mould <10.
+- Display already supports O157 (lab-results, COA, spec tab) — the column shows automatically once a value is extracted.
 
 ---
 
