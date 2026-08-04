@@ -592,13 +592,18 @@ export function GranuleCapture({
   const itemLocked = locked || value.outputs.length > 0 || value.blends.some(b => b.rows.length > 0)
 
   // ── Blends ──────────────────────────────────────────────────────────────────
+  // blendNo is stored (not derived at render time) because it's also written
+  // into the persisted debagging notes ("blend {blendNo}") for traceability —
+  // so it has to be kept sequential on every add/remove, not just relabelled
+  // on screen, or the next save would immediately go stale again.
+  const renumberBlends = (blends: GranuleBlend[]): GranuleBlend[] =>
+    blends.map((b, i) => b.blendNo === String(i + 1) ? b : { ...b, blendNo: String(i + 1) })
   function updateBlend(id: string, b: GranuleBlend) { patch({ blends: value.blends.map(x => x.id === id ? b : x) }) }
   function toggleBlendDone(id: string, done: boolean) { patch({ blends: value.blends.map(x => x.id === id ? { ...x, done } : x) }) }
   function addBlend() {
-    const nextNo = String(value.blends.reduce((m, b) => Math.max(m, parseInt(b.blendNo) || 0), 0) + 1)
-    patch({ blends: [...value.blends, { id: crypto.randomUUID(), blendNo: nextNo, rows: [], water: '', done: false }] })
+    patch({ blends: [...value.blends, { id: crypto.randomUUID(), blendNo: String(value.blends.length + 1), rows: [], water: '', done: false }] })
   }
-  function removeBlend(id: string) { patch({ blends: value.blends.filter(b => b.id !== id) }) }
+  function removeBlend(id: string) { patch({ blends: renumberBlends(value.blends.filter(b => b.id !== id)) }) }
   const lastBlend = value.blends[value.blends.length - 1]
   const canAddBlend = !locked && value.blends.length < 5 && !!lastBlend?.done
 

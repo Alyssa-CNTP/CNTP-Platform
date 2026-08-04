@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Granule Line: blend numbers go stale after deleting a blend)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`
+
+Reported: add 3 blends, delete Blend 2, and the debagging/blend list then shows "Blend 1, Blend 3" instead of renumbering sequentially. `blendNo` was a stored field assigned once at creation (`max(existing) + 1`) and never revisited — deleting a blend just filtered the array without touching the survivors' own `blendNo`, and adding a new one after a deletion could even skip numbers further (e.g. jumping straight to 4). `blendNo` isn't cosmetic — it's also written into the persisted debagging notes (`blend {blendNo}`) for traceability — so `removeBlend()` now renumbers every remaining blend sequentially by position, and `addBlend()` just appends at `length + 1` (always correct once the list has no gaps). No schema change; existing sessions are unaffected until their blends are next added to or removed.
+
+---
+
 ## 2026-08-04 — Alyssa (Checks: hourly VSD nudge ignores readings logged via the Checks tab)
 
 **Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`
