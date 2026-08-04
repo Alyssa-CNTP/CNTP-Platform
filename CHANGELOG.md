@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Fix: sibling productions were combining mass balances across different blends/grades; clearer balance wording)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/MassBalanceTable.tsx`
+
+Reported (live): "Blender production orders are combining all mass balances and totals and that is not correct, this should only happen if the blend, variant and grade is the same." Confirmed by investigation: when loading a session, `siblingProductions` pulled in every other session's productions for the same section/date/shift with zero filtering by variant/grade/blend — so two unrelated blends (or grades) captured in the same shift got summed into one mass balance together. This is also what made today's Sieving changeover confusing: unrelated batches were being folded into a single number instead of only truly-related ones.
+
+- **New `productionMatchKey()`** (variant+grade; variant+bomId for Blender/smallblender, which is gradeless) gates which sibling sessions' productions are allowed to combine into the active session's mass balance — only sessions sharing a key with one of the active session's own productions now combine. The separate cross-shift `run_id` mechanism (`otherShiftProductions`, gated by `findOpenRun` matching variant+PO+grade) was already correctly scoped and is untouched. `CaptureOverview`'s full activity-log combination (used for Acumatica data entry, a different purpose) is also untouched.
+- **Mass balance badge wording** now spells out what the sign means in plain terms ("X kg still to bag out" / "X kg more bagged than recorded in") instead of just a bare ±kg figure — the raw signed number stays in the table itself, only the badge text changed, so operators don't have to interpret +/- signs to know what to do next.
+
+Not yet addressed (flagged, not fixed, this pass): there is still no running stock/inventory ledger — only per-record in/out balance checks exist per session. Tracking actual on-hand material quantities over time is a separate, larger piece of work.
+
 ## 2026-08-04 — Alyssa (Granule Line job card brought to parity with Pasteuriser — BOM-driven generation, approval workflow, batch-number hygiene)
 
 **Files changed:** `supabase/migrations/20260804_003_job_cards_granule_workflow.sql` (new), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/production/bom.ts`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/granule/page.tsx`, `app/api/production/job-cards/granule/[id]/{send-for-approval,decide,quality-sign}/route.ts` (new), `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
