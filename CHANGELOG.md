@@ -3,6 +3,18 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Sieving: mid-shift grade/variant changeover keeps the mass balance visible)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/capture-config.ts` (new `isOrganicVariant()`)
+
+Reported: switching grade/variant mid-shift meant starting a new batch record, which reset the mass balance to zero — losing sight of the closing batch's leftover raw material, even though it's still part of the same production run and can go out as Blocks/Rolsiev Sticks/Indent Sticks under the new grade.
+
+- New **"Changeover — switch grade/variant"** action on Sieving's active batch card (any time during capture, not gated on submitting first). Confirming it shows the current combined mass balance before switching.
+- Reuses `addProduction()` — an existing function that appends a new production to the *same* session and auto-snapshots the closing batch's mass balance to the checks audit trail, but had never been wired to any button. Non-organic changeovers now use it, so the run's mass balance stays combined and the leftover can still be settled by bagging more output under the new grade.
+- **Organic material is the one exception** (`Organic` / `RA-Organic` / `FT-ORG` — segregation is a certification requirement): a changeover on an organic batch forces the existing hard-reset behaviour (`startNewProduction()`) instead, closing it into its own separate session so its balance can never combine with anything else.
+
+---
+
 ## 2026-08-04 — Alyssa (Granule Line: blend numbers go stale after deleting a blend)
 
 **Files changed:** `components/production/capture/GranuleCapture.tsx`
