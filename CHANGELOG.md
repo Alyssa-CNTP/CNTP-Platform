@@ -3,6 +3,22 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Sieving: match output grouping/colour style to Blender exactly)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+The output/bagging tab was already grouped and colour-coded by product type (added earlier this week), but wrapped each group in its own bordered card with a divide-y list inside — visually different from Blender's flatter pattern (a coloured dot+label header line, then each bag as its own individually-coloured/bordered row, no card wrapper). Rewrote to match Blender's pattern exactly. Presentation only — no data/schema change.
+
+---
+
+## 2026-08-04 — Alyssa (Roster: fix stale "now" shift badge)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+The on-duty "now" badge (`sastNow()`) is a pure function of the real clock, but nothing forced a re-render as time passed — a tab left open since before a 07h00/16h00 shift boundary kept showing whichever shift was current at its last render, not the actual current one. Added a once-a-minute re-render tick so it stays live; doesn't touch the operator's own manually-selected tab.
+
+---
+
 ## 2026-08-03 — Gustav (Maintenance: neat job-card history filter · calibration certificate upload · job-card photo now visible)
 
 **Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `components/maintenance/JobCardItem.tsx`, `lib/maintenance/helpers.ts`, `lib/maintenance/types.ts`, `app/api/maintenance/annual/cert/route.ts` (new), `supabase/migrations/20260803_010_annual_cert_columns.sql` (new)
