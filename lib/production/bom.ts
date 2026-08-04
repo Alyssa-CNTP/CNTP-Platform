@@ -56,6 +56,21 @@ export function variantFromSuffix(itemId: string): DbVariant | null {
   return null
 }
 
+// ── Granule Capture's output-item derivation from a BOM output code ─────────
+// GranuleCapture.tsx's item choice is one of 3 fixed strings ('SG Granules',
+// 'SF Granules', 'Export Granules'), not a 1:1 Acumatica code — this maps a
+// job card's bom_output_item_id back to that suggested choice, confirmed
+// against the same family segment capture-config.ts's
+// PRODUCTION_ORDER_PREFIXES.granule already uses ('20BGGSG-001', '20BGGF-001',
+// '20BGGE-001'). Returns null (no suggestion) rather than guessing wrong.
+export function itemFromCode(itemId: string): string | null {
+  const code = itemId.toUpperCase()
+  if (code.includes('GGSG')) return 'SG Granules'
+  if (code.includes('GGF'))  return 'SF Granules'
+  if (code.includes('GGE'))  return 'Export Granules'
+  return null
+}
+
 /**
  * All distinct blend BOMs, optionally filtered to one variant (matched against
  * the output item's row in Master Inventory when it exists, else derived from

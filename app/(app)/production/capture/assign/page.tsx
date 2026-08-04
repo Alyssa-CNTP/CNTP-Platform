@@ -88,6 +88,27 @@ function AssignScreen() {
   // real run number is only final once Capture actually creates a bag).
   const [lotPreview, setLotPreview] = useState<Record<string, string>>({})
 
+  // Today's approved Granule job card (if any) and whether the supervisor has
+  // explicitly chosen to override its batch number — mirrors Pasteuriser's
+  // "job card locks it, with an escape hatch" pattern, applied here (at
+  // Assign) rather than in Capture, since Granule's lot has always lived on
+  // this screen, not on the floor capture form.
+  const [granuleCard, setGranuleCard] = useState<{ id: string; job_card_no: string | null; batch_number: string | null } | null>(null)
+  const [granuleLotOverride, setGranuleLotOverride] = useState(false)
+  useEffect(() => { setGranuleLotOverride(false) }, [date])
+  // While job-card-sourced (not overridden), the draft's lot always mirrors
+  // the approved card's batch number — this is what actually gets saved by
+  // saveSection(), not just what's displayed.
+  useEffect(() => {
+    if (!granuleCard || granuleLotOverride) return
+    const batch = upperCode(granuleCard.batch_number) || ''
+    setDrafts(d => {
+      const cur = d.granule ?? emptyDraft()
+      if (cur.lotNumber === batch) return d
+      return { ...d, granule: { ...cur, lotNumber: batch } }
+    })
+  }, [granuleCard, granuleLotOverride])
+
   // Load operators once
   useEffect(() => {
     getDb().schema('production').from('operators')
@@ -348,7 +369,9 @@ function AssignScreen() {
             // out until later. Require it up front. Blender/Small Blender don't
             // need this: their lot is auto-derived (date + run number) in Capture
             // if the supervisor doesn't set one, so there's nothing to forget.
-            const lotMissing = sectionId === 'granule' && draft.operatorIds.length > 0 && !draft.lotNumber.trim()
+            // Not required when an approved job card already supplies it.
+            const granuleLotLocked = sectionId === 'granule' && !!granuleCard && !granuleLotOverride
+            const lotMissing = sectionId === 'granule' && draft.operatorIds.length > 0 && !draft.lotNumber.trim() && !granuleLotLocked
 
             return (
               <div key={sectionId} className="bg-white border border-stone-200 rounded-2xl overflow-hidden"
@@ -370,6 +393,12 @@ function AssignScreen() {
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Today's digital job card</label>
                       <PasteuriserJobCardPanel date={date} />
+                    </div>
+                  )}
+                  {sectionId === 'granule' && (
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Today's digital job card</label>
+                      <GranuleJobCardPanel date={date} onCard={setGranuleCard} />
                     </div>
                   )}
                   {/* Operators */}
@@ -411,17 +440,34 @@ function AssignScreen() {
                       {NEEDS_LOT.has(sectionId) && (
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">
-                            Lot / Batch{sectionId === 'granule' && <span className="text-err"> *</span>}
+                            Lot / Batch{sectionId === 'granule' && !granuleLotLocked && <span className="text-err"> *</span>}
                           </label>
-                          <input
-                            value={draft.lotNumber} onChange={e => setField(sectionId, 'lotNumber', e.target.value)}
-                            placeholder={isBlenderSection(sectionId) ? (lotPreview[sectionId] || 'Auto — date/run number') : 'e.g. GS-2026-001'}
-                            className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] text-text outline-none focus:border-brand ${lotMissing ? 'border-err' : 'border-stone-200'}`}
-                          />
-                          {lotMissing ? (
-                            <p className="text-[11px] text-err px-0.5">Required — every output bag tag is stamped with this lot, and QC readings link to it.</p>
-                          ) : isBlenderSection(sectionId) && (
-                            <p className="text-[11px] text-stone-400 px-0.5">Already handled — leave blank to use the auto lot shown above, or type one to override.</p>
+                          {granuleLotLocked ? (
+                            <>
+                              <div className="w-full px-3 py-2.5 rounded-xl border border-brand/20 bg-accent-bg/30 text-[13px] font-mono text-text">
+                                {draft.lotNumber || '—'}
+                              </div>
+                              <p className="text-[11px] text-stone-400 px-0.5">
+                                From job card {granuleCard?.job_card_no || ''} · <button type="button" onClick={() => setGranuleLotOverride(true)} className="text-brand hover:underline font-medium">Not this batch? Change</button>
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <input
+                                value={draft.lotNumber} onChange={e => setField(sectionId, 'lotNumber', e.target.value)}
+                                placeholder={isBlenderSection(sectionId) ? (lotPreview[sectionId] || 'Auto — date/run number') : 'e.g. GS-2026-001'}
+                                className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] text-text outline-none focus:border-brand ${lotMissing ? 'border-err' : 'border-stone-200'}`}
+                              />
+                              {lotMissing ? (
+                                <p className="text-[11px] text-err px-0.5">Required — every output bag tag is stamped with this lot, and QC readings link to it.</p>
+                              ) : isBlenderSection(sectionId) ? (
+                                <p className="text-[11px] text-stone-400 px-0.5">Already handled — leave blank to use the auto lot shown above, or type one to override.</p>
+                              ) : sectionId === 'granule' && granuleCard && (
+                                <p className="text-[11px] text-stone-400 px-0.5">
+                                  <button type="button" onClick={() => setGranuleLotOverride(false)} className="text-brand hover:underline font-medium">Use the job card's batch number</button> instead.
+                                </p>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
@@ -592,6 +638,61 @@ function PasteuriserJobCardPanel({ date }: { date: string }) {
             {c.job_card_no && <span className="font-mono text-[11px] text-text-muted shrink-0">{c.job_card_no}</span>}
           </div>
           <div className="text-text-muted font-mono truncate">{c.item_no} {c.blend_description ? `· ${c.blend_description}` : ''}</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-text-muted">
+            <span>Customer: {c.customer || '—'}</span>
+            <span>Batch: {c.batch_number || '—'}</span>
+            <span>Packaging: {c.packaging || '—'}</span>
+            <span>{c.total_mass ? `${c.total_mass} kg` : '—'} · {c.no_of_bags || '—'} bags</span>
+          </div>
+          {c.special_instructions && <div className="text-[11px] text-warn">⚠ {c.special_instructions}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Read-only summary of today's approved digital Granule job card(s) — same
+// role as PasteuriserJobCardPanel above, plus an onCard callback so the
+// parent can source (and lock) the Lot/Batch field from it, since Granule's
+// lot has always lived on this screen rather than in Capture itself.
+function GranuleJobCardPanel({ date, onCard }: { date: string; onCard: (card: { id: string; job_card_no: string | null; batch_number: string | null } | null) => void }) {
+  const [cards, setCards] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    getDb().from('job_cards_granule')
+      .select('id, job_card_no, item_no, product_name, customer, batch_number, packaging, total_mass, no_of_bags, special_instructions, status')
+      .eq('status', 'approved').eq('date_of_card', date)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        const rows = (data as any[]) ?? []
+        setCards(rows); setLoading(false)
+        onCard(rows[0] ? { id: rows[0].id, job_card_no: rows[0].job_card_no, batch_number: rows[0].batch_number } : null)
+      })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date])
+
+  if (loading) return null
+  if (cards.length === 0) {
+    return (
+      <p className="text-[12px] text-stone-400 bg-stone-50 border border-stone-200 rounded-xl px-3 py-2.5">
+        No approved job card for {date} yet — the production manager generates one from the BOM catalogue and a supervisor approves it on the Job Card page.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {cards.map(c => (
+        <div key={c.id} className="rounded-xl border border-brand/20 bg-accent-bg/30 p-3 text-[12px] space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-text truncate">{c.product_name || c.item_no}</span>
+            {c.job_card_no && <span className="font-mono text-[11px] text-text-muted shrink-0">{c.job_card_no}</span>}
+          </div>
+          <div className="text-text-muted font-mono truncate">{c.item_no}</div>
           <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-text-muted">
             <span>Customer: {c.customer || '—'}</span>
             <span>Batch: {c.batch_number || '—'}</span>

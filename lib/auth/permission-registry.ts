@@ -102,6 +102,9 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
       { key: 'production.job_cards', label: 'Pasteuriser job cards',
         read: 'can_view_blends', write: 'can_generate_job_cards',
         manage: [{ key: 'can_approve_job_cards', label: 'Approve or reject a job card sent for approval' }] },
+      { key: 'production.job_cards_granule', label: 'Granule job cards',
+        read: 'can_view_blends', write: 'can_generate_job_cards_granule',
+        manage: [{ key: 'can_approve_job_cards_granule', label: 'Approve or reject a Granule job card sent for approval' }] },
       { key: 'production.shift_report', label: 'Shift report (end-of-shift record)',
         read: 'can_view_shift_report', write: 'can_edit_shift_report',
         manage: [
