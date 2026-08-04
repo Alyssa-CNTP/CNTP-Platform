@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Checks: hourly VSD nudge ignores readings logged via the Checks tab)
+
+**Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`
+
+Reported: the hourly VSD reading prompt at Sieving Tower kept coming up — not on a clean hourly cadence — even right after the operator had just submitted a reading under Checks. Root cause: `ChecksPanel` has its own separate "Live: hourly VSD reading" widget that writes to the same `check_events` trail, but the page-level `HourlyVsdPrompt` modal only fetched its own last-known reading once on mount (or after logging a reading through itself) — a reading logged via the Checks tab never touched its state, so it kept treating the check as still-due. Now polls the DB every 30s (piggybacking on its existing tick) so a reading logged via either path is picked up.
+
+---
+
 ## 2026-08-04 — Alyssa (Sieving: match output grouping/colour style to Blender exactly)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
