@@ -3,6 +3,20 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Sieving: a changeover wasn't visible on screen; bagging order + batch number for Leaf)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`
+
+Reported (live, mid-shift): after a grade/variant changeover, the combined mass balance shown was correct but there was nothing on screen indicating a changeover had happened — the earlier batch's own figures were invisible, folded silently into one combined number.
+
+- **New "Batches this run" breakdown** on the active batch card, shown whenever there's more than one production this session: each batch (P1, P2, …) with its own variant/grade, kg in → kg out, variance and a "current"/"done" badge — so a changeover reads immediately from the screen instead of only being inferable from a combined total.
+- **Bagging groups now sort in a fixed order** (Fine Leaf, Coarse Leaf, Indent Sticks, Rolsiev Sticks, RB Blocks) instead of the order bags happened to be added in.
+- **Fine/Coarse Leaf bags now show their batch number** in the bag list — the field was already captured (leaf output is batch-tracked) but never displayed, and that identity is what downstream lines (Refining) trace back to.
+
+No schema change — this reuses `prodTotals()` and the `productions` array already in memory; existing sessions with a changeover already in them show the breakdown as soon as this loads, no re-capture needed.
+
+---
+
 ## 2026-08-04 — Alyssa (Production Orders redesign: shared UI kit, decluttered records + analytics)
 
 **Files changed:** `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx` (new)

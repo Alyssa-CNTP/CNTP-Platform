@@ -1757,6 +1757,36 @@ function CaptureScreen() {
                   )}
                 </div>
 
+                {/* Per-batch breakdown — a changeover (addProduction) keeps the
+                    run's mass balance combined, but that combined figure alone
+                    doesn't show a changeover ever happened. Each batch's own
+                    numbers stay visible here so one can be sanity-checked
+                    without waiting for the combined total to explain itself. */}
+                {multi && (
+                  <div className="pt-3 border-t border-stone-100 space-y-1.5">
+                    <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Batches this run ({productions.length})</span>
+                    {productions.map((p, i) => {
+                      const pt = prodTotals(p, shiftBal)
+                      const pVariance = pt.totalIn - pt.totalOut
+                      const pWithinTol = Math.abs(pVariance) <= massBalanceToleranceFor(sectionId)
+                      const isActive = i === activeIdx
+                      const variantLabel = VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant ?? '—'
+                      const gradeLabel = p.grade ? DESTINATION_OPTIONS.find(o => o.value === p.grade)?.label ?? p.grade : ''
+                      return (
+                        <div key={p.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] ${isActive ? 'border-brand/40 bg-brand/5' : 'border-stone-200'}`}>
+                          <span className="font-semibold text-text shrink-0">P{i + 1}</span>
+                          <span className="text-stone-500 truncate flex-1">{variantLabel}{gradeLabel ? ` · ${gradeLabel}` : ''}</span>
+                          <span className="font-mono text-stone-600 shrink-0">{pt.totalIn.toFixed(1)} → {pt.totalOut.toFixed(1)} kg</span>
+                          <span className={`font-mono font-semibold shrink-0 ${pWithinTol ? 'text-ok' : 'text-warn'}`}>{pVariance >= 0 ? '+' : ''}{pVariance.toFixed(1)}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand/10 text-brand' : 'bg-stone-100 text-stone-500'}`}>
+                            {isActive ? 'current' : 'done'}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
                 {/* Granule's balance is custom and lives in one place only — the
                     Overview. Other sections show the quick balance here too. */}
                 {rt.totalIn > 0 && sectionId !== 'granule' && (
