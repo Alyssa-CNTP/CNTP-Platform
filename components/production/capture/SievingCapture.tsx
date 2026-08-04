@@ -70,6 +70,21 @@ const DEBAG_BLUE = '#1d4ed8'
 const GROUP_COLORS = ['#d97706', '#0d9488', '#7c3aed', '#2563eb', '#db2777']
 const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
 
+// Canonical group order (paper-form order), not discovery order — a shift
+// that bags Sticks before Fine Leaf shouldn't reorder the groups on screen.
+// Anything not in this list (Dust, a free-text search result, etc.) sorts
+// after, in the order it was first bagged.
+const OUTPUT_GROUP_ORDER = ['Fine Leaf', 'Coarse Leaf', 'Indent Sticks', 'Rolsiev Sticks', 'RB Blocks']
+function sortOutputGroups(types: string[]): string[] {
+  return [...types].sort((a, b) => {
+    const ia = OUTPUT_GROUP_ORDER.indexOf(a), ib = OUTPUT_GROUP_ORDER.indexOf(b)
+    if (ia === -1 && ib === -1) return 0
+    if (ia === -1) return 1
+    if (ib === -1) return -1
+    return ia - ib
+  })
+}
+
 // Destination letter → raw-material local/export label, kept consistent with the
 // production's destination chosen at the top.
 const DEST_LABEL: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
@@ -413,7 +428,7 @@ export function SievingCapture({
       {tab === 'bag' && (
         <>
           {value.outputs.length > 0 && (() => {
-            const groups = Array.from(new Set(value.outputs.map(b => b.productType)))
+            const groups = sortOutputGroups(Array.from(new Set(value.outputs.map(b => b.productType))))
             return groups.map((productType, gi) => {
               const bags = value.outputs.filter(b => b.productType === productType)
               const groupKg = bags.reduce((s, b) => s + n(b.weight), 0)
@@ -437,6 +452,12 @@ export function SievingCapture({
                           <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
                             {b.serial}{b.code ? <span className="text-[10px] font-sans font-normal text-stone-400"> · {b.code}</span> : null}
                           </span>
+                          {/* Fine/Coarse Leaf carry a batch number — its identity
+                              is what other lines (Refining) trace back to, so it
+                              has to be visible here, not just captured. */}
+                          {b.batch && (
+                            <span className="font-mono text-[11px] text-stone-500">{b.batch}</span>
+                          )}
                           {b.tagMethod && (
                             <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
                               {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
