@@ -7,17 +7,19 @@ import {
 } from 'recharts'
 import { Clock, Scale, Factory, AlertTriangle, Users, Loader2, TrendingUp } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
+import { Table, Tr, Td } from '@/components/production/ui/kit'
 
 const todayStr = sastToday
 const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
 const AXIS = { fontSize: 11, fill: '#637056' }
 const GRID = '#F0F2F5'
+const SHIFTS = ['morning', 'afternoon', 'night']
 
-interface Sheet { operator_name: string; date: string; worked_minutes: number | null }
-interface Sess  { id: string; section_id: string; date: string }
+interface Sheet { operator_name: string; date: string; worked_minutes: number | null; section_id: string | null; shift: string | null }
+interface Sess  { id: string; section_id: string; date: string; shift: string; variant: string | null }
 interface MB    { session_id: string; total_input_kg: number; total_output_a_kg: number; total_output_b_kg: number; total_output_c_kg: number; total_output_d_kg: number }
 
 export default function SupervisorAnalytics() {
@@ -28,14 +30,23 @@ export default function SupervisorAnalytics() {
   const [mb, setMb] = useState<Map<string, MB>>(new Map())
   const [loading, setLoading] = useState(true)
 
+  // Section/shift/variant filters — mirrors Production Orders' filter bar so
+  // the same records read consistently across both pages. Timesheets carry
+  // section_id/shift (so hours can be filtered too) but no variant, so variant
+  // only narrows the kg/yield figures, which come from prod_sessions.
+  const [filterSection, setFilterSection] = useState('')
+  const [filterShift, setFilterShift] = useState('')
+  const [filterVariant, setFilterVariant] = useState('')
+  const activeFilterCount = [filterSection, filterShift, filterVariant].filter(Boolean).length
+
   useEffect(() => {
     let alive = true
     setLoading(true)
     const db = getDb()
     async function load() {
       const [ts, ss] = await Promise.all([
-        db.schema('production').from('prod_timesheets').select('operator_name,date,worked_minutes').eq('confirmed', true).gte('date', start).lte('date', end),
-        db.schema('production').from('prod_sessions').select('id,section_id,date').gte('date', start).lte('date', end).is('deleted_at', null),
+        db.schema('production').from('prod_timesheets').select('operator_name,date,worked_minutes,section_id,shift').eq('confirmed', true).gte('date', start).lte('date', end),
+        db.schema('production').from('prod_sessions').select('id,section_id,date,shift,variant').gte('date', start).lte('date', end).is('deleted_at', null),
       ])
       const sess = (ss.data as Sess[]) ?? []
       let mbRows: MB[] = []
@@ -63,37 +74,61 @@ export default function SupervisorAnalytics() {
     catch { return [] }
   }, [start, end])
 
+  const filteredSessions = useMemo(() => sessions.filter(s =>
+    (!filterSection || s.section_id === filterSection) &&
+    (!filterShift || s.shift === filterShift) &&
+    (!filterVariant || s.variant === filterVariant)
+  ), [sessions, filterSection, filterShift, filterVariant])
+
+  const filteredSheets = useMemo(() => sheets.filter(s =>
+    (!filterSection || s.section_id === filterSection) &&
+    (!filterShift || s.shift === filterShift)
+  ), [sheets, filterSection, filterShift])
+
   const perDay = useMemo(() => {
     const hours = new Map<string, number>(), kg = new Map<string, number>()
-    sheets.forEach(s => hours.set(s.date, (hours.get(s.date) ?? 0) + (s.worked_minutes ?? 0)))
-    sessions.forEach(s => kg.set(s.date, (kg.get(s.date) ?? 0) + kgOut(mb.get(s.id))))
+    filteredSheets.forEach(s => hours.set(s.date, (hours.get(s.date) ?? 0) + (s.worked_minutes ?? 0)))
+    filteredSessions.forEach(s => kg.set(s.date, (kg.get(s.date) ?? 0) + kgOut(mb.get(s.id))))
     return dayKeys.map(d => ({
       day: format(parseISO(d), 'd MMM'),
       hours: +((hours.get(d) ?? 0) / 60).toFixed(1),
       kg: Math.round(kg.get(d) ?? 0),
     }))
-  }, [dayKeys, sheets, sessions, mb])
+  }, [dayKeys, filteredSheets, filteredSessions, mb])
 
   const byOperator = useMemo(() => {
     const m = new Map<string, number>()
-    sheets.forEach(s => m.set(s.operator_name, (m.get(s.operator_name) ?? 0) + (s.worked_minutes ?? 0)))
+    filteredSheets.forEach(s => m.set(s.operator_name, (m.get(s.operator_name) ?? 0) + (s.worked_minutes ?? 0)))
     return Array.from(m.entries()).map(([name, min]) => ({ name, hours: +(min / 60).toFixed(1) }))
       .sort((a, b) => b.hours - a.hours).slice(0, 8)
-  }, [sheets])
+  }, [filteredSheets])
 
   const bySection = useMemo(() =>
     SECTION_ORDER.map(id => ({
       id, name: sectionMeta(id).name, color: sectionMeta(id).colorHex,
-      kg: Math.round(sessions.filter(s => s.section_id === id).reduce((sum, s) => sum + kgOut(mb.get(s.id)), 0)),
+      kg: Math.round(filteredSessions.filter(s => s.section_id === id).reduce((sum, s) => sum + kgOut(mb.get(s.id)), 0)),
     })).filter(r => r.kg > 0)
-  , [sessions, mb])
+  , [filteredSessions, mb])
 
   const totals = useMemo(() => {
-    const totalMin = sheets.reduce((s, r) => s + (r.worked_minutes ?? 0), 0)
-    const totalKg = sessions.reduce((s, r) => s + kgOut(mb.get(r.id)), 0)
-    const flags = sessions.filter(s => { const m = mb.get(s.id); if (!m) return false; const v = (Number(m.total_input_kg) || 0) - kgOut(m); return Number(m.total_input_kg) > 0 && Math.abs(v) > massBalanceToleranceFor(s.section_id) }).length
-    return { totalMin, totalKg: Math.round(totalKg), productions: sessions.length, flags, operators: new Set(sheets.map(s => s.operator_name)).size }
-  }, [sheets, sessions, mb])
+    const totalMin = filteredSheets.reduce((s, r) => s + (r.worked_minutes ?? 0), 0)
+    const totalKg = filteredSessions.reduce((s, r) => s + kgOut(mb.get(r.id)), 0)
+    const flags = filteredSessions.filter(s => { const m = mb.get(s.id); if (!m) return false; const v = (Number(m.total_input_kg) || 0) - kgOut(m); return Number(m.total_input_kg) > 0 && Math.abs(v) > massBalanceToleranceFor(s.section_id) }).length
+    return { totalMin, totalKg: Math.round(totalKg), productions: filteredSessions.length, flags, operators: new Set(filteredSheets.map(s => s.operator_name)).size }
+  }, [filteredSheets, filteredSessions, mb])
+
+  // Per-record line items — the same yield% shown against each production
+  // record on /production/orders, so it's visible here too, not just aggregated.
+  const lineRows = useMemo(() =>
+    filteredSessions.map(s => {
+      const m = mb.get(s.id)
+      const inputKg = m ? Number(m.total_input_kg) || 0 : 0
+      const outputKg = kgOut(m)
+      const yieldPct = inputKg > 0 ? Math.round((outputKg / inputKg) * 1000) / 10 : null
+      const flagged = inputKg > 0 && Math.abs(inputKg - outputKg) > massBalanceToleranceFor(s.section_id)
+      return { id: s.id, date: s.date, section: sectionMeta(s.section_id).name, color: sectionMeta(s.section_id).colorHex, shift: s.shift, variant: s.variant, inputKg, outputKg, yieldPct, flagged }
+    }).sort((a, b) => b.date.localeCompare(a.date) || a.section.localeCompare(b.section))
+  , [filteredSessions, mb])
 
   const tiles = [
     { label: 'Total hours', value: hrsLabel(totals.totalMin), icon: Clock, cls: 'text-brand' },
@@ -118,6 +153,31 @@ export default function SupervisorAnalytics() {
         <input type="date" value={start} onChange={e => setStart(e.target.value)} className="px-3 py-2 rounded-lg border border-stone-200 text-[12px] font-mono outline-none focus:border-brand" />
         <span className="text-[12px] text-stone-400">→</span>
         <input type="date" value={end} onChange={e => setEnd(e.target.value)} className="px-3 py-2 rounded-lg border border-stone-200 text-[12px] font-mono outline-none focus:border-brand" />
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={filterSection} onChange={e => setFilterSection(e.target.value)}
+          className="px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] text-stone-600 outline-none focus:border-brand cursor-pointer">
+          <option value="">All sections</option>
+          {SECTION_ORDER.map(id => <option key={id} value={id}>{sectionMeta(id).name}</option>)}
+        </select>
+        <select value={filterShift} onChange={e => setFilterShift(e.target.value)}
+          className="px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] text-stone-600 outline-none focus:border-brand cursor-pointer capitalize">
+          <option value="">All shifts</option>
+          {SHIFTS.map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
+        </select>
+        <select value={filterVariant} onChange={e => setFilterVariant(e.target.value)}
+          className="px-3 py-2 rounded-lg border border-stone-200 bg-white text-[12px] text-stone-600 outline-none focus:border-brand cursor-pointer">
+          <option value="">All variants</option>
+          {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+        </select>
+        {activeFilterCount > 0 && (
+          <button onClick={() => { setFilterSection(''); setFilterShift(''); setFilterVariant('') }}
+            className="px-3 py-2 rounded-lg text-[12px] text-stone-400 hover:text-err border border-transparent hover:border-err/20 transition-colors">
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Summary tiles */}
@@ -195,6 +255,29 @@ export default function SupervisorAnalytics() {
               </BarChart>
             </ResponsiveContainer>
           </ChartCard>
+        </div>
+      )}
+
+      {/* Per-record line items — yield against the actual record, not just
+          aggregated across the range. */}
+      {!loading && lineRows.length > 0 && (
+        <div className="bg-surface-card border border-surface-rule rounded-2xl p-4">
+          <div className="font-display font-semibold text-[13px] text-text">Records</div>
+          <div className="text-[11px] text-text-muted mb-3">{lineRows.length} record{lineRows.length === 1 ? '' : 's'} in range{activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'}` : ''}</div>
+          <Table head={['Date', 'Line', 'Shift', 'Variant', 'kg in', 'kg out', 'Yield', 'Flags']}>
+            {lineRows.map(r => (
+              <Tr key={r.id}>
+                <Td mono>{format(parseISO(r.date + 'T12:00:00'), 'd MMM')}</Td>
+                <Td><span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: r.color }} />{r.section}</span></Td>
+                <Td className="capitalize">{r.shift}</Td>
+                <Td>{r.variant ?? '—'}</Td>
+                <Td mono right>{r.inputKg.toLocaleString()}</Td>
+                <Td mono right>{r.outputKg.toLocaleString()}</Td>
+                <Td mono right>{r.yieldPct != null ? `${r.yieldPct}%` : '—'}</Td>
+                <Td right tone={r.flagged ? 'warn' : undefined}>{r.flagged ? 'Out of tolerance' : '—'}</Td>
+              </Tr>
+            ))}
+          </Table>
         </div>
       )}
     </div>

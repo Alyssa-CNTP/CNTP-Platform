@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { CheckCircle2, Circle, AlertTriangle, Lock, Loader2, ShieldCheck, Camera, Sparkles } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { cleaningTasksFor, FREQUENCY_LABEL, FREQUENCY_DAYS, type CleaningTaskDef } from '@/lib/production/cleaning-config'
+import { cleaningTasksFor, isCleanerOnlyTask, FREQUENCY_LABEL, FREQUENCY_DAYS, type CleaningTaskDef } from '@/lib/production/cleaning-config'
 
 type TaskStatus = 'done' | 'flag'
 interface PhotoVerdict { clean: boolean; note: string }
@@ -23,15 +23,27 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { d
  * cleaning_task_state); each area can be photo-verified (Gemini vision); and a
  * concise AI cleaning summary is stored on the record at sign-off.
  */
-export function CleaningPanel({ sectionId, date, shift, sessionId, locked, operators }: {
+export function CleaningPanel({ sectionId, date, shift, sessionId, locked, operators, viewer = 'operator', presignedActor = null, onSigned }: {
   sectionId: string
   date: string
   shift: string
   sessionId: string | null
   locked: boolean
   operators: { id: string; name: string; pin: string }[]
+  // Operators only ever see (and sign for) their own tasks; a section's
+  // cleaner-only tasks ("General cleaner" in cleaning-config.ts) are invisible
+  // to them entirely. A cleaner who has signed in sees only the cleaner-only
+  // tasks. See lib/production/cleaning-config.ts's isCleanerOnlyTask().
+  viewer?: 'operator' | 'cleaner'
+  // When the cleaner already authenticated at the page level (capture page's
+  // cleaner sign-in flow), skip re-asking for a PIN here — sign directly as them.
+  presignedActor?: { id: string; name: string } | null
+  // Fires once sign-off succeeds — the capture page uses this to end cleaner
+  // mode and hand the tablet back to the operator.
+  onSigned?: () => void
 }) {
-  const tasks = cleaningTasksFor(sectionId)
+  const allTasks = cleaningTasksFor(sectionId)
+  const tasks = viewer === 'cleaner' ? allTasks.filter(isCleanerOnlyTask) : allTasks.filter(t => !isCleanerOnlyTask(t))
   const areas = [...new Set(tasks.map(t => t.area))]
 
   const [status, setStatus] = useState<Record<string, TaskStatus>>({})   // task_key → 'done' | 'flag'
@@ -51,8 +63,13 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
   useEffect(() => {
     const db = getDb()
     db.schema('production').from('cleaning_records')
-      .select('status, ai_summary').eq('section_id', sectionId).eq('date', date).eq('shift', shift).maybeSingle()
-      .then(({ data }: any) => { if (data && data.status !== 'in_progress') { setSigned(true); setAiSummary(data.ai_summary ?? '') } })
+      .select('operator_signed_at, cleaner_signed_at, ai_summary')
+      .eq('section_id', sectionId).eq('date', date).eq('shift', shift).maybeSingle()
+      .then(({ data }: any) => {
+        if (!data) return
+        const done = viewer === 'cleaner' ? !!data.cleaner_signed_at : !!data.operator_signed_at
+        if (done) { setSigned(true); setAiSummary(data.ai_summary ?? '') }
+      })
     db.schema('production').from('cleaning_task_state').select('*').eq('section_id', sectionId)
       .then(({ data }: any) => {
         const m: Record<string, string> = {}
@@ -60,7 +77,7 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
         setTaskState(m)
         setLoading(false)
       })
-  }, [sectionId, date, shift])
+  }, [sectionId, date, shift, viewer])
 
   // Weekly/monthly tasks show only when due (daily always shows).
   function isDue(t: CleaningTaskDef): boolean {
@@ -119,25 +136,32 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
 
   async function sign() {
     setError(null)
-    if (!operators.length)       { setError('No operators rostered for this section'); return }
-    const op = operators.find(o => o.pin && o.pin === pin)
+    // A pre-verified cleaner (signed in at the page level) skips the PIN box
+    // here entirely — they've already proven who they are.
+    const op = presignedActor ?? (() => {
+      if (!operators.length) return null
+      return operators.find(o => o.pin && o.pin === pin) ?? null
+    })()
+    if (!operators.length && !presignedActor) { setError('No operators rostered for this section'); return }
     if (!op)                     { setError('PIN not recognised — check the roster'); return }
     if (untouched.length)        { setError(`Tick or flag every task first — ${untouched.length} still to action`); return }
     if (missingReason)           { setError('Add a reason for each flagged task'); return }
     setSigning(true)
     try {
       const db = getDb()
-      const { data: rec } = await db.schema('production').from('cleaning_records').upsert({
-        section_id: sectionId, date, shift, session_id: sessionId,
-        status: 'operator_signed',
-        operator_id: op.id, operator_name: op.name,
-        operator_signed_at: new Date().toISOString(),
-        exceptions_count: flaggedKeys.length,
-      } as any, { onConflict: 'section_id,date,shift' }).select('id').single()
+      const now = new Date().toISOString()
+      const patch: any = viewer === 'cleaner'
+        ? { section_id: sectionId, date, shift, session_id: sessionId,
+            cleaner_id: op.id, cleaner_name: op.name, cleaner_signed_at: now, cleaner_exceptions_count: flaggedKeys.length }
+        : { section_id: sectionId, date, shift, session_id: sessionId,
+            status: 'operator_signed', operator_id: op.id, operator_name: op.name,
+            operator_signed_at: now, exceptions_count: flaggedKeys.length }
+      const { data: rec } = await db.schema('production').from('cleaning_records')
+        .upsert(patch, { onConflict: 'section_id,date,shift' }).select('id').single()
       const recordId = (rec as any).id
 
       const logs: any[] = []
-      // Per-task done proof — each task the operator explicitly ticked (task_key set).
+      // Per-task done proof — each task the signer explicitly ticked (task_key set).
       doneKeys.forEach(k => {
         const t = tasks.find(x => x.key === k)
         logs.push({ record_id: recordId, action: 'area_confirmed', area: t?.area ?? null, task_key: k, detail: { task: t?.task }, actor_id: op.id, actor_name: op.name })
@@ -149,35 +173,41 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
       Object.entries(photos).forEach(([area, v]) => {
         logs.push({ record_id: recordId, action: 'photo', area, detail: { source: 'ai_verify', clean: v.clean, note: v.note }, actor_id: op.id, actor_name: op.name })
       })
-      logs.push({ record_id: recordId, action: 'operator_sign', detail: { pin_verified: true, done: doneCount, flagged: flaggedKeys.length, total: dueTasks.length }, actor_id: op.id, actor_name: op.name })
+      logs.push({
+        record_id: recordId, action: viewer === 'cleaner' ? 'cleaner_sign' : 'operator_sign',
+        detail: { pin_verified: !presignedActor, done: doneCount, flagged: flaggedKeys.length, total: dueTasks.length },
+        actor_id: op.id, actor_name: op.name,
+      })
       await db.schema('production').from('cleaning_logs').insert(logs as any)
 
       // Mark weekly/monthly tasks done (so they go quiet until next due).
-      const now = new Date().toISOString()
       const stateRows = dueTasks
         .filter(t => t.frequency !== 'daily' && status[t.key] === 'done')
         .map(t => ({ section_id: sectionId, task_key: t.key, last_done_at: now }))
       if (stateRows.length) await db.schema('production').from('cleaning_task_state').upsert(stateRows as any, { onConflict: 'section_id,task_key' })
 
-      // AI cleaning summary (best-effort).
-      try {
-        const sres = await fetch('/api/production/check-summary', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            kind: 'cleaning', section: sectionId, shift, date,
-            done: doneCount, total: dueTasks.length,
-            exceptions: flaggedKeys.map(k => ({ task: tasks.find(t => t.key === k)?.task, reason: reasons[k] ?? '' })),
-            photos: Object.entries(photos).map(([area, v]) => ({ area, clean: v.clean, note: v.note })),
-          }),
-        })
-        const sj = await sres.json().catch(() => ({}))
-        if (sj.summary) {
-          setAiSummary(sj.summary)
-          await db.schema('production').from('cleaning_records').update({ ai_summary: sj.summary } as any).eq('id', recordId)
-        }
-      } catch { /* summary is best-effort */ }
+      // AI cleaning summary (best-effort) — operator sign-off only, unchanged.
+      if (viewer === 'operator') {
+        try {
+          const sres = await fetch('/api/production/check-summary', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              kind: 'cleaning', section: sectionId, shift, date,
+              done: doneCount, total: dueTasks.length,
+              exceptions: flaggedKeys.map(k => ({ task: tasks.find(t => t.key === k)?.task, reason: reasons[k] ?? '' })),
+              photos: Object.entries(photos).map(([area, v]) => ({ area, clean: v.clean, note: v.note })),
+            }),
+          })
+          const sj = await sres.json().catch(() => ({}))
+          if (sj.summary) {
+            setAiSummary(sj.summary)
+            await db.schema('production').from('cleaning_records').update({ ai_summary: sj.summary } as any).eq('id', recordId)
+          }
+        } catch { /* summary is best-effort */ }
+      }
 
       setSigned(true)
+      onSigned?.()
     } catch (e: any) { setError(e.message) }
     setSigning(false)
   }
@@ -197,6 +227,14 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
             <p className="text-[13px] text-text leading-relaxed">{aiSummary}</p>
           </div>
         )}
+      </div>
+    )
+  }
+
+  if (viewer === 'cleaner' && tasks.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-32 text-[13px] text-text-muted">
+        No cleaner tasks for this section.
       </div>
     )
   }
@@ -276,17 +314,28 @@ export function CleaningPanel({ sectionId, date, shift, sessionId, locked, opera
           {flaggedKeys.length > 0 && <span className="text-err font-medium">· {flaggedKeys.length} flagged</span>}
           {untouched.length > 0 && <span className="text-amber-600 font-medium">· {untouched.length} still to action</span>}
         </div>
-        <div className="flex items-center gap-2">
-          <ShieldCheck size={16} className="text-brand shrink-0" />
-          <input type="password" inputMode="numeric" maxLength={4} value={pin}
-            onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 4)); setError(null) }}
-            placeholder="Enter PIN to sign" disabled={locked}
-            className="flex-1 px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-center font-mono tracking-[0.4em] text-[16px] outline-none focus:border-brand" />
-          <button onClick={sign} disabled={locked || signing || pin.length !== 4 || !canSign}
-            className="px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 flex items-center gap-1.5">
-            {signing ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />} Sign
-          </button>
-        </div>
+        {presignedActor ? (
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} className="text-brand shrink-0" />
+            <span className="flex-1 text-[12px] text-text-muted">Signing as <strong className="text-text">{presignedActor.name}</strong></span>
+            <button onClick={sign} disabled={locked || signing || !canSign}
+              className="px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 flex items-center gap-1.5">
+              {signing ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />} Sign
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} className="text-brand shrink-0" />
+            <input type="password" inputMode="numeric" maxLength={4} value={pin}
+              onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 4)); setError(null) }}
+              placeholder="Enter PIN to sign" disabled={locked}
+              className="flex-1 px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-center font-mono tracking-[0.4em] text-[16px] outline-none focus:border-brand" />
+            <button onClick={sign} disabled={locked || signing || pin.length !== 4 || !canSign}
+              className="px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 flex items-center gap-1.5">
+              {signing ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />} Sign
+            </button>
+          </div>
+        )}
         {error && <p className="text-[12px] text-err">{error}</p>}
       </div>
     </div>
