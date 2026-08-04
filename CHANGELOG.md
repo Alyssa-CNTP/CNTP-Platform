@@ -3,6 +3,19 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Granule Line job card brought to parity with Pasteuriser — BOM-driven generation, approval workflow, batch-number hygiene)
+
+**Files changed:** `supabase/migrations/20260804_003_job_cards_granule_workflow.sql` (new), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/production/bom.ts`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/granule/page.tsx`, `app/api/production/job-cards/granule/[id]/{send-for-approval,decide,quality-sign}/route.ts` (new), `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+Reported: comparing the real Pasteuriser and Granule paper job cards side by side, Granule's digital version was "barely built" next to Pasteuriser's — plus a concrete complaint that operators hand-typing batch numbers was producing real errors ("spaces between batch numbers") that put traceability/audit records at risk. Confirmed by investigation: `job_cards_granule` was an ad-hoc, non-migration-tracked table backing a flat manual-entry form with none of Pasteuriser's BOM auto-fill, auto-numbering, approval workflow, or identity-verified signatures — and Granule's Lot/Batch input at Assign was never normalized before being stamped onto every output bag tag.
+
+- **Migration-tracked `job_cards_granule`** with the same workflow shape as Pasteuriser's job cards: `status` (draft/sent_for_approval/approved/rejected), `bom_output_item_id`, `blend_ratio_lines` jsonb (Granule's dust blend is a single stage, unlike Pasteuriser's blend→final two-stage ratio, so no `final_ratio_lines`), `quality_signed_by/at`. Backfills any pre-existing submitted card to `approved`.
+- **New permission pair** `can_generate_job_cards_granule` / `can_approve_job_cards_granule`, independent of Pasteuriser's — granted by default to `production_manager` / `production_supervisor` alongside their existing Pasteuriser equivalents.
+- **`/job-cards/granule` rebuilt** to match Pasteuriser's: BOM picker over the real `04-GRANULATION` catalogue (105 seed rows) auto-fills the dust blend ratio and item code, auto-numbering via the same shared `next_job_card_no()` sequence, full draft → send-for-approval → approve/reject workflow, identity-verified "Verify & Sign" (replacing hand-drawn `SignaturePad`), a resumable Saved Drafts panel, and PDF export. The legacy 11-field manual dust entry stays as the fallback when no BOM is picked.
+- **Assign screen**: new `GranuleJobCardPanel` (read-only summary of today's approved card); once one exists, the Lot/Batch field locks to its (already-normalized) batch number instead of requiring free-text entry, with a two-way "not this batch / use the job card's number" toggle.
+- **Capture**: the mandatory "choose what this session is producing" gate now highlights the job-card-suggested item — a suggestion, never a pre-filled or auto-picked value, preserving this file's own explicit "no default, so a shift can never get silently recorded under the wrong item" design. Dust-quantity capture itself is untouched — that's real physical measurement, never sourced from a job card.
+- **Standalone hygiene fix, shipped first**: Granule's Lot/Batch input is now trimmed + upper-cased (`upperCode()`, the same chokepoint Pasteuriser already used everywhere) the moment it's saved — directly closes the reported "spaces between batch numbers" bug.
+
 ## 2026-08-04 — Alyssa (Sieving: a changeover wasn't visible on screen; bagging order + batch number for Leaf)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`
