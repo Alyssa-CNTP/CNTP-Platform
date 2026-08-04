@@ -57,10 +57,17 @@ export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, ac
   }
   useEffect(() => { refreshLast() }, [sectionId, date, shift, running, vsdCheck])
 
+  // ChecksPanel has its own, separate "Live: hourly VSD reading" widget on the
+  // Checks tab that writes to the same check_events trail — a reading logged
+  // there never touched this component's own lastVsd state, so this modal kept
+  // treating it as still-due (or popping up again almost immediately) even
+  // though a reading had genuinely just been logged elsewhere. Poll the DB
+  // periodically, not just once on mount, so a reading logged via EITHER path
+  // is picked up here within a tick.
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000)
+    const t = setInterval(() => { setNow(Date.now()); refreshLast() }, 30_000)
     return () => clearInterval(t)
-  }, [])
+  }, [sectionId, date, shift, vsdCheck])
 
   if (!vsdCheck) return null
 
