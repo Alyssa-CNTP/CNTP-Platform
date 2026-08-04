@@ -72,6 +72,19 @@ const isPasteuriser = (id: string) => id === 'pasteuriser'
 
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
+
+// A production's "what am I actually running" identity — the key two sibling
+// sessions must share before their mass balances are allowed to combine.
+// Blender/smallblender have no grade, but DO have a blend code (bomId) that
+// grade would otherwise stand in for — mixing two different blends' balances
+// together is exactly as wrong as mixing two different grades'.
+function productionMatchKey(p: Production, sectionId: string): string {
+  if (isBlenderSection(sectionId)) {
+    const bomId = (p.data as BlenderData | undefined)?.bomId ?? ''
+    return `${p.variant ?? ''}::${bomId}`
+  }
+  return `${p.variant ?? ''}::${p.grade ?? ''}`
+}
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
@@ -277,7 +290,11 @@ function CaptureScreen() {
       // new batch record" opens another): the newest/named-by-?session one is
       // the active, editable record; every other one is a sibling whose data
       // still needs to count in Overview/mass balance even though it isn't
-      // being edited right now.
+      // being edited right now — but ONLY if it's genuinely the same blend/
+      // variant/grade. Two Blender sessions running different blends (or two
+      // Sieving sessions on different grades) are different production runs
+      // that happen to share a shift; their balances must never be summed
+      // together just because of that coincidence.
       const { data: shiftSess } = await db.schema('production').from('prod_sessions')
         .select('id,status,draft_data,comments,created_at')
         .eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
@@ -285,7 +302,14 @@ function CaptureScreen() {
       const shiftRows = (shiftSess as any[]) ?? []
       const sess = sessionParam ? (shiftRows.find(r => r.id === sessionParam) ?? null) : (shiftRows[0] ?? null)
       const siblingRows = shiftRows.filter(r => r.id !== sess?.id)
-      setSiblingProductions(siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[]))
+      const activeMatchKeys = new Set(
+        (((sess as any)?.draft_data?.productions ?? []) as Production[]).map(p => productionMatchKey(p, sectionId))
+      )
+      setSiblingProductions(
+        siblingRows
+          .flatMap(r => (r.draft_data?.productions ?? []) as Production[])
+          .filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId)))
+      )
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).

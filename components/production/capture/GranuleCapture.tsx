@@ -41,6 +41,7 @@ import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-t
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
 import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
 import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
+import { itemFromCode } from '@/lib/production/bom'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
@@ -591,6 +592,29 @@ export function GranuleCapture({
   const dustType = dustForItem(item)
   const itemLocked = locked || value.outputs.length > 0 || value.blends.some(b => b.rows.length > 0)
 
+  // Today's approved job card (if any) suggests which item this session is
+  // producing — surfaced as a highlight on the mandatory "choose what this
+  // session is producing" gate below, never a pre-filled/auto-picked value.
+  // That gate exists specifically so a shift can never get silently recorded
+  // under the wrong item because no one touched it; a suggestion still
+  // requires the operator to actually click it.
+  const [suggestedItem, setSuggestedItem] = useState<string | null>(null)
+  const [suggestedJobCardNo, setSuggestedJobCardNo] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    getDb().from('job_cards_granule')
+      .select('job_card_no, bom_output_item_id')
+      .eq('status', 'approved').eq('date_of_card', date)
+      .then(({ data }: any) => {
+        if (cancelled) return
+        const row = ((data as any[]) ?? [])[0]
+        const suggestion = row?.bom_output_item_id ? itemFromCode(row.bom_output_item_id) : null
+        setSuggestedItem(suggestion)
+        setSuggestedJobCardNo(suggestion ? row.job_card_no : null)
+      })
+    return () => { cancelled = true }
+  }, [date])
+
   // ── Blends ──────────────────────────────────────────────────────────────────
   // blendNo is stored (not derived at render time) because it's also written
   // into the persisted debagging notes ("blend {blendNo}") for traceability —
@@ -763,12 +787,16 @@ export function GranuleCapture({
           <AlertTriangle size={22} className="text-amber-500" />
           <p className="text-[14px] font-medium text-text">Choose what this session is producing</p>
           <div className="flex flex-wrap justify-center gap-2">
-            {GRANULE_OUTPUT_ITEMS.map(it => (
-              <button key={it} onClick={() => patch({ item: it })}
-                className="px-4 py-2.5 rounded-xl border-2 border-stone-200 text-[13px] font-semibold text-text hover:border-brand hover:text-brand transition-colors">
-                {it}
-              </button>
-            ))}
+            {GRANULE_OUTPUT_ITEMS.map(it => {
+              const suggested = it === suggestedItem
+              return (
+                <button key={it} onClick={() => patch({ item: it })}
+                  className={`px-4 py-2.5 rounded-xl border-2 text-[13px] font-semibold transition-colors ${suggested ? 'border-brand text-brand bg-brand/5' : 'border-stone-200 text-text hover:border-brand hover:text-brand'}`}>
+                  {it}
+                  {suggested && <span className="block text-[9px] font-normal text-brand/70 mt-0.5">Suggested — job card {suggestedJobCardNo}</span>}
+                </button>
+              )
+            })}
           </div>
           <p className="text-[11px] text-text-muted max-w-sm">Capture opens once you choose SG, SF, or Export Granules — the by-product dust and Acumatica codes follow this choice.</p>
         </div>
