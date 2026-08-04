@@ -62,7 +62,13 @@ const fmtTime = (iso?: string) =>
 // Section colours — bulk bags carry the blue of Debagging, output bags the
 // amber of Bagging, so each list visibly belongs to the section you tapped.
 const DEBAG_BLUE = '#1d4ed8'
-const BAG_ORANGE = '#d97706'
+
+// Output bags are grouped by product type (Leaf / Dust / Sticks) so a shift
+// with several types bagged never turns into one long, easy-to-lose-count
+// list — same idea as Blender's colour-coded ingredient groups, one colour
+// per group, bags numbered within their own group.
+const GROUP_COLORS = ['#d97706', '#0d9488', '#7c3aed', '#2563eb', '#db2777']
+const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
 
 // Destination letter → raw-material local/export label, kept consistent with the
 // production's destination chosen at the top.
@@ -406,50 +412,71 @@ export function SievingCapture({
 
       {tab === 'bag' && (
         <>
-          {value.outputs.length > 0 && (
-            <div className="bg-white border rounded-2xl divide-y divide-stone-100" style={{ borderColor: BAG_ORANGE + '40' }}>
-              {value.outputs.map(b => (
-                <div key={b.id} className="flex items-center gap-3 px-4 py-3" style={b.secured ? { background: BAG_ORANGE + '0d' } : undefined}>
-                  {b.secured && <Lock size={14} className="shrink-0" style={{ color: BAG_ORANGE }} />}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-text">{b.productType} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
-                    <div className="mt-1 flex items-center gap-2 flex-wrap">
-                      <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
-                        {b.serial}{b.code ? <span className="text-[10px] font-sans font-normal text-stone-400"> · {b.code}</span> : null}
-                      </span>
-                      {b.tagMethod && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
-                          {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
+          {value.outputs.length > 0 && (() => {
+            const groups = Array.from(new Set(value.outputs.map(b => b.productType)))
+            return (
+              <div className="space-y-3">
+                {groups.map((productType, gi) => {
+                  const bags = value.outputs.filter(b => b.productType === productType)
+                  const groupKg = bags.reduce((s, b) => s + n(b.weight), 0)
+                  const col = groupColor(gi)
+                  return (
+                    <div key={productType} className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: col + '40' }}>
+                      <div className="flex items-center justify-between px-4 py-2.5 border-b border-stone-100">
+                        <span className="font-bold text-[13px] flex items-center gap-1.5" style={{ color: col }}>
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
+                          {productType}
                         </span>
-                      )}
-                    </div>
-                    {!b.tagMethod && !locked && (
-                      <div className="flex gap-1.5 mt-1.5">
-                        <button onClick={() => setOutputTagMethod(b.id, 'printed')}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
-                          <Printer size={12} /> Print label
-                        </button>
-                        <button onClick={() => setOutputTagMethod(b.id, 'handwritten')}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
-                          <PenLine size={12} /> Write on tag
-                        </button>
+                        <span className="text-[11px] font-mono text-stone-500">{groupKg.toFixed(1)} kg · {bags.length} bag{bags.length === 1 ? '' : 's'}</span>
                       </div>
-                    )}
-                  </div>
-                  {b.tagMethod === 'printed' && (
-                    <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
-                  )}
-                  {!locked && (b.secured
-                    ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
-                    : <>
-                        <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
-                        <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
-                      </>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                      <div className="divide-y divide-stone-100">
+                        {bags.map((b, i) => (
+                          <div key={b.id} className="flex items-center gap-3 px-4 py-3" style={b.secured ? { background: col + '0d' } : undefined}>
+                            {b.secured && <Lock size={14} className="shrink-0" style={{ color: col }} />}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[13px] font-medium text-text">Bag {i + 1} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
+                              <div className="mt-1 flex items-center gap-2 flex-wrap">
+                                <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
+                                  {b.serial}{b.code ? <span className="text-[10px] font-sans font-normal text-stone-400"> · {b.code}</span> : null}
+                                </span>
+                                {b.tagMethod && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                                    {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
+                                  </span>
+                                )}
+                              </div>
+                              {!b.tagMethod && !locked && (
+                                <div className="flex gap-1.5 mt-1.5">
+                                  <button onClick={() => setOutputTagMethod(b.id, 'printed')}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                                    <Printer size={12} /> Print label
+                                  </button>
+                                  <button onClick={() => setOutputTagMethod(b.id, 'handwritten')}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                                    <PenLine size={12} /> Write on tag
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {b.tagMethod === 'printed' && (
+                              <button onClick={() => reprint(b)} className="text-stone-400 hover:text-brand p-1.5" title="Reprint label"><Printer size={15} /></button>
+                            )}
+                            {!locked && (b.secured
+                              ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
+                              : <>
+                                  <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
+                                  <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
+                                </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()}
 
           {nudge && !picking && (
             <div className="flex items-center gap-2 px-4 py-2.5 bg-ok/5 border border-ok/20 rounded-xl text-[12px] text-ok">

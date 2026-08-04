@@ -40,6 +40,7 @@ import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
 import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
+import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
@@ -67,8 +68,11 @@ const blendColor = (i: number) => BLEND_COLORS[i % BLEND_COLORS.length]
 
 // Granule output items — chosen once per session.
 const GRANULE_OUTPUT_ITEMS = ['SG Granules', 'SF Granules', 'Export Granules']
-// The by-product dust that leaves the line follows the item.
-function dustForItem(item: string): string { return item.startsWith('SF') ? 'SF Dust' : 'SG Dust' }
+// The by-product dust that leaves the line follows the item. Exported so the
+// Carry-over ledger (generated at afternoon shutdown, consumed on a later
+// Blend tab) keys on the exact same dust-type string as everywhere else —
+// SG and SF are never summed together because they're different item_keys.
+export function dustForItem(item: string): string { return item.startsWith('SF') ? 'SF Dust' : 'SG Dust' }
 const DEFAULT_TARGET_KG = '500'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -84,6 +88,9 @@ export interface GranuleInputRow {
   secured: boolean
   logged_at?: string
   notInSystem?: boolean | string
+  // Added by the Carry-over banner (lib/production/carryover.ts) rather than
+  // scanned/picked/typed like a normal row — flagged so it renders distinctly.
+  fromCarryover?: boolean
 }
 
 export interface GranuleBlend {
@@ -497,10 +504,12 @@ function BlendCard({
           <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border" style={{ background: DUST_COLOR(r.dustKey) + '0d', borderColor: DUST_COLOR(r.dustKey) + '40' }}>
             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: DUST_COLOR(r.dustKey) }} />
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-medium text-text">{DUST_LABEL(r.dustKey)} · {n(r.weight).toFixed(1)} kg</div>
+              <div className="text-[13px] font-medium text-text">
+                {r.fromCarryover ? 'Carry-over' : DUST_LABEL(r.dustKey)} · {n(r.weight).toFixed(1)} kg
+              </div>
               <div className="font-mono text-[11px] text-text-muted truncate">
                 {[r.serial, r.variant].filter(Boolean).join(' · ')}{r.logged_at ? ` · ${fmtTime(r.logged_at)}` : ''}
-                {r.inputMode === 'system' ? ' · from system' : r.inputMode === 'manual' && r.notInSystem ? ' · registered' : ''}
+                {r.fromCarryover ? ' · ↩ carried over' : r.inputMode === 'system' ? ' · from system' : r.inputMode === 'manual' && r.notInSystem ? ' · registered' : ''}
               </div>
             </div>
             {!locked && <button onClick={() => unlockRow(r.id)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Edit</button>}
@@ -557,6 +566,7 @@ function BlendCard({
 
 export function GranuleCapture({
   sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId,
+  date, shift, sessionId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -566,6 +576,11 @@ export function GranuleCapture({
   onChange: (d: GranuleData) => void
   genSerial: () => string
   operatorId?: string | null
+  // Carry-over (see lib/production/carryover.ts) needs the shift to know when
+  // to suggest generating a leftover, and the date/session to log it.
+  date: string
+  shift: string
+  sessionId: string | null
 }) {
   const [tab, setTab] = useState<'feed' | 'bag'>('feed')
   const variantShort = variantToShort(variantWord as any) as ShortVariant
@@ -685,6 +700,43 @@ export function GranuleCapture({
     label: `${p.date?.slice(5)} ${p.time}`.trim(), moisture: p.moisture, bulkDensity: p.bulkDensity,
   }))
 
+  // ── Carry-over — afternoon leftover dust, suggested (never auto-written) for
+  // tomorrow's blend. See lib/production/carryover.ts; SG and SF are tracked
+  // as separate item_keys so they can never be added into the wrong blend. ──
+  const [carryoverKg, setCarryoverKg] = useState('')
+  const [carryoverLogged, setCarryoverLogged] = useState(false)
+  const [carryoverSaving, setCarryoverSaving] = useState(false)
+  const [availableCarryover, setAvailableCarryover] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    outstandingCarryover(sectionId, dustForItem(item)).then(kg => { if (!cancelled) setAvailableCarryover(kg) })
+    return () => { cancelled = true }
+  }, [sectionId, item, carryoverLogged])
+
+  async function confirmCarryover() {
+    const kg = n(carryoverKg)
+    if (kg <= 0) return
+    setCarryoverSaving(true)
+    try {
+      await logCarryover('generated', { sectionId, itemKey: dustForItem(item), kg, date, shift, sessionId })
+      setCarryoverLogged(true)
+    } finally { setCarryoverSaving(false) }
+  }
+
+  // Only a blend that's still open (not yet marked done) can take a new row —
+  // mirrors canAddBlend's own rule below.
+  async function addCarryoverToBlend(openBlend: GranuleBlend) {
+    if (availableCarryover <= 0) return
+    const kg = availableCarryover
+    const row: GranuleInputRow = {
+      id: crypto.randomUUID(), dustKey: 'other', serial: `CARRYOVER-${date}`, variant: variantWord || '',
+      weight: String(kg), lot: '', inputMode: 'manual', secured: true, logged_at: nowISO(), fromCarryover: true,
+    }
+    updateBlend(openBlend.id, { ...openBlend, rows: [...openBlend.rows, row] })
+    await logCarryover('consumed', { sectionId, itemKey: dustForItem(item), kg, date, shift, sessionId })
+    setAvailableCarryover(0)
+  }
+
   // ── Totals + derived ──────────────────────────────────────────────────────────
   const t = granuleTotals(value)
   const inputCount = value.blends.reduce((s, b) => s + b.rows.length, 0)
@@ -765,6 +817,22 @@ export function GranuleCapture({
       {tab === 'feed' && (
         <>
           <p className="text-[12px] text-stone-500 px-1">Record every dust bag fed into the pellet mill, grouped by blend. Complete a blend before starting the next.</p>
+
+          {/* Carry-over from a previous shift's leftover, matched to this exact
+              dust type only (SG/SF never cross) — added as a normal blend row,
+              not silently folded in. Only offered while a blend is still open
+              (not yet marked done) — same rule as adding any other bag. */}
+          {availableCarryover > 0 && lastBlend && !lastBlend.done && !locked && (
+            <div className="flex items-center gap-3 px-4 py-3 bg-info/5 border border-info/30 rounded-2xl">
+              <div className="flex-1 min-w-0 text-[12px] text-info">
+                <strong>Carry-over available:</strong> {availableCarryover.toFixed(1)} kg {dustForItem(item)} from a previous shift.
+              </div>
+              <button onClick={() => addCarryoverToBlend(lastBlend)}
+                className="shrink-0 px-3 py-2 rounded-xl bg-info text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
+                Add to Blend {lastBlend.blendNo}
+              </button>
+            </div>
+          )}
 
           {value.blends.map((b, i) => (
             <BlendCard key={b.id} blend={b} index={i} locked={locked} variantWord={variantWord} operatorId={operatorId} assignment={assignment}
@@ -915,10 +983,10 @@ export function GranuleCapture({
                   </div>
                 )}
                 <div className="p-3 space-y-2">
-                  {value.dustOutputs.map(r => (
+                  {value.dustOutputs.map((r, i) => (
                     <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-stone-200">
                       <div className="flex-1 min-w-0">
-                        <div className="text-[13px] font-medium text-text">{r.dustType} · {n(r.weight).toFixed(1)} kg</div>
+                        <div className="text-[13px] font-medium text-text">Bag {i + 1} · {r.dustType} · {n(r.weight).toFixed(1)} kg</div>
                         {!LABEL_PRINTING_ENABLED && <div className="mt-1 inline-flex items-center gap-2 font-mono text-[12px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2 py-0.5">{r.serial}<span className="text-[9px] font-sans font-normal text-stone-400 uppercase">write on bag</span></div>}
                       </div>
                       {!locked && <button onClick={() => removeDustOutput(r.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
@@ -1012,6 +1080,33 @@ export function GranuleCapture({
               </div>
             </div>
           </div>
+
+          {/* Carry-over — afternoon shift only. The mass-balance leftover is a
+              SUGGESTION (auto-computed, never auto-written) for what carries
+              over to tomorrow's blend as this exact dust type. */}
+          {shift === 'afternoon' && !locked && (
+            carryoverLogged ? (
+              <div className="flex items-center gap-3 px-4 py-3 bg-ok/8 border border-ok/30 rounded-2xl">
+                <CheckCircle2 size={16} className="text-ok shrink-0" />
+                <span className="text-[12px] text-ok font-medium">Carry-over logged — it'll be offered on the Blend tab next time this dust type is used.</span>
+              </div>
+            ) : t.balance > 0.5 && (
+              <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl space-y-2">
+                <div className="text-[12px] text-amber-800">
+                  <strong>Carry-over:</strong> {t.balance.toFixed(1)} kg {dustForItem(item)} unaccounted for — likely left in the line to carry over to tomorrow's blend. Confirm the amount before it's logged.
+                </div>
+                <div className="flex gap-2">
+                  <input type="text" inputMode="decimal" pattern="[0-9.,]*"
+                    value={carryoverKg || t.balance.toFixed(1)} onChange={e => setCarryoverKg(e.target.value)}
+                    className={INP + ' flex-1'} />
+                  <button onClick={confirmCarryover} disabled={carryoverSaving || n(carryoverKg || t.balance.toFixed(1)) <= 0}
+                    className="px-4 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40 shrink-0">
+                    {carryoverSaving ? '…' : 'Confirm carry-over'}
+                  </button>
+                </div>
+              </div>
+            )
+          )}
         </>
       )}
       </>

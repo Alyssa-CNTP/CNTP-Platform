@@ -14,6 +14,36 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
+## 2026-08-04 — Alyssa (Cleaning split + cleaner sign-in, bag numbering, granule carry-over, checks cleanup, analytics, job cards nav)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CleaningPanel.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/cleaning-config.ts`, `lib/production/carryover.ts` (new), `lib/production/cleaner-roster.ts` (new), `components/layout/Sidebar.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `supabase/migrations/20260804_001_cleaning_split_signoff.sql` (new), `supabase/migrations/20260804_002_dust_carryover.sql` (new)
+
+Requires migrations `20260804_001` and `20260804_002` (see manual steps at the end).
+
+- **Checks step deactivated for Refining 1/2 and Blender.** These sections have no machine checks configured (nothing on the paper form to check), but the Checks step still showed in the stepper and still demanded a PIN sign-off for nothing. The step is now hidden entirely for sections with zero configured checks (`machineChecksFor().length === 0`); Pasteuriser and Granule are unaffected.
+
+- **Cleaning tab now splits operator tasks from cleaner-only tasks**, for every section, not just Sieving. `cleaning-config.ts`'s existing `responsible` field already marked which tasks are the operator's job vs a dedicated cleaner's — a new `isCleanerOnlyTask()` helper (`responsible === 'General cleaner'`) drives the split. Operators only ever see and sign their own tasks; cleaner-only tasks are invisible to them entirely, closing the audit gap where an operator could tick off a cleaner's task.
+
+- **Cleaner sign-in/out on the capture tablet.** A new "Sign in as Cleaner" gate (header, next to Messages) authenticates against whoever the whole-site Shift Roster has on cleaning duty for that date/shift (`lib/production/cleaner-roster.ts`, reusing `roster_entries.operator_id` → `operators.pin`, not the per-section operator roster). Once signed in, the screen restricts to the Cleaning tab only; on sign-off it clears itself and hands back to the operator, who re-enters their own PIN — nothing is lost since draft data already autosaves. `cleaning_records` gained an independent `cleaner_*` signature so operator and cleaner can sign at different times without overwriting each other.
+
+- **Bag lists numbered and grouped, matching the Blender form's layout**, so a shift never loses count: Sieving's bagging tab (grouped by product type — Leaf/Dust/Sticks), Refining's debagging tab (grouped by product type) and bagging tab (existing A/B/C/D groups, now numbered + individually coloured), and Pasteuriser's bagging tab (grouped by kind: Final Product/High Moisture/Refill) and its two debagging streams (now visually distinct colours). Granule's dust by-product log gained plain numbering. Presentation only — no schema changes.
+
+- **Granule Line "Carry-over".** The afternoon shift's mass-balance leftover is now suggested (never silently written) as a **Carry-over** figure for the exact dust type in use (SG Dust / SF Dust — never merged), which the operator confirms before it's logged to a new append-only ledger (`production.dust_carryover_log`). On a later shift's Blend tab, an outstanding carry-over for that same dust type is offered as an "Add to Blend" banner; adding it tags the row `fromCarryover` and marks the ledger consumed. Distinct from the existing `dustNotRefed`/`coarseNotFed` paper-form fields, which are untouched. The "must mix ≥2 dust types per blend" rule was explicitly out of scope for this round.
+
+- **Supervisor Hub → Analytics brought to parity with Production Orders.** It previously had only a date-range picker and aggregate charts, no section/shift/variant filters and no per-record figures. Added the same filter set (reusing `SECTION_ORDER`/`sectionMeta`/`VARIANT_OPTIONS`) and a per-line records table (date, line, shift, variant, kg in/out, yield%, balance flag) so yield is visible against the actual record, not just aggregated. Timesheets carry `section_id`/`shift` (now selected) so hours figures filter too; variant only narrows the kg/yield figures since timesheets don't carry variant.
+
+- **Pasteuriser Job Card hub surfaced in the sidebar.** `/job-cards` (Pasteuriser + Granule job cards) had no nav entry anywhere — only reachable via a deep link from BOMs — so nobody could find it to test the pre-fill flow. Added one entry under Production, reusing the existing `can_view_blends` permission (no permission-registry change needed). The job-card ↔ capture pre-fill itself was already working (`PasteuriserCapture.tsx` already pulls approved cards); this was purely a missing link.
+
+**Not completed — flagged, not silently dropped:** Production Orders' filters/spacing were reported as broken. Static review of the filter state, option values and the server-side KPI route found no defect, and this web session has no login credentials for the app (Microsoft SSO / PIN gates) to reproduce the bug live in a browser, so the actual defect could not be found or fixed this session. Needs a session with real credentials (or the developer reproducing it with screenshots/steps) to pin down.
+
+**⚠️ Manual steps required before this is live:**
+1. Run `supabase/migrations/20260804_001_cleaning_split_signoff.sql` on **staging** (adds `cleaning_records.cleaner_*` columns and widens `cleaning_logs`' action check to allow `'cleaner_sign'`). Until applied, cleaner sign-off will fail to save.
+2. Run `supabase/migrations/20260804_002_dust_carryover.sql` on **staging** (creates `production.dust_carryover_log`). Until applied, the Carry-over confirm/add-to-blend actions will fail to save.
+3. Both migrations need applying to **production** separately when this is promoted.
+4. `npm run build` passes cleanly with these changes (verified this session); live browser verification of the new UI (cleaner sign-in flow, carry-over flow) should still be done against staging once migrations are applied.
+
+---
+
 ## 2026-07-31 — Gustav (COA History: edit a previously generated COA to fix mistakes)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

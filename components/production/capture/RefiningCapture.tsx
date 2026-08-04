@@ -108,6 +108,12 @@ const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 const DEBAG_COLOR = '#1d4ed8'
 const BAG_COLOR   = '#7c3aed'
 
+// Each destination letter (A/B/C/D) and each input product type gets its own
+// colour, cycled by index, so a shift with several groups reads as clearly
+// separate lists rather than one long undifferentiated one.
+const GROUP_COLORS = ['#7c3aed', '#2563eb', '#0d9488', '#db2777', '#4f46e5']
+const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
+
 const nowISO = () => new Date().toISOString()
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
@@ -382,9 +388,10 @@ function SystemPickList({
 // ── Output weight group (predefined product type, weight-only entry) ───────────
 
 function OutputWeightGroup({
-  groupLabel, productType, group, locked, variantWord, onAdd, onRemoveBag, onSetSecured,
+  groupLabel, groupIndex, productType, group, locked, variantWord, onAdd, onRemoveBag, onSetSecured,
 }: {
   groupLabel: string
+  groupIndex: number
   productType: string
   group: RefiningOutputGroup | null
   locked: boolean
@@ -395,6 +402,7 @@ function OutputWeightGroup({
 }) {
   const [weight, setWeight] = useState('')
   const groupKg = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
+  const col = groupColor(groupIndex)
 
   function handleAdd() {
     if (n(weight) <= 0) return
@@ -403,11 +411,11 @@ function OutputWeightGroup({
   }
 
   return (
-    <div className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: BAG_COLOR + '30' }}>
+    <div className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: col + '30' }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: BAG_COLOR + '20', background: BAG_COLOR + '08' }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: col + '20', background: col + '08' }}>
         <div className="flex items-center gap-2">
-          <span className="w-6 h-6 rounded-full text-white flex items-center justify-center text-[11px] font-bold shrink-0" style={{ background: BAG_COLOR }}>{groupLabel}</span>
+          <span className="w-6 h-6 rounded-full text-white flex items-center justify-center text-[11px] font-bold shrink-0" style={{ background: col }}>{groupLabel}</span>
           <span className="font-semibold text-[14px] text-text">{productType}</span>
           {variantWord && <span className="text-[11px] text-stone-400">{variantWord}</span>}
         </div>
@@ -416,13 +424,13 @@ function OutputWeightGroup({
 
       <div className="p-3 space-y-2">
         {/* Locked bags */}
-        {group?.bags.map(b => (
+        {group?.bags.map((b, i) => (
           <div key={b.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
-            style={b.secured ? { background: BAG_COLOR + '0d', border: `1px solid ${BAG_COLOR}30` } : { border: '1px solid #e5e7eb' }}>
-            {b.secured && <Lock size={13} className="shrink-0" style={{ color: BAG_COLOR }} />}
+            style={b.secured ? { background: col + '0d', border: `1px solid ${col}30` } : { border: '1px solid #e5e7eb' }}>
+            {b.secured && <Lock size={13} className="shrink-0" style={{ color: col }} />}
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-medium text-text">
-                {b.weight} kg
+                Bag {i + 1} · {b.weight} kg
                 {b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}
               </div>
               {LABEL_PRINTING_ENABLED
@@ -450,7 +458,7 @@ function OutputWeightGroup({
             />
             <button onClick={handleAdd} disabled={n(weight) <= 0}
               className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0"
-              style={{ background: BAG_COLOR }}>
+              style={{ background: col }}>
               <Plus size={15} /> Add bag
             </button>
           </div>
@@ -670,34 +678,63 @@ export function RefiningCapture({
             Record every input bag fed into the machine. Scan the barcode, pick from the system, or enter manually.
           </p>
 
-          {/* Locked input rows */}
-          {value.inputs.map((r, i) => r.secured ? (
-            <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border"
-              style={{ background: DEBAG_COLOR + '0d', borderColor: DEBAG_COLOR + '40' }}>
-              <Lock size={15} className="shrink-0" style={{ color: DEBAG_COLOR }} />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium text-text">
-                  {r.productType || 'Input bag'} {i + 1} · {n(r.weight).toFixed(1)} kg
-                </div>
-                <div className="font-mono text-[11px] text-text-muted truncate">
-                  {[r.serial, r.variant, r.deliveryDate || r.lot].filter(Boolean).join(' · ')}
-                  {r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}
-                  {r.inputMode === 'system' ? ' · from system' : r.inputMode === 'manual' && r.notInSystem ? ' · registered' : ''}
-                </div>
-              </div>
-              {!locked && (
-                <button onClick={() => unlockInput(r.id)}
-                  className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg">
-                  <Pencil size={13} /> Edit
-                </button>
-              )}
-            </div>
-          ) : (
-            <ScanRow key={r.id} row={r} sectionId={sectionId} locked={locked} items={items}
-              onUpdate={(k, v) => updateInput(r.id, k as keyof RefiningInputBag, v)}
-              onSecure={() => secureInput(r.id)}
-              onRemove={() => removeInput(r.id)} />
-          ))}
+          {/* Locked input rows — grouped by product type so a shift with several
+              materials never turns into one long, easy-to-lose-count list. Rows
+              still being edited (not yet secured) aren't grouped — their product
+              type may still change — and stay listed below, same as before. */}
+          {(() => {
+            const securedRows = value.inputs.filter(r => r.secured)
+            const editingRows = value.inputs.filter(r => !r.secured)
+            const groups = Array.from(new Set(securedRows.map(r => r.productType || 'Other')))
+            return (
+              <>
+                {groups.map((productType, gi) => {
+                  const rows = securedRows.filter(r => (r.productType || 'Other') === productType)
+                  const col = groupColor(gi)
+                  const groupKg = rows.reduce((s, r) => s + n(r.weight), 0)
+                  return (
+                    <div key={productType} className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-[12px] font-bold flex items-center gap-1.5" style={{ color: col }}>
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
+                          {productType}
+                        </span>
+                        <span className="text-[11px] font-mono text-stone-500">{groupKg.toFixed(1)} kg · {rows.length} bag{rows.length === 1 ? '' : 's'}</span>
+                      </div>
+                      {rows.map((r, i) => (
+                        <div key={r.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border"
+                          style={{ background: col + '0d', borderColor: col + '40' }}>
+                          <Lock size={15} className="shrink-0" style={{ color: col }} />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[13px] font-medium text-text">
+                              Bag {i + 1} · {n(r.weight).toFixed(1)} kg
+                            </div>
+                            <div className="font-mono text-[11px] text-text-muted truncate">
+                              {[r.serial, r.variant, r.deliveryDate || r.lot].filter(Boolean).join(' · ')}
+                              {r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}
+                              {r.inputMode === 'system' ? ' · from system' : r.inputMode === 'manual' && r.notInSystem ? ' · registered' : ''}
+                            </div>
+                          </div>
+                          {!locked && (
+                            <button onClick={() => unlockInput(r.id)}
+                              className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg">
+                              <Pencil size={13} /> Edit
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+                {editingRows.map(r => (
+                  <ScanRow key={r.id} row={r} sectionId={sectionId} locked={locked} items={items}
+                    onUpdate={(k, v) => updateInput(r.id, k as keyof RefiningInputBag, v)}
+                    onSecure={() => secureInput(r.id)}
+                    onRemove={() => removeInput(r.id)} />
+                ))}
+              </>
+            )
+          })()}
 
           {/* System pick list */}
           {showSystemPick && (
@@ -747,13 +784,14 @@ export function RefiningCapture({
             Enter each output bag weight — the system generates the serial automatically.
           </p>
 
-          {sectionOutputs.map(({ key, label, productType }) => {
+          {sectionOutputs.map(({ key, label, productType }, gi) => {
             const group = value[key]
             const groupKgVal = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
             return (
               <OutputWeightGroup
                 key={key}
                 groupLabel={label}
+                groupIndex={gi}
                 productType={productType}
                 group={group}
                 locked={locked}

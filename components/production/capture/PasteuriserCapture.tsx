@@ -148,6 +148,13 @@ const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 const DEBAG_COLOR = '#be185d'   // rose — matches SECTION_CONFIG.pasteuriser
 const BAG_COLOR   = '#0d9488'   // teal
 
+// Output lines are grouped by kind (Final Product / High Moisture / Refill),
+// one colour per group, numbered within their own group — same idea as the
+// Blender/Refining/Sieving lists, so a shift bagging more than one kind never
+// reads as one undifferentiated pile of lines.
+const GROUP_COLORS = ['#0d9488', '#7c3aed', '#2563eb', '#db2777', '#4f46e5']
+const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
+
 const OUTPUT_KINDS = ['Final Product', 'High Moisture', 'Refill'] as const
 // Granule Line's finished output items — what "post-sieve blending" actually
 // consumes (the granule material folded in at the post-sieve stage), matching
@@ -438,7 +445,7 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
 
 // ── Debagging stream (one of the two tables) ──────────────────────────────────
 
-function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, onEdit }: {
+function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, onEdit, color = DEBAG_COLOR }: {
   stream: 'main' | 'postsieve'
   title: string
   hint: string
@@ -448,12 +455,16 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
   locked: boolean
   onAdd: () => void
   onEdit: (r: PastDebagRow) => void
+  // main/postsieve get their own colour so the two streams read as visibly
+  // separate groups, not one shared list — defaults to DEBAG_COLOR so any
+  // other caller keeps today's look.
+  color?: string
 }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between px-1">
         <div>
-          <span className="text-[13px] font-bold text-text">{title}</span>
+          <span className="text-[13px] font-bold" style={{ color }}>{title}</span>
           <p className="text-[11px] text-stone-400">{hint}</p>
         </div>
         <span className="text-[11px] font-mono text-stone-500">{total.toFixed(1)} kg · {rows.length} bag{rows.length !== 1 ? 's' : ''}</span>
@@ -465,8 +476,8 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
           return (
             <button key={r.id} onClick={() => !locked && onEdit(r)}
               className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 border text-left transition-opacity hover:opacity-90"
-              style={{ background: DEBAG_COLOR + '0d', borderColor: DEBAG_COLOR + '40' }}>
-              {incomplete ? <AlertTriangle size={15} className="shrink-0 text-amber-500" /> : <Lock size={15} className="shrink-0" style={{ color: DEBAG_COLOR }} />}
+              style={{ background: color + '0d', borderColor: color + '40' }}>
+              {incomplete ? <AlertTriangle size={15} className="shrink-0 text-amber-500" /> : <Lock size={15} className="shrink-0" style={{ color }} />}
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-medium text-text">Bag {i + 1} · {r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg</div>
                 <div className="font-mono text-[11px] text-text-muted truncate">
@@ -482,7 +493,7 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
       {!locked && (
         <button onClick={onAdd}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-semibold transition-colors"
-          style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
+          style={{ borderColor: color + '50', color }}>
           <Plus size={16} /> Add {stream === 'main' ? 'debagging' : 'post-sieve'} bag
         </button>
       )}
@@ -496,8 +507,10 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
 
 // ── Final-product output line ─────────────────────────────────────────────────
 
-function OutputLineRow({ line, perBag, locked, onEdit, onRemove, onTag }: {
+function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove, onTag }: {
   line: PastOutputLine
+  lineNo: number
+  color: string
   perBag: number
   locked: boolean
   onEdit: () => void
@@ -506,11 +519,11 @@ function OutputLineRow({ line, perBag, locked, onEdit, onRemove, onTag }: {
 }) {
   const total = n(line.bagCount) * (n(line.bagWeight) || perBag)
   return (
-    <div className="rounded-2xl border px-4 py-3" style={{ background: BAG_COLOR + '0a', borderColor: BAG_COLOR + '33' }}>
+    <div className="rounded-2xl border px-4 py-3" style={{ background: color + '0a', borderColor: color + '33' }}>
       <div className="flex items-start gap-3">
         <button onClick={() => !locked && onEdit()} className="flex-1 min-w-0 text-left">
           <div className="text-[13px] font-semibold text-text">
-            {line.kind}{line.item ? ` · ${line.item}` : ''}
+            Line {lineNo}{line.item ? ` · ${line.item}` : ''}
             <span className="font-mono font-normal text-text-muted"> · {total.toFixed(0)} kg</span>
           </div>
           <div className="font-mono text-[11px] text-text-muted truncate mt-0.5">
@@ -806,11 +819,11 @@ export function PasteuriserCapture({
             Consume every bag fed into the pasteuriser. Scan the barcode, pick it from the system, or register a bag written on a paper tag.
           </p>
           <DebagStream stream="main" title="Debagging" hint="Blend bags fed to the steriliser, plus any High Moisture rework bag being fed back in" letter="D"
-            rows={mainRows} total={t.D} locked={locked}
+            rows={mainRows} total={t.D} locked={locked} color={DEBAG_COLOR}
             onAdd={() => setBagModal({ stream: 'main', editing: null })}
             onEdit={r => setBagModal({ stream: 'main', editing: r })} />
           <DebagStream stream="postsieve" title="Debagging — Post-sieve blending" hint="Granule Line output folded in at the post-sieve stage" letter="E"
-            rows={postRows} total={t.E} locked={locked}
+            rows={postRows} total={t.E} locked={locked} color={groupColor(1)}
             onAdd={() => setBagModal({ stream: 'postsieve', editing: null })}
             onEdit={r => setBagModal({ stream: 'postsieve', editing: r })} />
           <div className="flex items-center justify-between px-4 py-3 bg-stone-900 text-white rounded-2xl">
@@ -825,11 +838,27 @@ export function PasteuriserCapture({
         <>
           <p className="text-[12px] text-stone-500 px-1">Each line is a pallet / bag range — enter the bag count and confirm the weights; the serial is generated automatically.</p>
 
-          <div className="space-y-2">
-            {value.outputs.map(l => (
-              <OutputLineRow key={l.id} line={l} perBag={perBag} locked={locked}
-                onEdit={() => setEditLine(l)} onRemove={() => removeLine(l.id)} onTag={m => tagLine(l.id, m)} />
-            ))}
+          <div className="space-y-3">
+            {Array.from(new Set(value.outputs.map(l => l.kind))).map((kind, gi) => {
+              const rows = value.outputs.filter(l => l.kind === kind)
+              const col = groupColor(gi)
+              const groupKg = rows.reduce((s, l) => s + n(l.bagCount) * (n(l.bagWeight) || perBag), 0)
+              return (
+                <div key={kind} className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[12px] font-bold flex items-center gap-1.5" style={{ color: col }}>
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
+                      {kind}
+                    </span>
+                    <span className="text-[11px] font-mono text-stone-500">{groupKg.toFixed(1)} kg · {rows.length} line{rows.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {rows.map((l, i) => (
+                    <OutputLineRow key={l.id} line={l} lineNo={i + 1} color={col} perBag={perBag} locked={locked}
+                      onEdit={() => setEditLine(l)} onRemove={() => removeLine(l.id)} onTag={m => tagLine(l.id, m)} />
+                  ))}
+                </div>
+              )
+            })}
             {!locked && (
               <button onClick={addOutputLine}
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-semibold transition-colors"
