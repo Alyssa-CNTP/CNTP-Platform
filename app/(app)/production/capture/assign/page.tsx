@@ -12,6 +12,7 @@ import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
 import { productionOrderItems, loadAllInventory } from '@/lib/production/inventory'
+import { upperCode } from '@/lib/production/normalize-code'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
 import { WORK_CENTRE_FOR_SECTION, autoLot, resolveExistingBlendRunNo } from '@/components/production/capture/BlenderCapture'
@@ -257,14 +258,21 @@ function AssignScreen() {
         await getDb().schema('production').from('shift_assignments')
           .delete().eq('date', date).eq('shift', shift).eq('section_id', sectionId)
       } else {
+        const normalizedLot = upperCode(draft.lotNumber) || ''
         await getDb().schema('production').from('shift_assignments').upsert({
           date, shift, section_id: sectionId,
           operator_ids:      draft.operatorIds,
-          lot_number:        draft.lotNumber || null,
+          lot_number:        normalizedLot || null,
           variant:           draft.variant || null,
           production_orders: draft.prodOrders.length ? draft.prodOrders : null,
           assigned_by:       user?.id ?? null,
         } as any, { onConflict: 'date,shift,section_id' })
+        // Reflect the normalized value immediately — a stray space typed into
+        // Lot/Batch shouldn't linger on screen until the next reload once it's
+        // been stripped in what actually got saved.
+        if (normalizedLot !== draft.lotNumber) {
+          setDrafts(d => ({ ...d, [sectionId]: { ...(d[sectionId] ?? emptyDraft()), lotNumber: normalizedLot } }))
+        }
       }
       setSavedSections(s => new Set(s).add(sectionId))
     } catch (e: any) {
