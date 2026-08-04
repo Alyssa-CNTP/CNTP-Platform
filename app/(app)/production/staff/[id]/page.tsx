@@ -11,7 +11,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import SignaturePad from '@/components/ui/SignaturePad'
-import { getMySignatureStatus, setEmployeeSignature, loadEmployeeSignature } from '@/lib/production/employee-signature'
+import { getMySignatureStatus, setEmployeeSignature, loadEmployeeSignature, SIGNATURE_CONSENT_TEXT_SELF, SIGNATURE_CONSENT_TEXT_ADMIN_SETUP } from '@/lib/production/employee-signature'
 import { StaffTabs } from '@/components/production/StaffTabs'
 import { EmployeeModal, type Leave } from '@/components/production/EmployeeModal'
 import { tagLabel, categoryMeta } from '@/lib/production/roster-config'
@@ -51,7 +51,7 @@ const LBL = 'block text-[10px] font-semibold text-stone-500 uppercase tracking-w
 export default function StaffProfilePage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const { p, isIT, user } = useAuth()
+  const { p, isIT, user, role } = useAuth()
 
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,6 +70,7 @@ export default function StaffProfilePage() {
   const [mySignatureEmployeeId, setMySignatureEmployeeId] = useState<string | null | undefined>(undefined)
   const [signature, setSignature] = useState<string | null>(null)
   const [signatureDraft, setSignatureDraft] = useState<string | null>(null)
+  const [signatureConsent, setSignatureConsent] = useState(false)
   const [savingSignature, setSavingSignature] = useState(false)
   const [signatureError, setSignatureError] = useState<string | null>(null)
 
@@ -77,7 +78,12 @@ export default function StaffProfilePage() {
   const canAssignPin = p('can_reset_operator_pin')
   const canAssignTraining = p('can_assign_training')
   const isSelf = mySignatureEmployeeId === id
-  const canEditSignature = isSelf || p('can_edit_staff_profiles')
+  // Self, or — TEMPORARY, while the platform is being set up — a developer.
+  // No HR/admin permission bypass: a signature drawn by anyone other than its
+  // owner is exactly what this platform must never allow long-term, since
+  // every "Verify & Sign" flow downstream trusts whatever image is on file.
+  const isSetupOverride = !isSelf && (role === 'senior_developer' || role === 'co_developer')
+  const canEditSignature = isSelf || isSetupOverride
 
   async function loadIdentities() {
     const res = await fetch(`/api/staff/${id}/identities`)
@@ -123,11 +129,17 @@ export default function StaffProfilePage() {
     loadEmployeeSignature(id).then(setSignature)
   }, [id])
 
+  function signatureConsentText() {
+    return isSelf
+      ? SIGNATURE_CONSENT_TEXT_SELF
+      : SIGNATURE_CONSENT_TEXT_ADMIN_SETUP(employee?.display_name || employee?.name || 'this employee')
+  }
+
   async function saveSignature() {
-    if (!signatureDraft) return
+    if (!signatureDraft || !signatureConsent) return
     setSavingSignature(true); setSignatureError(null)
-    const res = await setEmployeeSignature(id, signatureDraft)
-    if (res.ok) { setSignature(signatureDraft); setSignatureDraft(null) }
+    const res = await setEmployeeSignature(id, signatureDraft, signatureConsentText())
+    if (res.ok) { setSignature(signatureDraft); setSignatureDraft(null); setSignatureConsent(false) }
     else setSignatureError(res.error ?? 'Could not save signature')
     setSavingSignature(false)
   }
@@ -391,17 +403,22 @@ export default function StaffProfilePage() {
 
       {/* Signature on file — drawn ONCE here, then reused everywhere a
           sign-off needs it (e.g. Pasteuriser job cards' "Verify & Sign").
-          Only the person themselves can set it, unless an HR/admin with
-          can_edit_staff_profiles is doing it on their behalf. */}
+          Self-service, or — TEMPORARY, while the platform is being set up —
+          a developer acting on someone's behalf (isSetupOverride). Saving
+          always requires an explicit consent tick, worded honestly for
+          whichever case applies, fresh on every redraw. */}
       <div className="space-y-2">
         <h2 className="font-display font-semibold text-[15px] text-text">Signature on file</h2>
+        {isSetupOverride && (
+          <p className="text-[11px] text-warn">Setting this up on {employee?.display_name || employee?.name}'s behalf (developer setup override).</p>
+        )}
         {signature && !signatureDraft ? (
           <div className="flex items-center gap-3">
             <div className="rounded-lg border border-surface-rule bg-white px-3 py-2">
               <img src={signature} alt="Signature on file" style={{ height: 36 }} />
             </div>
             {canEditSignature && (
-              <button onClick={() => setSignatureDraft('__redraw__')} className="text-[12px] text-brand font-medium hover:underline">Redraw →</button>
+              <button onClick={() => { setSignatureDraft('__redraw__'); setSignatureConsent(false) }} className="text-[12px] text-brand font-medium hover:underline">Redraw →</button>
             )}
           </div>
         ) : canEditSignature ? (
@@ -409,14 +426,24 @@ export default function StaffProfilePage() {
             <SignaturePad label={isSelf ? 'Your signature' : `${employee?.display_name || employee?.name}'s signature`}
               name={employee?.display_name || employee?.name || 'Signature'}
               value={signatureDraft === '__redraw__' ? null : signatureDraft} onChange={setSignatureDraft} />
-            <button onClick={saveSignature} disabled={!signatureDraft || signatureDraft === '__redraw__' || savingSignature}
+            {signatureDraft && signatureDraft !== '__redraw__' && (
+              <label className="flex items-start gap-2 text-[11px] text-text-muted cursor-pointer">
+                <input type="checkbox" checked={signatureConsent} onChange={e => setSignatureConsent(e.target.checked)} className="mt-0.5" />
+                <span>{signatureConsentText()}</span>
+              </label>
+            )}
+            <button onClick={saveSignature} disabled={!signatureDraft || signatureDraft === '__redraw__' || !signatureConsent || savingSignature}
               className="text-[12px] font-semibold px-3 py-1.5 rounded-lg bg-brand text-white disabled:opacity-40 disabled:cursor-not-allowed">
               {savingSignature ? 'Saving…' : 'Save signature'}
             </button>
             {signatureError && <p className="text-[11px] text-err flex items-center gap-1"><AlertTriangle size={11} /> {signatureError}</p>}
           </div>
         ) : (
-          <p className="text-[12px] text-text-muted">No signature on file yet.</p>
+          <p className="text-[12px] text-text-muted">
+            {isSelf === false && mySignatureEmployeeId !== undefined
+              ? 'Only this person can set up their own signature — it requires their own login.'
+              : 'No signature on file yet.'}
+          </p>
         )}
       </div>
 
