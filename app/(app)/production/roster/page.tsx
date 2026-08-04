@@ -1406,6 +1406,18 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 function OnDutyCard({ period, entries, roleCategory, leaveEmpIds }: {
   period: Period; entries: Entry[]; roleCategory: Map<string, string>; leaveEmpIds: Set<string>
 }) {
+  // sastNow() itself is a pure function of the real clock, but nothing was
+  // forcing a re-render as time passed — a tab left open across a shift
+  // boundary (07h00/16h00) kept showing the shift that was "now" at whatever
+  // moment it last happened to re-render, not the actual current one. A
+  // once-a-minute tick keeps the "now" badge live without touching the
+  // operator's own manually-selected tab.
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => forceTick(t => t + 1), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
   const { date, shift: currentShift } = sastNow()
   const coversToday = period.start_date <= date && date <= period.end_date
   const [shift, setShift] = useState<RosterShift>(currentShift)
