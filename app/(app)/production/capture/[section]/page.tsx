@@ -6,7 +6,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, ArrowRight,
+  FileText, Check, ArrowRight, RefreshCw,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -44,7 +44,7 @@ import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
-import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
@@ -223,6 +223,7 @@ function CaptureScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
   const [changeoverAsk, setChangeoverAsk] = useState(false) // early-submit "is there a changeover?" prompt
+  const [gradeChangeover, setGradeChangeover] = useState(false) // Sieving: mid-shift grade/variant changeover confirm
   const [error, setError]         = useState<string | null>(null)
 
   // Serial counter, seeded from existing tags for this section+date
@@ -1399,6 +1400,18 @@ function CaptureScreen() {
     setTab('production')
   }
 
+  // Mid-shift grade/variant changeover (Sieving): the closing batch's leftover
+  // mass balance is still part of the SAME production run and can go out as
+  // Blocks/Sticks under the new grade — so it stays in the same session
+  // (addProduction, combined mass balance) rather than a hard reset, UNLESS the
+  // closing batch is organic, which must never share a balance with anything
+  // else and gets a fully separate session (startNewProduction).
+  function confirmGradeChangeover() {
+    setGradeChangeover(false)
+    if (isOrganicVariant(active?.variant)) startNewProduction()
+    else addProduction()
+  }
+
   // Start a fresh batch record for the next variant/grade after the current one is
   // submitted/locked. LAZY — reset local state only; the new prod_sessions row is
   // created on the first real capture (ensureSession, gated by hasCaptureData). This
@@ -1445,6 +1458,47 @@ function CaptureScreen() {
           onAnswer={submitSession}
           onCancel={() => setChangeoverAsk(false)}
         />
+      )}
+
+      {/* Mid-shift grade/variant changeover confirm — shows the leftover mass
+          balance before switching, since it's the operator's cue to bag it out
+          as Blocks/Sticks under the new grade (or, if organic, that it must be
+          closed off on its own). */}
+      {gradeChangeover && active && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9997, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 16 }}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="flex items-center gap-2.5 px-5 py-4 border-b border-stone-100">
+              <RefreshCw size={18} className="text-brand shrink-0" />
+              <div className="font-semibold text-[15px] text-text">Changeover — switch grade/variant</div>
+            </div>
+            <div className="p-5 space-y-3">
+              {isOrganicVariant(active.variant) ? (
+                <p className="text-[13px] text-text-muted">
+                  This batch is <strong className="text-text">{VARIANT_OPTIONS.find(v => v.value === active.variant)?.label ?? active.variant}</strong> — organic material must stay segregated, so this closes it off as its own record. The new grade/variant starts a fresh batch with its own mass balance.
+                </p>
+              ) : (
+                <>
+                  <p className="text-[13px] text-text-muted">
+                    Current mass balance: <strong className={rtWithinTol ? 'text-text' : 'text-warn'}>{rtVariance >= 0 ? '+' : ''}{rtVariance.toFixed(1)} kg</strong> (±{massBalanceToleranceFor(sectionId)} kg tolerance).
+                  </p>
+                  <p className="text-[13px] text-text-muted">
+                    This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Rolsiev Sticks / Indent Sticks under the new grade.
+                  </p>
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2 px-5 pb-5">
+              <button onClick={() => setGradeChangeover(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:bg-stone-50">
+                Cancel
+              </button>
+              <button onClick={confirmGradeChangeover}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-semibold hover:bg-brand-mid transition-colors">
+                Confirm changeover
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
@@ -1708,6 +1762,19 @@ function CaptureScreen() {
                 {rt.totalIn > 0 && sectionId !== 'granule' && (
                   <div className="pt-3 border-t border-stone-100">
                     <MassBalanceTable rows={balanceRows} tolerance={massBalanceToleranceFor(sectionId)} note={balanceNote} />
+                  </div>
+                )}
+
+                {/* Mid-shift grade/variant changeover — the leftover mass balance
+                    stays visible and part of the run (can still go out as Blocks/
+                    Sticks under the new grade) unless the closing batch is
+                    organic, which must be segregated into its own session. */}
+                {sectionId === 'sieving' && !locked && active.variant && (
+                  <div className="pt-3 border-t border-stone-100">
+                    <button onClick={() => setGradeChangeover(true)}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-stone-200 text-stone-600 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
+                      <RefreshCw size={14} /> Changeover — switch grade/variant
+                    </button>
                   </div>
                 )}
               </div>

@@ -62,6 +62,14 @@ export const VARIANT_OPTIONS: { value: DbVariant; short: string; label: string }
   { value: 'FT-CON',          short: 'FT CON', label: 'Fairtrade Conventional' },
 ]
 
+// Organic variants (incl. Fairtrade Organic, which doesn't contain the word
+// "Organic") must never have their mass balance combined with a different
+// batch's — segregation is a certification requirement, not a preference.
+const ORGANIC_VARIANTS = new Set<DbVariant>(['Organic', 'RA-Organic', 'FT-ORG'])
+export function isOrganicVariant(v: string | null | undefined): boolean {
+  return !!v && ORGANIC_VARIANTS.has(v as DbVariant)
+}
+
 // Full Acumatica variant word → live-types short code used by getAcumaticaCode().
 export function variantToShort(v: DbVariant | null | undefined): string {
   const map: Record<string, string> = {
