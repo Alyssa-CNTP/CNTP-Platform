@@ -45,23 +45,33 @@ function RatioTable({ lines }: { lines: RatioLine[] }) {
   )
 }
 
-export function JobCardApprovalsPanel() {
+export function JobCardApprovalsPanel({
+  table = 'job_cards_pasteuriser',
+  decideUrl = (id: string) => `/api/production/job-cards/${id}/decide`,
+  showFinalRatio = true,
+}: {
+  table?: string
+  decideUrl?: (id: string) => string
+  showFinalRatio?: boolean
+} = {}) {
   const db = getDb()
   const [cards, setCards] = useState<PendingCard[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
 
   async function reload() {
-    const { data } = await db.from('job_cards_pasteuriser')
-      .select('id, job_card_no, item_no, product_name, batch_number, customer, blend_description, blend_ratio_lines, final_ratio_lines, sent_for_approval_at')
+    const cols = ['id', 'job_card_no', 'item_no', 'product_name', 'batch_number', 'customer', 'blend_description',
+      'blend_ratio_lines', showFinalRatio ? 'final_ratio_lines' : null, 'sent_for_approval_at'].filter(Boolean).join(', ')
+    const { data } = await db.from(table)
+      .select(cols)
       .eq('status', 'sent_for_approval').order('sent_for_approval_at', { ascending: true })
     setCards((data as PendingCard[]) ?? [])
     setLoading(false)
   }
-  useEffect(() => { reload() }, [])
+  useEffect(() => { reload() }, [table])
 
   async function decide(id: string, decision: 'approved' | 'rejected', extra: { reason?: string }) {
-    const res = await fetch(`/api/production/job-cards/${id}/decide`, {
+    const res = await fetch(decideUrl(id), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision, ...extra }),
     })

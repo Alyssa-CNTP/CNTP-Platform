@@ -25,6 +25,15 @@ export function MassBalanceTable({
   const multiShift = rows.length > 1
   const vClass = (v: number) => (Math.abs(v) <= tolerance ? 'text-ok' : 'text-warn')
   const sign = (v: number) => (v > 0 ? '+' : '')
+  // The raw +/- figure stays (some staff already rely on the exact signed
+  // number) but the badge spells out what the sign actually means in plain
+  // terms — "+46.0 kg" alone doesn't say whether that's still-to-bag-out or
+  // a recording mistake, and floor operators shouldn't have to work that out.
+  const badgeText = within
+    ? `Within ±${tolerance}`
+    : variance > 0
+      ? `${Math.abs(variance).toFixed(1)} kg still to bag out`
+      : `${Math.abs(variance).toFixed(1)} kg more bagged than recorded in`
 
   return (
     <div className="space-y-2.5">
@@ -34,7 +43,7 @@ export function MassBalanceTable({
         </span>
         <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${within ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
           {within ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-          {within ? `Within ±${tolerance}` : `Outside ±${tolerance}`}
+          {badgeText}
         </span>
       </div>
 

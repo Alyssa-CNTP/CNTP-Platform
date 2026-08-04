@@ -76,6 +76,9 @@ export type PermissionKey =
   // Production — Pasteuriser job cards (BOM-driven generation + approval)
   | 'can_generate_job_cards'   // production manager: pick a BOM code, auto-fill ratios, send for approval
   | 'can_approve_job_cards'    // production supervisor: approve/reject a generated job card
+  // Production — Granule job cards (separate line, separate people from Pasteuriser's)
+  | 'can_generate_job_cards_granule'
+  | 'can_approve_job_cards_granule'
   // Production — Shift Report (the generated end-of-shift record)
   | 'can_view_shift_report'    // read a shift report (any date/shift)
   | 'can_edit_shift_report'    // regenerate, add supervisor notes, save the draft
@@ -161,6 +164,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_inventory','can_edit_inventory','can_delete_inventory',
   'can_view_blends','can_edit_blends','can_delete_blends',
   'can_generate_job_cards','can_approve_job_cards',
+  'can_generate_job_cards_granule','can_approve_job_cards_granule',
   'can_view_shift_report','can_edit_shift_report','can_submit_shift_report','can_approve_shift_report',
   'can_view_capture_ratings','can_rate_capture','can_delete_capture_rating',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
@@ -340,8 +344,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // Master Inventory & Blends (BOM) — supervisors keep these current
     can_view_inventory: true, can_edit_inventory: true,
     can_view_blends: true, can_edit_blends: true,
-    // Pasteuriser job cards — supervisor approves what the manager generates
-    can_approve_job_cards: true,
+    // Pasteuriser + Granule job cards — supervisor approves what the manager generates
+    can_approve_job_cards: true, can_approve_job_cards_granule: true,
     // Shift report — the supervisor writes it and sends it up; the manager signs.
     can_view_shift_report: true, can_edit_shift_report: true, can_submit_shift_report: true,
     // Capture ratings — the supervisor scores their own rostered crew.
@@ -376,8 +380,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // Capture ratings — read the weekly board; scoring stays with the supervisor
     // who actually watched the shift.
     can_view_capture_ratings: true,
-    // BOM catalogue (read) + Pasteuriser job cards — manager generates, supervisor approves
-    can_view_blends: true, can_generate_job_cards: true,
+    // BOM catalogue (read) + Pasteuriser/Granule job cards — manager generates, supervisor approves
+    can_view_blends: true, can_generate_job_cards: true, can_generate_job_cards_granule: true,
   },
 
   // ── Store — owns the Store roster section ──────────────────────────────────
@@ -652,6 +656,14 @@ export const PERMISSION_GROUPS: {
     permissions: [
       { key: 'can_generate_job_cards', label: 'Generate a job card from a BOM and send it for approval' },
       { key: 'can_approve_job_cards',  label: 'Approve or reject a job card sent for approval' },
+    ],
+  },
+  {
+    group: 'Production — Granule Job Cards',
+    department: 'Production',
+    permissions: [
+      { key: 'can_generate_job_cards_granule', label: 'Generate a Granule job card from a BOM and send it for approval' },
+      { key: 'can_approve_job_cards_granule',  label: 'Approve or reject a Granule job card sent for approval' },
     ],
   },
   {
