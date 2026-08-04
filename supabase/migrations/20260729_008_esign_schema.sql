@@ -77,13 +77,22 @@ CREATE TABLE IF NOT EXISTS esign.signatures (
   void_reason      text
 );
 
-ALTER TABLE esign.signature_requests
-  ADD CONSTRAINT signature_requests_signature_id_fkey
-  FOREIGN KEY (signature_id) REFERENCES esign.signatures(id);
+-- Guarded (not IF NOT EXISTS — Postgres doesn't support that on ADD CONSTRAINT)
+-- so this migration is safe to re-run if an earlier attempt got partway through.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'signature_requests_signature_id_fkey') THEN
+    ALTER TABLE esign.signature_requests
+      ADD CONSTRAINT signature_requests_signature_id_fkey
+      FOREIGN KEY (signature_id) REFERENCES esign.signatures(id);
+  END IF;
 
-ALTER TABLE esign.signatures
-  ADD CONSTRAINT signatures_request_id_fkey
-  FOREIGN KEY (request_id) REFERENCES esign.signature_requests(id);
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'signatures_request_id_fkey') THEN
+    ALTER TABLE esign.signatures
+      ADD CONSTRAINT signatures_request_id_fkey
+      FOREIGN KEY (request_id) REFERENCES esign.signature_requests(id);
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS signatures_subject_idx ON esign.signatures (subject_type, subject_id);
 CREATE INDEX IF NOT EXISTS signatures_request_idx ON esign.signatures (request_id);
