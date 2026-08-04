@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Sieving: match output grouping/colour style to Blender exactly)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+The output/bagging tab was already grouped and colour-coded by product type (added earlier this week), but wrapped each group in its own bordered card with a divide-y list inside — visually different from Blender's flatter pattern (a coloured dot+label header line, then each bag as its own individually-coloured/bordered row, no card wrapper). Rewrote to match Blender's pattern exactly. Presentation only — no data/schema change.
+
+---
+
 ## 2026-08-04 — Alyssa (Roster: fix stale "now" shift badge)
 
 **Files changed:** `app/(app)/production/roster/page.tsx`
