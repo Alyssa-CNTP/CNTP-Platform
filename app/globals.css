@@ -414,4 +414,22 @@ select.input { cursor: pointer; }
   /* Keep the colour-coded roster true on paper */
   *                { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body             { background: #fff; }
+
+  /* ── Shift report ──
+     Unlike the roster (deliberately one sheet), the shift report is a
+     multi-page handover document: it spans as many pages as the day needs. What
+     matters is that a section never splits mid-table, so a reader is never
+     handed half a breakdown list with the heading on the previous page. */
+  .report-section  { break-inside: avoid; page-break-inside: avoid; }
+  .report-section + .report-section { margin-top: 8mm; }
+  .report-break    { break-before: page; page-break-before: always; }
+  /* Cards lose their screen chrome on paper — a printed report should read as a
+     document, not a screenshot of stacked cards. */
+  .report-section, .report-section > div {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+  table            { width: 100%; border-collapse: collapse; }
+  thead            { display: table-header-group; }   /* repeat headers per page */
+  tr               { break-inside: avoid; page-break-inside: avoid; }
 }

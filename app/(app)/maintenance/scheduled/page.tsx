@@ -6,7 +6,7 @@
 // calibration registers, and Readings & Trends (water, IP, diesel, loadshedding,
 // run-hours, boiler starts) with the Excel database history and due-date formulas.
 
-import { useState, Fragment } from 'react'
+import { useState } from 'react'
 import { Printer, Users } from 'lucide-react'
 import { useMaintenanceContext } from '../layout'
 import { useAuth } from '@/lib/auth/context'
@@ -48,9 +48,6 @@ export default function ScheduledPage() {
   const [rd, setRd] = useState<Record<string, string>>({})
   // Per-row calibrate form for the editable annual register (date · interval · who).
   const [calForm, setCalForm] = useState<Record<number, { date?: string; interval?: string; by?: string }>>({})
-  // Which annual row's "mark calibrated" panel is expanded (keeps the table compact
-  // so full asset / serial / supplier names fit on one line without scrolling).
-  const [calPanel, setCalPanel] = useState<number | null>(null)
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
@@ -59,6 +56,39 @@ export default function ScheduledPage() {
   // Annual register header filters.
   const [annualSearch, setAnnualSearch] = useState('')
   const [annualCat, setAnnualCat] = useState('all')
+  // Calibration-certificate upload state (per annual item id).
+  const [certBusy, setCertBusy] = useState<number | null>(null)
+
+  // Upload a calibration certificate (image or PDF) as external-party proof.
+  // Stored in storage (not the DB) via /api/maintenance/annual/cert.
+  const uploadCert = async (id: number, file: File) => {
+    setCertBusy(id)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('id', String(id))
+      const res = await fetch('/api/maintenance/annual/cert', { method: 'POST', body: fd })
+      const j = await res.json()
+      if (!res.ok) { setPopup('Certificate upload failed: ' + (j.error ?? res.statusText)); return }
+      await reload()
+    } catch (e: any) {
+      setPopup('Certificate upload failed: ' + (e?.message ?? 'network error'))
+    } finally {
+      setCertBusy(null)
+    }
+  }
+
+  // Open a stored certificate via a short-lived signed URL.
+  const viewCert = async (path: string) => {
+    try {
+      const res = await fetch('/api/maintenance/annual/cert?path=' + encodeURIComponent(path))
+      const j = await res.json()
+      if (res.ok && j.url) window.open(j.url, '_blank', 'noopener')
+      else setPopup('Could not open certificate: ' + (j.error ?? res.statusText))
+    } catch (e: any) {
+      setPopup('Could not open certificate: ' + (e?.message ?? 'network error'))
+    }
+  }
   // Run-hours list ordered so forklifts are grouped in forklift-number order.
   const eqOrdered = [...eqLatest].sort((a, b) => {
     const fa = forkliftNum(a.cfg.equipment), fb = forkliftNum(b.cfg.equipment)
@@ -135,7 +165,7 @@ export default function ScheduledPage() {
       <div className="flex items-center gap-1 bg-surface-dim rounded-lg p-1 w-fit flex-wrap">
         {['Overview', 'Weekly', 'Monthly', 'Annual / Calibration'].map((t, i) => (
           <button key={t} onClick={() => setSub(i)}
-            className={`px-3.5 py-1.5 rounded-md text-[12px] font-semibold whitespace-nowrap transition ${sub === i ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{t}</button>
+            className={`px-3.5 py-1.5 rounded-md text-[12px] font-semibold whitespace-nowrap ${sub === i ? 'bg-brand text-white' : 'text-text-muted'}`}>{t}</button>
         ))}
       </div>
 
@@ -415,115 +445,126 @@ export default function ScheduledPage() {
             <p className="text-[12px] text-text-muted mt-0.5">Every field is editable. Mark an item calibrated with the date, cycle (days) and who did it — the next-due date recomputes automatically. Boiler: 180-day warning; others: 60 / 30 / 7 / 1-day alerts.</p>
           </div>
 
-          {/* At-a-glance counts + search (overdue items sort to the top of the table). */}
+          {/* Counts + search + category filter */}
           <div className="flex gap-2 flex-wrap items-center text-[12px]">
             <span className="badge badge-err">{annualRows.filter(a => a.days <= 0).length} overdue</span>
             <span className="badge badge-warn">{annualRows.filter(a => a.days > 0 && a.days <= 30).length} due ≤30d</span>
             <span className="badge badge-info">{annualRows.filter(a => a.days > 30 && a.days <= 60).length} due ≤60d</span>
-            <input className={`${INP} w-[220px] ml-auto`} placeholder="Search asset / serial / supplier…" value={annualSearch} onChange={e => setAnnualSearch(e.target.value)} />
+            <select className={`${INP} w-auto ml-auto`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
+              <option value="all">All categories</option>
+              {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input className={`${INP} w-[220px]`} placeholder="Search asset / serial / supplier…" value={annualSearch} onChange={e => setAnnualSearch(e.target.value)} />
           </div>
 
-          <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="data-table w-full">
-                <thead><tr>
-                  <th>Status</th>
-                  <th><select className={`${INP} text-[11px] py-1 min-h-0 font-semibold ${annualCat !== 'all' ? 'text-brand' : ''}`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
-                    <option value="all">Category ▾</option>
-                    {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
-                  </select></th>
-                  {['Asset', 'Serial', 'Supplier', 'Calibrated', 'Cycle (d)', 'Next due', ''].map((h, i) => <th key={i}>{h}</th>)}
-                </tr></thead>
-                <tbody>{annualRows
-                  .filter(a => (annualCat === 'all' || a.category === annualCat)
-                    && (!annualSearch || `${a.asset} ${a.serial_no} ${a.category} ${a.supplier}`.toLowerCase().includes(annualSearch.toLowerCase())))
-                  .map(a => {
-                  const cf = calForm[a.id] ?? {}
-                  const open = calPanel === a.id
-                  return (
-                  <Fragment key={a.id}>
-                  <tr>
-                    <td><span className={`badge ${calClass(a.days)}`} title={a.days <= 0 ? `overdue by ${Math.abs(a.days)}d` : `due in ${a.days}d`}>{calBadge(a.days)}</span></td>
-                    <td><input className={`${INP} w-full min-w-[100px] text-[11px] py-1 min-h-0`} value={drafts['ac' + a.id] ?? a.category}
-                      onChange={e => setDrafts(p => ({ ...p, ['ac' + a.id]: e.target.value }))}
-                      onBlur={e => e.target.value !== a.category && updateAnnual(a.id, { category: e.target.value })} /></td>
-                    <td><input className={`${INP} w-full min-w-[200px] text-[11px] py-1 min-h-0 font-semibold`} value={drafts['aa' + a.id] ?? a.asset}
+          {/* Card grid — one card per asset so the full name + every field is readable
+              and fits the screen (no horizontal scroll). */}
+          <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3">
+            {annualRows
+              .filter(a => (annualCat === 'all' || a.category === annualCat)
+                && (!annualSearch || `${a.asset} ${a.serial_no} ${a.category} ${a.supplier}`.toLowerCase().includes(annualSearch.toLowerCase())))
+              .map(a => {
+                const cf = calForm[a.id] ?? {}
+                return (
+                  <div key={a.id} className="rounded-xl border border-surface-rule bg-surface-card p-3 flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`badge ${calClass(a.days)}`}>{calBadge(a.days)}</span>
+                      <input className={`${INP} w-32 text-[11px] py-1 min-h-0 text-right`} title="Category" value={drafts['ac' + a.id] ?? a.category}
+                        onChange={e => setDrafts(p => ({ ...p, ['ac' + a.id]: e.target.value }))}
+                        onBlur={e => e.target.value !== a.category && updateAnnual(a.id, { category: e.target.value })} />
+                    </div>
+                    <input className={`${INP} w-full text-[13px] py-1.5 min-h-0 font-semibold`} title="Asset" value={drafts['aa' + a.id] ?? a.asset}
                       onChange={e => setDrafts(p => ({ ...p, ['aa' + a.id]: e.target.value }))}
-                      onBlur={e => e.target.value !== a.asset && updateAnnual(a.id, { asset: e.target.value })} /></td>
-                    <td><input className={`${INP} w-full min-w-[120px] text-[11px] py-1 min-h-0 font-mono`} value={drafts['as' + a.id] ?? a.serial_no}
-                      onChange={e => setDrafts(p => ({ ...p, ['as' + a.id]: e.target.value }))}
-                      onBlur={e => e.target.value !== a.serial_no && updateAnnual(a.id, { serial_no: e.target.value })} /></td>
-                    <td><input className={`${INP} w-full min-w-[130px] text-[11px] py-1 min-h-0`} value={drafts['au' + a.id] ?? a.supplier}
-                      onChange={e => setDrafts(p => ({ ...p, ['au' + a.id]: e.target.value }))}
-                      onBlur={e => e.target.value !== a.supplier && updateAnnual(a.id, { supplier: e.target.value })} /></td>
-                    <td className="text-[11px] whitespace-nowrap">{a.last_done
-                      ? <span className="text-ok">✓ {fmtD(a.last_done)}{a.last_done_by ? <span className="text-text-faint"> · {a.last_done_by}</span> : ''}</span>
-                      : <span className="text-text-faint">not yet</span>}</td>
-                    {/* Cycle (days) → recomputes Next due from the anchor (last done, else today). */}
-                    <td><input className={`${INP} w-16 text-[11px] py-1 min-h-0`} type="number" inputMode="numeric" placeholder="—"
-                      value={drafts['ai' + a.id] ?? (a.interval_days != null ? String(a.interval_days) : '')}
-                      onChange={e => setDrafts(p => ({ ...p, ['ai' + a.id]: e.target.value }))}
-                      onBlur={e => {
-                        const v = e.target.value ? parseInt(e.target.value, 10) : null
-                        if (v === a.interval_days) return
-                        const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
-                        const patch: any = { interval_days: v }
-                        if (v && anchor) patch.next_due = addDays(anchor, v).toISOString().slice(0, 10)
-                        setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n })
-                        updateAnnual(a.id, patch)
-                      }} /></td>
-                    {/* Next due → recomputes Cycle (days) from the anchor. Bidirectional. */}
-                    <td><input className={`${INP} w-32 text-[11px] py-1 min-h-0`} type="date"
-                      value={drafts['an' + a.id] ?? (a.next_due ?? '').slice(0, 10)}
-                      onChange={e => setDrafts(p => ({ ...p, ['an' + a.id]: e.target.value }))}
-                      onBlur={e => {
-                        const nd = e.target.value || null
-                        if (nd === (a.next_due ?? '').slice(0, 10)) return
-                        const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
-                        const patch: any = { next_due: nd }
-                        if (nd) patch.interval_days = Math.max(0, diffDays(anchor, nd))
-                        setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n })
-                        updateAnnual(a.id, patch)
-                      }} /></td>
-                    <td><button className={BTN_SM} onClick={() => setCalPanel(open ? null : a.id)}>{open ? 'Close' : 'Calibrate ▾'}</button></td>
-                  </tr>
-                  {open && (
-                    <tr>
-                      <td colSpan={9} className="bg-surface-raised/40">
-                        <div className="flex gap-2 flex-wrap items-center p-2">
-                          <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">Mark calibrated:</span>
-                          <label className="text-[11px] text-text-muted">Date <input className={`${INP} w-36 text-[11px] py-1 min-h-0 ml-1`} type="date"
-                            value={cf.date ?? new Date().toISOString().slice(0, 10)}
-                            onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} /></label>
-                          <label className="text-[11px] text-text-muted">Cycle (d) <input className={`${INP} w-20 text-[11px] py-1 min-h-0 ml-1`} type="number" inputMode="numeric"
-                            title="The next-due date is set this many days forward from the calibration date"
-                            placeholder={a.interval_days != null ? `${a.interval_days}` : 'days'}
-                            value={cf.interval ?? (a.interval_days != null ? String(a.interval_days) : '')}
-                            onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], interval: e.target.value } }))} /></label>
-                          <label className="text-[11px] text-text-muted">By <select className={`${INP} w-36 text-[11px] py-1 min-h-0 ml-1 ${cf.by ? '' : 'border-warn'}`}
-                            value={cf.by ?? ''} onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
-                            <option value="">Who?…</option>
-                            {[actor, ...techNames].filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
-                            <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
-                          </select></label>
-                          <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by}
-                            title="Record who calibrated it and when; the next-due date is set forward by the cycle days"
-                            onClick={() => { calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
-                              (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
-                              cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!); setCalPanel(null) }}>✓ Calibrated</button>
-                          {a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>✉ Email supplier</button>}
-                          <label className="text-[11px] text-text-muted flex-1 min-w-[160px]">Notes <input className={`${INP} w-full text-[11px] py-1 min-h-0 mt-0.5`} placeholder="Notes…"
-                            value={drafts['a' + a.id] ?? a.notes}
-                            onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
-                            onBlur={e => saveAnnualNotes(a.id, e.target.value)} /></label>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                  </Fragment>
-                )})}</tbody>
-              </table>
-            </div>
+                      onBlur={e => e.target.value !== a.asset && updateAnnual(a.id, { asset: e.target.value })} />
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-[10px] text-text-muted uppercase tracking-wide">Serial
+                        <input className={`${INP} w-full text-[11px] py-1 min-h-0 font-mono mt-0.5`} value={drafts['as' + a.id] ?? a.serial_no}
+                          onChange={e => setDrafts(p => ({ ...p, ['as' + a.id]: e.target.value }))}
+                          onBlur={e => e.target.value !== a.serial_no && updateAnnual(a.id, { serial_no: e.target.value })} /></label>
+                      <label className="text-[10px] text-text-muted uppercase tracking-wide">Supplier
+                        <input className={`${INP} w-full text-[11px] py-1 min-h-0 mt-0.5`} value={drafts['au' + a.id] ?? a.supplier}
+                          onChange={e => setDrafts(p => ({ ...p, ['au' + a.id]: e.target.value }))}
+                          onBlur={e => e.target.value !== a.supplier && updateAnnual(a.id, { supplier: e.target.value })} /></label>
+                    </div>
+                    <div className="text-[11px]">{a.last_done
+                      ? <span className="text-ok">✓ Calibrated {fmtD(a.last_done)}{a.last_done_by ? <span className="text-text-faint"> · {a.last_done_by}</span> : ''}</span>
+                      : <span className="text-text-faint">Not calibrated yet</span>}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-[10px] text-text-muted uppercase tracking-wide">Cycle (days)
+                        <input className={`${INP} w-full text-[11px] py-1 min-h-0 mt-0.5`} type="number" inputMode="numeric" placeholder="—"
+                          value={drafts['ai' + a.id] ?? (a.interval_days != null ? String(a.interval_days) : '')}
+                          onChange={e => setDrafts(p => ({ ...p, ['ai' + a.id]: e.target.value }))}
+                          onBlur={e => {
+                            const v = e.target.value ? parseInt(e.target.value, 10) : null
+                            if (v === a.interval_days) return
+                            const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
+                            const patch: any = { interval_days: v }
+                            if (v && anchor) patch.next_due = addDays(anchor, v).toISOString().slice(0, 10)
+                            setDrafts(p => { const n = { ...p }; delete n['an' + a.id]; return n })
+                            updateAnnual(a.id, patch)
+                          }} /></label>
+                      <label className="text-[10px] text-text-muted uppercase tracking-wide">Next due
+                        <input className={`${INP} w-full text-[11px] py-1 min-h-0 mt-0.5`} type="date"
+                          value={drafts['an' + a.id] ?? (a.next_due ?? '').slice(0, 10)}
+                          onChange={e => setDrafts(p => ({ ...p, ['an' + a.id]: e.target.value }))}
+                          onBlur={e => {
+                            const nd = e.target.value || null
+                            if (nd === (a.next_due ?? '').slice(0, 10)) return
+                            const anchor = a.last_done ?? new Date().toISOString().slice(0, 10)
+                            const patch: any = { next_due: nd }
+                            if (nd) patch.interval_days = Math.max(0, diffDays(anchor, nd))
+                            setDrafts(p => { const n = { ...p }; delete n['ai' + a.id]; return n })
+                            updateAnnual(a.id, patch)
+                          }} /></label>
+                    </div>
+                    {/* Mark calibrated — date + who; the cycle above sets the forward next-due date. */}
+                    <div className="border-t border-surface-rule pt-2 flex gap-2 flex-wrap items-end">
+                      <label className="text-[10px] text-text-muted uppercase tracking-wide">Calibrated on
+                        <input className={`${INP} w-36 text-[11px] py-1 min-h-0 mt-0.5`} type="date"
+                          value={cf.date ?? new Date().toISOString().slice(0, 10)}
+                          onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], date: e.target.value } }))} /></label>
+                      <label className="text-[10px] text-text-muted uppercase tracking-wide">By
+                        <select className={`${INP} w-32 text-[11px] py-1 min-h-0 mt-0.5 ${cf.by ? '' : 'border-warn'}`}
+                          value={cf.by ?? ''} onChange={e => setCalForm(p => ({ ...p, [a.id]: { ...p[a.id], by: e.target.value } }))}>
+                          <option value="">Who?…</option>
+                          {techNames.filter((v, i, arr) => v && arr.indexOf(v) === i).map(t => <option key={t}>{t}</option>)}
+                          <option value="__external__">External / supplier{a.supplier && a.supplier !== 'Internal' ? ` (${a.supplier})` : ''}</option>
+                        </select></label>
+                      <button className={`${BTN_OK} ${cf.by ? '' : 'opacity-40 cursor-not-allowed'}`} disabled={!cf.by}
+                        title="Record who calibrated it and when; the next-due date is set forward by the cycle days above"
+                        onClick={() => calibrateAnnual(a, cf.date ?? new Date().toISOString().slice(0, 10),
+                          (cf.interval ? parseInt(cf.interval, 10) : (drafts['ai' + a.id] ? parseInt(drafts['ai' + a.id], 10) : a.interval_days)) ?? null,
+                          cf.by === '__external__' ? (a.supplier && a.supplier !== 'Internal' ? a.supplier : 'External') : cf.by!)}>✓ Calibrated</button>
+                      {a.supplier !== 'Internal' && <button className={BTN_SM} onClick={() => setPopup('Draft Email to ' + a.supplier + ':\n\nSubject: ' + a.category + ' Due — ' + a.asset + '\n\nDear ' + a.supplier + ',\n\nPlease schedule ' + a.category.toLowerCase() + ' for:\nAsset: ' + a.asset + '\nSerial: ' + a.serial_no + '\nDue: ' + fmtD(a.next_due) + '\n\nPlease confirm.\n\nRegards,\nCNTP Maintenance')}>✉ Email</button>}
+                    </div>
+                    {/* Calibration certificate — proof of external calibration (image / PDF, stored in storage not the DB) */}
+                    <div className="border-t border-surface-rule pt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-text-muted uppercase tracking-wide">Certificate</span>
+                      {a.cert_path ? (
+                        <>
+                          <button className={BTN_SM} onClick={() => viewCert(a.cert_path!)} title={a.cert_name ?? 'View certificate'}>
+                            📄 View certificate
+                          </button>
+                          <span className="text-[10px] text-text-faint">
+                            {a.cert_uploaded_by ? `by ${a.cert_uploaded_by}` : ''}{a.cert_uploaded_at ? ` · ${fmtD(a.cert_uploaded_at)}` : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-text-faint">None uploaded</span>
+                      )}
+                      <label className={`${BTN_SM} cursor-pointer ${certBusy === a.id ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {certBusy === a.id ? 'Uploading…' : (a.cert_path ? 'Replace…' : 'Upload proof…')}
+                        <input type="file" accept="image/*,application/pdf" className="hidden"
+                          onChange={e => { const f = e.target.files?.[0]; if (f) uploadCert(a.id, f); e.target.value = '' }} />
+                      </label>
+                    </div>
+                    <input className={`${INP} w-full text-[11px] py-1 min-h-0`} placeholder="Notes…"
+                      value={drafts['a' + a.id] ?? a.notes}
+                      onChange={e => setDrafts(p => ({ ...p, ['a' + a.id]: e.target.value }))}
+                      onBlur={e => saveAnnualNotes(a.id, e.target.value)} />
+                  </div>
+                )
+              })}
           </div>
 
           {/* Full calibration register imported from the Excel — next due = last done + interval */}

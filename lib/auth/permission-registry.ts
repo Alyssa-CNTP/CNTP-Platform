@@ -102,6 +102,15 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
       { key: 'production.job_cards', label: 'Pasteuriser job cards',
         read: 'can_view_blends', write: 'can_generate_job_cards',
         manage: [{ key: 'can_approve_job_cards', label: 'Approve or reject a job card sent for approval' }] },
+      { key: 'production.shift_report', label: 'Shift report (end-of-shift record)',
+        read: 'can_view_shift_report', write: 'can_edit_shift_report',
+        manage: [
+          { key: 'can_submit_shift_report',  label: 'Send the report to the Production Manager' },
+          { key: 'can_approve_shift_report', label: 'Sign the report off (Production Manager)' },
+        ],
+        note: 'Content is generated from capture, checks, timesheets and maintenance — Write covers regenerating and adding notes.' },
+      { key: 'production.capture_ratings', label: 'Capture ratings (performance & accuracy)',
+        read: 'can_view_capture_ratings', write: 'can_rate_capture', delete: 'can_delete_capture_rating' },
     ],
   },
   {
@@ -140,6 +149,12 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     resources: [
       { key: 'logistics.access', label: 'Logistics module', read: 'can_access_logistics',
         note: 'Grant Read to give a non-Production/Quality/Management user the module.' },
+      { key: 'logistics.dispatch_signing', label: 'Dispatch document signing',
+        write: 'can_sign_dispatch_doc',
+        manage: [
+          { key: 'can_request_external_signature', label: 'Send external signing link to driver/customer' },
+          { key: 'can_verify_dispatch_doc', label: 'Verify a signed document' },
+        ] },
     ],
   },
   {

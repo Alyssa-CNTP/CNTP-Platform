@@ -42,6 +42,8 @@ import { CaptureOverview, type BlenderRatioGroup } from '@/components/production
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
+import { machineChecksFor } from '@/lib/production/checks-config'
+import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
 import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
@@ -114,6 +116,11 @@ function CaptureScreen() {
   const { user, role, isSupervisor, isIT, signOut, displayName } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
+  // Refining 1/2 and Blender have no machine checks configured (nothing on the
+  // paper form to check) — the Checks step is deactivated for them rather than
+  // showing an empty panel that still demands a PIN sign-off for nothing.
+  const hasChecks = machineChecksFor(sectionId).length > 0
+  const visibleSteps = hasChecks ? STEPS : STEPS.filter(s => s.id !== 'checks')
   // Grade-driven sections (Sieving) need a grade chosen per batch; Refining and
   // Granule are variant-only — traceability there comes from the system serials.
   // Blender's Export/Export Blend/Domestic field lives per input row (matching the
@@ -132,11 +139,49 @@ function CaptureScreen() {
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
 
+  // Where "back" goes. Capture is reached from several places — the capture
+  // landing page, Production Orders (with filters applied), the Supervisor Hub's
+  // Sign-off queue and Shift Report — and it used to always return to the capture
+  // landing page, dumping a supervisor reviewing a filtered order list back to
+  // the operator's start screen. Callers pass their own URL as `return`, and only
+  // an app-internal path is honoured so the parameter can't be used to bounce
+  // someone off-site.
+  const returnParam = sp.get('return')
+  const backHref = returnParam && returnParam.startsWith('/') && !returnParam.startsWith('//')
+    ? returnParam
+    : '/production/capture'
+  const goBack = () => router.push(backHref)
+
   const [loading, setLoading]     = useState(true)
   const [assignment, setAssignment] = useState<ShiftAssignment | null>(null)
   const [opNames, setOpNames]     = useState<string[]>([])
   const [rosterOps, setRosterOps] = useState<{ id: string; name: string; pin: string }[]>([])
   const [verifiedOp, setVerifiedOp] = useState<Operator | null>(null)
+
+  // ── Cleaner sign-in — a dedicated cleaner can sign into the Cleaning tab's
+  // cleaner-only tasks without touching the operator's own identity/session.
+  // While cleanerActor is set, the whole screen is restricted to Cleaning
+  // (nothing else is reachable), and it clears itself once they sign off,
+  // handing the tablet straight back to the operator's still-running capture.
+  const [cleanerActor, setCleanerActor] = useState<{ id: string; name: string } | null>(null)
+  const [cleanerGateOpen, setCleanerGateOpen] = useState(false)
+  const [cleanerCandidates, setCleanerCandidates] = useState<{ id: string; name: string; pin: string }[]>([])
+  const [cleanerPin, setCleanerPin] = useState('')
+  const [cleanerError, setCleanerError] = useState<string | null>(null)
+
+  useEffect(() => {
+    cleanersOnDuty(dateParam, shift).then(setCleanerCandidates).catch(() => setCleanerCandidates([]))
+  }, [dateParam, shift])
+
+  function verifyCleanerPin() {
+    setCleanerError(null)
+    const c = cleanerCandidates.find(c => c.pin && c.pin === cleanerPin)
+    if (!c) { setCleanerError('PIN not recognised — check the roster'); return }
+    setCleanerActor({ id: c.id, name: c.name })
+    setCleanerGateOpen(false)
+    setCleanerPin('')
+    setTab('cleaning')
+  }
 
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [status, setStatus]       = useState<'new' | 'draft' | 'submitted' | 'approved'>('new')
@@ -169,6 +214,7 @@ function CaptureScreen() {
   const [runRollupStale, setRunRollupStale] = useState(false)
   const [tab, setTab]             = useState<Tab>(() => {
     const t = sp.get('tab')
+    if (t === 'checks' && !hasChecks) return 'production'   // stale ?tab=checks on a section with no checks
     return (['production', 'checks', 'cleaning', 'overview', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
   })
   const [variantMismatch, setVariantMismatch] = useState<string | null>(null)
@@ -348,7 +394,7 @@ function CaptureScreen() {
           || (Array.isArray(d?.outputs) && d.outputs.length > 0)
         )
         const fresh = (sessStatus === 'new' || sessStatus === 'draft') && !hasCapture
-        if (!sp.get('tab') && fresh && !signed) setTab('checks')
+        if (hasChecks && !sp.get('tab') && fresh && !signed) setTab('checks')
       } catch { /* routing is best-effort */ }
 
       // Load the other shift's session(s) so the overview can show combined
@@ -1255,7 +1301,7 @@ function CaptureScreen() {
         <AlertTriangle size={24} className="text-warn" />
         <p className="text-[14px] font-medium text-text">No assignment for this section</p>
         <p className="text-[12px] text-text-muted max-w-sm">A supervisor needs to roster operators onto {meta.name} for the {shift} shift before capture can start.</p>
-        <button onClick={() => router.push('/production/capture')} className="text-[12px] text-brand hover:underline">← Back</button>
+        <button onClick={goBack} className="text-[12px] text-brand hover:underline">← Back</button>
       </div>
     )
   }
@@ -1266,7 +1312,7 @@ function CaptureScreen() {
         <ClipboardList size={24} className="text-stone-400" />
         <p className="text-[14px] font-medium text-text">{meta.name} capture is coming soon</p>
         <p className="text-[12px] text-text-muted max-w-sm">The Sieving Tower flow is the proven template; this section will follow the same pattern.</p>
-        <button onClick={() => router.push('/production/capture')} className="text-[12px] text-brand hover:underline">← Back</button>
+        <button onClick={goBack} className="text-[12px] text-brand hover:underline">← Back</button>
       </div>
     )
   }
@@ -1387,7 +1433,7 @@ function CaptureScreen() {
           sectionName={meta.name}
           hasRoster={afternoonOps.length > 0}
           onConfirm={confirmChangeover}
-          onBack={() => router.push('/production/capture')}
+          onBack={goBack}
         />
       )}
 
@@ -1408,7 +1454,7 @@ function CaptureScreen() {
           reached from a supervisor's production-order review), and a modal
           popping up over someone reading the AI summary rather than actually
           operating the line reads as a bug, not a reminder. */}
-      {tab !== 'overview' && (
+      {tab !== 'overview' && !cleanerActor && (
         <HourlyVsdPrompt
           sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
           running={totalIn > 0}
@@ -1420,30 +1466,87 @@ function CaptureScreen() {
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
         style={{ background: `linear-gradient(180deg, ${meta.colorHex}12, transparent)` }}>
-        <button onClick={() => router.push('/production/capture')} className="p-2 -ml-1 rounded-lg hover:bg-black/5 text-stone-500"><ChevronLeft size={18} /></button>
+        <button onClick={goBack} className="p-2 -ml-1 rounded-lg hover:bg-black/5 text-stone-500"><ChevronLeft size={18} /></button>
         <div className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-sm" style={{ background: meta.colorHex }}>
           <span className="font-mono font-bold text-[12px] text-white">{meta.code}</span>
         </div>
         <div className="flex-1 min-w-0">
           <h1 className="font-semibold text-[20px] text-text leading-tight">{meta.name}</h1>
           <p className="text-[11px] text-text-muted mt-0.5 truncate">
-            <span className="capitalize">{shift} shift</span> · {format(parseISO(dateParam + 'T12:00:00'), 'd MMM')}
-            {opNames.length ? <> · {opNames.join(', ')}</> : null}
+            {cleanerActor ? (
+              <>Signed in as <strong className="text-text">{cleanerActor.name}</strong> · Cleaner</>
+            ) : (
+              <><span className="capitalize">{shift} shift</span> · {format(parseISO(dateParam + 'T12:00:00'), 'd MMM')}
+              {opNames.length ? <> · {opNames.join(', ')}</> : null}</>
+            )}
           </p>
         </div>
-        <button onClick={() => setTab('messages')} title="Line messages"
-          className={`p-2 rounded-lg shrink-0 transition-colors ${tab === 'messages' ? 'bg-brand/10 text-brand' : 'text-stone-400 hover:bg-black/5 hover:text-stone-600'}`}>
-          <MessageSquare size={18} />
-        </button>
-        <span className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 ${statusColor}`}>{statusLabel}</span>
+        {!cleanerActor && (
+          <button onClick={() => setCleanerGateOpen(true)} title="Cleaner sign-in"
+            className="p-2 rounded-lg shrink-0 text-stone-400 hover:bg-black/5 hover:text-stone-600">
+            <Sparkles size={18} />
+          </button>
+        )}
+        {!cleanerActor && (
+          <button onClick={() => setTab('messages')} title="Line messages"
+            className={`p-2 rounded-lg shrink-0 transition-colors ${tab === 'messages' ? 'bg-brand/10 text-brand' : 'text-stone-400 hover:bg-black/5 hover:text-stone-600'}`}>
+            <MessageSquare size={18} />
+          </button>
+        )}
+        {cleanerActor ? (
+          <span className="text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 bg-ok/10 text-ok">Cleaner mode</span>
+        ) : (
+          <span className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full shrink-0 ${statusColor}`}>{statusLabel}</span>
+        )}
       </div>
+
+      {/* Cleaner sign-in gate — PIN-matched against whoever the whole-site Shift
+          Roster has on cleaning duty for this date/shift (not the section's own
+          operators). Deliberately separate from the operator's own identity so
+          a cleaner task can only ever be signed by an actual cleaner. */}
+      {cleanerGateOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setCleanerGateOpen(false)}>
+          <div className="w-full max-w-sm bg-white rounded-2xl border border-stone-200 shadow-lg p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex flex-col items-center text-center gap-2">
+              <div className="w-12 h-12 rounded-2xl bg-brand/10 flex items-center justify-center"><Sparkles size={22} className="text-brand" /></div>
+              <h2 className="font-semibold text-[17px] text-text">Cleaner sign-in</h2>
+              <p className="text-[12px] text-text-muted leading-relaxed">
+                Enter your PIN to open this section's cleaning tasks. The operator's capture stays saved — you'll sign out once you're done.
+              </p>
+            </div>
+            {cleanerCandidates.length === 0 ? (
+              <p className="text-[12px] text-amber-600 text-center">No cleaner rostered for this shift.</p>
+            ) : (
+              <>
+                <input type="password" inputMode="numeric" maxLength={4} value={cleanerPin} autoFocus
+                  onChange={e => { setCleanerPin(e.target.value.replace(/\D/g, '').slice(0, 4)); setCleanerError(null) }}
+                  onKeyDown={e => { if (e.key === 'Enter') verifyCleanerPin() }}
+                  placeholder="••••"
+                  className="w-full px-3 py-3 rounded-xl border border-stone-200 bg-white text-center font-mono tracking-[0.5em] text-[22px] outline-none focus:border-brand" />
+                {cleanerError && <p className="text-[11px] text-err text-center">{cleanerError}</p>}
+                <button onClick={verifyCleanerPin} disabled={cleanerPin.length !== 4}
+                  className="w-full py-3 rounded-xl bg-brand text-white font-semibold text-[13px] disabled:opacity-40">
+                  Sign in
+                </button>
+              </>
+            )}
+            <button onClick={() => { setCleanerGateOpen(false); setCleanerPin(''); setCleanerError(null) }}
+              className="w-full text-[12px] text-stone-400 hover:text-text">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Process stepper — the steps the operators actually work through, in order.
           Clickable so they can jump around; current step is highlighted, earlier
-          steps read as done. Messages lives in the header, not the flow. */}
+          steps read as done. Messages lives in the header, not the flow.
+          Hidden entirely in cleaner mode — a signed-in cleaner has nowhere else
+          to go but Cleaning, so there's nothing to step through. */}
+      {!cleanerActor && (
       <div className="flex items-center px-3 sm:px-4 py-3 flex-shrink-0 bg-white border-b border-stone-200 overflow-x-auto">
-        {STEPS.map((s, i) => {
-          const activeIdxStep = STEPS.findIndex(x => x.id === tab)
+        {visibleSteps.map((s, i) => {
+          const activeIdxStep = visibleSteps.findIndex(x => x.id === tab)
           const isActive = tab === s.id
           // Checks reflects real state (signed?) so its tick means "checks done",
           // not just "we've moved past this tab".
@@ -1464,13 +1567,14 @@ function CaptureScreen() {
                 </span>
                 <Icon size={15} className={`sm:hidden ${isActive ? 'text-brand' : isDone ? 'text-stone-700' : 'text-stone-400'}`} />
               </button>
-              {i < STEPS.length - 1 && (
+              {i < visibleSteps.length - 1 && (
                 <div className={`w-6 sm:w-10 h-px mx-1.5 sm:mx-2.5 ${activeIdxStep > i ? 'bg-brand/40' : 'bg-stone-200'}`} />
               )}
             </div>
           )
         })}
       </div>
+      )}
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
@@ -1479,14 +1583,14 @@ function CaptureScreen() {
               mass balance above is still correct and safely saved, but the
               combined full-day total (production_runs) may be stale until the
               next successful save. Non-blocking: capture continues normally. */}
-          {runRollupStale && runId && tab !== 'messages' && (
+          {runRollupStale && runId && tab !== 'messages' && !cleanerActor && (
             <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
               <AlertTriangle size={14} className="shrink-0 mt-0.5" />
               <span><strong>Full-day total may be out of date</strong> — the last save couldn't update the combined run total. Your per-shift figures above are still correct and saved; try Save draft again to refresh the full-day total.</span>
             </div>
           )}
           {/* Handover note from the previous shift on this line */}
-          {prevNote && tab !== 'messages' && (
+          {prevNote && tab !== 'messages' && !cleanerActor && (
             <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-800">
               <MessageSquare size={14} className="shrink-0 mt-0.5" />
               <span>
@@ -1521,7 +1625,7 @@ function CaptureScreen() {
               {/* Routine guide: until start-up checks are done, lead with a clear
                   "do checks first" gate. Strong but not blocking — capture is still
                   below for the cases where they must proceed. */}
-              {!locked && !checksSigned && (
+              {hasChecks && !locked && !checksSigned && (
                 <button onClick={() => setTab('checks')}
                   className="w-full flex items-center gap-3 px-4 py-3.5 bg-warn/8 border-2 border-warn/30 rounded-2xl text-left hover:bg-warn/12 transition-colors">
                   <div className="w-9 h-9 rounded-xl bg-warn/15 flex items-center justify-center shrink-0"><Gauge size={18} className="text-warn" /></div>
@@ -1533,7 +1637,7 @@ function CaptureScreen() {
                 </button>
               )}
 
-              {!locked && checksSigned && (
+              {hasChecks && !locked && checksSigned && (
                 <ChecksStatusStrip sectionId={sectionId} date={dateParam} shift={shift}
                   running={totalIn > 0} onOpen={() => setTab('checks')} />
               )}
@@ -1658,6 +1762,9 @@ function CaptureScreen() {
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                        date={dateParam}
+                        shift={shift}
+                        sessionId={sessionId}
                       />
                     : isPasteuriser(sectionId)
                     ? <PasteuriserCapture
@@ -1665,6 +1772,8 @@ function CaptureScreen() {
                         sectionId={sectionId}
                         assignment={assignment}
                         variantWord={active.variant}
+                        onVariantSuggestion={v => { if (!active.variant) updateActiveMeta('variant', v) }}
+                        date={dateParam}
                         locked={locked}
                         value={active.data as PasteuriserData}
                         onChange={updateActiveData}
@@ -1701,7 +1810,7 @@ function CaptureScreen() {
             </>
           )}
 
-          {tab === 'checks' && (
+          {tab === 'checks' && hasChecks && (
             <ChecksPanel
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
               operators={candidateOps}
@@ -1714,6 +1823,9 @@ function CaptureScreen() {
             <CleaningPanel
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
               operators={candidateOps}
+              viewer={cleanerActor ? 'cleaner' : 'operator'}
+              presignedActor={cleanerActor}
+              onSigned={cleanerActor ? () => { setCleanerActor(null); setTab('production') } : undefined}
             />
           )}
 

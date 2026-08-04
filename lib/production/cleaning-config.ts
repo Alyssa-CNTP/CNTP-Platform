@@ -109,3 +109,13 @@ export const FREQUENCY_DAYS: Record<Frequency, number> = {
 export function cleaningTasksFor(sectionId: string): CleaningTaskDef[] {
   return CLEANING_TASKS[sectionId] ?? CLEANING_TASKS.refining1
 }
+
+// A task is cleaner-only when a dedicated cleaner (not the operator) is solely
+// responsible for it — everything else ('Operator', 'Operator / General
+// cleaner', 'Bagging operator', 'Operator / General worker') is an operator
+// task, since an operator is allowed to do it. Drives the Cleaning tab split:
+// operators never see cleaner-only tasks, and cleaner-only tasks are only
+// actionable once a rostered cleaner signs in (see cleaner-roster.ts).
+export function isCleanerOnlyTask(t: CleaningTaskDef): boolean {
+  return t.responsible === 'General cleaner'
+}

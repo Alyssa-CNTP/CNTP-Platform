@@ -102,7 +102,7 @@ export default function SupervisorMessages() {
 
   return (
     <div className="px-4 py-6 max-w-[1100px] mx-auto space-y-5">
-      <HubHeader subtitle="Per-line messages between supervisors and the floor" />
+      <HubHeader title="Messages" subtitle="Per-line messages between supervisors and the floor" />
 
       <div className="flex gap-4 h-[calc(100vh-280px)] min-h-[440px]">
         {/* Channel list */}

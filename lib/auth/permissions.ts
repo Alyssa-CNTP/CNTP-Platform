@@ -76,6 +76,15 @@ export type PermissionKey =
   // Production — Pasteuriser job cards (BOM-driven generation + approval)
   | 'can_generate_job_cards'   // production manager: pick a BOM code, auto-fill ratios, send for approval
   | 'can_approve_job_cards'    // production supervisor: approve/reject a generated job card
+  // Production — Shift Report (the generated end-of-shift record)
+  | 'can_view_shift_report'    // read a shift report (any date/shift)
+  | 'can_edit_shift_report'    // regenerate, add supervisor notes, save the draft
+  | 'can_submit_shift_report'  // send the report to the production manager
+  | 'can_approve_shift_report' // production manager: sign the report off
+  // Production — Capture ratings (performance + data accuracy per rostered person)
+  | 'can_view_capture_ratings' // see the weekly capture scoreboard
+  | 'can_rate_capture'         // score a rostered person's performance & accuracy
+  | 'can_delete_capture_rating'
   // Sales & Marketing
   | 'can_access_sales'
   | 'can_access_marketing'
@@ -102,6 +111,9 @@ export type PermissionKey =
   | 'can_access_workspace'
   // Logistics
   | 'can_access_logistics'
+  | 'can_sign_dispatch_doc'            // sign a dispatch document in-app (own on-file signature)
+  | 'can_request_external_signature'   // send a driver/customer an external signing link; void/resend
+  | 'can_verify_dispatch_doc'          // mark a signed dispatch document verified
   // Maintenance
   | 'can_access_maintenance'
   | 'can_raise_breakdown'
@@ -149,13 +161,15 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_inventory','can_edit_inventory','can_delete_inventory',
   'can_view_blends','can_edit_blends','can_delete_blends',
   'can_generate_job_cards','can_approve_job_cards',
+  'can_view_shift_report','can_edit_shift_report','can_submit_shift_report','can_approve_shift_report',
+  'can_view_capture_ratings','can_rate_capture','can_delete_capture_rating',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
-  'can_access_logistics',
+  'can_access_logistics','can_sign_dispatch_doc','can_request_external_signature','can_verify_dispatch_doc',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_access_hr',
@@ -328,6 +342,10 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_blends: true, can_edit_blends: true,
     // Pasteuriser job cards — supervisor approves what the manager generates
     can_approve_job_cards: true,
+    // Shift report — the supervisor writes it and sends it up; the manager signs.
+    can_view_shift_report: true, can_edit_shift_report: true, can_submit_shift_report: true,
+    // Capture ratings — the supervisor scores their own rostered crew.
+    can_view_capture_ratings: true, can_rate_capture: true,
     // Staff & Competency
     can_access_hr: true, can_view_staff: true, can_edit_staff_profiles: true,
     can_manage_competencies: true, can_allocate_staff: true,
@@ -352,6 +370,12 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_export_csv: true,
     can_view_roster: true, can_submit_roster_production: true,
     can_approve_reopen_request: true,
+    // Shift report — the manager is the signing tier, and can correct a report
+    // before signing it rather than bouncing it back for a typo.
+    can_view_shift_report: true, can_edit_shift_report: true, can_approve_shift_report: true,
+    // Capture ratings — read the weekly board; scoring stays with the supervisor
+    // who actually watched the shift.
+    can_view_capture_ratings: true,
     // BOM catalogue (read) + Pasteuriser job cards — manager generates, supervisor approves
     can_view_blends: true, can_generate_job_cards: true,
   },
@@ -477,6 +501,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_all_sections:  true,
     can_view_live_history:  true,
     can_view_inventory: true, can_view_blends: true,
+    // Shift report + capture scoreboard (read-only — signing stays with production)
+    can_view_shift_report: true, can_view_capture_ratings: true,
     // Maintenance (view module — no job-card actions)
     can_access_maintenance: true,
     // Management & Reporting

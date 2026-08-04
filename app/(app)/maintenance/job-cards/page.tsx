@@ -382,20 +382,31 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
 
   return (
     <div className="card p-4 mt-6">
-      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-        <div className="text-sm font-semibold text-text">Historical job cards <span className="text-[11px] text-text-muted tabular-nums">{rows.length}</span></div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
-            <input className={`${INP} pl-8 w-[240px]`} placeholder="Search history — card, machine, root cause…" value={q} onChange={e => setQ(e.target.value)} />
+      <div className="mb-3">
+        <div className="text-sm font-semibold text-text mb-2">Historical job cards <span className="text-[11px] text-text-muted tabular-nums">{rows.length}</span></div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+            <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Search</span>
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
+              <input className={`${INP} pl-8 w-full`} placeholder="Card, machine, root cause…" value={q} onChange={e => setQ(e.target.value)} />
+            </div>
           </div>
-          <select className={`${INP} w-auto`} value={statusF} onChange={e => setStatusF(e.target.value as any)}>
-            <option value="complete">Done</option><option value="cancelled">Cancelled</option><option value="all">Done + cancelled</option>
-          </select>
-          <label className="text-[11px] text-text-muted">Closed <input type="date" className={`${INP} w-auto ml-1`} value={from} onChange={e => setFrom(e.target.value)} /></label>
-          <span className="text-text-faint">–</span>
-          <input type="date" className={`${INP} w-auto`} value={to} onChange={e => setTo(e.target.value)} />
-          {active && <button className="text-[12px] underline text-text-muted hover:text-text" onClick={clear}>Clear</button>}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Status</span>
+            <select className={`${INP} w-auto`} value={statusF} onChange={e => setStatusF(e.target.value as any)}>
+              <option value="complete">Done</option><option value="cancelled">Cancelled</option><option value="all">Done + cancelled</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Closed from</span>
+            <input type="date" className={`${INP} w-auto`} value={from} onChange={e => setFrom(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Closed to</span>
+            <input type="date" className={`${INP} w-auto`} value={to} onChange={e => setTo(e.target.value)} />
+          </div>
+          {active && <button className="text-[12px] underline text-text-muted hover:text-text pb-2" onClick={clear}>Clear</button>}
         </div>
       </div>
       <div className="overflow-x-auto">

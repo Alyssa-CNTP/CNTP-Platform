@@ -3,6 +3,55 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Roster: fix stale "now" shift badge)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+The on-duty "now" badge (`sastNow()`) is a pure function of the real clock, but nothing forced a re-render as time passed — a tab left open since before a 07h00/16h00 shift boundary kept showing whichever shift was current at its last render, not the actual current one. Added a once-a-minute re-render tick so it stays live; doesn't touch the operator's own manually-selected tab.
+
+---
+
+## 2026-08-03 — Gustav (Maintenance: neat job-card history filter · calibration certificate upload · job-card photo now visible)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `components/maintenance/JobCardItem.tsx`, `lib/maintenance/helpers.ts`, `lib/maintenance/types.ts`, `app/api/maintenance/annual/cert/route.ts` (new), `supabase/migrations/20260803_010_annual_cert_columns.sql` (new)
+
+- **Job-card history filter tidied up.** The History panel's filter bar (search · status · closed-from · closed-to · clear) is now a single neat labelled row that wraps cleanly, instead of controls scattered with `justify-between`. Each control has a small uppercase label so it's clear what each field does.
+- **Removed Gustav Meyer from the annual "By" (calibrated-by) list.** The picker now lists only the maintenance technicians from the Staff Directory (plus the "External / supplier" option) — the logged-in manager is no longer injected into the list.
+- **Calibration certificate upload (proof of external calibration).** Each asset in the Annual / Calibration register now has a **Certificate** row: upload an image or PDF as proof an external party did the calibration, then **View certificate** re-opens it via a short-lived signed URL. Files are stored in the private `maintenance-card-photos` storage bucket under a `cert/annual/<id>/` prefix — **not** in the database — and the row records who uploaded it and when (`cert_path` / `cert_name` / `cert_uploaded_at` / `cert_uploaded_by`, added by migration `20260803_010`). New server route `app/api/maintenance/annual/cert` handles upload (image/PDF, ≤15 MB) and signed-URL viewing.
+- **Job-card creation photo is now visible.** A photo attached when raising a job card was being saved but only shown behind the "More detail" toggle, so it looked missing. The photo now renders as an always-visible, click-to-enlarge thumbnail on the expanded card for both the manager and the technician. To avoid bloating the database (photos are stored inline as base64 in `photo_url`), new photos are downscaled more aggressively (640 px, JPEG q0.55 — typically well under ~40 KB). *Note: moving existing/new photos fully into storage is a recommended larger follow-up.*
+
+---
+
+## 2026-08-04 — Alyssa (Cleaning split + cleaner sign-in, bag numbering, granule carry-over, checks cleanup, analytics, job cards nav)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CleaningPanel.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/cleaning-config.ts`, `lib/production/carryover.ts` (new), `lib/production/cleaner-roster.ts` (new), `components/layout/Sidebar.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `supabase/migrations/20260804_001_cleaning_split_signoff.sql` (new), `supabase/migrations/20260804_002_dust_carryover.sql` (new)
+
+Requires migrations `20260804_001` and `20260804_002` (see manual steps at the end).
+
+- **Checks step deactivated for Refining 1/2 and Blender.** These sections have no machine checks configured (nothing on the paper form to check), but the Checks step still showed in the stepper and still demanded a PIN sign-off for nothing. The step is now hidden entirely for sections with zero configured checks (`machineChecksFor().length === 0`); Pasteuriser and Granule are unaffected.
+
+- **Cleaning tab now splits operator tasks from cleaner-only tasks**, for every section, not just Sieving. `cleaning-config.ts`'s existing `responsible` field already marked which tasks are the operator's job vs a dedicated cleaner's — a new `isCleanerOnlyTask()` helper (`responsible === 'General cleaner'`) drives the split. Operators only ever see and sign their own tasks; cleaner-only tasks are invisible to them entirely, closing the audit gap where an operator could tick off a cleaner's task.
+
+- **Cleaner sign-in/out on the capture tablet.** A new "Sign in as Cleaner" gate (header, next to Messages) authenticates against whoever the whole-site Shift Roster has on cleaning duty for that date/shift (`lib/production/cleaner-roster.ts`, reusing `roster_entries.operator_id` → `operators.pin`, not the per-section operator roster). Once signed in, the screen restricts to the Cleaning tab only; on sign-off it clears itself and hands back to the operator, who re-enters their own PIN — nothing is lost since draft data already autosaves. `cleaning_records` gained an independent `cleaner_*` signature so operator and cleaner can sign at different times without overwriting each other.
+
+- **Bag lists numbered and grouped, matching the Blender form's layout**, so a shift never loses count: Sieving's bagging tab (grouped by product type — Leaf/Dust/Sticks), Refining's debagging tab (grouped by product type) and bagging tab (existing A/B/C/D groups, now numbered + individually coloured), and Pasteuriser's bagging tab (grouped by kind: Final Product/High Moisture/Refill) and its two debagging streams (now visually distinct colours). Granule's dust by-product log gained plain numbering. Presentation only — no schema changes.
+
+- **Granule Line "Carry-over".** The afternoon shift's mass-balance leftover is now suggested (never silently written) as a **Carry-over** figure for the exact dust type in use (SG Dust / SF Dust — never merged), which the operator confirms before it's logged to a new append-only ledger (`production.dust_carryover_log`). On a later shift's Blend tab, an outstanding carry-over for that same dust type is offered as an "Add to Blend" banner; adding it tags the row `fromCarryover` and marks the ledger consumed. Distinct from the existing `dustNotRefed`/`coarseNotFed` paper-form fields, which are untouched. The "must mix ≥2 dust types per blend" rule was explicitly out of scope for this round.
+
+- **Supervisor Hub → Analytics brought to parity with Production Orders.** It previously had only a date-range picker and aggregate charts, no section/shift/variant filters and no per-record figures. Added the same filter set (reusing `SECTION_ORDER`/`sectionMeta`/`VARIANT_OPTIONS`) and a per-line records table (date, line, shift, variant, kg in/out, yield%, balance flag) so yield is visible against the actual record, not just aggregated. Timesheets carry `section_id`/`shift` (now selected) so hours figures filter too; variant only narrows the kg/yield figures since timesheets don't carry variant.
+
+- **Pasteuriser Job Card hub surfaced in the sidebar.** `/job-cards` (Pasteuriser + Granule job cards) had no nav entry anywhere — only reachable via a deep link from BOMs — so nobody could find it to test the pre-fill flow. Added one entry under Production, reusing the existing `can_view_blends` permission (no permission-registry change needed). The job-card ↔ capture pre-fill itself was already working (`PasteuriserCapture.tsx` already pulls approved cards); this was purely a missing link.
+
+**Not completed — flagged, not silently dropped:** Production Orders' filters/spacing were reported as broken. Static review of the filter state, option values and the server-side KPI route found no defect, and this web session has no login credentials for the app (Microsoft SSO / PIN gates) to reproduce the bug live in a browser, so the actual defect could not be found or fixed this session. Needs a session with real credentials (or the developer reproducing it with screenshots/steps) to pin down.
+
+**⚠️ Manual steps required before this is live:**
+1. Run `supabase/migrations/20260804_001_cleaning_split_signoff.sql` on **staging** (adds `cleaning_records.cleaner_*` columns and widens `cleaning_logs`' action check to allow `'cleaner_sign'`). Until applied, cleaner sign-off will fail to save.
+2. Run `supabase/migrations/20260804_002_dust_carryover.sql` on **staging** (creates `production.dust_carryover_log`). Until applied, the Carry-over confirm/add-to-blend actions will fail to save.
+3. Both migrations need applying to **production** separately when this is promoted.
+4. `npm run build` passes cleanly with these changes (verified this session); live browser verification of the new UI (cleaner sign-in flow, carry-over flow) should still be done against staging once migrations are applied.
+
+---
+
 ## 2026-07-31 — Gustav (COA History: edit a previously generated COA to fix mistakes)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
@@ -65,25 +114,61 @@ Format: date · developer · files changed · description of code changes.
 
 ---
 
-## 2026-07-30 — Alyssa (PRODUCTION: Staff Directory: edit a person from their profile; one action per list row)
+## 2026-07-30 — Alyssa (Supervisor Hub redesign + generated Shift Report + Production Orders KPIs)
+
+**Files changed:** `supabase/migrations/20260730_001_shift_report_and_capture_ratings.sql` (new), `supabase/migrations/20260730_002_roster_daily_changes.sql` (new), `lib/production/shift-report.ts` (new), `app/api/production/shift-report/route.ts` (new), `app/api/production/capture-ratings/route.ts` (new), `app/api/production/orders-kpis/route.ts` (new), `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/roster/page.tsx` (new), `app/(app)/supervisor/signoff/page.tsx`, `app/(app)/supervisor/report/page.tsx` (new), `app/(app)/supervisor/team/page.tsx` (new), `app/(app)/supervisor/timesheets/page.tsx` (now a redirect), `app/(app)/supervisor/productions/page.tsx` (now a redirect), `app/(app)/supervisor/messages/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/calendar/page.tsx`, `components/supervisor/HubTabs.tsx`, `components/supervisor/CaptureRatings.tsx` (new), `components/supervisor/TimesheetsPanel.tsx` (new), `components/supervisor/ReopenRequestsPanel.tsx` (new), `components/supervisor/PendingSignOffs.tsx` (deleted), `app/(app)/production/orders/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/api/production/roster/audit/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`, `app/api/production/notify-line-message/route.ts`, `app/(app)/layout.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `app/globals.css`
+
+Requires migrations `20260730_001` and `20260730_002` (see manual steps at the end).
+
+**Supervisor Hub — one job per tab.** The hub had tabs that told you where you were while the page did three unrelated jobs at once: the Roster tab opened with job-card approvals and a pending-sign-off queue stacked above the staffing grid, and Sign-off showed lines that were already signed (which by definition need nothing). Restructured to **Dashboard · Roster · Sign-off · Shift Report · Team · Messages**, with a hard rule: if it needs a signature it is on Sign-off, if it is about who works where it is on Roster, and nothing appears on two tabs.
+
+- **Dashboard** (new) is the only summary page — six tiles, today's lines, a "needs attention" list and links out. It holds no controls of its own, which is what stops it drifting back into a page that does everything. It reads the same shift-report assembly the Shift Report tab renders, so the dashboard and the signed report can't disagree.
+- **Roster** moved to `/supervisor/roster` with the sign-off panels removed. **A published roster is now editable** — previously submitting it LOCKED the grid, so the daily reality of people swapping lines or calling in sick was handled verbally and the published roster went stale. Editing a submitted roster no longer resets it to draft (that erased the fact it was signed off); it moves to a new `changes_pending` status, and every add/remove/move is written to `production.roster_change_log` with who did it. The supervisor sees an itemised list of unsaved changes before saving, the Production Manager re-confirms a short list instead of re-reading the whole grid, and a collapsible change history sits at the bottom of the tab.
+- **Sign-off** is now a queue that empties: submitted records awaiting a signature (**every date, oldest first, with an age badge** — a session left unsigned last Thursday was previously invisible because the queue only looked at today), records still open on a finished shift, shift reports awaiting send/sign, reopen-request decisions and job-card approvals. Nothing else.
+- **Team** (new) holds the people facts: capture ratings + timesheets. `/supervisor/timesheets` redirects here.
+- **`/supervisor/productions` retired** → redirects to `/production/orders`. It was a second copy of the same session list with a different layout, which is most of why production history felt inconsistent depending on where you opened it. Its one unique action ("request reopen") moved onto each record on Production Orders; the manager's reopen *decision* queue moved to Sign-off.
+
+**Shift Report (new)** — `/supervisor/report`, the document the floor never had: one auditable record of everything that happened on a shift, **generated rather than typed**. Every figure derives from records already captured, so nothing here is a second place to key a number: attendance (rostered vs actually present vs absent, with leave as the reason and "on the floor but not rostered" called out as a swap nobody wrote down), lines run with yield and mass balance, what was produced per product and off which line, machine throughput in kg/hour, machine + sieving configuration and hourly VSD readings from the checks engine, change-overs (from timesheet events and checks production indexes), breakdowns with downtime, flagged/failed checks, waste and spillage, handover notes and line messages, and what is still outstanding. Lifecycle is draft → sent to the Production Manager → signed off; submitting or signing **freezes the payload the reader actually looked at** into `production.shift_reports` and writes an audit row, so a later recapture can't rewrite a report someone already signed. Printable as a multi-page handover document (new print rules keep a section from splitting mid-table). Anything the report could not read is stated explicitly rather than rendering as an empty section, so "no breakdowns" is never confused with "we couldn't read breakdowns". An open breakdown's downtime is capped at the end of the shift — otherwise a card left open for a week reports a week of downtime against one shift.
+
+**Capture ratings (new)** — supervisors score every rostered person on **performance** and **data accuracy**, kept as two separate 1–5 scores rather than one blended number because they fail independently (a fast operator who mis-keys weights and a careful operator on a slow line are different problems). A weekly leaderboard ranks the crew. Alongside each human score sits the **system's own accuracy read**, computed from what actually landed in the database (mass-balance variances outside tolerance, records never submitted, failed checks on their line) with the reasons spelled out — it never overrides the supervisor, it just makes "you gave them 5, the data says 70%" visible so the score can't drift into a popularity vote. Every score written is appended to `production.capture_rating_audit`, so a revision is visible rather than replacing the original.
+
+**Production Orders — KPIs, analytics and yields that stop hiding.** The page carried a record list and nothing else; "how many tons this week, at what throughput, of which product, off which line" had no answer on it, and the yield analytics existed but were reachable only via `/traceability`.
+
+- A **KPI strip on both views**: tons out, tons/day, tons/week, kg/hour, yield, records, balance flags. Averages are per *producing* day, not per calendar day — dividing a week's output by 7 when the factory ran 5 days understates the line by 30%.
+- A new **Analytics view** over the same filters: tons per day, tons per week, throughput per line, a full per-line table (yield, run time, crew hours, kg/hour and which basis was used), output per product with the lines it came off, and yield per variant. Throughput is measured from first-to-last bag where that window is meaningful and from confirmed crew hours otherwise — the basis is always reported, because the two answer slightly different questions.
+- Computed from the base capture tables rather than the `production.v_*` reporting views, since those views (`20260721_002/003`) are still pending on staging and a KPI strip that silently renders zeros is worse than one that reads the tables it knows exist.
+- **Yield is on each record row now** (previously only visible by opening it), and the capture Overview tab gained a yield/throughput strip — kg in/out, yield, tons, bags, balance, the output split per product, and deep links to the analytics view for that line and to full traceability for the lot.
+
+**Back navigation out of capture is fixed.** Every filter on Production Orders now lives in the URL, and every link into capture carries a `return` pointing at that exact URL. Back from a record returns to the list you were reading, with its filters, instead of dumping you on the operator's capture landing page. Only app-internal paths are honoured, so the parameter can't bounce someone off-site. The Dashboard, Sign-off and Shift Report links pass their own return targets too.
+
+**New permissions** (Users & Roles → Production): `can_view_shift_report`, `can_edit_shift_report`, `can_submit_shift_report`, `can_approve_shift_report`, `can_view_capture_ratings`, `can_rate_capture`, `can_delete_capture_rating`. Defaults follow the existing tiering — the supervisor writes and sends the report and rates their own crew; the Production Manager signs the report off and reads the board; Management is read-only on both.
+
+**⚠️ Manual steps required before this is live** (a web session can't reach the Supabase SQL editor — see CLAUDE.md's DB workflow):
+1. Run `supabase/migrations/20260730_001_shift_report_and_capture_ratings.sql` in the **staging** Supabase SQL editor (creates `production.shift_reports`, `shift_report_audit`, `capture_ratings`, `capture_rating_audit` and the `v_capture_scoreboard` view). Until it is applied, the Shift Report renders but can't be saved/signed, and the ratings tab says so explicitly rather than showing an empty board.
+2. Run `supabase/migrations/20260730_002_roster_daily_changes.sql` on staging (adds the `changes_pending` status and `production.roster_change_log`). Until it is applied, the roster still saves and submits — it just won't record the itemised change history.
+3. Both migrations need applying to the **production** project separately when this is promoted.
+
+---
+
+## 2026-07-30 — Alyssa (Staff Directory: edit a person from their profile; one action per list row)
 
 **Files changed:** `components/production/EmployeeModal.tsx` (new, shared), `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
 
 The list row had two controls (a quick-edit pencil AND an arrow to the profile). Consolidated to one: the row now just opens the profile, and **all fields are editable on the profile** via an "Edit details" button. Extracted the Add/Edit person form (fields + skills + leave + login block) into a shared `EmployeeModal` component so the list ("Add person") and the profile ("Edit details") use the exact same editor. Removed the list pencil; offboard/reactivate stay as their own icons.
 
-## 2026-07-30 — Alyssa (PRODUCTION: Manually link an existing login account to a Staff Directory profile)
+## 2026-07-30 — Alyssa (Manually link an existing login account to a Staff Directory profile)
 
 **Files changed:** `app/api/staff/[id]/link-login/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`
 
 41 of 53 logins weren't linked to a profile (so no connections showed, incl. IT's own account). IT can now link an existing login to a person from the profile's Login panel: "Link an existing login" opens a picker of unlinked, active accounts with the likely name match highlighted as "suggested" — one click links it by ID (sets `app_roles.employee_id`). Nothing auto-links. An "Unlink" action is provided when one is linked. New account creation stays available too.
 
-## 2026-07-30 — Alyssa (PRODUCTION: Staff profile: show digital training only — removed the full SOP competency flood)
+## 2026-07-30 — Alyssa (Staff profile: show digital training only — removed the full SOP competency flood)
 
 **Files changed:** `app/(app)/production/staff/[id]/page.tsx`
 
 The profile listed every SOP under "Competency by SOP" (plus an X/Y SOPs-competent header stat), which flooded the page. Removed that section (and its history + inline edit modal + the header stat) from the profile so it shows only the **digital Training portfolio** (assigned courses). The full competency matrix still lives on the Skills Matrix page. Also pruned the now-unused state, fetches, memos and imports.
 
-## 2026-07-28 — Alyssa (PRODUCTION: PIN sign-ins linked to Staff Directory by ID; shown as PIN on the profile)
+## 2026-07-28 — Alyssa (PIN sign-ins linked to Staff Directory by ID; shown as PIN on the profile)
 
 **Files changed:** migration `20260729_006_lab_auth_employee_link.sql` (new), `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`, `app/api/quality/lab-assistants/manage/route.ts`, `app/api/quality/lab-assistants/route.ts`, `app/(app)/quality/lab-manager/page.tsx`
 
@@ -92,7 +177,7 @@ Requires migration `20260729_006` on both projects (adds `qms.lab_auth.employee_
 - Lab/QC PIN accounts were keyed by NAME with no link to the person's Staff Directory profile. Now linked by `employee_id`: the lab-manager list carries each person's ID and assigning a PIN stores it on `lab_auth` (and `app_roles`), so a PIN is one identity tied to the profile by ID, not matched by name.
 - The linked PIN now surfaces as the person's **PIN** sign-in on their Staff Directory profile + list (via the identities routes), so the profile is the single source of truth for how someone signs in. Graceful if the column/qms schema isn't reachable.
 
-## 2026-07-28 — Alyssa (PRODUCTION: Staff sign-in badges: Microsoft SSO only, not supabase/PIN accounts)
+## 2026-07-28 — Alyssa (Staff sign-in badges: Microsoft SSO only, not supabase/PIN accounts)
 
 **Files changed:** `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
 
@@ -103,6 +188,24 @@ The staff directory showed an "EMAIL" badge for any linked login account — inc
 **Files changed:** `app/api/quality/lab-assistants/manage/route.ts`
 
 The lab-manager PIN list was built only from people already placed on the shift roster in a QC role, so a newly-added QC person didn't appear until they were rostered. The list now also includes everyone in the Staff Directory (`production.employees`) under the QC department (active, Microsoft-SSO staff still excluded), so the lab manager can assign them a sign-in PIN as soon as they're added. Roster entries still take precedence for role; staff-directory-only people show as generic QC. No migration.
+
+## 2026-07-29 — Alyssa (Internal e-signature platform + dispatch/delivery document signing)
+
+**Files changed:** `supabase/migrations/20260729_008_esign_schema.sql` (new), `lib/esign/subjects.ts` (new), `lib/esign/request.ts` (new), `lib/esign/capture.ts` (new), `app/api/esign/requests/route.ts` (new), `app/api/esign/requests/[id]/void/route.ts` (new), `app/api/esign/sign/[token]/route.ts` (new), `app/api/esign/staff-sign/route.ts` (new), `app/api/esign/subjects/[type]/[id]/route.ts` (new), `components/esign/SignatureCapture.tsx` (new), `app/sign/[token]/page.tsx` (new), `app/sign/[token]/SignClient.tsx` (new), `app/middleware.ts`, `app/(app)/logistics/dispatch/[id]/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+New polymorphic `esign` schema (`signature_requests` + append-only `signatures`) so any feature can request a signature against any record (`subject_type`/`subject_id`) with a real audit trail — signer, timestamp, IP, user-agent, and a tamper-evidence hash — instead of the three incompatible ad hoc patterns that existed before (`user_signatures`/`employee_signatures`, `production.session_signatures`, `qms.coa_signatories`). A captured signature is immutable: a DB trigger blocks every `UPDATE`/`DELETE` except the one legal `active → voided` transition, so a correction is always a new signature, never an edit.
+
+- **Two signer kinds.** Internal staff sign in-app with no drawing — same "Verify & Sign" trust model shipped last session for job cards, stamping the signature already on file in `production.employee_signatures`. External signers (a driver/customer with no CNTP account) get a one-time link (`/sign/[token]`, SHA-256-hashed token, 72h expiry, single-use) to draw their signature on their own device — added to `PUBLIC_ROUTES` in `app/middleware.ts`, fully outside the authenticated app.
+- **First consumer: dispatch/delivery documents.** `logistics.dispatch_documents.signed_by`/`signed_at` existed in the schema but nothing ever wrote them — the Checklist tab's status dropdown was purely manual. It now has real "Sign now" (in-app) and "Send for external signature" actions per document, shows live audit info once signed, and blocks marking a document "Verified" until it's actually been signed.
+- **New permissions:** `can_sign_dispatch_doc`, `can_request_external_signature`, `can_verify_dispatch_doc` (Users & Roles → Logistics → Dispatch document signing).
+- Deliberately **not** touched this session: job card / COA / cleaning signature UIs — they work today and were just reworked last session; migrating them onto `esign` is a separate future pass.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260729_007_employee_signatures.sql` (still pending from last session — this migration's `production.employee_signatures` is a hard dependency for internal signing) then `supabase/migrations/20260729_008_esign_schema.sql`, in that order, in the **staging** Supabase SQL editor.
+2. Add `esign` to **Exposed schemas** (Supabase dashboard → Project Settings → API) on staging — PostgREST can't reach a schema that isn't exposed, same requirement as `hr`/`maintenance`/`shared` before it.
+3. Promote both migrations + the schema exposure to production separately, once verified on staging.
+
+---
 
 ## 2026-07-29 — Alyssa (BOM page redesign: master-detail layout + rich Master Inventory search)
 

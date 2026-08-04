@@ -45,6 +45,7 @@ import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import { isValidLot } from '@/components/production/capture/SievingCapture'
 import { upperCode } from '@/lib/production/normalize-code'
+import { variantFromSuffix } from '@/lib/production/bom'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
@@ -146,6 +147,13 @@ const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 const DEBAG_COLOR = '#be185d'   // rose — matches SECTION_CONFIG.pasteuriser
 const BAG_COLOR   = '#0d9488'   // teal
+
+// Output lines are grouped by kind (Final Product / High Moisture / Refill),
+// one colour per group, numbered within their own group — same idea as the
+// Blender/Refining/Sieving lists, so a shift bagging more than one kind never
+// reads as one undifferentiated pile of lines.
+const GROUP_COLORS = ['#0d9488', '#7c3aed', '#2563eb', '#db2777', '#4f46e5']
+const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
 
 const OUTPUT_KINDS = ['Final Product', 'High Moisture', 'Refill'] as const
 // Granule Line's finished output items — what "post-sieve blending" actually
@@ -437,7 +445,7 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
 
 // ── Debagging stream (one of the two tables) ──────────────────────────────────
 
-function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, onEdit }: {
+function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, onEdit, color = DEBAG_COLOR }: {
   stream: 'main' | 'postsieve'
   title: string
   hint: string
@@ -447,12 +455,16 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
   locked: boolean
   onAdd: () => void
   onEdit: (r: PastDebagRow) => void
+  // main/postsieve get their own colour so the two streams read as visibly
+  // separate groups, not one shared list — defaults to DEBAG_COLOR so any
+  // other caller keeps today's look.
+  color?: string
 }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between px-1">
         <div>
-          <span className="text-[13px] font-bold text-text">{title}</span>
+          <span className="text-[13px] font-bold" style={{ color }}>{title}</span>
           <p className="text-[11px] text-stone-400">{hint}</p>
         </div>
         <span className="text-[11px] font-mono text-stone-500">{total.toFixed(1)} kg · {rows.length} bag{rows.length !== 1 ? 's' : ''}</span>
@@ -464,8 +476,8 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
           return (
             <button key={r.id} onClick={() => !locked && onEdit(r)}
               className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 border text-left transition-opacity hover:opacity-90"
-              style={{ background: DEBAG_COLOR + '0d', borderColor: DEBAG_COLOR + '40' }}>
-              {incomplete ? <AlertTriangle size={15} className="shrink-0 text-amber-500" /> : <Lock size={15} className="shrink-0" style={{ color: DEBAG_COLOR }} />}
+              style={{ background: color + '0d', borderColor: color + '40' }}>
+              {incomplete ? <AlertTriangle size={15} className="shrink-0 text-amber-500" /> : <Lock size={15} className="shrink-0" style={{ color }} />}
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-medium text-text">Bag {i + 1} · {r.productType || 'Input bag'} · {n(r.weight).toFixed(1)} kg</div>
                 <div className="font-mono text-[11px] text-text-muted truncate">
@@ -481,7 +493,7 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
       {!locked && (
         <button onClick={onAdd}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-semibold transition-colors"
-          style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
+          style={{ borderColor: color + '50', color }}>
           <Plus size={16} /> Add {stream === 'main' ? 'debagging' : 'post-sieve'} bag
         </button>
       )}
@@ -495,8 +507,10 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
 
 // ── Final-product output line ─────────────────────────────────────────────────
 
-function OutputLineRow({ line, perBag, locked, onEdit, onRemove, onTag }: {
+function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove, onTag }: {
   line: PastOutputLine
+  lineNo: number
+  color: string
   perBag: number
   locked: boolean
   onEdit: () => void
@@ -505,11 +519,11 @@ function OutputLineRow({ line, perBag, locked, onEdit, onRemove, onTag }: {
 }) {
   const total = n(line.bagCount) * (n(line.bagWeight) || perBag)
   return (
-    <div className="rounded-2xl border px-4 py-3" style={{ background: BAG_COLOR + '0a', borderColor: BAG_COLOR + '33' }}>
+    <div className="rounded-2xl border px-4 py-3" style={{ background: color + '0a', borderColor: color + '33' }}>
       <div className="flex items-start gap-3">
         <button onClick={() => !locked && onEdit()} className="flex-1 min-w-0 text-left">
           <div className="text-[13px] font-semibold text-text">
-            {line.kind}{line.item ? ` · ${line.item}` : ''}
+            Line {lineNo}{line.item ? ` · ${line.item}` : ''}
             <span className="font-mono font-normal text-text-muted"> · {total.toFixed(0)} kg</span>
           </div>
           <div className="font-mono text-[11px] text-text-muted truncate mt-0.5">
@@ -539,11 +553,13 @@ function OutputLineRow({ line, perBag, locked, onEdit, onRemove, onTag }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function PasteuriserCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId,
+  sectionId, assignment, variantWord, onVariantSuggestion, date, locked, value, onChange, genSerial, operatorId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
   variantWord: string
+  onVariantSuggestion?: (variant: string) => void
+  date?: string
   locked: boolean
   value: PasteuriserData
   onChange: (d: PasteuriserData) => void
@@ -555,15 +571,20 @@ export function PasteuriserCapture({
   const [editLine, setEditLine] = useState<PastOutputLine | null>(null)
   const [items, setItems] = useState<InventoryItem[]>([])
   const [jobCards, setJobCards] = useState<any[]>([])
+  const [todaysJobCards, setTodaysJobCards] = useState<any[]>([])
   const [pickingItem, setPickingItem] = useState(false)
+  // Locked once today's (unambiguous) approved job card has been applied —
+  // closes the old silent-overwrite gap where a job card's fields stayed
+  // freely editable with nothing marking them as authoritative.
+  const [jobCardLocked, setJobCardLocked] = useState(false)
   const variantShort = variantToShort(variantWord as any) as ShortVariant
 
   const patch = (p: Partial<PasteuriserData>) => onChange({ ...value, ...p })
 
   useEffect(() => { loadAllInventory().then(setItems) }, [])
 
-  // Recent pasteuriser job cards — the prefill source for item / batch / blend /
-  // packaging / weight per bag. Public schema (matches the Job Card page).
+  // Recent pasteuriser job cards — the manual-override picker (last 40,
+  // company-wide). Public schema (matches the Job Card page).
   useEffect(() => {
     getDb().from('job_cards_pasteuriser')
       .select('id, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
@@ -572,6 +593,24 @@ export function PasteuriserCapture({
       .then(({ data }: any) => setJobCards(data ?? []))
       .catch(() => setJobCards([]))
   }, [])
+
+  // Today's card(s) for THIS date — if there's exactly one, it auto-applies
+  // and locks its fields (the manual list above stays available as the
+  // "not this batch, change" escape hatch). If none exist yet, nothing
+  // changes from today's manual-entry behaviour — never a blocker.
+  useEffect(() => {
+    if (!date || value.jobCardId) return
+    getDb().from('job_cards_pasteuriser')
+      .select('id, job_card_no, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
+      .eq('status', 'approved').eq('date_of_card', date)
+      .then(({ data }: any) => {
+        const rows = (data as any[]) ?? []
+        setTodaysJobCards(rows)
+        if (rows.length === 1) { applyJobCard(rows[0]); setJobCardLocked(true) }
+      })
+      .catch(() => setTodaysJobCards([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date])
 
   const t = pasteuriserTotals(value)
   const perBag = n(value.weightPerBag) || 18
@@ -588,6 +627,12 @@ export function PasteuriserCapture({
       packaging: jc.packaging ?? value.packaging,
       weightPerBag: jc.weight_per_bulk_bag ? String(jc.weight_per_bulk_bag).replace(/[^0-9.]/g, '') || value.weightPerBag : value.weightPerBag,
     })
+    // A suggested default only — the operator's own variant selector still
+    // shows it and can change it; never silently locked (see [section]/page.tsx).
+    if (jc.item_no) {
+      const suggested = variantFromSuffix(upperCode(jc.item_no))
+      if (suggested) onVariantSuggestion?.(suggested)
+    }
   }
 
   function applyItem(it: InventoryItem) {
@@ -677,7 +722,15 @@ export function PasteuriserCapture({
           <FileText size={13} className="text-stone-400" />
           <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Final product for this batch</span>
         </div>
-        {!locked && (
+        {jobCardLocked && !locked && (
+          <div className="flex items-center justify-between gap-2 bg-brand/5 border border-brand/20 rounded-lg px-2.5 py-1.5">
+            <span className="text-[11px] text-stone-600">
+              From Job Card{todaysJobCards[0]?.job_card_no ? ` ${todaysJobCards[0].job_card_no}` : ''} — today's approved batch.
+            </span>
+            <button onClick={() => setJobCardLocked(false)} className="text-[11px] font-semibold text-brand hover:underline shrink-0">Not this batch? Change</button>
+          </div>
+        )}
+        {!locked && !jobCardLocked && (
           <select value={value.jobCardId ?? ''} onChange={e => applyJobCard(jobCards.find(j => j.id === e.target.value))} className={INP}>
             <option value="">Prefill from a job card…</option>
             {jobCards.map(j => (
@@ -690,11 +743,11 @@ export function PasteuriserCapture({
         <div className="grid grid-cols-2 gap-2.5">
           <div className="space-y-1">
             <label className={LBL}>Batch number</label>
-            <BatchKeypadField value={value.batchNo} placeholder="26244-CON-SFC" onChange={v => patch({ batchNo: v })} className={INP} />
+            <BatchKeypadField value={value.batchNo} placeholder="26244-CON-SFC" onChange={v => patch({ batchNo: v })} className={INP} disabled={locked || jobCardLocked} />
           </div>
           <div className="space-y-1">
             <label className={LBL}>Blend code</label>
-            <BatchKeypadField value={value.blendCode} placeholder="SFC-KUN25-C" onChange={v => patch({ blendCode: v })} className={INP} />
+            <BatchKeypadField value={value.blendCode} placeholder="SFC-KUN25-C" onChange={v => patch({ blendCode: v })} className={INP} disabled={locked || jobCardLocked} />
           </div>
         </div>
         <div className="space-y-1">
@@ -702,22 +755,22 @@ export function PasteuriserCapture({
           {pickingItem ? (
             <ItemPicker items={items} placeholder="Search Master Inventory (30FP…)" onPick={applyItem} className={INP} />
           ) : (
-            <button onClick={() => !locked && setPickingItem(true)} disabled={locked}
+            <button onClick={() => !locked && !jobCardLocked && setPickingItem(true)} disabled={locked || jobCardLocked}
               className={INP + ' flex items-center justify-between text-left disabled:opacity-70'}>
               <span className="truncate">{value.item || 'Pick the final product item…'}{value.itemCode ? <span className="font-mono text-[11px] text-stone-400"> · {value.itemCode}</span> : null}</span>
-              {!locked && <Search size={14} className="text-stone-400 shrink-0" />}
+              {!locked && !jobCardLocked && <Search size={14} className="text-stone-400 shrink-0" />}
             </button>
           )}
         </div>
         <div className="grid grid-cols-2 gap-2.5">
           <div className="space-y-1">
             <label className={LBL}>Weight per bag (kg)</label>
-            <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.weightPerBag} disabled={locked}
+            <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.weightPerBag} disabled={locked || jobCardLocked}
               onChange={e => patch({ weightPerBag: e.target.value })} className={INP} />
           </div>
           <div className="space-y-1">
             <label className={LBL}>Packaging</label>
-            <input type="text" value={value.packaging} disabled={locked} onChange={e => patch({ packaging: e.target.value })} className={INP} />
+            <input type="text" value={value.packaging} disabled={locked || jobCardLocked} onChange={e => patch({ packaging: e.target.value })} className={INP} />
           </div>
         </div>
       </div>
@@ -766,11 +819,11 @@ export function PasteuriserCapture({
             Consume every bag fed into the pasteuriser. Scan the barcode, pick it from the system, or register a bag written on a paper tag.
           </p>
           <DebagStream stream="main" title="Debagging" hint="Blend bags fed to the steriliser, plus any High Moisture rework bag being fed back in" letter="D"
-            rows={mainRows} total={t.D} locked={locked}
+            rows={mainRows} total={t.D} locked={locked} color={DEBAG_COLOR}
             onAdd={() => setBagModal({ stream: 'main', editing: null })}
             onEdit={r => setBagModal({ stream: 'main', editing: r })} />
           <DebagStream stream="postsieve" title="Debagging — Post-sieve blending" hint="Granule Line output folded in at the post-sieve stage" letter="E"
-            rows={postRows} total={t.E} locked={locked}
+            rows={postRows} total={t.E} locked={locked} color={groupColor(1)}
             onAdd={() => setBagModal({ stream: 'postsieve', editing: null })}
             onEdit={r => setBagModal({ stream: 'postsieve', editing: r })} />
           <div className="flex items-center justify-between px-4 py-3 bg-stone-900 text-white rounded-2xl">
@@ -785,11 +838,27 @@ export function PasteuriserCapture({
         <>
           <p className="text-[12px] text-stone-500 px-1">Each line is a pallet / bag range — enter the bag count and confirm the weights; the serial is generated automatically.</p>
 
-          <div className="space-y-2">
-            {value.outputs.map(l => (
-              <OutputLineRow key={l.id} line={l} perBag={perBag} locked={locked}
-                onEdit={() => setEditLine(l)} onRemove={() => removeLine(l.id)} onTag={m => tagLine(l.id, m)} />
-            ))}
+          <div className="space-y-3">
+            {Array.from(new Set(value.outputs.map(l => l.kind))).map((kind, gi) => {
+              const rows = value.outputs.filter(l => l.kind === kind)
+              const col = groupColor(gi)
+              const groupKg = rows.reduce((s, l) => s + n(l.bagCount) * (n(l.bagWeight) || perBag), 0)
+              return (
+                <div key={kind} className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[12px] font-bold flex items-center gap-1.5" style={{ color: col }}>
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
+                      {kind}
+                    </span>
+                    <span className="text-[11px] font-mono text-stone-500">{groupKg.toFixed(1)} kg · {rows.length} line{rows.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {rows.map((l, i) => (
+                    <OutputLineRow key={l.id} line={l} lineNo={i + 1} color={col} perBag={perBag} locked={locked}
+                      onEdit={() => setEditLine(l)} onRemove={() => removeLine(l.id)} onTag={m => tagLine(l.id, m)} />
+                  ))}
+                </div>
+              )
+            })}
             {!locked && (
               <button onClick={addOutputLine}
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed text-[13px] font-semibold transition-colors"

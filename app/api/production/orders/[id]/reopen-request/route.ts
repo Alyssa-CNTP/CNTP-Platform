@@ -54,7 +54,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       recipients, kind: 'po_reopen_request',
       title: `Reopen request — ${name}`,
       body: `${requestedByName || 'A supervisor'} asked to reopen ${name} (${session.date}, ${session.shift} shift): "${reason}"`,
-      url: '/supervisor/productions',
+      // The decision queue lives with everything else awaiting a signature.
+      url: '/supervisor/signoff',
       channels: ['inApp', 'email'],
     })
   } catch { /* notification is best-effort — the request itself already saved */ }

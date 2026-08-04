@@ -37,7 +37,11 @@ interface Props {
   recategorizing: boolean
 }
 
-const CX = 450, CY = 450
+// Canvas must be at least 2x the outermost radius (R_BOARD[1] = 540) or the
+// board/manager rings clip against the square viewBox at the cardinal
+// directions (0/90/180/270deg) — that clipping is what cut off label text
+// there. 40px margin on top of that for stroke width + label overhang.
+const CX = 560, CY = 560
 const R_HUB = 65
 const R_LAYERS_START = 70
 const LAYER_BAND = 60           // 6 layers * 60 = 360, ends at 430
@@ -112,7 +116,7 @@ export default function IntelligenceHub({
 
       <div className="p-5 flex flex-col lg:flex-row gap-6 items-center lg:items-start">
         <div className="relative w-full max-w-[520px] flex-shrink-0">
-          <svg viewBox="0 0 900 900" className="w-full h-auto">
+          <svg viewBox="0 0 1120 1120" className="w-full h-auto">
             <defs>
               <radialGradient id="hub-core" cx="38%" cy="32%" r="80%">
                 <stop offset="0%" stopColor="#3a82c4" />

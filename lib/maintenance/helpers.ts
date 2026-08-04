@@ -48,13 +48,16 @@ export function downscalePhoto(file: File): Promise<string> {
     reader.onload = ev => {
       const img = new window.Image()
       img.onload = () => {
-        const max = 800
+        // Keep the stored data-URL small — the manager/technician only need a
+        // clear reference photo, not a full-resolution image, and photos live
+        // inline in the DB (photo_url). 640px @ q0.55 keeps most under ~40 KB.
+        const max = 640
         const scale = Math.min(1, max / Math.max(img.width, img.height))
         const canvas = document.createElement('canvas')
         canvas.width = Math.round(img.width * scale)
         canvas.height = Math.round(img.height * scale)
         canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
-        resolve(canvas.toDataURL('image/jpeg', 0.7))
+        resolve(canvas.toDataURL('image/jpeg', 0.55))
       }
       img.onerror = reject
       img.src = ev.target?.result as string
