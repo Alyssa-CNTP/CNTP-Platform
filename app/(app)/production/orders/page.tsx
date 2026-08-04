@@ -5,47 +5,40 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { format, parseISO, subDays } from 'date-fns'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import {
   Loader2, CheckCircle2, Clock, Pen, Play, ChevronRight,
-  Filter, X, AlertTriangle, Package, PackageCheck, Scale,
-  ArrowRight, MoreHorizontal, Pencil, Trash2, RotateCcw,
-  Save, Unlock, Archive, BarChart3, List, Gauge, TrendingUp, Undo2,
-  Layers, CalendarRange,
+  Filter, X, AlertTriangle, Package, ArrowRight, MoreHorizontal, Pencil, Trash2,
+  RotateCcw, Save, Unlock, Archive, BarChart3, List, Gauge, TrendingUp, Undo2,
+  Layers, Scale,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
+import {
+  Panel, PanelHead, PanelBody, Stat, StatRow, BarRow, ShareBar, ActionPanel,
+  Collapse, Table, Tr, Td, Empty, Pill, SectionChip, MARK, MARK_SOFT,
+  type Action,
+} from '@/components/production/ui/kit'
 
 // Production Orders — the single home for captured batch records and the KPIs
-// that describe them.
+// that describe them. Two views over one set of filters: Records and Analytics.
 //
-// Three things were wrong before and are fixed here:
+// Rebuilt on components/production/ui/kit.tsx so this page, the Supervisor Hub
+// and the Shift Report read as one product. The changes from the first pass are
+// all in the same direction: what needs doing goes above what happened, graphs
+// replace table walls, exact numbers move behind a disclosure, and the chrome
+// gets out of the way (hairline rules, no shadows, one border weight).
 //
-//  1. The page carried a record list and nothing else. "How many tons did we do
-//     this week, at what throughput, of which product, off which line" had no
-//     answer anywhere on it — the yield analytics existed but were reachable only
-//     via /traceability. There are now two views on one page: Records and
-//     Analytics, over the same filters, so a KPI and the rows behind it can never
-//     describe different sets.
-//
-//  2. Filters lived in component state, so opening a record and coming back
-//     dropped you into an unfiltered 14-day list. Every filter now lives in the
-//     URL, and every link into capture carries a `return` pointing back at that
-//     exact URL — so Back returns you to the list you were reading, not to the
-//     capture landing page.
-//
-//  3. /supervisor/productions was a second copy of this list. It now redirects
-//     here, and its one unique action — a supervisor asking to reopen a signed-off
-//     record — is on each record below.
+// Filters live in the URL, and every link into capture carries a `return`
+// pointing back at that exact URL — so Back returns you to the list you were
+// reading, with its filters, instead of the capture landing page.
 
 const VARIANT_OPTS = VARIANT_OPTIONS.map(v => v.value)
 const SHIFTS = ['morning', 'afternoon', 'night']
-const AXIS = { fontSize: 11, fill: '#637056' }
-const GRID = '#F0F2F5'
-const TOOLTIP_STYLE = { fontSize: 12, borderRadius: 8, border: '1px solid #E4E7EC' }
+const AXIS = { fontSize: 10.5, fill: 'var(--color-text-faint)' }
 
 interface SessionRow {
   id: string
@@ -117,18 +110,18 @@ function hasRawCaptureData(productions: any[] | undefined): boolean {
   })
 }
 
-const STATUS: Record<string, { label: string; cls: string; icon: any }> = {
-  draft:     { label: 'In progress',       cls: 'bg-warn/10 text-warn',  icon: Pen },
-  submitted: { label: 'Awaiting sign-off', cls: 'bg-info/10 text-info',  icon: Clock },
-  approved:  { label: 'Signed off',        cls: 'bg-ok/10 text-ok',      icon: CheckCircle2 },
-  new:       { label: 'Not started',       cls: 'bg-stone-100 text-stone-500', icon: Play },
+const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 'info'; icon: any }> = {
+  draft:     { label: 'In progress',       tone: 'warn',    icon: Pen },
+  submitted: { label: 'Awaiting sign-off', tone: 'info',    icon: Clock },
+  approved:  { label: 'Signed off',        tone: 'ok',      icon: CheckCircle2 },
+  new:       { label: 'Not started',       tone: 'neutral', icon: Play },
 }
 
 const hrs = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m` }
 
 export default function ProductionOrdersPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-64"><Loader2 size={24} className="animate-spin text-text-muted" /></div>}>
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><Loader2 size={22} className="animate-spin text-text-faint" /></div>}>
       <OrdersInner />
     </Suspense>
   )
@@ -139,10 +132,6 @@ function OrdersInner() {
   const pathname = usePathname()
   const params = useSearchParams()
 
-  // ── Filters live in the URL ─────────────────────────────────────────────────
-  // So the view is shareable, survives a reload, and — the reason this changed —
-  // can be handed to the capture page as a `return` target that restores exactly
-  // what you were looking at.
   const view         = params.get('view') === 'analytics' ? 'analytics' : 'records'
   const dateFrom     = params.get('from')    || format(subDays(new Date(), 14), 'yyyy-MM-dd')
   const dateTo       = params.get('to')      || sastToday()
@@ -161,7 +150,6 @@ function OrdersInner() {
     router.replace(`${pathname}?${next.toString()}`, { scroll: false })
   }, [params, pathname, router])
 
-  // The URL a capture page should come back to — the current filters, verbatim.
   const returnUrl = `${pathname}?${params.toString()}`
 
   const [sessions, setSessions] = useState<SessionRow[]>([])
@@ -178,7 +166,6 @@ function OrdersInner() {
   const canDelete = p('can_delete_session')
   const canRequestReopen = isFullAdmin || canEdit || p('can_approve_session')
 
-  // ── KPIs / analytics — server-computed over the same filters ───────────────
   useEffect(() => {
     let alive = true
     setKpiLoading(true); setKpiError(null)
@@ -194,7 +181,6 @@ function OrdersInner() {
     return () => { alive = false }
   }, [dateFrom, dateTo, filterSection, filterVariant, filterShift, refreshKey])
 
-  // ── Records ────────────────────────────────────────────────────────────────
   useEffect(() => {
     let alive = true
     async function load() {
@@ -220,29 +206,25 @@ function OrdersInner() {
         .select('id,record_no,deleted_at,edited_at').in('id', ids)
       if (!exErr && ex) (ex as any[]).forEach(r => extra.set(r.id, r))
 
-      // Fetched separately (not in the main select) since it's the largest
-      // column on this table and only needed as the empty-record fallback below.
       const rawData = new Map<string, boolean>()
       const { data: drafts } = await db.schema('production').from('prod_sessions')
         .select('id,draft_data').in('id', ids)
       ;(drafts as any[] ?? []).forEach(r => rawData.set(r.id, hasRawCaptureData(r.draft_data?.productions)))
 
       const { data: mb } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_input_kg,total_output_a_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg,balance_kg').in('session_id', ids)
+        .select('session_id,total_input_kg,total_output_b_kg,total_output_c_kg,total_output_d_kg,balance_kg').in('session_id', ids)
       const mbMap = new Map<string, any>()
       ;(mb ?? []).forEach((r: any) => mbMap.set(r.session_id, r))
 
-      const { data: bags }  = await db.schema('production').from('prod_bagging')
-        .select('session_id').in('session_id', ids)
-      const { data: debags } = await db.schema('production').from('prod_debagging')
-        .select('session_id').in('session_id', ids)
+      const { data: bags }  = await db.schema('production').from('prod_bagging').select('session_id').in('session_id', ids)
+      const { data: debags } = await db.schema('production').from('prod_debagging').select('session_id').in('session_id', ids)
       const bagCount   = new Map<string, number>()
       const debagCount = new Map<string, number>()
       ;(bags  ?? []).forEach((r: any) => bagCount.set(r.session_id,   (bagCount.get(r.session_id)   ?? 0) + 1))
       ;(debags ?? []).forEach((r: any) => debagCount.set(r.session_id, (debagCount.get(r.session_id) ?? 0) + 1))
 
       if (!alive) return
-      const rows: SessionRow[] = (sess as any[]).map(s => {
+      setSessions((sess as any[]).map(s => {
         const m = mbMap.get(s.id)
         const x = extra.get(s.id) ?? {}
         return {
@@ -260,9 +242,7 @@ function OrdersInner() {
           bag_count:   bagCount.get(s.id)   ?? 0,
           has_raw_data: rawData.get(s.id) ?? false,
         }
-      })
-
-      setSessions(rows)
+      }))
       setLoading(false)
     }
     load()
@@ -271,12 +251,10 @@ function OrdersInner() {
 
   const filtered = useMemo(() => sessions.filter(s => {
     // Hide stray empty drafts — a draft/new session with no debagging, no bagging
-    // and no mass balance is an abandoned "No data" row (e.g. an opened-then-left
-    // section). Submitted/approved records always show. New captures create a row
-    // only once real weights are entered, so a real in-progress shift still appears.
+    // and no mass balance is an abandoned "No data" row. Submitted/approved
+    // records always show.
     const isEmpty = s.debag_count === 0 && s.bag_count === 0 && !s.total_input_kg && !s.total_output_kg && !s.has_raw_data
     if (isEmpty && (s.status === 'draft' || s.status === 'new')) return false
-    // Archived (soft-deleted) records are hidden unless the toggle is on.
     if (s.deleted_at && !showArchived) return false
     if (!s.deleted_at && showArchived) return false
     if (filterSection && s.section_id !== filterSection) return false
@@ -289,59 +267,97 @@ function OrdersInner() {
   const activeFilters = [filterSection, filterStatus, filterShift, filterVariant].filter(Boolean).length
   const clearFilters = () => setParams({ section: null, status: null, shift: null, variant: null })
 
+  // What needs doing across the visible range — above the figures, as everywhere
+  // else in this redesign.
+  const actions: Action[] = useMemo(() => {
+    const out: Action[] = []
+    const awaiting = filtered.filter(s => s.status === 'submitted')
+    if (awaiting.length) {
+      out.push({
+        label: `${awaiting.length} record${awaiting.length === 1 ? '' : 's'} awaiting sign-off`,
+        detail: 'Oldest first on the Supervisor Hub’s Sign-off queue',
+        href: '/supervisor/signoff', severity: 'warn', count: awaiting.length,
+      })
+    }
+    const flagged = filtered.filter(s => {
+      const v = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
+      return (s.bag_count > 0 || s.debag_count > 0) && Math.abs(v) > massBalanceToleranceFor(s.section_id)
+    })
+    for (const s of flagged.slice(0, 5)) {
+      const v = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
+      out.push({
+        label: `${sectionMeta(s.section_id).name} is out by ${v.toFixed(1)} kg`,
+        detail: `${format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · ${s.shift} · tolerance ±${massBalanceToleranceFor(s.section_id)} kg`,
+        href: `/production/capture/${s.section_id}?date=${s.date}&shift=${s.shift}&session=${s.id}&tab=overview&return=${encodeURIComponent(returnUrl)}`,
+        severity: 'critical',
+      })
+    }
+    const empties = filtered.filter(s =>
+      !s.deleted_at && (s.status === 'submitted' || s.status === 'approved')
+      && s.bag_count === 0 && s.debag_count === 0 && !s.has_raw_data)
+    if (empties.length) {
+      out.push({
+        label: `${empties.length} signed record${empties.length === 1 ? '' : 's'} with nothing captured`,
+        detail: 'Empty records still count as production orders — archive them',
+        href: `${pathname}?${new URLSearchParams({ ...Object.fromEntries(params), status: 'submitted' }).toString()}`,
+        severity: 'info', count: empties.length,
+      })
+    }
+    return out
+  }, [filtered, pathname, params, returnUrl])
+
   const rangeLabel = `${format(parseISO(dateFrom + 'T12:00:00'), 'd MMM')} – ${format(parseISO(dateTo + 'T12:00:00'), 'd MMM yyyy')}`
 
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 px-6 pt-6 pb-4 border-b border-stone-100 flex-shrink-0 flex-wrap">
+      <div className="flex items-end justify-between gap-3 px-6 pt-6 pb-4 flex-shrink-0 flex-wrap border-b border-surface-rule/60">
         <div>
-          <h1 className="font-semibold text-[22px] text-text leading-tight">Production Orders</h1>
-          <p className="text-[12px] text-text-muted mt-0.5">
-            Captured batch records and output KPIs · {rangeLabel}
+          <h1 className="font-display font-semibold text-[22px] text-text leading-tight tracking-[-0.02em]">Production Orders</h1>
+          <p className="text-[12px] text-text-muted mt-1">
+            {rangeLabel}
             {activeFilters > 0 ? ` · ${activeFilters} filter${activeFilters === 1 ? '' : 's'}` : ''}
+            {showArchived ? ' · archived' : ''}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Records vs Analytics — same filters, two readings of one set. */}
-          <div className="flex gap-1 p-1 bg-stone-100 rounded-xl">
+          <div className="flex gap-1 p-1 bg-surface-dim rounded-xl">
             {([['records', 'Records', List], ['analytics', 'Analytics', BarChart3]] as const).map(([v, label, Icon]) => (
               <button key={v} onClick={() => setParams({ view: v === 'records' ? null : v })}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${view === v ? 'bg-white text-brand shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${view === v ? 'bg-surface-card text-brand' : 'text-text-muted hover:text-text'}`}>
                 <Icon size={13} /> {label}
               </button>
             ))}
           </div>
           {(canEdit || canDelete) && view === 'records' && (
             <button onClick={() => setParams({ archived: showArchived ? null : '1' })}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-[13px] font-medium transition-colors
-                ${showArchived ? 'border-brand bg-brand/5 text-brand' : 'border-stone-200 text-stone-600 hover:border-brand hover:text-brand'}`}>
-              <Archive size={14} /> {showArchived ? 'Viewing archived' : 'Archived'}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-[12.5px] font-medium transition-colors
+                ${showArchived ? 'border-brand bg-brand/5 text-brand' : 'border-surface-rule text-text-muted hover:border-brand hover:text-brand'}`}>
+              <Archive size={14} /> Archived
             </button>
           )}
           <button onClick={() => setShowFilters(f => !f)}
-            className={`relative flex items-center gap-2 px-4 py-2 rounded-xl border text-[13px] font-medium transition-colors
-              ${showFilters || activeFilters > 0 ? 'border-brand bg-brand/5 text-brand' : 'border-stone-200 text-stone-600 hover:border-brand hover:text-brand'}`}>
+            className={`relative flex items-center gap-2 px-3.5 py-2 rounded-xl border text-[12.5px] font-medium transition-colors
+              ${showFilters || activeFilters > 0 ? 'border-brand bg-brand/5 text-brand' : 'border-surface-rule text-text-muted hover:border-brand hover:text-brand'}`}>
             <Filter size={14} /> Filters
             {activeFilters > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-brand text-white text-[10px] font-bold flex items-center justify-center">{activeFilters}</span>
+              <span className="absolute -top-1.5 -right-1.5 w-4.5 h-4.5 min-w-[18px] h-[18px] rounded-full bg-brand text-white text-[10px] font-bold flex items-center justify-center">{activeFilters}</span>
             )}
           </button>
         </div>
       </div>
 
-      {/* Filter panel — one row of controls above the content, driving both views. */}
+      {/* Filters — one row above the content, driving both views. */}
       {showFilters && (
-        <div className="px-6 py-4 bg-stone-50 border-b border-stone-100 flex flex-wrap gap-3 items-end flex-shrink-0">
-          <Preset label="7 days"  onClick={() => setParams({ from: format(subDays(new Date(), 6), 'yyyy-MM-dd'), to: sastToday() })} />
-          <Preset label="14 days" onClick={() => setParams({ from: format(subDays(new Date(), 13), 'yyyy-MM-dd'), to: sastToday() })} />
-          <Preset label="30 days" onClick={() => setParams({ from: format(subDays(new Date(), 29), 'yyyy-MM-dd'), to: sastToday() })} />
-          <Field label="From">
-            <input type="date" value={dateFrom} onChange={e => setParams({ from: e.target.value })} className={INP} />
-          </Field>
-          <Field label="To">
-            <input type="date" value={dateTo} onChange={e => setParams({ to: e.target.value })} className={INP} />
-          </Field>
+        <div className="px-6 py-4 bg-surface-raised border-b border-surface-rule/60 flex flex-wrap gap-3 items-end flex-shrink-0">
+          {[[7, '7 days'], [14, '14 days'], [30, '30 days'], [90, '90 days']].map(([d, label]) => (
+            <button key={label as string} onClick={() => setParams({ from: format(subDays(new Date(), (d as number) - 1), 'yyyy-MM-dd'), to: sastToday() })}
+              className="px-3 py-2 rounded-xl border border-surface-rule bg-surface-card text-[12px] text-text-muted hover:border-brand hover:text-brand transition-colors">
+              {label as string}
+            </button>
+          ))}
+          <Field label="From"><input type="date" value={dateFrom} onChange={e => setParams({ from: e.target.value })} className={INP} /></Field>
+          <Field label="To"><input type="date" value={dateTo} onChange={e => setParams({ to: e.target.value })} className={INP} /></Field>
           <Field label="Section">
             <select value={filterSection} onChange={e => setParams({ section: e.target.value })} className={`${INP} cursor-pointer`}>
               <option value="">All sections</option>
@@ -371,315 +387,264 @@ function OrdersInner() {
             </Field>
           )}
           {activeFilters > 0 && (
-            <button onClick={clearFilters} className="flex items-center gap-1.5 px-3 py-2 text-[12px] text-stone-500 hover:text-err rounded-xl border border-stone-200 bg-white">
-              <X size={13} /> Clear filters
+            <button onClick={clearFilters} className="flex items-center gap-1.5 px-3 py-2 text-[12px] text-text-muted hover:text-err rounded-xl border border-surface-rule bg-surface-card transition-colors">
+              <X size={13} /> Clear
             </button>
           )}
         </div>
       )}
 
-      {/* KPI strip — on BOTH views, because "how did we do" should not require
-          switching tabs to find out. */}
-      <KpiStrip kpis={analytics?.kpis ?? null} loading={kpiLoading} error={kpiError} />
-
-      {/* Content */}
       <div className="flex-1 overflow-auto">
-        {view === 'analytics' ? (
-          <AnalyticsView data={analytics} loading={kpiLoading} error={kpiError} />
-        ) : loading ? (
-          <div className="flex items-center justify-center h-64"><Loader2 size={24} className="animate-spin text-text-muted" /></div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 gap-3">
-            <Package size={24} className="text-stone-300" />
-            <p className="text-[13px] text-stone-400">No production orders found for this date range.</p>
-            {activeFilters > 0 && <button onClick={clearFilters} className="text-[12px] text-brand hover:underline">Clear filters</button>}
-          </div>
-        ) : (
-          <div className="px-6 py-4 space-y-2 max-w-[1100px]">
-            {groupByDate(filtered).map(({ date: d, rows }) => (
-              <div key={d}>
-                <div className="flex items-center gap-2 py-2">
-                  <span className="text-[11px] font-bold text-stone-400 uppercase tracking-widest">
-                    {format(parseISO(d + 'T12:00:00'), 'EEE d MMM yyyy')}
-                  </span>
-                  <span className="font-mono text-[10px] text-stone-400">
-                    {Math.round(rows.reduce((t, r) => t + r.total_output_kg, 0)).toLocaleString()} kg out
-                  </span>
-                  <div className="flex-1 h-px bg-stone-100" />
-                </div>
-                <div className="space-y-1.5">
-                  {rows.map(s => (
-                    <OrderCard key={s.id} session={s} canEdit={canEdit} canDelete={canDelete}
-                      canRequestReopen={canRequestReopen} returnUrl={returnUrl} onChanged={reload} />
-                  ))}
-                </div>
+        <div className="px-6 py-5 space-y-4 max-w-[1050px]">
+          {kpiError ? (
+            <Panel tone="attention">
+              <PanelBody className="pt-4">
+                <p className="flex items-center gap-2 text-[12px] text-warn"><AlertTriangle size={13} /> KPIs unavailable — {kpiError}</p>
+              </PanelBody>
+            </Panel>
+          ) : (
+            <Panel>
+              <StatRow>
+                <Stat value={analytics ? analytics.kpis.totalTons.toFixed(2) : '—'} unit="t" label="Tons out"
+                  hint={analytics ? `${analytics.kpis.totalOutputKg.toLocaleString()} kg` : ''}
+                  spark={analytics && analytics.perDay.length > 1 ? analytics.perDay.map(d => d.tons) : undefined} />
+                <Stat value={analytics?.kpis.tonsPerDay != null ? analytics.kpis.tonsPerDay.toFixed(2) : '—'} unit="t"
+                  label="Tons per day" hint={analytics ? `over ${analytics.kpis.activeDays} producing day${analytics.kpis.activeDays === 1 ? '' : 's'}` : ''} />
+                <Stat value={analytics?.kpis.tonsPerWeek != null ? analytics.kpis.tonsPerWeek.toFixed(2) : '—'} unit="t"
+                  label="Tons per week" hint="average in range" />
+                <Stat value={analytics?.kpis.kgPerHour != null ? analytics.kpis.kgPerHour.toLocaleString() : '—'} unit="kg/h"
+                  label="Throughput" hint="all lines" />
+                <Stat value={analytics?.kpis.yieldPct != null ? String(analytics.kpis.yieldPct) : '—'} unit="%"
+                  label="Yield" hint={analytics ? `${analytics.kpis.totalInputKg.toLocaleString()} kg in` : ''} />
+                <Stat value={analytics ? String(analytics.kpis.sessions) : '—'} label="Records"
+                  hint={analytics ? `${analytics.kpis.signedOff} signed · ${analytics.kpis.balanceFlags} flagged` : ''}
+                  tone={analytics?.kpis.balanceFlags ? 'warn' : 'plain'} />
+              </StatRow>
+            </Panel>
+          )}
+
+          {view === 'records' && actions.length > 0 && <ActionPanel actions={actions} />}
+
+          {view === 'analytics' ? (
+            <AnalyticsView data={analytics} loading={kpiLoading} error={kpiError} returnUrl={returnUrl} />
+          ) : loading ? (
+            <div className="flex items-center justify-center h-48"><Loader2 size={22} className="animate-spin text-text-faint" /></div>
+          ) : filtered.length === 0 ? (
+            <Panel>
+              <div className="flex flex-col items-center justify-center py-16 gap-2.5">
+                <Package size={22} className="text-text-faint/40" />
+                <p className="text-[13px] text-text-faint">No production orders in this range.</p>
+                {activeFilters > 0 && <button onClick={clearFilters} className="text-[12px] text-brand hover:underline">Clear filters</button>}
               </div>
-            ))}
-          </div>
-        )}
+            </Panel>
+          ) : (
+            <div className="space-y-4">
+              {groupByDate(filtered).map(({ date: d, rows }) => (
+                <div key={d}>
+                  <div className="flex items-baseline gap-2.5 pb-2">
+                    <span className="text-[11px] font-semibold text-text-muted uppercase tracking-[0.06em]">
+                      {format(parseISO(d + 'T12:00:00'), 'EEE d MMM yyyy')}
+                    </span>
+                    <span className="font-mono text-[10.5px] text-text-faint">
+                      {Math.round(rows.reduce((t, r) => t + r.total_output_kg, 0)).toLocaleString()} kg out · {rows.length} record{rows.length === 1 ? '' : 's'}
+                    </span>
+                    <div className="flex-1 h-px bg-surface-rule/50" />
+                  </div>
+                  <Panel>
+                    <div className="divide-y divide-surface-rule/40">
+                      {rows.map(s => (
+                        <OrderRow key={s.id} session={s} canEdit={canEdit} canDelete={canDelete}
+                          canRequestReopen={canRequestReopen} returnUrl={returnUrl}
+                          maxKg={Math.max(1, ...rows.map(r => r.total_output_kg))} onChanged={reload} />
+                      ))}
+                    </div>
+                  </Panel>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
-const INP = 'px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-brand'
+const INP = 'px-3 py-2 rounded-xl border border-surface-rule bg-surface-card text-[12.5px] text-text outline-none focus:border-brand'
 const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div className="space-y-1">
-    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest block">{label}</label>
+    <label className="text-[9.5px] font-semibold text-text-faint uppercase tracking-[0.06em] block">{label}</label>
     {children}
   </div>
 )
-const Preset = ({ label, onClick }: { label: string; onClick: () => void }) => (
-  <button onClick={onClick} className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[12px] text-stone-600 hover:border-brand hover:text-brand transition-colors">
-    {label}
-  </button>
-)
 
-// ── KPI strip ────────────────────────────────────────────────────────────────
+// ── Analytics ────────────────────────────────────────────────────────────────
 
-function KpiStrip({ kpis, loading, error }: { kpis: Kpis | null; loading: boolean; error: string | null }) {
-  if (error) {
-    return (
-      <div className="px-6 py-3 border-b border-stone-100 flex-shrink-0 bg-white">
-        <p className="flex items-center gap-2 text-[12px] text-err"><AlertTriangle size={13} /> KPIs unavailable — {error}</p>
-      </div>
-    )
-  }
-  const tiles = [
-    { label: 'tons out',      value: kpis ? kpis.totalTons.toFixed(2) : '—', hint: kpis ? `${kpis.totalOutputKg.toLocaleString()} kg` : '' },
-    { label: 'tons / day',    value: kpis?.tonsPerDay != null ? kpis.tonsPerDay.toFixed(2) : '—', hint: kpis ? `over ${kpis.activeDays} producing day${kpis.activeDays === 1 ? '' : 's'}` : '' },
-    { label: 'tons / week',   value: kpis?.tonsPerWeek != null ? kpis.tonsPerWeek.toFixed(2) : '—', hint: 'avg per week in range' },
-    { label: 'kg / hour',     value: kpis?.kgPerHour != null ? kpis.kgPerHour.toLocaleString() : '—', hint: 'throughput, all lines' },
-    { label: 'yield',         value: kpis?.yieldPct != null ? `${kpis.yieldPct}%` : '—', hint: kpis ? `${kpis.totalInputKg.toLocaleString()} kg in` : '' },
-    { label: 'records',       value: kpis ? String(kpis.sessions) : '—', hint: kpis ? `${kpis.signedOff} signed off` : '' },
-    { label: 'balance flags', value: kpis ? String(kpis.balanceFlags) : '—', hint: 'over tolerance', warn: !!kpis?.balanceFlags },
-  ]
-  return (
-    <div className="px-6 py-3 border-b border-stone-100 flex items-stretch gap-5 flex-shrink-0 bg-white overflow-x-auto">
-      {tiles.map((t, i) => (
-        <div key={t.label} className="flex items-stretch gap-5 shrink-0">
-          {i > 0 && <div className="w-px bg-stone-200" />}
-          <div>
-            <div className={`font-mono font-bold text-[18px] leading-tight ${t.warn ? 'text-warn' : 'text-text'}`}>
-              {loading && !kpis ? '—' : t.value}
-            </div>
-            <div className="text-[10px] text-text-muted uppercase tracking-wide">{t.label}</div>
-            {t.hint && <div className="text-[9px] text-stone-400">{t.hint}</div>}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── Analytics view ───────────────────────────────────────────────────────────
-
-function AnalyticsView({ data, loading, error }: { data: Analytics | null; loading: boolean; error: string | null }) {
-  if (loading && !data) return <div className="flex items-center justify-center h-64"><Loader2 size={24} className="animate-spin text-text-muted" /></div>
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-2">
-        <AlertTriangle size={24} className="text-warn" />
-        <p className="text-[13px] text-err">{error}</p>
-      </div>
-    )
-  }
+function AnalyticsView({ data, loading, error, returnUrl }: {
+  data: Analytics | null; loading: boolean; error: string | null; returnUrl: string
+}) {
+  if (loading && !data) return <div className="flex items-center justify-center h-48"><Loader2 size={22} className="animate-spin text-text-faint" /></div>
+  if (error) return null
   if (!data || data.kpis.sessions === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <TrendingUp size={24} className="text-stone-300" />
-        <p className="text-[13px] text-stone-400">Nothing was captured in this range, so there is nothing to chart.</p>
-      </div>
+      <Panel>
+        <div className="flex flex-col items-center justify-center py-16 gap-2.5">
+          <TrendingUp size={22} className="text-text-faint/40" />
+          <p className="text-[13px] text-text-faint">Nothing was captured in this range, so there is nothing to chart.</p>
+        </div>
+      </Panel>
     )
   }
 
   const dayData = data.perDay.map(d => ({ ...d, label: format(parseISO(d.date + 'T12:00:00'), 'd MMM') }))
-  const weekData = data.perWeek.map(w => ({ ...w, label: `w/c ${format(parseISO(w.weekStart + 'T12:00:00'), 'd MMM')}` }))
+  const weekData = data.perWeek.map(w => ({ ...w, label: format(parseISO(w.weekStart + 'T12:00:00'), 'd MMM') }))
+  const maxThroughput = Math.max(1, ...data.bySection.map(s => s.kgPerHour ?? 0))
+  const productTotal = data.byProduct.reduce((t, p) => t + p.kg, 0)
 
   return (
-    <div className="px-6 py-5 space-y-4 max-w-[1100px]">
-      {/* Tons per day — one series, so no legend: the title names it. */}
-      <Card title="Tons produced per day" subtitle="Bagged output, from mass balance">
-        <ResponsiveContainer width="100%" height={230}>
-          <BarChart data={dayData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
-            <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-            <YAxis tick={AXIS} axisLine={false} tickLine={false} width={34} unit="t" />
-            <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(26,58,14,0.05)' }}
-              formatter={(v: any, _n: any, entry: any) => [
-                `${Number(v).toFixed(2)} t (${entry?.payload?.outputKg?.toLocaleString()} kg)`, 'Out',
-              ]}
-              labelFormatter={(l: any, payload: any) => {
-                const d = payload?.[0]?.payload
-                return d ? `${l} · ${d.sessions} record${d.sessions === 1 ? '' : 's'}${d.yieldPct != null ? ` · ${d.yieldPct}% yield` : ''}` : l
-              }} />
-            <Bar dataKey="tons" fill="#1A3A0E" radius={[4, 4, 0, 0]} maxBarSize={28} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
-
-      {weekData.length > 1 && (
-        <Card title="Tons produced per week" subtitle="Week commencing Monday">
+    <div className="space-y-4">
+      {/* Trend. One series, so no legend — the title names it. An axis genuinely
+          helps here, which is why this is the only place a chart library is used;
+          everywhere else the kit's own marks are lighter and more consistent. */}
+      <Panel>
+        <PanelHead icon={Scale} title="Tons produced per day" meta="bagged output, from mass balance" />
+        <PanelBody>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={weekData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />
-              <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} />
-              <YAxis tick={AXIS} axisLine={false} tickLine={false} width={34} unit="t" />
-              <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(26,58,14,0.05)' }}
-                formatter={(v: any) => [`${Number(v).toFixed(2)} t`, 'Out']} />
-              <Bar dataKey="tons" fill="#1A3A0E" radius={[4, 4, 0, 0]} maxBarSize={44} />
+            <BarChart data={dayData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="2 4" stroke="var(--color-surface-rule)" vertical={false} />
+              <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              <YAxis tick={AXIS} axisLine={false} tickLine={false} width={30} unit="t" />
+              <Tooltip cursor={{ fill: MARK_SOFT }}
+                contentStyle={{ fontSize: 12, borderRadius: 10, border: '1px solid var(--color-surface-rule)', background: 'var(--color-surface-card)' }}
+                formatter={(v: any, _n: any, entry: any) => [`${Number(v).toFixed(2)} t (${entry?.payload?.outputKg?.toLocaleString()} kg)`, 'Out']}
+                labelFormatter={(l: any, payload: any) => {
+                  const d = payload?.[0]?.payload
+                  return d ? `${l} · ${d.sessions} record${d.sessions === 1 ? '' : 's'}${d.yieldPct != null ? ` · ${d.yieldPct}% yield` : ''}` : l
+                }} />
+              <Bar dataKey="tons" fill={MARK} radius={[3, 3, 0, 0]} maxBarSize={26} />
             </BarChart>
           </ResponsiveContainer>
-        </Card>
+        </PanelBody>
+      </Panel>
+
+      {weekData.length > 1 && (
+        <Panel>
+          <PanelHead icon={Scale} title="Tons produced per week" meta="week commencing Monday" />
+          <PanelBody>
+            <div className="-my-1">
+              {weekData.map(w => (
+                <BarRow key={w.weekStart} label={`w/c ${w.label}`}
+                  sublabel={`${w.sessions} record${w.sessions === 1 ? '' : 's'}${w.yieldPct != null ? ` · ${w.yieldPct}% yield` : ''}`}
+                  value={w.tons} max={Math.max(...weekData.map(x => x.tons), 1)}
+                  display={`${w.tons.toFixed(2)} t`} />
+              ))}
+            </div>
+          </PanelBody>
+        </Panel>
       )}
 
-      {/* Throughput by line. The line NAME is on the axis, so identity never
-          depends on the bar colour — the section palette has two violets that a
-          protanope can't separate, and colour here is decoration, not data. */}
-      <Card title="Machine throughput by line" subtitle="kg out per producing hour">
-        <ResponsiveContainer width="100%" height={Math.max(160, data.bySection.length * 38)}>
-          <BarChart data={data.bySection} layout="vertical" margin={{ top: 0, right: 48, bottom: 0, left: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={GRID} horizontal={false} />
-            <XAxis type="number" tick={AXIS} axisLine={false} tickLine={false} />
-            <YAxis type="category" dataKey="sectionName" tick={AXIS} axisLine={false} tickLine={false} width={110} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(26,58,14,0.05)' }}
-              formatter={(v: any, _n: any, entry: any) => [
-                `${Number(v).toLocaleString()} kg/h`,
-                entry?.payload?.basis === 'run' ? 'From run time' : 'From crew hours',
-              ]} />
-            <Bar dataKey="kgPerHour" radius={[0, 4, 4, 0]} maxBarSize={22}>
-              {data.bySection.map(s => <Cell key={s.sectionId} fill={s.colorHex} />)}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-        <p className="text-[11px] text-text-muted mt-2">
-          Measured from the first to the last bag on each record where that window is meaningful,
-          otherwise from confirmed crew hours — the basis is shown per line in the table below,
-          because the two answer slightly different questions.
-        </p>
-      </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Throughput. Line name on the axis, so identity never rests on colour. */}
+        <Panel>
+          <PanelHead icon={Gauge} title="Throughput by line" meta="kg out per producing hour" />
+          <PanelBody className="space-y-3">
+            <div className="-my-1">
+              {data.bySection.map(s => (
+                <BarRow key={s.sectionId} label={s.sectionName}
+                  sublabel={s.basis === 'run' ? `ran ${hrs(s.runMinutes)}` : s.basis === 'worked' ? `${hrs(s.workedMinutes)} crew` : 'no basis'}
+                  value={s.kgPerHour ?? 0} max={maxThroughput}
+                  display={s.kgPerHour != null ? `${s.kgPerHour.toLocaleString()} kg/h` : '—'}
+                  badge={s.flagged ? <Pill tone="warn">{s.flagged} flagged</Pill> : undefined} />
+              ))}
+            </div>
+            <p className="text-[11px] text-text-faint">
+              Measured first bag to last where that window is meaningful, otherwise from confirmed crew hours.
+            </p>
+          </PanelBody>
+        </Panel>
 
-      {/* Per line, in full. A table because a production manager wants the exact
-          numbers, and it carries yield, throughput and its basis together. */}
-      <Card title="Per line" subtitle="Yield, throughput and flags" icon={Gauge}>
-        <DataTable head={['Line', 'Records', 'kg in', 'kg out', 'Tons', 'Yield', 'Ran for', 'Crew hours', 'kg / hour', 'Basis', 'Flags']}>
-          {data.bySection.map(s => (
-            <tr key={s.sectionId}>
-              <Cellx>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded flex items-center justify-center shrink-0" style={{ background: s.colorHex }}>
-                    <span className="font-mono font-bold text-[7px] text-white">{s.sectionCode}</span>
-                  </span>
-                  {s.sectionName}
-                </span>
-              </Cellx>
-              <Cellx mono right>{s.sessions}</Cellx>
-              <Cellx mono right>{s.inputKg.toLocaleString()}</Cellx>
-              <Cellx mono right>{s.outputKg.toLocaleString()}</Cellx>
-              <Cellx mono right>{s.tons.toFixed(2)}</Cellx>
-              <Cellx mono right>{s.yieldPct != null ? `${s.yieldPct}%` : '—'}</Cellx>
-              <Cellx mono right>{s.runMinutes ? hrs(s.runMinutes) : '—'}</Cellx>
-              <Cellx mono right>{s.workedMinutes ? hrs(s.workedMinutes) : '—'}</Cellx>
-              <Cellx mono right className="font-semibold">{s.kgPerHour != null ? s.kgPerHour.toLocaleString() : '—'}</Cellx>
-              <Cellx>{s.basis === 'run' ? 'Run time' : s.basis === 'worked' ? 'Crew hours' : '—'}</Cellx>
-              <Cellx mono right className={s.flagged ? 'text-warn font-semibold' : ''}>{s.flagged || '—'}</Cellx>
-            </tr>
-          ))}
-        </DataTable>
-      </Card>
+        {/* Output produced, by product. */}
+        <Panel>
+          <PanelHead icon={Layers} title="Output by product" meta={`${productTotal.toLocaleString()} kg bagged`} />
+          <PanelBody className="space-y-4">
+            <ShareBar items={data.byProduct.map(pr => ({
+              label: pr.productType, value: pr.kg, display: `${pr.kg.toLocaleString()} kg`,
+            }))} total={productTotal} />
+            <Collapse label="Show which line produced what">
+              <Table head={['Product', 'Bags', 'kg', 'Tons', 'Share', 'From line(s)']}>
+                {data.byProduct.map(pr => (
+                  <Tr key={pr.productType}>
+                    <Td>{pr.productType}</Td>
+                    <Td mono right>{pr.bags}</Td>
+                    <Td mono right>{pr.kg.toLocaleString()}</Td>
+                    <Td mono right>{pr.tons.toFixed(2)}</Td>
+                    <Td mono right>{pr.sharePct != null ? `${pr.sharePct}%` : '—'}</Td>
+                    <Td right>
+                      <span className="flex flex-wrap gap-1 justify-end">
+                        {pr.bySection.map(bs => (
+                          <span key={bs.sectionId} title={`${bs.sectionName} — ${bs.kg.toLocaleString()} kg`}
+                            className="inline-flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 rounded bg-surface-dim text-text-muted">
+                            {bs.sectionCode} {bs.kg.toLocaleString()}
+                          </span>
+                        ))}
+                      </span>
+                    </Td>
+                  </Tr>
+                ))}
+              </Table>
+            </Collapse>
+          </PanelBody>
+        </Panel>
+      </div>
 
-      {/* How much of each output, and which line produced it. */}
-      <Card title="Output produced, by product" subtitle="Every bagged product and the lines it came off" icon={Layers}>
-        <DataTable head={['Product', 'Bags', 'kg', 'Tons', 'Share', 'From line(s)']}>
-          {data.byProduct.map(pr => (
-            <tr key={pr.productType}>
-              <Cellx>{pr.productType}</Cellx>
-              <Cellx mono right>{pr.bags}</Cellx>
-              <Cellx mono right>{pr.kg.toLocaleString()}</Cellx>
-              <Cellx mono right>{pr.tons.toFixed(2)}</Cellx>
-              <Cellx mono right>
-                {pr.sharePct != null ? (
-                  <span className="inline-flex items-center gap-1.5 justify-end">
-                    <span className="hidden sm:inline-block w-14 h-1.5 rounded-full bg-stone-100 overflow-hidden align-middle">
-                      <span className="block h-full bg-brand" style={{ width: `${Math.min(100, pr.sharePct)}%` }} />
+      {/* Per line, in full — the exact numbers, on request. */}
+      <Panel>
+        <PanelHead icon={Gauge} title="Per line" meta="yield, throughput and flags" />
+        <PanelBody>
+          <Collapse label="Show the full per-line table" count={data.bySection.length} defaultOpen>
+            <Table head={['Line', 'Records', 'kg in', 'kg out', 'Tons', 'Yield', 'Ran for', 'Crew hours', 'kg / hour', 'Basis', 'Flags']}>
+              {data.bySection.map(s => (
+                <Tr key={s.sectionId}>
+                  <Td>
+                    <span className="inline-flex items-center gap-1.5">
+                      <SectionChip code={s.sectionCode} colorHex={s.colorHex} size={18} />
+                      {s.sectionName}
                     </span>
-                    {pr.sharePct}%
-                  </span>
-                ) : '—'}
-              </Cellx>
-              <Cellx>
-                <span className="flex flex-wrap gap-1">
-                  {pr.bySection.map(bs => (
-                    <span key={bs.sectionId} title={`${bs.sectionName} — ${bs.kg.toLocaleString()} kg`}
-                      className="inline-flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">
-                      {bs.sectionCode} {bs.kg.toLocaleString()}
-                    </span>
-                  ))}
-                </span>
-              </Cellx>
-            </tr>
-          ))}
-        </DataTable>
-      </Card>
+                  </Td>
+                  <Td mono right>{s.sessions}</Td>
+                  <Td mono right>{s.inputKg.toLocaleString()}</Td>
+                  <Td mono right>{s.outputKg.toLocaleString()}</Td>
+                  <Td mono right>{s.tons.toFixed(2)}</Td>
+                  <Td mono right>{s.yieldPct != null ? `${s.yieldPct}%` : '—'}</Td>
+                  <Td mono right>{s.runMinutes ? hrs(s.runMinutes) : '—'}</Td>
+                  <Td mono right>{s.workedMinutes ? hrs(s.workedMinutes) : '—'}</Td>
+                  <Td mono right>{s.kgPerHour != null ? s.kgPerHour.toLocaleString() : '—'}</Td>
+                  <Td right>{s.basis === 'run' ? 'Run time' : s.basis === 'worked' ? 'Crew hours' : '—'}</Td>
+                  <Td mono right tone={s.flagged ? 'warn' : undefined}>{s.flagged || '—'}</Td>
+                </Tr>
+              ))}
+            </Table>
+          </Collapse>
+        </PanelBody>
+      </Panel>
 
       {data.byVariant.length > 1 && (
-        <Card title="By variant" subtitle="Yield per material variant" icon={CalendarRange}>
-          <DataTable head={['Variant', 'Records', 'kg in', 'kg out', 'Tons', 'Yield']}>
-            {data.byVariant.map(v => (
-              <tr key={v.variant}>
-                <Cellx>{v.variant}</Cellx>
-                <Cellx mono right>{v.sessions}</Cellx>
-                <Cellx mono right>{v.inputKg.toLocaleString()}</Cellx>
-                <Cellx mono right>{v.outputKg.toLocaleString()}</Cellx>
-                <Cellx mono right>{v.tons.toFixed(2)}</Cellx>
-                <Cellx mono right>{v.yieldPct != null ? `${v.yieldPct}%` : '—'}</Cellx>
-              </tr>
-            ))}
-          </DataTable>
-        </Card>
+        <Panel>
+          <PanelHead icon={Layers} title="By variant" meta="yield per material variant" />
+          <PanelBody>
+            <div className="-my-1">
+              {data.byVariant.map(v => (
+                <BarRow key={v.variant} label={v.variant}
+                  sublabel={`${v.sessions} record${v.sessions === 1 ? '' : 's'}${v.yieldPct != null ? ` · ${v.yieldPct}% yield` : ''}`}
+                  value={v.tons} max={Math.max(...data.byVariant.map(x => x.tons), 1)}
+                  display={`${v.tons.toFixed(2)} t`} />
+              ))}
+            </div>
+          </PanelBody>
+        </Panel>
       )}
     </div>
   )
 }
-
-function Card({ title, subtitle, icon: Icon, children }: {
-  title: string; subtitle?: string; icon?: React.ElementType; children: React.ReactNode
-}) {
-  return (
-    <div className="bg-surface-card border border-surface-rule rounded-2xl p-4">
-      <div className="flex items-center gap-2 mb-0.5">
-        {Icon && <Icon size={14} className="text-text-muted shrink-0" />}
-        <div className="font-display font-semibold text-[13px] text-text">{title}</div>
-      </div>
-      {subtitle && <div className="text-[11px] text-text-muted mb-3">{subtitle}</div>}
-      {children}
-    </div>
-  )
-}
-
-function DataTable({ head, children }: { head: string[]; children: React.ReactNode }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left">
-        <thead>
-          <tr className="border-b border-surface-rule">
-            {head.map((h, i) => (
-              <th key={h} className={`py-1.5 font-mono text-[9px] font-semibold text-text-muted uppercase tracking-wide whitespace-nowrap ${i ? 'pl-3' : ''} ${i > 0 ? 'text-right' : ''}`}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-surface-rule">{children}</tbody>
-      </table>
-    </div>
-  )
-}
-const Cellx = ({ children, mono, right, className = '' }: {
-  children: React.ReactNode; mono?: boolean; right?: boolean; className?: string
-}) => (
-  <td className={`py-2 pl-3 first:pl-0 text-[12px] text-text align-middle whitespace-nowrap ${mono ? 'font-mono' : ''} ${right ? 'text-right' : ''} ${className}`}>
-    {children}
-  </td>
-)
 
 // ── Records ──────────────────────────────────────────────────────────────────
 
@@ -693,14 +658,13 @@ function groupByDate(rows: SessionRow[]): { date: string; rows: SessionRow[] }[]
   return Array.from(map.entries()).map(([date, rows]) => ({ date, rows }))
 }
 
-function OrderCard({ session: s, canEdit, canDelete, canRequestReopen, returnUrl, onChanged }: {
+function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl, maxKg, onChanged }: {
   session: SessionRow; canEdit: boolean; canDelete: boolean
-  canRequestReopen: boolean; returnUrl: string; onChanged: () => void
+  canRequestReopen: boolean; returnUrl: string; maxKg: number; onChanged: () => void
 }) {
   const { displayName } = useAuth()
   const meta       = sectionMeta(s.section_id)
   const st         = STATUS[s.status] ?? STATUS.new
-  const StatusIcon = st.icon
   const variance   = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
   const withinTol  = Math.abs(variance) <= massBalanceToleranceFor(s.section_id)
   const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
@@ -738,163 +702,141 @@ function OrderCard({ session: s, canEdit, canDelete, canRequestReopen, returnUrl
     production_orders: form.production_orders.split(',').map(x => x.trim()).filter(Boolean),
   })
 
-  // Meta line — one flowing row of muted facts instead of a rigid grid column,
-  // so a record with fewer facts (no PO, no lot) doesn't leave a ragged empty
-  // cell and one with more doesn't get cramped.
-  const metaParts = [
-    s.operator_names?.length ? s.operator_names.join(', ') : 'No operators',
-    s.lot_number,
-  ].filter(Boolean)
-  const poLabel = s.production_orders?.length ? `PO ${s.production_orders.join(', ')}` : null
-
-  // Back out of capture returns HERE, with the filters that were applied.
   const href = `/production/capture/${s.section_id}?date=${s.date}&shift=${s.shift}&session=${s.id}`
     + `&return=${encodeURIComponent(returnUrl)}`
 
+  const facts = [
+    s.operator_names?.length ? s.operator_names.join(', ') : null,
+    s.lot_number,
+    s.variant,
+    s.production_orders?.length ? `PO ${s.production_orders.join(', ')}` : null,
+  ].filter(Boolean)
+
   return (
-    <div className={`bg-white border rounded-2xl transition-all ${archived ? 'border-stone-200 opacity-70' : 'border-stone-200 hover:border-brand/40 hover:shadow-sm'}`}>
-      <div className="flex items-center gap-3 px-5 py-3.5">
-        <Link href={href} className="flex items-center gap-3.5 flex-1 min-w-0">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm" style={{ background: meta.colorHex }}>
-            <span className="font-mono font-bold text-[11px] text-white">{meta.code}</span>
-          </div>
-
+    <div className={archived ? 'opacity-60' : ''}>
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Link href={href} className="flex items-center gap-3 flex-1 min-w-0">
+          <SectionChip code={meta.code} colorHex={meta.colorHex} size={30} />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="font-semibold text-[14px] text-text">{meta.name}</span>
-              <span className="text-[11px] text-text-muted capitalize">{s.shift} · {s.variant ?? '—'}</span>
-              {s.record_no && <span className="font-mono text-[10px] font-semibold text-brand">{s.record_no}</span>}
-              {archived && <span className="text-[9px] font-semibold uppercase tracking-wide text-stone-500 bg-stone-100 rounded px-1.5 py-0.5">Archived</span>}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-body font-medium text-[13.5px] text-text">{meta.name}</span>
+              <span className="text-[11px] text-text-faint capitalize">{s.shift}</span>
+              {s.record_no && <span className="font-mono text-[10px] text-brand">{s.record_no}</span>}
+              {archived && <Pill>Archived</Pill>}
             </div>
-            <div className="flex items-center gap-1.5 min-w-0 mt-0.5">
-              <div className="text-[11px] text-stone-400 truncate">{metaParts.join(' · ')}</div>
-              {poLabel && <span className="text-[11px] font-medium text-stone-500 shrink-0">{poLabel}</span>}
-            </div>
+            <div className="text-[11px] text-text-faint truncate mt-0.5">{facts.join(' · ') || 'No details captured'}</div>
           </div>
 
-          <div className="text-right shrink-0 hidden sm:block">
-            {hasData ? (
-              <>
-                <div className="flex items-center justify-end gap-1 text-[12px] text-stone-600">
-                  <Package size={11} /> {s.total_input_kg.toFixed(1)}
-                  <ArrowRight size={10} className="text-stone-300" />
-                  <PackageCheck size={11} /> {s.total_output_kg.toFixed(1)} kg
-                </div>
-                <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                  {/* Yield on the row — the number the record is actually judged
-                      on, previously only visible by opening it. */}
-                  {yieldPct != null && (
-                    <span className="font-mono text-[10px] font-medium text-stone-500">{yieldPct}% yield</span>
-                  )}
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-                    <Scale size={10} />{variance > 0 ? '+' : ''}{variance.toFixed(1)} kg{!withinTol && <AlertTriangle size={10} />}
-                  </span>
-                </div>
-              </>
-            ) : <span className="text-stone-300 text-[11px]">No data</span>}
-          </div>
+          {hasData ? (
+            <div className="shrink-0 hidden sm:block w-40">
+              <div className="flex items-baseline justify-end gap-2 mb-1">
+                <span className="font-mono text-[12.5px] text-text tabular-nums">{s.total_output_kg.toFixed(0)} kg</span>
+                {yieldPct != null && <span className="font-mono text-[10.5px] text-text-faint">{yieldPct}%</span>}
+              </div>
+              {/* Output relative to the busiest record that day — the shape of the
+                  day without a chart per row. */}
+              <div className="h-1.5 rounded-full bg-surface-dim overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${Math.max(1.5, (s.total_output_kg / maxKg) * 100)}%`, background: meta.colorHex }} />
+              </div>
+            </div>
+          ) : <span className="text-text-faint text-[11px] shrink-0 hidden sm:block">No data</span>}
         </Link>
 
-        <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full shrink-0 ${st.cls}`}>
-          <StatusIcon size={11} /> {st.label}
-        </span>
+        {hasData && (
+          <Pill tone={withinTol ? 'ok' : 'warn'}>
+            {!withinTol && <AlertTriangle size={10} />}
+            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
+          </Pill>
+        )}
+        <Pill tone={st.tone}><st.icon size={10} /> {st.label}</Pill>
 
-        {/* A supervisor can't reopen a signed-off record themselves — they ask,
-            and the Production Manager decides it on the Sign-off tab. */}
         {canRequestReopen && !archived && (s.status === 'submitted' || s.status === 'approved') && (
           <button onClick={() => setReopening(true)} title="Request that this record be reopened for edits"
-            className="p-1.5 rounded-lg text-stone-400 hover:text-warn hover:bg-stone-50 shrink-0">
-            <Undo2 size={16} />
+            className="p-1.5 rounded-lg text-text-faint hover:text-warn hover:bg-surface-raised shrink-0 transition-colors">
+            <Undo2 size={15} />
           </button>
         )}
-
         {s.lot_number && (
-          <Link href={`/traceability?batch=${encodeURIComponent(s.lot_number)}`} title="Full batch traceability — yield, quality, reconciliation"
-            className="p-1.5 rounded-lg text-stone-400 hover:text-brand hover:bg-stone-50 shrink-0">
-            <BarChart3 size={16} />
+          <Link href={`/traceability?batch=${encodeURIComponent(s.lot_number)}`} title="Full batch traceability"
+            className="p-1.5 rounded-lg text-text-faint hover:text-brand hover:bg-surface-raised shrink-0 transition-colors">
+            <BarChart3 size={15} />
           </Link>
         )}
 
         {canManage ? (
           <div className="relative shrink-0">
             <button onClick={() => setMenuOpen(o => !o)} disabled={busy}
-              className="p-1.5 rounded-lg text-stone-400 hover:text-brand hover:bg-stone-50 disabled:opacity-40">
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <MoreHorizontal size={16} />}
+              className="p-1.5 rounded-lg text-text-faint hover:text-brand hover:bg-surface-raised disabled:opacity-40 transition-colors">
+              {busy ? <Loader2 size={15} className="animate-spin" /> : <MoreHorizontal size={15} />}
             </button>
             {menuOpen && (<>
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-8 z-20 w-48 bg-white border border-stone-200 rounded-xl shadow-lg py-1 text-[13px]">
+              <div className="absolute right-0 top-8 z-20 w-48 bg-surface-card border border-surface-rule rounded-xl shadow-menu py-1 text-[12.5px]">
                 {archived ? (
-                  canDelete && <button onClick={() => act('restore')} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-stone-50"><RotateCcw size={14} /> Restore</button>
+                  canDelete && <button onClick={() => act('restore')} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-raised"><RotateCcw size={14} /> Restore</button>
                 ) : (<>
-                  {canEdit && <button onClick={() => { setEditing(e => !e); setMenuOpen(false) }} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-stone-50"><Pencil size={14} /> Edit details</button>}
+                  {canEdit && <button onClick={() => { setEditing(e => !e); setMenuOpen(false) }} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-raised"><Pencil size={14} /> Edit details</button>}
                   {canEdit && (s.status === 'submitted' || s.status === 'approved') &&
-                    <button onClick={() => act('reopen')} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-stone-50"><Unlock size={14} /> Reopen for edits</button>}
-                  {canDelete && <button onClick={() => { if (confirm('Archive this record? It will be hidden but kept for the audit trail and can be restored. Archived orders are excluded from KPI totals.')) act('delete') }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-err hover:bg-err/5"><Trash2 size={14} /> Archive</button>}
+                    <button onClick={() => act('reopen')} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-raised"><Unlock size={14} /> Reopen for edits</button>}
+                  {canDelete && <button onClick={() => { if (confirm('Archive this record? It will be hidden but kept for the audit trail and can be restored. Archived orders are excluded from KPI totals.')) act('delete') }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-err hover:bg-err-bg"><Trash2 size={14} /> Archive</button>}
                 </>)}
               </div>
             </>)}
           </div>
         ) : (
-          <ChevronRight size={16} className="text-stone-300 shrink-0" />
+          <ChevronRight size={15} className="text-text-faint shrink-0" />
         )}
       </div>
 
-      {/* Empty record submitted/signed-off with nothing actually captured — e.g.
-          an operator hit errors mid-batch, submitted anyway, and started a new
-          record instead. Surfaced directly (not buried in the "…" menu) so it
-          doesn't just sit there as silent clutter; discarding still goes
-          through the same permissioned archive action as any other record. */}
+      {/* A signed-off record with nothing in it — surfaced directly rather than
+          buried in the "…" menu, since it silently counts as a production order. */}
       {!hasData && !archived && (s.status === 'submitted' || s.status === 'approved') && (
-        <div className="flex items-center gap-2 px-5 pb-3 -mt-1 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-warn bg-warn/10 px-2 py-1 rounded-full">
-            <AlertTriangle size={11} /> Empty record — no debagging or bagging captured
-          </span>
+        <div className="flex items-center gap-2 px-5 pb-3 flex-wrap">
+          <Pill tone="warn"><AlertTriangle size={10} /> Empty record — nothing captured</Pill>
           {canDelete && (
-            <button
-              onClick={() => { if (confirm('This record has no captured data. Archive it now? It will be hidden but kept for the audit trail and can be restored.')) act('delete') }}
-              disabled={busy}
-              className="text-[11px] font-medium text-err hover:underline disabled:opacity-40">
+            <button onClick={() => { if (confirm('This record has no captured data. Archive it now? It will be hidden but kept for the audit trail and can be restored.')) act('delete') }}
+              disabled={busy} className="text-[11px] font-medium text-err hover:underline disabled:opacity-40">
               Discard
             </button>
           )}
         </div>
       )}
 
-      {/* Small-screen data row — the two-column right-aligned block above hides
-          under sm; show the same facts inline instead of dropping them. */}
       {hasData && (
-        <div className="sm:hidden flex items-center gap-2 px-5 pb-3 -mt-1 text-[11px] text-stone-500 flex-wrap">
-          <Package size={11} /> {s.total_input_kg.toFixed(1)} kg
-          <ArrowRight size={10} className="text-stone-300" />
-          <PackageCheck size={11} /> {s.total_output_kg.toFixed(1)} kg
+        <div className="sm:hidden flex items-center gap-2 px-5 pb-3 text-[11px] text-text-muted flex-wrap">
+          <Package size={11} /> {s.total_input_kg.toFixed(0)} kg
+          <ArrowRight size={10} className="text-text-faint" />
+          {s.total_output_kg.toFixed(0)} kg
           {yieldPct != null && <span className="font-mono">{yieldPct}%</span>}
-          <span className={`inline-flex items-center gap-1 font-medium px-1.5 py-0.5 rounded-full ${withinTol ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
-          </span>
         </div>
       )}
 
       {editing && (
-        <div className="border-t border-stone-100 px-5 py-4 bg-stone-50/50 space-y-3">
+        <div className="border-t border-surface-rule/60 px-5 py-4 bg-surface-raised space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="space-y-1 block"><span className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Operators (comma-separated)</span>
-              <input value={form.operator_names} onChange={e => setForm(f => ({ ...f, operator_names: e.target.value }))} className={EDIT_INP} /></label>
-            <label className="space-y-1 block"><span className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</span>
-              <select value={form.variant} onChange={e => setForm(f => ({ ...f, variant: e.target.value }))} className={EDIT_INP + ' cursor-pointer'}>
+            {([
+              ['Operators (comma-separated)', 'operator_names'],
+              ['Lot / batch', 'lot_number'],
+              ['Production order(s) (comma-separated)', 'production_orders'],
+            ] as const).map(([label, key]) => (
+              <label key={key} className="space-y-1 block">
+                <span className="text-[9.5px] font-semibold text-text-faint uppercase tracking-[0.06em]">{label}</span>
+                <input value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} className={`${INP} w-full`} />
+              </label>
+            ))}
+            <label className="space-y-1 block">
+              <span className="text-[9.5px] font-semibold text-text-faint uppercase tracking-[0.06em]">Variant</span>
+              <select value={form.variant} onChange={e => setForm(f => ({ ...f, variant: e.target.value }))} className={`${INP} w-full cursor-pointer`}>
                 <option value="">—</option>{VARIANT_OPTS.map(v => <option key={v} value={v}>{v}</option>)}
-              </select></label>
-            <label className="space-y-1 block"><span className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Lot / batch</span>
-              <input value={form.lot_number} onChange={e => setForm(f => ({ ...f, lot_number: e.target.value }))} className={EDIT_INP} /></label>
-            <label className="space-y-1 block"><span className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Production order(s) (comma-separated)</span>
-              <input value={form.production_orders} onChange={e => setForm(f => ({ ...f, production_orders: e.target.value }))} className={EDIT_INP} /></label>
+              </select>
+            </label>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={saveEdit} disabled={busy} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-brand text-white text-[13px] font-medium disabled:opacity-40">
+            <button onClick={saveEdit} disabled={busy} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-brand text-white text-[12.5px] font-medium disabled:opacity-40">
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save changes
             </button>
-            <button onClick={() => setEditing(false)} className="px-4 py-2 rounded-xl border border-stone-200 text-[13px] text-stone-600 hover:bg-white">Cancel</button>
-            <span className="text-[11px] text-stone-400 ml-auto hidden sm:block">Weights / batches → open the record to edit in capture.</span>
+            <button onClick={() => setEditing(false)} className="px-4 py-2 rounded-xl border border-surface-rule text-[12.5px] text-text-muted hover:bg-surface-card">Cancel</button>
+            <span className="text-[11px] text-text-faint ml-auto hidden sm:block">Weights &amp; batches → open the record in capture.</span>
           </div>
         </div>
       )}
@@ -907,12 +849,9 @@ function OrderCard({ session: s, canEdit, canDelete, canRequestReopen, returnUrl
   )
 }
 
-const EDIT_INP = 'w-full px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand'
-
 // ── "Request reopen" ─────────────────────────────────────────────────────────
-// Lifted from the retired /supervisor/productions page so the action sits on the
-// record it applies to. The DECISION stays with the Production Manager, on the
-// Supervisor Hub's Sign-off tab.
+// The action sits on the record it applies to. The DECISION stays with the
+// Production Manager, on the Supervisor Hub's Sign-off tab.
 function RequestReopenModal({ session: s, requestedByName, onClose, onDone }: {
   session: SessionRow; requestedByName: string | null
   onClose: () => void; onDone: () => void
@@ -942,13 +881,13 @@ function RequestReopenModal({ session: s, requestedByName, onClose, onDone }: {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.45)' }}>
+      <div className="bg-surface-card rounded-2xl shadow-menu w-full max-w-sm p-6 space-y-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-xl bg-warn/10 flex items-center justify-center shrink-0"><Undo2 size={18} className="text-warn" /></div>
+          <div className="w-10 h-10 rounded-xl bg-warn-bg flex items-center justify-center shrink-0"><Undo2 size={17} className="text-warn" /></div>
           <div className="min-w-0">
-            <div className="font-semibold text-[16px] text-text leading-tight">Request to reopen</div>
-            <div className="text-[12px] text-text-muted mt-0.5">
+            <div className="font-display font-semibold text-[15px] text-text leading-tight">Request to reopen</div>
+            <div className="text-[11.5px] text-text-muted mt-0.5">
               {m.name} · {format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · <span className="capitalize">{s.shift}</span>
             </div>
           </div>
@@ -956,21 +895,18 @@ function RequestReopenModal({ session: s, requestedByName, onClose, onDone }: {
         {sent ? (
           <p className="flex items-center gap-2 text-[13px] text-ok"><CheckCircle2 size={15} /> Sent — a Production Manager will decide it.</p>
         ) : (<>
-          <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-            <span>A Production Manager or IT reviews this and reopens the record for edits if approved.</span>
-          </div>
+          <p className="text-[12px] text-text-muted">A Production Manager or IT reviews this and reopens the record for edits if approved.</p>
           <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} autoFocus
             placeholder="What needs to be fixed?"
-            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand resize-none" />
+            className="w-full px-3.5 py-2.5 rounded-xl border border-surface-rule bg-surface-card text-[13px] text-text outline-none focus:border-brand resize-none placeholder:text-text-faint" />
           {error && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} className="shrink-0" /> {error}</p>}
           <div className="grid grid-cols-2 gap-2">
             <button onClick={onClose} disabled={busy}
-              className="py-2.5 rounded-xl border border-stone-200 bg-white text-text font-medium text-[13px] hover:bg-stone-50 disabled:opacity-40 transition-colors">
+              className="py-2.5 rounded-xl border border-surface-rule text-text font-medium text-[12.5px] hover:bg-surface-raised disabled:opacity-40 transition-colors">
               Cancel
             </button>
             <button onClick={submit} disabled={busy || !reason.trim()}
-              className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand text-white font-medium text-[13px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
+              className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand text-white font-medium text-[12.5px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />} Send request
             </button>
           </div>
