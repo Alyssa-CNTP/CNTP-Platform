@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-04 — Alyssa (Mass balance: one consistent display everywhere it appears, not four different ones)
+
+**Files changed:** `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported (live, follow-up): the previous fix's plain-language badge wording missed the actual complaint — "it was not a matter of understanding what the + or - is, its the inconsistency of it, show it in a logical way not 3 versions of it." Investigation found four separate hand-rolled representations of the same underlying balance figure on the capture page: the Production tab's table badge, the "Batches this run" per-batch row (bare ± number), the changeover-confirm modal ("Current mass balance: +46.0 kg (±15 kg tolerance)"), and Sign-off's own 3-stat card with a separately-worded tolerance warning — each phrased and styled differently even when showing the same number.
+
+- **New `balanceStatus()` / `<BalanceBadge>`** exported from `MassBalanceTable.tsx` — the one place the "within tolerance / still to bag out / more bagged than recorded in" wording and pill styling is defined.
+- **All four spots now render the same badge**: the per-batch breakdown chip, the changeover-confirm modal, and Sign-off (which now renders the exact same `<MassBalanceTable>` used on the Production tab instead of its own duplicate summary card) all use `<BalanceBadge>`/`MassBalanceTable` — so the same figure looks the same wherever it's shown, instead of needing to be re-interpreted each time.
+
 ## 2026-08-04 — Alyssa (Fix: sibling productions were combining mass balances across different blends/grades; clearer balance wording)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/MassBalanceTable.tsx`

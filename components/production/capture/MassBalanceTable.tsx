@@ -11,6 +11,32 @@ import { Scale, CheckCircle2, AlertTriangle, Info } from 'lucide-react'
 
 export interface BalanceRow { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number }
 
+// Single source of truth for how a mass-balance variance reads in plain
+// language. Every place on the capture page that shows "how far off are
+// we" — this table, sign-off, the changeover prompt, the per-batch
+// breakdown — must render this same text/colour rather than inventing its
+// own phrasing. Four different-looking indicators for the same underlying
+// figure is what read as confusing, not the +/- sign itself.
+export function balanceStatus(variance: number, tolerance: number) {
+  const within = Math.abs(variance) <= tolerance
+  const text = within
+    ? `Within ±${tolerance}`
+    : variance > 0
+      ? `${Math.abs(variance).toFixed(1)} kg still to bag out`
+      : `${Math.abs(variance).toFixed(1)} kg more bagged than recorded in`
+  return { within, text }
+}
+
+export function BalanceBadge({ variance, tolerance, className }: { variance: number; tolerance: number; className?: string }) {
+  const { within, text } = balanceStatus(variance, tolerance)
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${within ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'} ${className ?? ''}`}>
+      {within ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+      {text}
+    </span>
+  )
+}
+
 export function MassBalanceTable({
   rows, tolerance, note,
 }: {
@@ -21,19 +47,9 @@ export function MassBalanceTable({
   const totalIn  = rows.reduce((s, r) => s + r.totalIn, 0)
   const totalOut = rows.reduce((s, r) => s + r.totalOut, 0)
   const variance = totalIn - totalOut
-  const within   = Math.abs(variance) <= tolerance
   const multiShift = rows.length > 1
   const vClass = (v: number) => (Math.abs(v) <= tolerance ? 'text-ok' : 'text-warn')
   const sign = (v: number) => (v > 0 ? '+' : '')
-  // The raw +/- figure stays (some staff already rely on the exact signed
-  // number) but the badge spells out what the sign actually means in plain
-  // terms — "+46.0 kg" alone doesn't say whether that's still-to-bag-out or
-  // a recording mistake, and floor operators shouldn't have to work that out.
-  const badgeText = within
-    ? `Within ±${tolerance}`
-    : variance > 0
-      ? `${Math.abs(variance).toFixed(1)} kg still to bag out`
-      : `${Math.abs(variance).toFixed(1)} kg more bagged than recorded in`
 
   return (
     <div className="space-y-2.5">
@@ -41,10 +57,7 @@ export function MassBalanceTable({
         <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-stone-400 uppercase tracking-wide">
           <Scale size={13} /> Mass balance{multiShift ? ' · whole run (all shifts)' : ''}
         </span>
-        <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full ${within ? 'bg-ok/10 text-ok' : 'bg-warn/10 text-warn'}`}>
-          {within ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-          {badgeText}
-        </span>
+        <BalanceBadge variance={variance} tolerance={tolerance} />
       </div>
 
       <div className="rounded-xl border border-stone-200 overflow-hidden">
