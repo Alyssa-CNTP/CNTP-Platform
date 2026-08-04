@@ -3,10 +3,20 @@
 /**
  * SignaturePad
  * ─────────────────────────────────────────────────────────────────────────────
- * A canvas-based finger/mouse signature component.
+ * A canvas-based finger/mouse/stylus signature component.
  * Renders a name label, a drawing canvas, and Clear / Confirm controls.
- * On mobile the operator draws with their finger.
- * On desktop they draw with the mouse.
+ *
+ * Uses the Pointer Events API (not separate mouse/touch handlers) so mouse,
+ * touch, AND a stylus/pen all go through one code path. Two things that were
+ * previously missing and caused fast strokes to visibly "cut out":
+ *   1. Pointer capture on pointerdown — once captured, move/up events for
+ *      that pointer keep firing even if it briefly leaves the canvas bounds
+ *      or moves faster than the browser's hit-testing can keep up with.
+ *   2. Coalesced events on pointermove — a stylus reports far more samples
+ *      than one 'pointermove' callback per animation frame; getCoalescedEvents()
+ *      returns every sample the browser batched since the last event, so a
+ *      fast stroke draws through all of them instead of skipping straight to
+ *      the latest point and leaving a gap.
  *
  * Props:
  *   label    — heading shown above the pad (e.g. "Supervisor signature")
@@ -70,41 +80,51 @@ export default function SignaturePad({ label, name, value, onChange, disabled }:
     if (value) setConfirmed(true)
   }, [value])
 
-  function getPos(e: React.MouseEvent | React.TouchEvent): { x: number; y: number } | null {
+  function posFromClient(clientX: number, clientY: number): { x: number; y: number } | null {
     const canvas = canvasRef.current
     if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
-    if ('touches' in e) {
-      const t = e.touches[0]
-      return { x: t.clientX - rect.left, y: t.clientY - rect.top }
-    }
-    return { x: (e as React.MouseEvent).clientX - rect.left, y: (e as React.MouseEvent).clientY - rect.top }
+    return { x: clientX - rect.left, y: clientY - rect.top }
   }
 
-  function startDraw(e: React.MouseEvent | React.TouchEvent) {
-    if (disabled || confirmed) return
-    e.preventDefault()
-    drawing.current = true
-    lastPos.current = getPos(e)
-  }
-
-  function draw(e: React.MouseEvent | React.TouchEvent) {
-    if (!drawing.current || disabled || confirmed) return
-    e.preventDefault()
+  function strokeTo(pos: { x: number; y: number }) {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
-    if (!ctx || !canvas) return
-    const pos = getPos(e)
-    if (!pos || !lastPos.current) return
+    if (!ctx || !lastPos.current) return
     ctx.beginPath()
     ctx.moveTo(lastPos.current.x, lastPos.current.y)
     ctx.lineTo(pos.x, pos.y)
     ctx.stroke()
     lastPos.current = pos
+  }
+
+  function startDraw(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (disabled || confirmed) return
+    e.preventDefault()
+    canvasRef.current?.setPointerCapture(e.pointerId)
+    drawing.current = true
+    lastPos.current = posFromClient(e.clientX, e.clientY)
+  }
+
+  function draw(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!drawing.current || disabled || confirmed) return
+    e.preventDefault()
+    if (!lastPos.current) return
+
+    // Draw through every sample the browser batched since the last callback —
+    // this is what keeps a fast stylus stroke from visibly skipping/cutting out.
+    const coalesced = e.nativeEvent.getCoalescedEvents?.() ?? [e.nativeEvent]
+    for (const ev of coalesced) {
+      const pos = posFromClient(ev.clientX, ev.clientY)
+      if (pos) strokeTo(pos)
+    }
     setHasStrokes(true)
   }
 
-  function endDraw() {
+  function endDraw(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (canvasRef.current?.hasPointerCapture(e.pointerId)) {
+      canvasRef.current.releasePointerCapture(e.pointerId)
+    }
     drawing.current = false
     lastPos.current = null
   }
@@ -182,17 +202,15 @@ export default function SignaturePad({ label, name, value, onChange, disabled }:
           ref={canvasRef}
           className="w-full h-full touch-none"
           style={{ cursor: disabled ? 'not-allowed' : 'crosshair' }}
-          onMouseDown={startDraw}
-          onMouseMove={draw}
-          onMouseUp={endDraw}
-          onMouseLeave={endDraw}
-          onTouchStart={startDraw}
-          onTouchMove={draw}
-          onTouchEnd={endDraw}
+          onPointerDown={startDraw}
+          onPointerMove={draw}
+          onPointerUp={endDraw}
+          onPointerCancel={endDraw}
+          onPointerLeave={e => { if (!drawing.current) endDraw(e) }}
         />
         {!hasStrokes && !disabled && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <p className="text-text-faint text-[12px]">Sign here with your finger or mouse</p>
+            <p className="text-text-faint text-[12px]">Sign here with your finger, stylus or mouse</p>
           </div>
         )}
       </div>

@@ -23,10 +23,23 @@ export async function getMySignatureStatus(): Promise<MySignatureStatus> {
   }
 }
 
-export async function setEmployeeSignature(employeeId: string, signature: string): Promise<{ ok: boolean; error?: string }> {
+// The exact wording shown at the moment of consent — stored verbatim on the
+// row (see 20260730_004_employee_signature_consent.sql) so a later copy
+// change never rewrites what someone actually agreed to.
+export const SIGNATURE_CONSENT_TEXT_SELF =
+  'I confirm this is my own signature and I consent to CNTP storing it and using it on this platform to sign records on my behalf (e.g. job cards, shift reports, dispatch documents).'
+
+// TEMPORARY, for initial platform setup only: senior_developer/co_developer
+// can set a signature on someone else's behalf (see app/api/staff/[id]/signature
+// route.ts). This wording is deliberately honest about that — it never claims
+// the employee consented themselves, and set_by records who actually did this.
+export const SIGNATURE_CONSENT_TEXT_ADMIN_SETUP = (employeeName: string) =>
+  `Signature set up on behalf of ${employeeName} by a developer during platform setup, with their permission. Going forward, ${employeeName} should redraw and consent to their own signature from their own login.`
+
+export async function setEmployeeSignature(employeeId: string, signature: string, consentText: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/staff/${employeeId}/signature`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ signature }),
+    body: JSON.stringify({ signature, consentText }),
   })
   if (res.ok) return { ok: true }
   const body = await res.json().catch(() => ({}))
