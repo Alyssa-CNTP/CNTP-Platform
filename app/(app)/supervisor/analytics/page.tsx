@@ -10,7 +10,6 @@ import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
-import { Table, Tr, Td } from '@/components/production/ui/kit'
 
 const todayStr = sastToday
 const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
@@ -264,20 +263,35 @@ export default function SupervisorAnalytics() {
         <div className="bg-surface-card border border-surface-rule rounded-2xl p-4">
           <div className="font-display font-semibold text-[13px] text-text">Records</div>
           <div className="text-[11px] text-text-muted mb-3">{lineRows.length} record{lineRows.length === 1 ? '' : 's'} in range{activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'}` : ''}</div>
-          <Table head={['Date', 'Line', 'Shift', 'Variant', 'kg in', 'kg out', 'Yield', 'Flags']}>
-            {lineRows.map(r => (
-              <Tr key={r.id}>
-                <Td mono>{format(parseISO(r.date + 'T12:00:00'), 'd MMM')}</Td>
-                <Td><span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: r.color }} />{r.section}</span></Td>
-                <Td className="capitalize">{r.shift}</Td>
-                <Td>{r.variant ?? '—'}</Td>
-                <Td mono right>{r.inputKg.toLocaleString()}</Td>
-                <Td mono right>{r.outputKg.toLocaleString()}</Td>
-                <Td mono right>{r.yieldPct != null ? `${r.yieldPct}%` : '—'}</Td>
-                <Td right tone={r.flagged ? 'warn' : undefined}>{r.flagged ? 'Out of tolerance' : '—'}</Td>
-              </Tr>
-            ))}
-          </Table>
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr>
+                  {['Date', 'Line', 'Shift', 'Variant', 'kg in', 'kg out', 'Yield', 'Flags'].map((h, i) => (
+                    <th key={h} className={`px-1 pb-2 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap border-b border-surface-rule/60 ${i > 0 ? 'text-right' : ''}`}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lineRows.map(r => (
+                  <tr key={r.id} className="border-b border-surface-rule/40 last:border-0">
+                    <td className="px-1 py-2 text-[12px] align-top font-mono tabular-nums text-text">{format(parseISO(r.date + 'T12:00:00'), 'd MMM')}</td>
+                    <td className="px-1 py-2 text-[12px] align-top text-text">
+                      <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: r.color }} />{r.section}</span>
+                    </td>
+                    <td className="px-1 py-2 text-[12px] align-top text-text capitalize">{r.shift}</td>
+                    <td className="px-1 py-2 text-[12px] align-top text-text">{r.variant ?? '—'}</td>
+                    <td className="px-1 py-2 text-[12px] align-top font-mono tabular-nums text-right text-text">{r.inputKg.toLocaleString()}</td>
+                    <td className="px-1 py-2 text-[12px] align-top font-mono tabular-nums text-right text-text">{r.outputKg.toLocaleString()}</td>
+                    <td className="px-1 py-2 text-[12px] align-top font-mono tabular-nums text-right text-text">{r.yieldPct != null ? `${r.yieldPct}%` : '—'}</td>
+                    <td className={`px-1 py-2 text-[12px] align-top text-right ${r.flagged ? 'text-warn font-medium' : 'text-text'}`}>{r.flagged ? 'Out of tolerance' : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
