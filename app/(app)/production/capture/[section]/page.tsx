@@ -16,7 +16,7 @@ import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData, type Shift,
 } from '@/components/production/capture/SievingCapture'
-import { MassBalanceTable } from '@/components/production/capture/MassBalanceTable'
+import { MassBalanceTable, BalanceBadge, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 import {
   RefiningCapture, emptyRefiningData, refiningTotals,
   type RefiningData,
@@ -1502,9 +1502,10 @@ function CaptureScreen() {
                 </p>
               ) : (
                 <>
-                  <p className="text-[13px] text-text-muted">
-                    Current mass balance: <strong className={rtWithinTol ? 'text-text' : 'text-warn'}>{rtVariance >= 0 ? '+' : ''}{rtVariance.toFixed(1)} kg</strong> (±{massBalanceToleranceFor(sectionId)} kg tolerance).
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] text-text-muted">Current mass balance:</span>
+                    <BalanceBadge variance={rtVariance} tolerance={massBalanceToleranceFor(sectionId)} />
+                  </div>
                   <p className="text-[13px] text-text-muted">
                     This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Rolsiev Sticks / Indent Sticks under the new grade.
                   </p>
@@ -1792,16 +1793,15 @@ function CaptureScreen() {
                     {productions.map((p, i) => {
                       const pt = prodTotals(p, shiftBal)
                       const pVariance = pt.totalIn - pt.totalOut
-                      const pWithinTol = Math.abs(pVariance) <= massBalanceToleranceFor(sectionId)
                       const isActive = i === activeIdx
                       const variantLabel = VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant ?? '—'
                       const gradeLabel = p.grade ? DESTINATION_OPTIONS.find(o => o.value === p.grade)?.label ?? p.grade : ''
                       return (
-                        <div key={p.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] ${isActive ? 'border-brand/40 bg-brand/5' : 'border-stone-200'}`}>
+                        <div key={p.id} className={`flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border text-[12px] ${isActive ? 'border-brand/40 bg-brand/5' : 'border-stone-200'}`}>
                           <span className="font-semibold text-text shrink-0">P{i + 1}</span>
                           <span className="text-stone-500 truncate flex-1">{variantLabel}{gradeLabel ? ` · ${gradeLabel}` : ''}</span>
                           <span className="font-mono text-stone-600 shrink-0">{pt.totalIn.toFixed(1)} → {pt.totalOut.toFixed(1)} kg</span>
-                          <span className={`font-mono font-semibold shrink-0 ${pWithinTol ? 'text-ok' : 'text-warn'}`}>{pVariance >= 0 ? '+' : ''}{pVariance.toFixed(1)}</span>
+                          <BalanceBadge variance={pVariance} tolerance={massBalanceToleranceFor(sectionId)} />
                           <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand/10 text-brand' : 'bg-stone-100 text-stone-500'}`}>
                             {isActive ? 'current' : 'done'}
                           </span>
@@ -1977,7 +1977,7 @@ function CaptureScreen() {
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-              variance={rtVariance} withinTol={rtWithinTol} totalIn={rt.totalIn} totalOut={rt.totalOut}
+              balanceRows={balanceRows} balanceTolerance={massBalanceToleranceFor(sectionId)} balanceNote={balanceNote}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
               comments={comments} onComments={setComments}
@@ -2016,9 +2016,9 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, variance, withinTol, totalIn, totalOut, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
+function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanceTolerance, balanceNote, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
-  variance: number; withinTol: boolean; totalIn: number; totalOut: number
+  balanceRows: BalanceRow[]; balanceTolerance: number; balanceNote?: string
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   comments: string; onComments: (v: string) => void
   hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
@@ -2042,17 +2042,11 @@ function SignOff({ status, locked, canApprove, operatorName, variance, withinTol
           <span>Check your totals below, then sign your name and tap submit. Your supervisor approves and locks it after.</span>
         </div>
       )}
-      {/* Mass balance summary */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
-        <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Mass balance{hasRun ? ' · whole production run' : ''}</span>
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <div><div className="font-mono font-bold text-[18px] text-text">{totalIn.toFixed(1)}</div><div className="text-[10px] text-text-muted">kg in</div></div>
-          <div><div className="font-mono font-bold text-[18px] text-text">{totalOut.toFixed(1)}</div><div className="text-[10px] text-text-muted">kg out</div></div>
-          <div><div className={`font-mono font-bold text-[18px] ${withinTol ? 'text-ok' : 'text-warn'}`}>{variance > 0 ? '+' : ''}{variance.toFixed(1)}</div><div className="text-[10px] text-text-muted">variance</div></div>
-        </div>
-        {!withinTol && (
-          <p className="text-[11px] text-warn flex items-center gap-1.5"><AlertTriangle size={12} /> Outside {massBalanceToleranceFor(sectionId)} kg tolerance — review before submitting</p>
-        )}
+      {/* Mass balance — same table as the Production tab, so sign-off never
+          shows this figure in a different shape than what was already seen
+          while capturing. */}
+      <div className="bg-white border border-stone-200 rounded-2xl p-4">
+        <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} />
       </div>
 
       {/* Auto-derived timesheet — operator confirms (with light edits) at sign-off */}
