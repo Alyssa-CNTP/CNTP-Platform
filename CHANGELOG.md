@@ -3,6 +3,19 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Production dashboard redesign, Phases 1–4)
+
+**Files changed:** `components/production/ProductionTabs.tsx`, `components/production/ProductionDashboard.tsx`, `components/layout/WarehouseMap.tsx` (deleted), `app/(app)/production/energy/page.tsx` (new), `app/(app)/production/shift-reports/page.tsx` (new), `app/api/production/shift-report/route.ts`, `lib/production/shift-report-builder.ts` (new), `app/api/production/shift-report/cron/route.ts` (new), `app/api/production/shift-report/recent/route.ts` (new), `.github/workflows/shift-report-generate.yml` (new), `app/api/production/manager-kpis/route.ts`
+
+Planned redesign of the production dashboard, shipped as 4 small independently-reviewable PRs rather than one large one (#536–#539).
+
+- **Phase 1 — dashboard shell**: added Energy and Shift Reports tabs to the Production hub's tab bar. Removed the Factory Floor Plan and Energy widgets that were duplicated inside the main dashboard body (Floor Plan already had, and still has, its own tab; Energy moved to its own new tab). Deleted `components/layout/WarehouseMap.tsx`, a confirmed byte-identical stale duplicate of the one the home page actually uses. Labeling pass: added the active date window to section subtitles that were missing it, and added a "Line" column (section codes) to the Batches table so it's clear which line each batch came from.
+- **Phase 2 — per-line throughput**: added a kg/hr column to the existing "Section status · today" table (which already showed kg in/out — debagging in / bagging out for Sieving Tower & Pasteuriser — per earlier floor feedback about unclear labels), reusing the same run-time/crew-time throughput basis already computed for Production Orders' Analytics view rather than building a second, competing number.
+- **Phase 3 — auto-generated shift reports**: extracted the shift-report assembly and save/audit logic out of the route handler into `lib/production/shift-report-builder.ts` so it can be called from outside an HTTP request. Added a cron endpoint (dual-auth: `Bearer CRON_SECRET` or a signed-in user, mirroring the existing roster cron) and a GitHub Action that fires at 16:00 and 01:00 SAST (shift end) to auto-generate a **draft** report — submit/approve and their e-signatures remain entirely manual, unchanged. Added a real "Recent reports" list to the Shift Reports tab, linking into the existing, unmodified `/supervisor/report` page.
+- **Phase 4 — quality data surfaced**: leaf shade and PA level were already columns on `qms.sd_runs` (and partly already fetched) but not shown anywhere on the dashboard — added them to the PSD/machine-settings correlation table and the Batches table. Granule moisture/bulk-density, lab-results/COA quality, and pasteuriser/raw-material quality remain a deliberate follow-up, gated on confirming the live `qms` schema's join columns against `production.batches` before writing a migration.
+
+Also shipped earlier the same day (#534/#535): fixed the sieving mesh-config label mismatch ("12H/18H/40H" → "12#/18#/40#"), realigned Organic's sieving mesh config to match Conventional's (12#→18#→40#, was 10#→18#→40#), fixed a bag-scan bug where a stray space or lowercase entry silently broke the `bag_tags` lookup, and swapped the Production Dashboard nav icon.
+
 ## 2026-08-05 — Alyssa (Sieving mesh-config label, scan sanitization, production dashboard icon)
 
 **Files changed:** `components/layout/Sidebar.tsx`, `components/production/AcumaticaSummary.tsx`, `components/production/ProductionDashboard.tsx`, `components/production/SievingTowerForm.tsx`, `components/production/live/ScanInput.tsx`, `lib/production/capture-config.ts`, `app/api/production/live/bag/[serial]/route.ts`
