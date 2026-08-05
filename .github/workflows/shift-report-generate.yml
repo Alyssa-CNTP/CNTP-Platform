@@ -1,0 +1,56 @@
+name: Shift reports — auto-generate at shift end
+
+# Creates a draft shift_reports row automatically as each shift ends, so the
+# report is already sitting there when a supervisor opens /supervisor/report
+# instead of being built from scratch on first view. Only ever produces
+# status='draft' — the human submit (signature) and approve (signature) steps
+# are unchanged and still require a person on /supervisor/report.
+#
+#   morning end   — 16:00 SAST → 14:00 UTC
+#   afternoon end — 01:00 SAST (next day) → 23:00 UTC same day
+#
+# Both triggers use the CURRENT UTC calendar date at fire time — see the note
+# on shiftWindowUtc in lib/production/shift-report-builder.ts for why no
+# "yesterday" adjustment is needed despite the afternoon shift technically
+# ending at 01:00 SAST the next day.
+#
+# Requires:
+#   secrets.CRON_SECRET        — must match the CRON_SECRET env var on the server
+#   vars.SHIFT_REPORT_CRON_URL — (optional) base URL to hit; defaults to staging
+
+on:
+  schedule:
+    - cron: '0 14 * * *'  # 16:00 SAST — morning shift just ended
+    - cron: '0 23 * * *'  # 01:00 SAST (next day) — afternoon shift just ended
+  workflow_dispatch:
+    inputs:
+      shift:
+        description: 'Shift to generate'
+        required: true
+        default: afternoon
+        type: choice
+        options: [morning, afternoon]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide shift from schedule
+        id: shift
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "shift=${{ github.event.inputs.shift }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 14 * * *" ]; then
+            echo "shift=morning" >> "$GITHUB_OUTPUT"
+          else
+            echo "shift=afternoon" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ping shift-report cron endpoint
+        env:
+          BASE_URL: ${{ vars.SHIFT_REPORT_CRON_URL || 'https://cntpplatform-staging.rooibostea.co.za' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BASE_URL}/api/production/shift-report/cron?shift=${{ steps.shift.outputs.shift }}"
