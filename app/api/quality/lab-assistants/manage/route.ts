@@ -90,14 +90,14 @@ export async function GET() {
       if (r.full_name) authByName.set(normName(r.full_name), r)
     }
 
-    // 3. Assemble.
+    // 3. Assemble. Deliberately no `pin` field — the actual value is only ever
+    // fetched on demand, per-person, via the reveal route (see ./reveal/route.ts).
     const assistants = [...nameMap.entries()].map(([norm, { display, role }]) => {
       const authRow = authByName.get(norm)
       return {
         full_name:   display,
         role,
         has_pin:     !!authRow?.pin,
-        pin:         authRow?.pin ?? null,
         section_ids: authRow?.section_ids ?? [],
         is_active:   authRow?.active ?? true,
         user_id:     authRow?.user_id ?? null,
