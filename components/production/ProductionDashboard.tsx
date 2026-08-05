@@ -21,10 +21,8 @@ import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor, SIEVING_MESH_CONFIG, SIEVING_MESH_CONFIG_PREVIOUS } from '@/lib/production/capture-config'
 import { fetchGranuleQuality } from '@/lib/production/granule-quality'
-import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
 import OperationalTrends from '@/components/management/OperationalTrends'
-import { FactoryFloorPlan } from '@/components/production/FactoryFloorPlan'
 
 const C = { brand: '#1A3A0E', accent: '#5A8A2A', azure: '#2A7CB8', warn: '#B85C0A', err: '#B81C1C', ok: '#1A7A3C', info: '#2A7CB8', gray: '#96A88A' }
 // Categorical palette for the output-mix bars — brand-anchored, distinguishable.
@@ -555,7 +553,7 @@ export default function ProductionDashboard() {
 
       {/* ── §2 Output mix & batches (folded in from the Analytics page) ─────── */}
       <div className="card p-4">
-        <SectionTitle icon={Boxes} title="Output mix & batches" subtitle="Per-product share of output, and each batch linked to quality" />
+        <SectionTitle icon={Boxes} title="Output mix & batches" subtitle={`Per-product share of output, and each batch linked to quality · last ${windowDays} days`} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
           {/* Output mix */}
@@ -595,7 +593,7 @@ export default function ProductionDashboard() {
                 <table className="w-full text-[11px]">
                   <thead className="sticky top-0 bg-surface-dim">
                     <tr className="border-b border-surface-rule text-left">
-                      {([['displayLot', 'Batch'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['leafShade', 'Leaf shade'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
+                      {([['displayLot', 'Batch'], ['sections', 'Line'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['leafShade', 'Leaf shade'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
                         <th key={k} onClick={() => setBatchSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}
                           className="px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted cursor-pointer hover:text-text whitespace-nowrap select-none">
                           {label}{batchSort.key === k ? (batchSort.dir === 1 ? ' ▲' : ' ▼') : ''}
@@ -613,6 +611,14 @@ export default function ProductionDashboard() {
                     }).slice(0, 60).map((b, i) => (
                       <tr key={b.batchKey || i} className="hover:bg-surface-dim/40">
                         <td className="px-2.5 py-2 font-mono text-text whitespace-nowrap">{b.displayLot || b.batchKey}</td>
+                        <td className="px-2.5 py-2">
+                          <div className="flex items-center gap-1">
+                            {(b.sections || []).length === 0 ? <span className="text-text-faint">—</span> : (b.sections as string[]).map((sid: string) => {
+                              const m = sectionMeta(sid)
+                              return <span key={sid} title={m.name} className="w-5 h-5 rounded flex items-center justify-center text-[8px] font-bold text-white shrink-0" style={{ background: m.colorHex }}>{m.code}</span>
+                            })}
+                          </div>
+                        </td>
                         <td className="px-2.5 py-2 text-text-muted">{b.variant || '—'}</td>
                         <td className="px-2.5 py-2 font-mono">{b.totalOutputKg != null ? Math.round(b.totalOutputKg).toLocaleString() : '—'}</td>
                         <td className="px-2.5 py-2 font-mono font-semibold" style={{ color: (b.yieldPct ?? 0) >= 70 ? C.ok : C.warn }}>{b.yieldPct != null ? `${b.yieldPct}%` : '—'}</td>
@@ -631,7 +637,7 @@ export default function ProductionDashboard() {
 
       {/* ── §3 Machine KPIs & throughput ───────────────────────────────────── */}
       <div className="card p-4">
-        <SectionTitle icon={Cpu} title="Machine KPIs & throughput" subtitle="Infeed speed (VSD), screen settings & check compliance" />
+        <SectionTitle icon={Cpu} title="Machine KPIs & throughput" subtitle={`Infeed speed (VSD), screen settings & check compliance · last ${windowDays} days`} />
         <div className="space-y-6">
 
             {/* VSD trend */}
@@ -795,7 +801,7 @@ export default function ProductionDashboard() {
 
       {/* ── §3 Quality integration ─────────────────────────────────────────── */}
       <div className="card p-4">
-        <SectionTitle icon={FlaskConical} title="Quality integration" subtitle="Particle size (PSD) ↔ machine settings, from QC" />
+        <SectionTitle icon={FlaskConical} title="Quality integration — Sieving Tower" subtitle={`Particle size (PSD) ↔ machine settings, from QC · last ${windowDays} days`} />
         <div className="space-y-6">
 
             {/* Methodology note */}
@@ -1041,36 +1047,29 @@ export default function ProductionDashboard() {
         <QuickChip href="/quality/sieving" icon={FlaskConical} label="Sieving QC" />
       </div>
 
-      {/* ── Factory floor plan ─────────────────────────────────────────────── */}
+      {/* Open breakdowns — Factory Floor Plan lives on its own tab (see ProductionTabs);
+          Energy lives on its own tab too (/production/energy) — both used to be
+          duplicated/embedded here as well, which is why this used to be a 2-col grid. */}
       <div className="card p-4">
-        <SectionTitle icon={MapIcon} title="Factory floor plan" subtitle="Live section layout & status" />
-        <FactoryFloorPlan />
-      </div>
-
-      {/* Energy + breakdowns */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <EnergyWidget />
-        <div className="card p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Wrench size={15} className="text-text-muted" />
-            <h3 className="text-sm font-semibold text-text">Open breakdowns</h3>
-          </div>
-          {breakdowns.length === 0 ? (
-            <div className="text-[12px] text-text-faint py-6 text-center">No open breakdowns. All clear.</div>
-          ) : (
-            <div className="space-y-2">
-              {breakdowns.slice(0, 6).map((b: any) => (
-                <Link key={b.card_no} href="/maintenance/job-cards" className="flex items-center justify-between rounded-lg border border-err/20 bg-err/5 px-3 py-2 hover:border-err/40 transition">
-                  <div>
-                    <div className="text-[13px] font-medium text-text">{b.area}{b.machine ? ` · ${b.machine}` : ''}</div>
-                    <div className="text-[11px] text-text-muted">{b.card_no} · raised {format(new Date(b.raised_at), 'd MMM HH:mm')}</div>
-                  </div>
-                  <span className="text-[10px] font-medium px-2 py-1 rounded-lg bg-err/10 text-err capitalize">{b.status}</span>
-                </Link>
-              ))}
-            </div>
-          )}
+        <div className="flex items-center gap-2 mb-3">
+          <Wrench size={15} className="text-text-muted" />
+          <h3 className="text-sm font-semibold text-text">Open breakdowns</h3>
         </div>
+        {breakdowns.length === 0 ? (
+          <div className="text-[12px] text-text-faint py-6 text-center">No open breakdowns. All clear.</div>
+        ) : (
+          <div className="space-y-2">
+            {breakdowns.slice(0, 6).map((b: any) => (
+              <Link key={b.card_no} href="/maintenance/job-cards" className="flex items-center justify-between rounded-lg border border-err/20 bg-err/5 px-3 py-2 hover:border-err/40 transition">
+                <div>
+                  <div className="text-[13px] font-medium text-text">{b.area}{b.machine ? ` · ${b.machine}` : ''}</div>
+                  <div className="text-[11px] text-text-muted">{b.card_no} · raised {format(new Date(b.raised_at), 'd MMM HH:mm')}</div>
+                </div>
+                <span className="text-[10px] font-medium px-2 py-1 rounded-lg bg-err/10 text-err capitalize">{b.status}</span>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* AI analyst */}
