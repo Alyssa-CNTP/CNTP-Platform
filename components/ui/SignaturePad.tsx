@@ -36,9 +36,10 @@ interface Props {
   value:    string | null
   onChange: (sig: string | null) => void
   disabled?: boolean
+  height?:  number  // drawing surface height in px — default keeps existing pages (multiple pads per screen, e.g. cleaning) unchanged; pass a larger value where there's only one pad and more room, e.g. Staff Directory.
 }
 
-export default function SignaturePad({ label, name, value, onChange, disabled }: Props) {
+export default function SignaturePad({ label, name, value, onChange, disabled, height = 100 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawing   = useRef(false)
   const lastPos   = useRef<{ x: number; y: number } | null>(null)
@@ -197,7 +198,7 @@ export default function SignaturePad({ label, name, value, onChange, disabled }:
         'relative rounded-xl border-2 overflow-hidden bg-surface-card',
         disabled ? 'opacity-50 cursor-not-allowed border-surface-rule' : 'border-dashed border-surface-rule hover:border-accent/30 transition-colors',
         hasStrokes && !disabled && 'border-accent/40'
-      )} style={{ height: 100 }}>
+      )} style={{ height }}>
         <canvas
           ref={canvasRef}
           className="w-full h-full touch-none"
