@@ -11,7 +11,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import SignaturePad from '@/components/ui/SignaturePad'
-import { getMySignatureStatus, setEmployeeSignature, loadEmployeeSignature, SIGNATURE_CONSENT_TEXT_SELF, SIGNATURE_CONSENT_TEXT_ADMIN_SETUP } from '@/lib/production/employee-signature'
+import { getMySignatureStatus, setEmployeeSignature, loadEmployeeSignature, getEmployeeSignatureStatus, SIGNATURE_CONSENT_TEXT_SELF, SIGNATURE_CONSENT_TEXT_ADMIN_SETUP } from '@/lib/production/employee-signature'
 import { StaffTabs } from '@/components/production/StaffTabs'
 import { EmployeeModal, type Leave } from '@/components/production/EmployeeModal'
 import { tagLabel, categoryMeta } from '@/lib/production/roster-config'
@@ -69,6 +69,7 @@ export default function StaffProfilePage() {
   const [assigningTraining, setAssigningTraining] = useState(false)
   const [mySignatureEmployeeId, setMySignatureEmployeeId] = useState<string | null | undefined>(undefined)
   const [signature, setSignature] = useState<string | null>(null)
+  const [otherHasSignature, setOtherHasSignature] = useState(false)
   const [signatureDraft, setSignatureDraft] = useState<string | null>(null)
   const [signatureConsent, setSignatureConsent] = useState(false)
   const [savingSignature, setSavingSignature] = useState(false)
@@ -124,10 +125,19 @@ export default function StaffProfilePage() {
     getMySignatureStatus().then(s => setMySignatureEmployeeId(s.employeeId))
   }, [])
 
+  // Never fetch or render someone ELSE's actual signature image — only the
+  // owner ever sees it. mySignatureEmployeeId !== undefined guards against
+  // firing before we know who "self" even is (would otherwise briefly treat
+  // the viewer's own profile as "someone else's" on first paint).
   useEffect(() => {
-    if (!id) return
-    loadEmployeeSignature(id).then(setSignature)
-  }, [id])
+    if (!id || mySignatureEmployeeId === undefined) return
+    if (isSelf) {
+      loadEmployeeSignature(id).then(setSignature)
+    } else {
+      setSignature(null)
+      if (isSetupOverride) getEmployeeSignatureStatus(id).then(s => setOtherHasSignature(s.hasSignature))
+    }
+  }, [id, isSelf, isSetupOverride, mySignatureEmployeeId])
 
   function signatureConsentText() {
     return isSelf
@@ -423,6 +433,9 @@ export default function StaffProfilePage() {
           </div>
         ) : canEditSignature ? (
           <div className="space-y-2">
+            {isSetupOverride && otherHasSignature && (
+              <p className="text-[11px] text-warn">This person already has a signature on file — it can't be viewed here; drawing a new one below will replace it.</p>
+            )}
             <SignaturePad label={isSelf ? 'Your signature' : `${employee?.display_name || employee?.name}'s signature`}
               name={employee?.display_name || employee?.name || 'Signature'}
               value={signatureDraft === '__redraw__' ? null : signatureDraft} onChange={setSignatureDraft} />
