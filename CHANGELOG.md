@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
+
+**Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested: "when the supervisor signs off, I need it to call their signature in the staff directory but the user interface just needs to have a verify and sign button as the job cards work." Previously the capture page's supervisor sign-off asked for a hand-typed name plus a hand-drawn signature on every session — unverified against who was actually logged in, unlike job cards which already resolve the approver's own Staff Directory signature server-side.
+
+- **New `PATCH /api/production/sessions/[id]/approve`** — mirrors the job-cards `decide` route exactly: resolves the caller's Staff Directory `employee_id`, looks up their `production.employee_signatures` row, rejects with "No signature on file" if none exists, then stamps that signature onto `session_signatures` and marks the session approved (plus closes the production run if "end of run" was ticked). The signature is never accepted from the client.
+- **Sign-off UI**: the supervisor's name field + `SignaturePad` are gone. In their place, a single **"Verify & Sign as {name} to Approve"** button (disabled until they have a signature on file), same wording/pattern as the job-card approval panel — or, if they don't have one yet, a link straight to their Staff Directory profile to set one up. Operator sign-off (name + drawn signature) is untouched — this only changes the supervisor step.
+
 ## 2026-08-04 — Alyssa (Fixed job card ratio-table layout: .input's width:100% was silently beating w-24)
 
 **Files changed:** `app/globals.css`
