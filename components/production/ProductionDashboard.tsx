@@ -612,7 +612,7 @@ export default function ProductionDashboard() {
                 <table className="w-full text-[11px]">
                   <thead className="sticky top-0 bg-surface-dim">
                     <tr className="border-b border-surface-rule text-left">
-                      {([['displayLot', 'Batch'], ['sections', 'Line'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['leafShade', 'Leaf shade'], ['paLevel', 'PA %'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
+                      {([['displayLot', 'Batch'], ['sections', 'Line'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['moisture', 'Moisture %'], ['leafShade', 'Leaf shade'], ['paLevel', 'PA %'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
                         <th key={k} onClick={() => setBatchSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}
                           className="px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted cursor-pointer hover:text-text whitespace-nowrap select-none">
                           {label}{batchSort.key === k ? (batchSort.dir === 1 ? ' ▲' : ' ▼') : ''}
@@ -641,10 +641,22 @@ export default function ProductionDashboard() {
                         <td className="px-2.5 py-2 text-text-muted">{b.variant || '—'}</td>
                         <td className="px-2.5 py-2 font-mono">{b.totalOutputKg != null ? Math.round(b.totalOutputKg).toLocaleString() : '—'}</td>
                         <td className="px-2.5 py-2 font-mono font-semibold" style={{ color: (b.yieldPct ?? 0) >= 70 ? C.ok : C.warn }}>{b.yieldPct != null ? `${b.yieldPct}%` : '—'}</td>
-                        <td className="px-2.5 py-2 font-mono">{b.bulkDensity ?? '—'}</td>
+                        {/* Bulk density/moisture: sieving (sd_runs) only tracks bulk density,
+                            never moisture; Granule Line and Pasteuriser track both. A batch
+                            only ever has ONE of these three quality sources, so coalescing
+                            is safe — it's never averaging two different lines' numbers. */}
+                        <td className="px-2.5 py-2 font-mono">{b.bulkDensity ?? b.granuleBulkDensity ?? b.pasteuriserBulkDensity ?? '—'}</td>
+                        <td className="px-2.5 py-2 font-mono">{b.granuleMoisture != null ? `${b.granuleMoisture}%` : b.pasteuriserMoisture != null ? `${b.pasteuriserMoisture}%` : '—'}</td>
                         <td className="px-2.5 py-2 text-text-muted">{b.leafShade || '—'}</td>
                         <td className="px-2.5 py-2 font-mono">{b.paLevel != null ? `${b.paLevel}%` : '—'}</td>
-                        <td className="px-2.5 py-2">{b.hasQuality ? (b.allPassed === false ? <span className="text-err font-semibold">Fail</span> : <span className="text-ok font-semibold">Pass</span>) : <span className="text-text-faint">—</span>}</td>
+                        <td className="px-2.5 py-2">
+                          {(() => {
+                            const has = b.hasQuality || b.hasGranuleQuality || b.hasPasteuriserQuality || b.hasLabResult
+                            if (!has) return <span className="text-text-faint">—</span>
+                            const failed = b.allPassed === false || b.granuleAllPassed === false || b.labOverallStatus === 'Fail'
+                            return failed ? <span className="text-err font-semibold">Fail</span> : <span className="text-ok font-semibold">Pass</span>
+                          })()}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

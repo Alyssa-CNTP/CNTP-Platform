@@ -156,7 +156,7 @@ export async function GET(req: NextRequest) {
       let all: any[] = []
       for (let i = 0; i < keys.length; i += 200) {
         const { data } = await db.schema('production').from('v_batch_360')
-          .select('batch_id,batch_key,display_lot,variant,first_section,sections,session_count,total_input_kg,total_output_kg,yield_pct,first_date,last_date,bulk_density_latest,leaf_shade_latest,pa_level_latest,all_passed,sd_run_count,pa_ta_level,residue_grade,has_quality')
+          .select('batch_id,batch_key,display_lot,variant,first_section,sections,session_count,total_input_kg,total_output_kg,yield_pct,first_date,last_date,bulk_density_latest,leaf_shade_latest,pa_level_latest,all_passed,sd_run_count,pa_ta_level,residue_grade,has_quality,granule_moisture_latest,granule_bulk_density_latest,granule_all_passed,has_granule_quality,pasteuriser_moisture_latest,pasteuriser_bd_latest,has_pasteuriser_quality,lab_overall_status_latest,has_lab_result')
           .in('batch_key', keys.slice(i, i + 200))
         all = all.concat((data || []) as any[])
       }
@@ -178,11 +178,24 @@ export async function GET(req: NextRequest) {
         allPassed: b.all_passed,
         sdRunCount: b.sd_run_count || 0,
         hasQuality: !!b.has_quality,
+        // Granule / Pasteuriser / final-product lab quality — a batch that ran
+        // through the Granule Line or Pasteuriser has moisture/BD from THOSE
+        // lines instead of sieving's sd_runs, so these are separate fields
+        // rather than overloading bulkDensity/leafShade above.
+        granuleMoisture: num(b.granule_moisture_latest),
+        granuleBulkDensity: num(b.granule_bulk_density_latest),
+        granuleAllPassed: b.granule_all_passed,
+        hasGranuleQuality: !!b.has_granule_quality,
+        pasteuriserMoisture: num(b.pasteuriser_moisture_latest),
+        pasteuriserBulkDensity: num(b.pasteuriser_bd_latest),
+        hasPasteuriserQuality: !!b.has_pasteuriser_quality,
+        labOverallStatus: b.lab_overall_status_latest || null,
+        hasLabResult: !!b.has_lab_result,
       })).sort((a, b) => (b.lastDate || '').localeCompare(a.lastDate || ''))
       completeness = {
         batches: batches.length,
-        withQuality: batches.filter(b => b.hasQuality).length,
-        withoutQuality: batches.filter(b => !b.hasQuality).length,
+        withQuality: batches.filter(b => b.hasQuality || b.hasGranuleQuality || b.hasPasteuriserQuality || b.hasLabResult).length,
+        withoutQuality: batches.filter(b => !b.hasQuality && !b.hasGranuleQuality && !b.hasPasteuriserQuality && !b.hasLabResult).length,
       }
     }
 
