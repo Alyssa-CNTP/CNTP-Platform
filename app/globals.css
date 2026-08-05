@@ -170,7 +170,18 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
 
 /* ══════════════════════════════════════════════════════════════════════════
    CARD COMPONENTS
+   Wrapped in Tailwind's `base` layer (not left as plain, unlayered CSS) so
+   Tailwind utility classes (`w-24`, `bg-brand`, etc.) always win over these
+   when both are applied to the same element — previously, at equal
+   specificity, whichever rule happened to sit later in the raw source order
+   of this file won regardless of the element's actual className order. That
+   silently broke `className="input w-24"` (the input always rendered at
+   .input's own width: 100%, never the intended w-24) and, before, a
+   `className="card bg-brand"` header (the card's own background always won
+   over bg-brand). `base` sits before Tailwind's `utilities` layer, so this
+   is now correct by construction, not by avoiding the combination.
 ══════════════════════════════════════════════════════════════════════════ */
+@layer base {
 .card {
   background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(16px) saturate(160%);
@@ -230,6 +241,7 @@ h3, .h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.125re
 .input:disabled { opacity: 0.6; cursor: not-allowed; }
 textarea.input { height: auto; padding: 0.5rem 0.75rem; }
 select.input { cursor: pointer; }
+}
 
 /* bg-surface-card utility used throughout — override to be glass-aware */
 .bg-surface-card {
