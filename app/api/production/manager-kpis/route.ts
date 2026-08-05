@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
 
     // ── 5. PSD runs (qms.sd_runs) ──────────────────────────────────────────────
     const { data: psdRuns } = await (db as any).schema('qms').from('sd_runs')
-      .select('id,date,lot_number,variant,product,sieve_results,bulk_density,pass_status,grade')
+      .select('id,date,lot_number,variant,product,sieve_results,bulk_density,leaf_shade,pa_level,pass_status,grade')
       .gte('date', startDate)
       .order('date', { ascending: false })
 
@@ -170,6 +170,8 @@ export async function GET(req: NextRequest) {
         product: r.product,
         sieveResults: typeof r.sieve_results === 'object' ? r.sieve_results : {},
         bulkDensity: r.bulk_density,
+        leafShade: r.leaf_shade,
+        paLevel: r.pa_level,
         passStatus: r.pass_status,
         grade: r.grade,
       })),

@@ -137,7 +137,7 @@ function SectionTitle({ icon: Icon, title, subtitle }: { icon: typeof Scale; tit
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface MachineParam { checkKey: string; checkLabel: string; valueNum: number; unit: string; sectionId: string; date: string; shift: string; recordedAt: string; status: string }
-interface PsdRun { id: string; date: string; lotNumber: string; variant: string; product: string; sieveResults: Record<string, any>; bulkDensity: string; passStatus: string; grade: string }
+interface PsdRun { id: string; date: string; lotNumber: string; variant: string; product: string; sieveResults: Record<string, any>; bulkDensity: string; leafShade: string | null; paLevel: string | null; passStatus: string; grade: string }
 interface CheckComp { sectionId: string; total: number; ok: number; flagged: number; fail: number; ratePct: number | null }
 interface DailyYield { date: string; label: string; outputKg: number; inputKg: number; sessions: number; yieldPct: number | null }
 interface SectionYield { sectionId: string; inputKg: number; outputKg: number; sessions: number }
@@ -384,6 +384,8 @@ export default function ProductionDashboard() {
         grade: run.grade,
         passStatus: run.passStatus,
         bulkDensity: run.bulkDensity ? Number(run.bulkDensity) : null,
+        leafShade: run.leafShade ?? null,
+        paLevel: run.paLevel != null ? Number(run.paLevel) : null,
         avgVsd: vsdOnDay.length ? round1(vsdOnDay.reduce((a, b) => a + b, 0) / vsdOnDay.length) : null,
         screenAngle: angleOnDay ? angleOnDay.valueNum : null,
         screenSpeed: speedOnDay ? speedOnDay.valueNum : null,
@@ -610,7 +612,7 @@ export default function ProductionDashboard() {
                 <table className="w-full text-[11px]">
                   <thead className="sticky top-0 bg-surface-dim">
                     <tr className="border-b border-surface-rule text-left">
-                      {([['displayLot', 'Batch'], ['sections', 'Line'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['leafShade', 'Leaf shade'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
+                      {([['displayLot', 'Batch'], ['sections', 'Line'], ['variant', 'Variant'], ['totalOutputKg', 'Output'], ['yieldPct', 'Yield'], ['bulkDensity', 'Bulk dens.'], ['leafShade', 'Leaf shade'], ['paLevel', 'PA %'], ['hasQuality', 'QC']] as [string, string][]).map(([k, label]) => (
                         <th key={k} onClick={() => setBatchSort(s => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : -1 }))}
                           className="px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted cursor-pointer hover:text-text whitespace-nowrap select-none">
                           {label}{batchSort.key === k ? (batchSort.dir === 1 ? ' ▲' : ' ▼') : ''}
@@ -641,6 +643,7 @@ export default function ProductionDashboard() {
                         <td className="px-2.5 py-2 font-mono font-semibold" style={{ color: (b.yieldPct ?? 0) >= 70 ? C.ok : C.warn }}>{b.yieldPct != null ? `${b.yieldPct}%` : '—'}</td>
                         <td className="px-2.5 py-2 font-mono">{b.bulkDensity ?? '—'}</td>
                         <td className="px-2.5 py-2 text-text-muted">{b.leafShade || '—'}</td>
+                        <td className="px-2.5 py-2 font-mono">{b.paLevel != null ? `${b.paLevel}%` : '—'}</td>
                         <td className="px-2.5 py-2">{b.hasQuality ? (b.allPassed === false ? <span className="text-err font-semibold">Fail</span> : <span className="text-ok font-semibold">Pass</span>) : <span className="text-text-faint">—</span>}</td>
                       </tr>
                     ))}
@@ -869,7 +872,7 @@ export default function ProductionDashboard() {
                   <table className="w-full text-[11px]">
                     <thead>
                       <tr className="bg-surface-dim border-b border-surface-rule">
-                        {['Date', 'Lot', 'Product', 'Variant', 'Avg VSD (Hz)', 'Screen Angle', '>18 %', '>12 %', 'BD', 'PSD Result'].map(h => (
+                        {['Date', 'Lot', 'Product', 'Variant', 'Avg VSD (Hz)', 'Screen Angle', '>18 %', '>12 %', 'BD', 'Leaf shade', 'PA %', 'PSD Result'].map(h => (
                           <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -888,6 +891,8 @@ export default function ProductionDashboard() {
                           <td className="px-3 py-2 font-mono">{r.gt18 != null ? `${r.gt18}%` : '—'}</td>
                           <td className="px-3 py-2 font-mono">{r.gt12 != null ? `${r.gt12}%` : '—'}</td>
                           <td className="px-3 py-2 font-mono">{r.bulkDensity != null ? r.bulkDensity : '—'}</td>
+                          <td className="px-3 py-2 font-mono">{r.leafShade ?? '—'}</td>
+                          <td className="px-3 py-2 font-mono">{r.paLevel != null ? `${r.paLevel}%` : '—'}</td>
                           <td className="px-3 py-2">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${r.passStatus === 'Pass' ? 'bg-ok/10 text-ok' : r.passStatus === 'Fail' ? 'bg-err/10 text-err' : 'bg-surface-dim text-text-muted'}`}>
                               {r.passStatus || '—'}
