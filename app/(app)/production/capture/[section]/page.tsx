@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, Suspense } from 'react'
+import Link from 'next/link'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
@@ -46,6 +47,7 @@ import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
 import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
+import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 
@@ -1299,17 +1301,18 @@ function CaptureScreen() {
     setSubmitting(false)
   }
 
+  // Approving IS the supervisor's "Verify & Sign" — their signature is
+  // resolved server-side from their own Staff Directory record, same as job
+  // cards, never accepted from the client. See app/api/production/sessions/[id]/approve.
   async function handleApprove() {
     setSubmitting(true)
     try {
-      await getDb().schema('production').from('prod_sessions').update({
-        status: 'approved', updated_at: new Date().toISOString(),
-      } as any).eq('id', sessionId)
-      // Close the run if the supervisor marked this as the end of the production run.
-      if (endOfRun && runId) {
-        await getDb().schema('production').from('production_runs')
-          .update({ status: 'closed', closed_at: new Date().toISOString() } as any).eq('id', runId)
-      }
+      const res = await fetch(`/api/production/sessions/${sessionId}/approve`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endOfRun }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error || 'Could not approve')
       setStatus('approved')
     } catch (e: any) { setError(e.message) }
     setSubmitting(false)
@@ -2027,12 +2030,15 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
   capturedCodes: CapturedCode[]
 }) {
   const [opName, setOpName]   = useState(operatorName)
-  const [supName, setSupName] = useState('')
   const [opSig, setOpSig]     = useState(false)
-  const [supSig, setSupSig]   = useState(false)
   const [tsConfirmed, setTsConfirmed] = useState(false)
   const [codesConfirmed, setCodesConfirmed] = useState(false)
   const needsCodeConfirm = capturedCodes.length > 0
+
+  // Supervisor approval is "Verify & Sign" against their own Staff Directory
+  // signature (same as job cards) — no name field, no hand-drawn signature.
+  const [sigStatus, setSigStatus] = useState<MySignatureStatus | null>(null)
+  useEffect(() => { if (canApprove) getMySignatureStatus().then(setSigStatus) }, [canApprove])
 
   return (
     <div className="space-y-5">
@@ -2119,12 +2125,12 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
         </div>
       )}
 
-      {/* Submitted — supervisor approval (signature + lock) */}
+      {/* Submitted — supervisor approval: "Verify & Sign" against their own
+          Staff Directory signature, same pattern as job cards — no name
+          field, no hand-drawn signature. */}
       {status === 'submitted' && canApprove && (
         <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
           <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide">Supervisor approval</span>
-          <input value={supName} onChange={e => setSupName(e.target.value)} placeholder="Supervisor name"
-            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand" />
           {hasRun && (
             <label className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 cursor-pointer">
               <input type="checkbox" checked={endOfRun} onChange={e => onEndOfRun(e.target.checked)} className="mt-0.5 accent-brand" />
@@ -2133,15 +2139,21 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
               </span>
             </label>
           )}
-          <SignaturePad label="Supervisor signature" signed={supSig} disabled={!supName.trim()}
-            onSign={async sig => { await onSign('supervisor', supName.trim(), sig); setSupSig(true) }} />
-          {supSig && needsCodeConfirm && !codesConfirmed && (
+          {needsCodeConfirm && !codesConfirmed && (
             <p className="text-[12px] text-warn flex items-center gap-1.5 px-1"><AlertTriangle size={13} /> Confirm the item codes above before approving.</p>
           )}
-          {supSig && (!needsCodeConfirm || codesConfirmed) && (
-            <button onClick={onApprove} disabled={submitting}
+          {sigStatus && !sigStatus.hasSignature ? (
+            <p className="text-[12px] text-warn flex items-start gap-1.5 px-1">
+              <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+              <span>No signature on file — {sigStatus.employeeId
+                ? <Link href={`/production/staff/${sigStatus.employeeId}`} className="underline">set one up on your Staff Directory profile</Link>
+                : 'ask IT to link your login to your Staff Directory profile'} before you can approve.</span>
+            </p>
+          ) : (
+            <button onClick={onApprove} disabled={submitting || !sigStatus?.hasSignature || (needsCodeConfirm && !codesConfirmed)}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-ok text-white font-semibold text-[15px] disabled:opacity-40">
-              {submitting ? <Loader2 size={18} className="animate-spin" /> : <Lock size={18} />} Approve &amp; lock
+              {submitting ? <Loader2 size={18} className="animate-spin" /> : <Lock size={18} />}
+              {submitting ? 'Signing…' : `Verify & Sign as ${sigStatus?.employeeName ?? 'you'} to Approve`}
             </button>
           )}
         </div>

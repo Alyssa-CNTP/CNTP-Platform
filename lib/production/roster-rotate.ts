@@ -33,7 +33,11 @@ export interface RotateEntry {
   employee_id?: string | null; operator_id?: string | null
   person_name: string; tags: string[]; sort_order: number
   pinned?: boolean
+  days?: string[]
 }
+
+// The default working week when an entry carries no explicit day set.
+const DEFAULT_WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri']
 
 /** Dates + label for the period that follows `source`. */
 export function nextPeriodConfig(source: RotatePeriod, periodDays = ROSTER_PERIOD_DAYS) {
@@ -69,6 +73,7 @@ export function rotateEntries(entries: RotateEntry[], newPeriodId: string) {
       tags:        e.tags,
       sort_order:  e.sort_order,
       pinned:      e.pinned ?? false,
+      days:        e.days?.length ? e.days : DEFAULT_WEEKDAYS,
     }
   })
 }

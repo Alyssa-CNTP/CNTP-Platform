@@ -3,6 +3,35 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Job cards: fixed scroll cutoff, missing signature after approval, and a misleading numbering error)
+
+**Files changed:** `app/(app)/layout.tsx`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`
+
+Reported: couldn't scroll all the way to the bottom of a job card (cuts off mid Sign-offs); clicking Verify & Sign to approve doesn't show the signature anywhere; and an auto-numbering error ("is migration 20260729_003 applied?") on both staging and production.
+
+- **Scroll cutoff**: the app shell (`app/(app)/layout.tsx`) sized itself with `h-screen` (100vh) while `html`/`body` were already deliberately set to `100dvh` for mobile browser chrome. On a device where the address bar is visible, 100vh is taller than what's actually on screen — the shell (and the job card page's fixed action bar inside it) ended up partly below the real fold, not just scrolled short. Switched to `h-dvh` to match, and wired the codebase's own already-written-but-unused `.page-content` safety class (`min-height:0` + iOS momentum scrolling) onto the main scroll container.
+- **Signature not shown after approval**: `JobCardApprovalsPanel`'s "Verify & Sign to Approve" button called the decide API successfully but then just removed the card from the pending list — it never read back the response, so the freshly-stamped supervisor signature was never shown anywhere, and there was no way back into that specific card afterward (the drafts panel only lists `status='draft'` cards). Added an `onApproved` callback, wired on both job card pages to their existing `resumeDraft()`, so approving a card now loads it right back up — signature and all.
+- **Numbering error**: the message was the same generic guess regardless of what actually failed (missing migration vs. a permission grant vs. something else), which made it undiagnosable without direct database access. Now shows the real Postgres error message/code alongside the migration hint.
+
+## 2026-08-05 — Alyssa (Job cards now visible to Sales — customer, blend, batch, tonnage, date — and wired into the batch spine)
+
+**Files changed:** `supabase/migrations/20260805_001_job_cards_batch_spine_link.sql` (new), `lib/production/batch-spine.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/granule/[id]/decide/route.ts`, `components/sales/ProductionBatchesTab.tsx` (new), `app/(app)/sales/page.tsx`
+
+Asked: does the customer/blend/tonnage info on a job card get saved anywhere sales can see it? Confirmed by investigation: no — the Sales page is fed entirely by invoiced Acumatica AR data with zero awareness of production batches, and job cards weren't wired into the existing canonical batch spine (`production.batches`/`normalize_batch()`) the way every other capture table already is. Scoped with the user to visibility only (no actuals-vs-demand comparison yet — Acumatica has no open-order/demand data to compare against), and to close the batch-spine gap rather than build a Sales-only one-off.
+
+- **Job cards now join the batch spine** at the moment they're approved (not on every draft save, since a draft's batch number can still change) — new `resolveBatchId()` helper normalizes the batch number and upserts it into `production.batches`, same pattern the original spine migration already uses for `prod_sessions`/`bag_tags`/etc.
+- **New "Production" tab on the Sales page** — every approved job card (Pasteuriser + Granule), customer/blend/batch/planned mass/date, searchable by customer/product/batch. Each row links straight into the existing `/traceability?batch=` view for full yield/QC history — no new detail view needed.
+- Deliberately labelled the mass figure "planned mass" (the job card's own stated target, not a verified actual yield) — the next natural step, once real demand data exists to compare against, is joining through the now-present `batch_id` to the real captured output.
+
+## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
+
+**Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested: "when the supervisor signs off, I need it to call their signature in the staff directory but the user interface just needs to have a verify and sign button as the job cards work." Previously the capture page's supervisor sign-off asked for a hand-typed name plus a hand-drawn signature on every session — unverified against who was actually logged in, unlike job cards which already resolve the approver's own Staff Directory signature server-side.
+
+- **New `PATCH /api/production/sessions/[id]/approve`** — mirrors the job-cards `decide` route exactly: resolves the caller's Staff Directory `employee_id`, looks up their `production.employee_signatures` row, rejects with "No signature on file" if none exists, then stamps that signature onto `session_signatures` and marks the session approved (plus closes the production run if "end of run" was ticked). The signature is never accepted from the client.
+- **Sign-off UI**: the supervisor's name field + `SignaturePad` are gone. In their place, a single **"Verify & Sign as {name} to Approve"** button (disabled until they have a signature on file), same wording/pattern as the job-card approval panel — or, if they don't have one yet, a link straight to their Staff Directory profile to set one up. Operator sign-off (name + drawn signature) is untouched — this only changes the supervisor step.
+
 ## 2026-08-04 — Alyssa (Fixed job card ratio-table layout: .input's width:100% was silently beating w-24)
 
 **Files changed:** `app/globals.css`
@@ -61,6 +90,12 @@ Reported (live, mid-shift): after a grade/variant changeover, the combined mass 
 No schema change — this reuses `prodTotals()` and the `productions` array already in memory; existing sessions with a changeover already in them show the breakdown as soon as this loads, no re-capture needed.
 
 ---
+
+## 2026-07-30 — Alyssa (Fix: roster rotation now keeps pins (and per-person days))
+
+**Files changed:** `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`
+
+Pinning a person to a shift wasn't surviving rotation. The Sunday auto-rotate cron selected roster entries WITHOUT the `pinned` (or `days`) columns, so `rotateEntries()` saw everyone as unpinned and rotated pinned people anyway, dropping the pin on the new week. Fixed the cron's `ENTRY_COLS` to include `pinned,days`, and `rotateEntries()` now carries `days` forward too (it already carried `pinned`). Both the automatic and manual "Generate next week" paths now keep a pinned person on their shift and preserve their working days. No migration.
 
 ## 2026-08-04 — Alyssa (Production Orders redesign: shared UI kit, decluttered records + analytics)
 

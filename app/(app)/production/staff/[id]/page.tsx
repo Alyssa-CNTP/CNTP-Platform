@@ -437,7 +437,7 @@ export default function StaffProfilePage() {
               <p className="text-[11px] text-warn">This person already has a signature on file — it can't be viewed here; drawing a new one below will replace it.</p>
             )}
             <SignaturePad label={isSelf ? 'Your signature' : `${employee?.display_name || employee?.name}'s signature`}
-              name={employee?.display_name || employee?.name || 'Signature'}
+              name={employee?.display_name || employee?.name || 'Signature'} height={220}
               value={signatureDraft === '__redraw__' ? null : signatureDraft} onChange={setSignatureDraft} />
             {signatureDraft && signatureDraft !== '__redraw__' && (
               <label className="flex items-start gap-2 text-[11px] text-text-muted cursor-pointer">
