@@ -586,6 +586,18 @@ Asked: does the customer/blend/tonnage info on a job card get saved anywhere sal
 - **New "Production" tab on the Sales page** — every approved job card (Pasteuriser + Granule), customer/blend/batch/planned mass/date, searchable by customer/product/batch. Each row links straight into the existing `/traceability?batch=` view for full yield/QC history — no new detail view needed.
 - Deliberately labelled the mass figure "planned mass" (the job card's own stated target, not a verified actual yield) — the next natural step, once real demand data exists to compare against, is joining through the now-present `batch_id` to the real captured output.
 
+## 2026-08-05 — Alyssa (Sieving mesh-config label, scan sanitization, production dashboard icon)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `components/production/AcumaticaSummary.tsx`, `components/production/ProductionDashboard.tsx`, `components/production/SievingTowerForm.tsx`, `components/production/live/ScanInput.tsx`, `lib/production/capture-config.ts`, `app/api/production/live/bag/[serial]/route.ts`
+
+Reported while scoping a production dashboard redesign: the sieving tower's mesh configuration wasn't reading correctly on the dashboard, and bag scans on the floor weren't auto-populating (looked like a Supabase storage issue but wasn't).
+
+- **Mesh label fix**: the sieve-config checkboxes/summary were labelled `12H/18H/40H` instead of the `#` mesh-size notation used everywhere else (`12#/18#/40#`). Same underlying `sieve12/18/40` fields, just relabelled.
+- **Organic sieving config realigned to Conventional**: per floor request, Organic's mesh stack was `10#→18#→40#` (set up years ago to boost leaf output), which shifted more material into the coarse-leaf fraction and caused visual inconsistency between Organic and Conventional grades. Added `SIEVING_MESH_CONFIG`/`SIEVING_MESH_CONFIG_PREVIOUS` in `capture-config.ts` recording both are now `12#→18#→40#`. Quality's QC pass/fail spec matrix (`qms.sd_runs` acceptance ranges in `app/(app)/quality/sieving/page.tsx`) was explicitly left untouched — that's a separate, documented QA decision (IPS-SIEV spec ranges), not covered by this change.
+- **Production dashboard**: added a "Sieving Tower — mesh configuration" comparison card (Conventional vs Organic, current + previous stack) under Machine KPIs & throughput.
+- **Bag scan fix**: `ScanInput` only did `.trim()` before calling `onScan`, so a stray space (scanner double-fire) or a lowercase manual entry broke the exact-match `bag_tags.serial_number` lookup silently — looked like "not found"/"traceability is lacking" on the floor. Wired in the existing (but previously unused-here) `sanitizeSerial()` helper in both `ScanInput` and the `/api/production/live/bag/[serial]` lookup route.
+- **Production Dashboard nav icon**: swapped `Factory` → `ChartNoAxesCombined` per request.
+
 ## 2026-08-05 — Alyssa (Training lessons: switched embedded video from YouTube to Scribe)
 
 **Files changed:** `supabase/migrations/20260722_004_lesson_embed_url.sql` (new), `app/(app)/training/course/[slug]/page.tsx`, `app/(app)/training/manage/[id]/page.tsx`, `app/api/training/courses/[id]/route.ts`
