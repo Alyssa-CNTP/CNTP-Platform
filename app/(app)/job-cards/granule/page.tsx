@@ -379,7 +379,8 @@ function GranuleJobCardScreen() {
       {canApprove && (
         <div className="no-print">
           <JobCardApprovalsPanel table="job_cards_granule" showFinalRatio={false}
-            decideUrl={id => `/api/production/job-cards/granule/${id}/decide`} />
+            decideUrl={id => `/api/production/job-cards/granule/${id}/decide`}
+            onApproved={resumeDraft} />
         </div>
       )}
 

@@ -3,6 +3,16 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Job cards: fixed scroll cutoff, missing signature after approval, and a misleading numbering error)
+
+**Files changed:** `app/(app)/layout.tsx`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`
+
+Reported: couldn't scroll all the way to the bottom of a job card (cuts off mid Sign-offs); clicking Verify & Sign to approve doesn't show the signature anywhere; and an auto-numbering error ("is migration 20260729_003 applied?") on both staging and production.
+
+- **Scroll cutoff**: the app shell (`app/(app)/layout.tsx`) sized itself with `h-screen` (100vh) while `html`/`body` were already deliberately set to `100dvh` for mobile browser chrome. On a device where the address bar is visible, 100vh is taller than what's actually on screen — the shell (and the job card page's fixed action bar inside it) ended up partly below the real fold, not just scrolled short. Switched to `h-dvh` to match, and wired the codebase's own already-written-but-unused `.page-content` safety class (`min-height:0` + iOS momentum scrolling) onto the main scroll container.
+- **Signature not shown after approval**: `JobCardApprovalsPanel`'s "Verify & Sign to Approve" button called the decide API successfully but then just removed the card from the pending list — it never read back the response, so the freshly-stamped supervisor signature was never shown anywhere, and there was no way back into that specific card afterward (the drafts panel only lists `status='draft'` cards). Added an `onApproved` callback, wired on both job card pages to their existing `resumeDraft()`, so approving a card now loads it right back up — signature and all.
+- **Numbering error**: the message was the same generic guess regardless of what actually failed (missing migration vs. a permission grant vs. something else), which made it undiagnosable without direct database access. Now shows the real Postgres error message/code alongside the migration hint.
+
 ## 2026-08-05 — Alyssa (Job cards now visible to Sales — customer, blend, batch, tonnage, date — and wired into the batch spine)
 
 **Files changed:** `supabase/migrations/20260805_001_job_cards_batch_spine_link.sql` (new), `lib/production/batch-spine.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/granule/[id]/decide/route.ts`, `components/sales/ProductionBatchesTab.tsx` (new), `app/(app)/sales/page.tsx`

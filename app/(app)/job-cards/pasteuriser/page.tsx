@@ -491,7 +491,7 @@ function PasteuriserJobCardScreen() {
         )}
       </div>
 
-      {canApprove && <div className="no-print"><JobCardApprovalsPanel /></div>}
+      {canApprove && <div className="no-print"><JobCardApprovalsPanel onApproved={resumeDraft} /></div>}
 
       {canGenerate && (
         <DraftsPanel excludeId={savedId} refreshToken={draftsRefresh} onResume={resumeDraft} />
