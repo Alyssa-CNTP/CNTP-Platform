@@ -272,7 +272,10 @@ function PasteuriserJobCardScreen() {
   function generateJobCardNo() {
     setJobCardNoError(null)
     db.rpc('next_job_card_no' as any).then(({ data, error }: any) => {
-      if (error) { setJobCardNoError('Could not auto-generate a number — is migration 20260729_003 applied?'); return }
+      if (error) {
+        setJobCardNoError(`Could not auto-generate a number — ${error.message || error.code || 'unknown error'} (migration 20260729_003 must be applied in this environment)`)
+        return
+      }
       if (data) setForm(f => (f.job_card_no ? f : { ...f, job_card_no: data as string }))
     })
   }
