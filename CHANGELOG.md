@@ -3,6 +3,21 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Batch quality: Granule, Pasteuriser and Lab Results joined)
+
+**Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` (new), `app/api/production/yield-analytics/route.ts`, `app/api/production/batch/[key]/route.ts`, `components/production/ProductionDashboard.tsx`
+
+**⚠ Requires running `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` in the Supabase SQL Editor (staging first, then production) before the new columns return data.**
+
+Closes the last open item from the production dashboard redesign plan: `production.v_batch_quality`/`v_batch_360` (added 2026-07-21) deliberately left out Granule, Pasteuriser and Lab Results quality, pending "confirmation against the live qms schema, rather than guessing." That confirmation is now done — by reading the actual, working queries inside the quality capture pages themselves, not guessed:
+
+- **Granule Line**: `qms.granule_runs(batch_number)` joined to `qms.granule_samples(run_id, moisture, bulk_density)`.
+- **Pasteuriser**: `qms.quality_records(batch_number, workflow='pasteuriser_run')` — moisture and bulk density live inside `data_json->'samples'`, unnested per run rather than being flat columns.
+- **Lab Results (final-product COA)**: `qms.lab_results(batch_no, overall_status, date_issued)` — pass/fail per batch.
+- **Deliberately NOT joined**: raw-material `quality_records` (`workcenter='rawMaterial'`) — that's pesticide/EU-MRL residue compliance for incoming raw leaf, not moisture/bulk-density/waste, and its batch numbering predates any processed batch_key. A separate decision if that data is ever wanted on the batch view.
+- No `qms.*` table or quality-module page was touched — this only adds read-only `SELECT`s from the existing view layer, same pattern as the sieving/`sd_runs` join already there.
+- Wired into `yield-analytics` and the batch-360 detail route, and surfaced on the dashboard's Batches table: a coalesced Bulk density column (a batch only ever has one of sieving/granule/pasteuriser quality, so coalescing never mixes two lines' numbers), a new Moisture % column, and the QC pass/fail flag now considers all four quality sources instead of only sieving's.
+
 ## 2026-08-05 — Alyssa (Production dashboard redesign, Phases 1–4)
 
 **Files changed:** `components/production/ProductionTabs.tsx`, `components/production/ProductionDashboard.tsx`, `components/layout/WarehouseMap.tsx` (deleted), `app/(app)/production/energy/page.tsx` (new), `app/(app)/production/shift-reports/page.tsx` (new), `app/api/production/shift-report/route.ts`, `lib/production/shift-report-builder.ts` (new), `app/api/production/shift-report/cron/route.ts` (new), `app/api/production/shift-report/recent/route.ts` (new), `.github/workflows/shift-report-generate.yml` (new), `app/api/production/manager-kpis/route.ts`
