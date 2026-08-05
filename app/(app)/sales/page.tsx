@@ -20,6 +20,7 @@ import SignalCard   from '@/components/intelligence/SignalCard'
 import SignalDrawer from '@/components/intelligence/SignalDrawer'
 import type { Signal } from '@/components/intelligence/types'
 import type { SalesActuals, SalesCategory } from '@/lib/acumatica/sales-actuals'
+import ProductionBatchesTab from '@/components/sales/ProductionBatchesTab'
 
 // ─── Planning / forecast data from CNTP_EXCO_Dashboard_2026_Redesign_3.xlsx ──
 // Live ACTUALS now come from GET /api/dashboard/sales. These constants are kept
@@ -178,7 +179,7 @@ function Tab({ label, active, onClick }: { label: string; active: boolean; onCli
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-type TabKey = 'overview' | 'customers' | 'products' | 'okrs'
+type TabKey = 'overview' | 'customers' | 'products' | 'production' | 'okrs'
 
 // Category toggle chips → live API `include` scope.
 const CATEGORY_CHIPS: { key: SalesCategory; label: string }[] = [
@@ -315,10 +316,11 @@ export default function SalesPage() {
   const tradeSignals  = useMemo(() => signals.filter(s => s.keyword_group === 'trade').sort((a, b) => b.relevance_score - a.relevance_score), [signals])
 
   const TABS: { key: TabKey; label: string }[] = [
-    { key: 'overview',  label: 'Overview'    },
-    { key: 'customers', label: 'Customers'   },
-    { key: 'products',  label: 'Product Mix' },
-    { key: 'okrs',      label: 'OKRs'        },
+    { key: 'overview',   label: 'Overview'    },
+    { key: 'customers',  label: 'Customers'   },
+    { key: 'products',   label: 'Product Mix' },
+    { key: 'production', label: 'Production'  },
+    { key: 'okrs',       label: 'OKRs'        },
   ]
 
   const filteredCustomers = customers.filter(c => {
@@ -788,6 +790,13 @@ export default function SalesPage() {
               </div>
             </>
           )}
+
+          {/* ════════════════════════════════════════════════════════════════
+              PRODUCTION — approved job cards (customer, blend, batch, planned
+              tonnage, date), sourced straight from Production's job card
+              workflow. Visibility only for now — see ProductionBatchesTab.
+          ════════════════════════════════════════════════════════════════ */}
+          {tab === 'production' && <ProductionBatchesTab />}
 
           {/* ════════════════════════════════════════════════════════════════
               OKRs

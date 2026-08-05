@@ -586,6 +586,16 @@ Asked: does the customer/blend/tonnage info on a job card get saved anywhere sal
 - **New "Production" tab on the Sales page** — every approved job card (Pasteuriser + Granule), customer/blend/batch/planned mass/date, searchable by customer/product/batch. Each row links straight into the existing `/traceability?batch=` view for full yield/QC history — no new detail view needed.
 - Deliberately labelled the mass figure "planned mass" (the job card's own stated target, not a verified actual yield) — the next natural step, once real demand data exists to compare against, is joining through the now-present `batch_id` to the real captured output.
 
+## 2026-08-05 — Alyssa (Job cards now visible to Sales — customer, blend, batch, tonnage, date — and wired into the batch spine)
+
+**Files changed:** `supabase/migrations/20260805_001_job_cards_batch_spine_link.sql` (new), `lib/production/batch-spine.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/granule/[id]/decide/route.ts`, `components/sales/ProductionBatchesTab.tsx` (new), `app/(app)/sales/page.tsx`
+
+Asked: does the customer/blend/tonnage info on a job card get saved anywhere sales can see it? Confirmed by investigation: no — the Sales page is fed entirely by invoiced Acumatica AR data with zero awareness of production batches, and job cards weren't wired into the existing canonical batch spine (`production.batches`/`normalize_batch()`) the way every other capture table already is. Scoped with the user to visibility only (no actuals-vs-demand comparison yet — Acumatica has no open-order/demand data to compare against), and to close the batch-spine gap rather than build a Sales-only one-off.
+
+- **Job cards now join the batch spine** at the moment they're approved (not on every draft save, since a draft's batch number can still change) — new `resolveBatchId()` helper normalizes the batch number and upserts it into `production.batches`, same pattern the original spine migration already uses for `prod_sessions`/`bag_tags`/etc.
+- **New "Production" tab on the Sales page** — every approved job card (Pasteuriser + Granule), customer/blend/batch/planned mass/date, searchable by customer/product/batch. Each row links straight into the existing `/traceability?batch=` view for full yield/QC history — no new detail view needed.
+- Deliberately labelled the mass figure "planned mass" (the job card's own stated target, not a verified actual yield) — the next natural step, once real demand data exists to compare against, is joining through the now-present `batch_id` to the real captured output.
+
 ## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
 
 **Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
