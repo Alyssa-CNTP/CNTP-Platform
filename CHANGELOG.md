@@ -3,6 +3,27 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
+
+**Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested: "when the supervisor signs off, I need it to call their signature in the staff directory but the user interface just needs to have a verify and sign button as the job cards work." Previously the capture page's supervisor sign-off asked for a hand-typed name plus a hand-drawn signature on every session — unverified against who was actually logged in, unlike job cards which already resolve the approver's own Staff Directory signature server-side.
+
+- **New `PATCH /api/production/sessions/[id]/approve`** — mirrors the job-cards `decide` route exactly: resolves the caller's Staff Directory `employee_id`, looks up their `production.employee_signatures` row, rejects with "No signature on file" if none exists, then stamps that signature onto `session_signatures` and marks the session approved (plus closes the production run if "end of run" was ticked). The signature is never accepted from the client.
+- **Sign-off UI**: the supervisor's name field + `SignaturePad` are gone. In their place, a single **"Verify & Sign as {name} to Approve"** button (disabled until they have a signature on file), same wording/pattern as the job-card approval panel — or, if they don't have one yet, a link straight to their Staff Directory profile to set one up. Operator sign-off (name + drawn signature) is untouched — this only changes the supervisor step.
+
+## 2026-08-04 — Alyssa (Fixed job card ratio-table layout: .input's width:100% was silently beating w-24)
+
+**Files changed:** `app/globals.css`
+
+Reported: the Pasteuriser job card's Final Product Ratio inputs (and the same pattern on the new Granule job card) rendered as full-width boxes with badly wrapped labels stacked above them, instead of a narrow value box beside its label.
+
+Root cause: `.input` (added earlier this session to fix invisible form fields) sets `width: 100%` as a plain, unlayered CSS class defined after `@import "tailwindcss"`. Combined with a Tailwind utility like `w-24` on the same element (`className="input w-24 text-right"`), both rules have equal specificity — the tiebreak goes to whichever rule sits later in the compiled stylesheet's raw source order, which was `.input`, not `w-24`, regardless of the className order in the JSX. Confirmed only two live call sites hit this (`job-cards/pasteuriser` and the newly-built `job-cards/granule`), but it's the exact same root cause as an earlier bug this session where a `.card` background beat a `bg-brand` utility.
+
+- Wrapped `.card`, `.card-glass` and `.input` (plus their dark-mode variants) in Tailwind v4's `@layer base`. Cascade layers resolve by declared layer order, not source position — `base` is declared before `utilities` in Tailwind's own order (`@layer theme, base, components, utilities`), so any Tailwind utility now always wins over these classes when both are applied to the same element, regardless of where either rule physically sits in the file.
+- Verified by compiling `globals.css` through the actual `@tailwindcss/postcss` pipeline used at build time and confirming `.input`/`.card` land inside the `base` layer while `w-24` (and other utilities) land inside `utilities` — a deterministic, spec-guaranteed fix, not something that needs re-litigating per page.
+- `.bg-surface-card` was left untouched — it already uses `!important`, which isn't subject to this layer-ordering issue.
+
 ## 2026-08-04 — Alyssa (Mass balance: one consistent display everywhere it appears, not four different ones)
 
 **Files changed:** `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`
