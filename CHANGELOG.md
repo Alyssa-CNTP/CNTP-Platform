@@ -2,6 +2,13 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-07-30 — Alyssa (Fix: roster rotation now keeps pins (and per-person days))
+
+**Files changed:** `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`
+
+Pinning a person to a shift wasn't surviving rotation. The Sunday auto-rotate cron selected roster entries WITHOUT the `pinned` (or `days`) columns, so `rotateEntries()` saw everyone as unpinned and rotated pinned people anyway, dropping the pin on the new week. Fixed the cron's `ENTRY_COLS` to include `pinned,days`, and `rotateEntries()` now carries `days` forward too (it already carried `pinned`). Both the automatic and manual "Generate next week" paths now keep a pinned person on their shift and preserve their working days. No migration.
+
+
 ## 2026-08-14 — Alyssa (Production outage + fix: add `scripts/production-deploy.sh`, matching the existing staging one)
 
 **Files changed:** `scripts/production-deploy.sh` (new), `docs/environments-architecture.md`
