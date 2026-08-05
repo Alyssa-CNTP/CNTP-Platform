@@ -78,7 +78,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { course, lessons, questions, sopIds } = body as {
     course: { title: string; description?: string; area?: string; status?: string; pass_threshold?: number; sort_order?: number }
-    lessons: Array<{ title: string; youtube_id?: string; body?: string; duration_seconds?: number; sort_order: number; required?: boolean }>
+    lessons: Array<{ title: string; embed_url?: string; youtube_id?: string; body?: string; duration_seconds?: number; sort_order: number; required?: boolean }>
     questions: Array<{
       prompt: string; kind: string; points?: number; explanation?: string; image_url?: string
       numeric_answer?: number; numeric_tolerance?: number; manual_review?: boolean; sort_order: number
@@ -99,7 +99,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     await hrDb.from('training_lessons').delete().eq('course_id', id)
     if (lessons.length) {
       const { error } = await hrDb.from('training_lessons').insert(
-        lessons.map(l => ({ course_id: id, title: l.title, youtube_id: l.youtube_id ?? null, body: l.body ?? null, duration_seconds: l.duration_seconds ?? null, sort_order: l.sort_order, required: l.required ?? true }))
+        lessons.map(l => ({ course_id: id, title: l.title, embed_url: l.embed_url ?? null, youtube_id: l.youtube_id ?? null, body: l.body ?? null, duration_seconds: l.duration_seconds ?? null, sort_order: l.sort_order, required: l.required ?? true }))
       )
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     }

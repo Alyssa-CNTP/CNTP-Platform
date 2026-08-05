@@ -3,6 +3,21 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-05 — Alyssa (Training lessons: switched embedded video from YouTube to Scribe)
+
+**Files changed:** `supabase/migrations/20260722_004_lesson_embed_url.sql` (new), `app/(app)/training/course/[slug]/page.tsx`, `app/(app)/training/manage/[id]/page.tsx`, `app/api/training/courses/[id]/route.ts`
+
+The org is now recording training walkthroughs with Scribe (scribehow.com) instead of YouTube. Scribe's embed is a full iframe URL (not a bare video ID like YouTube's), so the lesson model generalizes to hold any embeddable URL rather than being YouTube-specific.
+
+- **New `hr.training_lessons.embed_url` column** (nullable text) holds the full embed URL for any provider. `youtube_id` is kept for backward compatibility — the player and editor both prefer `embed_url` when present and fall back to building a YouTube embed from `youtube_id` for any pre-existing rows.
+- **Course editor** (`/training/manage/[id]`): the "YouTube video ID" field is now "Embed URL (Scribe, YouTube, etc.)" — takes any provider's full embed URL. Existing YouTube lessons load pre-filled with the equivalent full URL so re-saving carries them over to the new column automatically.
+- **Course player** (`/training/course/[slug]`): renders Scribe embeds with Scribe's own recommended sizing (16/12 aspect ratio, 480px min-height — its step-by-step player needs more vertical room than a plain video) and a minimal `allow="fullscreen"`, versus the existing 16:9 + YouTube's fuller `allow` list for legacy YouTube lessons.
+- **Migration also repoints the already-seeded Sieving Tower lesson** at the new Scribe walkthrough (`How_To_Capture_And_Submit_Production_Data_At_CNTP`), replacing its YouTube placeholder.
+
+**Before this shows on staging:** run `supabase/migrations/20260722_004_lesson_embed_url.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
 ## 2026-08-05 — Alyssa (Job cards: fixed scroll cutoff, missing signature after approval, and a misleading numbering error)
 
 **Files changed:** `app/(app)/layout.tsx`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`
