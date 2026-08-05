@@ -31,6 +31,21 @@ export const NEEDS_VARIANT = new Set(['sieving', 'refining1', 'refining2', 'gran
 
 export const SECTION_ORDER = ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'smallblender', 'pasteuriser'] as const
 
+// Sieving Tower physical mesh screen stack, per variant family. This is a
+// standing machine setup (changed only when screens are physically swapped),
+// not a per-session captured value. Updated 2026-08-05: Organic was
+// 10# → 18# → 40# (set up years ago to boost leaf output), which shifted more
+// material into the coarse-leaf fraction and produced visual inconsistency
+// between Organic and Conventional grades. Realigned to match Conventional.
+export const SIEVING_MESH_CONFIG: Record<'conventional' | 'organic', string[]> = {
+  conventional: ['12#', '18#', '40#'],
+  organic:      ['12#', '18#', '40#'],
+}
+export const SIEVING_MESH_CONFIG_PREVIOUS: Record<'conventional' | 'organic', string[]> = {
+  conventional: ['12#', '18#', '40#'],
+  organic:      ['10#', '18#', '40#'],
+}
+
 export interface SectionMeta {
   id: string
   name: string
