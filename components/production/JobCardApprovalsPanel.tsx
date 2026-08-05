@@ -49,10 +49,16 @@ export function JobCardApprovalsPanel({
   table = 'job_cards_pasteuriser',
   decideUrl = (id: string) => `/api/production/job-cards/${id}/decide`,
   showFinalRatio = true,
+  onApproved,
 }: {
   table?: string
   decideUrl?: (id: string) => string
   showFinalRatio?: boolean
+  // Called with the card's id right after a successful approval — lets the
+  // job-card pages load that record back up (e.g. via their own resumeDraft)
+  // so the supervisor actually sees their signature land on it, instead of
+  // the card just vanishing from this pending list with no confirmation.
+  onApproved?: (id: string) => void
 } = {}) {
   const db = getDb()
   const [cards, setCards] = useState<PendingCard[]>([])
@@ -75,7 +81,10 @@ export function JobCardApprovalsPanel({
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision, ...extra }),
     })
-    if (res.ok) { setCards(cs => cs.filter(c => c.id !== id)); setExpanded(null) }
+    if (res.ok) {
+      setCards(cs => cs.filter(c => c.id !== id)); setExpanded(null)
+      if (decision === 'approved') onApproved?.(id)
+    }
     else { const body = await res.json().catch(() => ({})); alert(body.error || 'Could not save decision') }
   }
 
