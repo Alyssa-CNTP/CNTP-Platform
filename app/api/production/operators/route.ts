@@ -33,6 +33,29 @@ function validate(body: any): string | null {
   return null
 }
 
+// ─── GET — list operators, WITHOUT the pin column ──────────────────────────────
+// The actual PIN is only ever fetched on demand, per operator, via
+// GET /api/production/operators/[id]/pin — this list never carries it, so it's
+// never sitting in the browser (not even in the network response) just
+// because the Operators page loaded.
+export async function GET() {
+  try {
+    const caller = await getCallerPermissions()
+    if (!canManage(caller)) return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+
+    const admin = getAdminClient()
+    const { data, error } = await admin.schema('production').from('operators')
+      .select('id,name,display_name,operator_code,role,section_ids,active,employee_id,user_id,pin')
+      .order('name')
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    const operators = ((data ?? []) as any[]).map(({ pin, ...rest }) => ({ ...rest, has_pin: !!pin }))
+    return NextResponse.json(operators)
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message ?? 'Internal server error' }, { status: 500 })
+  }
+}
+
 // ─── POST — create a new operator + hidden auth account ───────────────────────
 export async function POST(req: NextRequest) {
   try {
@@ -143,8 +166,9 @@ export async function PATCH(req: NextRequest) {
 
     const body = await req.json()
     if (!body?.id) return NextResponse.json({ error: 'Operator id is required' }, { status: 400 })
-    const bad = validate(body)
-    if (bad) return NextResponse.json({ error: bad }, { status: 400 })
+    if (!body?.name?.trim())            return NextResponse.json({ error: 'Name is required' }, { status: 400 })
+    if (!Array.isArray(body?.section_ids) || body.section_ids.length === 0)
+      return NextResponse.json({ error: 'Assign at least one section' }, { status: 400 })
 
     const admin   = getAdminClient()
     const session = await getSessionClient()
@@ -154,6 +178,15 @@ export async function PATCH(req: NextRequest) {
       .select('user_id,auth_email,operator_code,name,display_name,role,section_ids,pin,active')
       .eq('id', body.id).maybeSingle()
     if (!existing) return NextResponse.json({ error: 'Operator not found' }, { status: 404 })
+
+    // PIN is optional on PATCH — the client never re-downloads it just to
+    // resend it (see app/(app)/production/operators/page.tsx), so a blank/absent
+    // body.pin means "leave the current one". Only an actually-supplied value
+    // is validated and takes effect.
+    const effectivePin = (typeof body.pin === 'string' && body.pin) ? body.pin : ((existing as any).pin ?? '')
+    if (!/^\d{4}$/.test(effectivePin)) {
+      return NextResponse.json({ error: 'PIN must be exactly 4 digits' }, { status: 400 })
+    }
 
     let userId    = (existing as any).user_id as string | null
     let authEmail = (existing as any).auth_email as string | null
@@ -169,7 +202,7 @@ export async function PATCH(req: NextRequest) {
     if (!userId) {
       authEmail = newFloorEmail()
       const { data: created, error: authErr } = await admin.auth.admin.createUser({
-        email: authEmail, password: deriveAuthPassword(body.pin, authEmail),
+        email: authEmail, password: deriveAuthPassword(effectivePin, authEmail),
         email_confirm: true, user_metadata: { full_name: display, floor_operator: true },
       })
       if (authErr) return NextResponse.json({ error: authErr.message }, { status: 500 })
@@ -177,7 +210,7 @@ export async function PATCH(req: NextRequest) {
     } else {
       // Update password to match the (possibly new) PIN
       const { error: pwErr } = await admin.auth.admin.updateUserById(userId, {
-        password: deriveAuthPassword(body.pin, authEmail!),
+        password: deriveAuthPassword(effectivePin, authEmail!),
         user_metadata: { full_name: display, floor_operator: true },
       })
       if (pwErr) return NextResponse.json({ error: pwErr.message }, { status: 500 })
@@ -193,7 +226,7 @@ export async function PATCH(req: NextRequest) {
       operator_code: code,
       role:          body.role === 'production_supervisor' ? 'production_supervisor' : 'floor_operator',
       section_ids:   body.section_ids,
-      pin:           body.pin,
+      pin:           effectivePin,
       active:        body.active !== false,
     }
     if (body.employee_id !== undefined) opUpdate.employee_id = body.employee_id

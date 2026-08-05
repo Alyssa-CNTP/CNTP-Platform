@@ -77,7 +77,7 @@ export default function LabManagerPage() {
   const [tab, setTab] = useState<'approvals' | 'daily' | 'history' | 'pins'>('approvals')
 
   // ── Lab assistant PINs ─────────────────────────────────────────────────────
-  interface LabAsst { full_name: string; role: string; has_pin: boolean; pin: string | null; section_ids: string[]; is_active: boolean; user_id: string | null; employee_id: string | null }
+  interface LabAsst { full_name: string; role: string; has_pin: boolean; section_ids: string[]; is_active: boolean; user_id: string | null; employee_id: string | null }
   interface PinForm { full_name: string; pin: string; section_ids: string[]; employee_id: string | null }
   const [labAsstList,  setLabAsstList]  = useState<LabAsst[]>([])
   const [labAsstLoad,  setLabAsstLoad]  = useState(false)
@@ -85,7 +85,22 @@ export default function LabManagerPage() {
   const [pinSaving,    setPinSaving]    = useState(false)
   const [pinError,     setPinError]     = useState<string | null>(null)
   const [pinQuery,     setPinQuery]     = useState('')
-  const [revealedPin,  setRevealedPin]  = useState<string | null>(null)
+  const [revealedName, setRevealedName] = useState<string | null>(null)
+  const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
+  const [revealing,    setRevealing]    = useState<string | null>(null)
+
+  // Fetches the actual PIN on demand — never bulk-loaded with the list (see
+  // app/api/quality/lab-assistants/manage/route.ts).
+  async function revealPin(fullName: string) {
+    if (revealedName === fullName) { setRevealedName(null); return }
+    if (revealedPins[fullName]) { setRevealedName(fullName); return }
+    setRevealing(fullName)
+    try {
+      const res = await fetch(`/api/quality/lab-assistants/manage/reveal?name=${encodeURIComponent(fullName)}`)
+      const json = await res.json()
+      if (res.ok) { setRevealedPins(p => ({ ...p, [fullName]: json.pin })); setRevealedName(fullName) }
+    } finally { setRevealing(null) }
+  }
 
   const ROLE_LABELS: Record<string, string> = { qc_supervisor: 'QC Supervisor', qc: 'QC', lab_analyst: 'Lab Analyst', incoming_goods_qc: 'Incoming Goods QC' }
 
@@ -668,11 +683,11 @@ export default function LabManagerPage() {
                       {!asst.has_pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      {asst.pin ? (
+                      {asst.has_pin ? (
                         <>
-                          <span className="font-mono text-[12px] text-text-muted tracking-widest">{revealedPin === asst.full_name ? asst.pin : '••••'}</span>
-                          <button onClick={() => setRevealedPin(revealedPin === asst.full_name ? null : asst.full_name)} className="text-stone-400 hover:text-text p-0.5" title={revealedPin === asst.full_name ? 'Hide PIN' : 'Reveal PIN'}>
-                            {revealedPin === asst.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
+                          <span className="font-mono text-[12px] text-text-muted tracking-widest">{revealedName === asst.full_name ? revealedPins[asst.full_name] : '••••'}</span>
+                          <button onClick={() => revealPin(asst.full_name)} disabled={revealing === asst.full_name} className="text-stone-400 hover:text-text p-0.5 disabled:opacity-40" title={revealedName === asst.full_name ? 'Hide PIN' : 'Reveal PIN'}>
+                            {revealing === asst.full_name ? <Loader2 size={12} className="animate-spin" /> : revealedName === asst.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
                           </button>
                           {asst.section_ids?.length > 0 && <><span className="text-[11px] text-text-faint">·</span><span className="text-[11px] text-text-muted font-mono">{asst.section_ids.map(s => sectionMeta(s).code).join(' · ')}</span></>}
                         </>

@@ -46,9 +46,26 @@ export async function setEmployeeSignature(employeeId: string, signature: string
   return { ok: false, error: body.error || 'Could not save signature' }
 }
 
+// Only ever call this for the CALLER'S OWN employeeId — production.employee_signatures'
+// RLS (see 20260805_001_employee_signatures_self_read.sql) restricts SELECT to
+// the caller's own row, so calling this for anyone else just returns null, but
+// don't rely on that as the only guard: never wire this to an arbitrary profile.
 export async function loadEmployeeSignature(employeeId: string | null): Promise<string | null> {
   if (!employeeId) return null
   const { data } = await getDb().schema('production').from('employee_signatures')
     .select('signature').eq('employee_id', employeeId).maybeSingle()
   return (data as any)?.signature ?? null
+}
+
+// Whether someone ELSE has a signature on file, without ever exposing the
+// image — for the temporary setup-override UI (see app/(app)/production/staff/[id]/page.tsx)
+// to show "this person already has one, drawing replaces it" without viewing it.
+export async function getEmployeeSignatureStatus(employeeId: string): Promise<{ hasSignature: boolean }> {
+  try {
+    const res = await fetch(`/api/staff/${employeeId}/signature/status`)
+    if (!res.ok) return { hasSignature: false }
+    return await res.json()
+  } catch {
+    return { hasSignature: false }
+  }
 }
