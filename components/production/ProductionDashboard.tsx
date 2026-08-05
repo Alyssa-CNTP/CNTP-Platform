@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { getDb } from '@/lib/supabase/db'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor, SIEVING_MESH_CONFIG, SIEVING_MESH_CONFIG_PREVIOUS } from '@/lib/production/capture-config'
 import { fetchGranuleQuality } from '@/lib/production/granule-quality'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
@@ -739,6 +739,34 @@ export default function ProductionDashboard() {
                     </table>
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Sieving Tower mesh configuration — Conventional vs Organic */}
+            <div className="rounded-xl border border-surface-rule p-4">
+              <div className="flex items-center gap-1 mb-3">
+                <h3 className="text-sm font-semibold text-text">Sieving Tower — mesh configuration</h3>
+                <InfoTip text="The physical mesh screen stack fitted to the sieving tower, per variant family. This is a standing machine setup changed only when screens are physically swapped — not a per-session reading. Organic was realigned on 2026-08-05 to match Conventional's screen stack, after the previous 10#/18#/40# setup was found to shift more material into the coarse-leaf fraction and cause visual inconsistency between grades." />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {(['conventional', 'organic'] as const).map(family => {
+                  const changed = SIEVING_MESH_CONFIG[family].join('|') !== SIEVING_MESH_CONFIG_PREVIOUS[family].join('|')
+                  return (
+                    <div key={family} className="rounded-lg bg-surface-dim/40 p-3">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1.5 capitalize">{family}</div>
+                      <div className="flex items-center gap-1.5 font-mono text-[13px] font-semibold text-text">
+                        {SIEVING_MESH_CONFIG[family].map((mesh, i) => (
+                          <span key={i} className="px-2 py-0.5 rounded bg-white border border-surface-rule">{mesh}</span>
+                        ))}
+                      </div>
+                      {changed && (
+                        <div className="text-[10px] text-text-muted mt-1.5">
+                          Previously {SIEVING_MESH_CONFIG_PREVIOUS[family].join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
 

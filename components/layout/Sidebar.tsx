@@ -6,7 +6,7 @@ import Link            from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth }     from '@/lib/auth/context'
 import {
-  LayoutDashboard, ClipboardList, Factory, BarChart2, Home,
+  LayoutDashboard, ClipboardList, ChartNoAxesCombined, BarChart2, Home,
   Users, Radio, Info, Tag, LogOut, Beaker, Leaf,
   TrendingUp, Globe, FlaskConical,
   Microscope, FileText, BookOpen, Layers, Settings,
@@ -38,7 +38,7 @@ export interface NavItem {
 // Home is rendered as a standalone item above the groups (see render).
 export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
-  { href: '/production/dashboard',      label: 'Production Dashboard',       icon: Factory,         group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/dashboard',      label: 'Production Dashboard',       icon: ChartNoAxesCombined, group: 'Production', departments: ['Production','Management'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/inventory',      label: 'Master Inventory',           icon: PackageOpen,     group: 'Production', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
