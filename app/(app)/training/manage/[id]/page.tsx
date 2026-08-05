@@ -13,7 +13,7 @@ import { QUESTION_KINDS, type QuestionKind } from '@/lib/training/training-confi
 interface Sop { id: string; doc_no: string; title: string; area: string; active: boolean }
 
 interface OptionDraft { key: string; label: string; is_correct: boolean; match_key: string }
-interface LessonDraft { key: string; title: string; youtube_id: string; body: string; required: boolean }
+interface LessonDraft { key: string; title: string; embed_url: string; body: string; required: boolean }
 interface QuestionDraft {
   key: string; prompt: string; kind: QuestionKind; points: string; explanation: string
   manual_review: boolean; numeric_answer: string; numeric_tolerance: string; options: OptionDraft[]
@@ -51,7 +51,11 @@ export default function CourseEditorPage() {
       const c = courseRes.course
       setTitle(c.title); setDescription(c.description ?? ''); setArea(c.area); setStatus(c.status); setPassThreshold(String(c.pass_threshold))
       setLessons((courseRes.lessons ?? []).map((l: any): LessonDraft => ({
-        key: newKey(), title: l.title, youtube_id: l.youtube_id ?? '', body: l.body ?? '', required: l.required,
+        key: newKey(), title: l.title,
+        // Legacy rows only have youtube_id — show them as the equivalent full
+        // embed URL so re-saving carries them over to the new column.
+        embed_url: l.embed_url || (l.youtube_id ? `https://www.youtube-nocookie.com/embed/${l.youtube_id}` : ''),
+        body: l.body ?? '', required: l.required,
       })))
       setQuestions((courseRes.questions ?? []).map((q: any): QuestionDraft => ({
         key: newKey(), prompt: q.prompt, kind: q.kind, points: String(q.points ?? 1),
@@ -70,7 +74,7 @@ export default function CourseEditorPage() {
   }, [id])
 
   function addLesson() {
-    setLessons(ls => [...ls, { key: newKey(), title: '', youtube_id: '', body: '', required: true }])
+    setLessons(ls => [...ls, { key: newKey(), title: '', embed_url: '', body: '', required: true }])
   }
   function updateLesson(key: string, patch: Partial<LessonDraft>) {
     setLessons(ls => ls.map(l => l.key === key ? { ...l, ...patch } : l))
@@ -115,7 +119,7 @@ export default function CourseEditorPage() {
     try {
       const payload = {
         course: { title, description, area, status, pass_threshold: parseFloat(passThreshold) || 0.8 },
-        lessons: lessons.map((l, i) => ({ title: l.title, youtube_id: l.youtube_id, body: l.body, required: l.required, sort_order: i })),
+        lessons: lessons.map((l, i) => ({ title: l.title, embed_url: l.embed_url, body: l.body, required: l.required, sort_order: i })),
         questions: questions.map((q, i) => ({
           prompt: q.prompt, kind: q.kind, points: parseFloat(q.points) || 1, explanation: q.explanation || undefined,
           manual_review: q.manual_review, sort_order: i,
@@ -209,7 +213,7 @@ export default function CourseEditorPage() {
               <button onClick={() => removeLesson(l.key)} className="text-stone-300 hover:text-err shrink-0"><Trash2 size={14} /></button>
             </div>
             <div className="grid grid-cols-2 gap-2 pl-5">
-              <input value={l.youtube_id} onChange={e => updateLesson(l.key, { youtube_id: e.target.value })} placeholder="YouTube video ID" className={`${INP} font-mono`} />
+              <input value={l.embed_url} onChange={e => updateLesson(l.key, { embed_url: e.target.value })} placeholder="Embed URL (Scribe, YouTube, etc.)" className={`${INP} font-mono`} />
               <label className="flex items-center gap-1.5 text-[12px] text-text-muted">
                 <input type="checkbox" checked={l.required} onChange={e => updateLesson(l.key, { required: e.target.checked })} className="accent-brand" /> Required before assessment
               </label>
