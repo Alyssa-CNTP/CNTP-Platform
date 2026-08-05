@@ -240,11 +240,28 @@ export default function ProductionDashboard() {
       const kgOut = ss.reduce((t, s) => t + outOf(s), 0)
       const bags = bagsData.filter(b => b.section_id === id).length
       const yieldPct = kgIn > 0 ? round1(kgOut / kgIn * 100) : null
-      return { id, status, kgIn, kgOut, variance: kgIn - kgOut, bags, yieldPct }
+      return { id, status, kgIn, kgOut, variance: kgIn - kgOut, bags, yieldPct, kgPerHour: null as number | null, throughputBasis: null as 'run' | 'worked' | null }
     })
 
     setTodayRows(rows)
     setBreakdowns((bd as any[]) ?? [])
+
+    // Per-line throughput (kg/hr) for today, from the same run-time/crew-time
+    // basis used on Production Orders' Analytics view — merged onto the
+    // section-status rows above rather than building a second throughput
+    // number. Best-effort: a slow/missing response must never block the rest
+    // of the dashboard.
+    fetch(`/api/production/orders-kpis?from=${today}&to=${today}`)
+      .then(r => r.json())
+      .then(j => {
+        if (j.error) return
+        const bySec = new Map((j.bySection || []).map((s: any) => [s.sectionId, s]))
+        setTodayRows(prev => prev.map(r => {
+          const s = bySec.get(r.id) as any
+          return s ? { ...r, kgPerHour: s.kgPerHour, throughputBasis: s.basis } : r
+        }))
+      })
+      .catch(() => {})
 
     // ── Granule KPI foundations ──────────────────────────────────────────────
     // Quality readings (moisture %, bulk density cc/100g) from the capture draft,
@@ -1095,13 +1112,13 @@ export default function ProductionDashboard() {
       <div className="card overflow-hidden p-0">
         <div className="px-4 py-3 border-b border-surface-rule flex items-center justify-between">
           <h3 className="text-sm font-semibold text-text">Section status · today</h3>
-          <InfoTip text="Live status of each production section today. kg in/out from prod_mass_balance; yield % = output ÷ input × 100. Variance = input − output; a large positive variance (above tolerance) triggers a ⚠ warning. Status reflects the highest session status across all shifts today." />
+          <InfoTip text="Live status of each production section today. kg in/out from prod_mass_balance (debagging in / bagging out for Sieving Tower &amp; Pasteuriser); yield % = output ÷ input × 100. Variance = input − output; a large positive variance (above tolerance) triggers a ⚠ warning. kg/hr is bagged output over run time (first→last bag today), falling back to confirmed crew hours when there aren't enough bags yet to measure a run window — the basis used is shown next to the figure. Status reflects the highest session status across all shifts today." />
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b border-surface-rule bg-surface-dim text-left">
-                {['Section', 'Status', 'kg in', 'kg out', 'Yield %', 'Variance', 'Bags', ''].map((h, i) => (
+                {['Section', 'Status', 'kg in', 'kg out', 'kg/hr', 'Yield %', 'Variance', 'Bags', ''].map((h, i) => (
                   <th key={i} className="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
                 ))}
               </tr>
@@ -1124,6 +1141,9 @@ export default function ProductionDashboard() {
                     <td className="px-4 py-3"><span className={`text-[10px] font-medium px-2 py-1 rounded-lg ${st.cls}`}>{st.label}</span></td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{r.kgIn ? r.kgIn.toFixed(1) : '—'}</td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text">{r.kgOut ? r.kgOut.toFixed(1) : '—'}</td>
+                    <td className="px-4 py-3 font-mono text-[12px] text-text-muted">
+                      {r.kgPerHour != null ? <>{r.kgPerHour} <span className="text-[9px] text-text-faint">({r.throughputBasis})</span></> : '—'}
+                    </td>
                     <td className="px-4 py-3 font-mono text-[12px]" style={{ color: r.yieldPct != null && r.yieldPct < 70 ? C.warn : C.ok }}>
                       {r.yieldPct != null ? `${r.yieldPct}%` : '—'}
                     </td>
