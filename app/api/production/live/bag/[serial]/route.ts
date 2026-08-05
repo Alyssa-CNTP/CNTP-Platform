@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { sanitizeSerial } from '@/lib/production/scan-utils'
 
 // GET /api/production/live/bag/[serial]
 // Looks up a bag tag by serial number.
@@ -13,7 +14,7 @@ export async function GET(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     )
-    const serial = decodeURIComponent(params.serial).trim()
+    const serial = sanitizeSerial(decodeURIComponent(params.serial))
     const { data, error } = await supabase
       .schema('production')
       .from('bag_tags')
