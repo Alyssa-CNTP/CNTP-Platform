@@ -424,7 +424,7 @@ export default function StaffProfilePage() {
         ) : canEditSignature ? (
           <div className="space-y-2">
             <SignaturePad label={isSelf ? 'Your signature' : `${employee?.display_name || employee?.name}'s signature`}
-              name={employee?.display_name || employee?.name || 'Signature'}
+              name={employee?.display_name || employee?.name || 'Signature'} height={220}
               value={signatureDraft === '__redraw__' ? null : signatureDraft} onChange={setSignatureDraft} />
             {signatureDraft && signatureDraft !== '__redraw__' && (
               <label className="flex items-start gap-2 text-[11px] text-text-muted cursor-pointer">
