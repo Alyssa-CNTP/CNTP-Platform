@@ -12,7 +12,7 @@ import { useMyEmployee } from '@/lib/training/use-my-employee'
 import { QuestionRunner } from '@/components/training/QuestionRunner'
 import type { TrainingQuestion, SubmittedAnswer } from '@/lib/training/training-config'
 
-interface Lesson { id: string; title: string; youtube_id: string | null; body: string | null; sort_order: number; required: boolean }
+interface Lesson { id: string; title: string; embed_url: string | null; youtube_id: string | null; body: string | null; sort_order: number; required: boolean }
 interface Course { id: string; slug: string; title: string; description: string | null; pass_threshold: number }
 interface Sop { id: string; doc_no: string; title: string; requires_practical_signoff: boolean }
 
@@ -136,7 +136,12 @@ export default function CoursePlayerPage() {
             <p className="text-[13px] text-text-muted">No lessons yet — you can go straight to the assessment.</p>
           ) : lessons.map(lesson => {
             const isWatched = watched.has(lesson.id)
-            const showPlaceholder = !lesson.youtube_id || lesson.youtube_id === 'REPLACE_WITH_YOUTUBE_ID'
+            // embed_url (Scribe, or any other provider) takes precedence; a bare
+            // legacy youtube_id still resolves to a playable embed.
+            const embedSrc = lesson.embed_url
+              || (lesson.youtube_id && lesson.youtube_id !== 'REPLACE_WITH_YOUTUBE_ID' ? `https://www.youtube-nocookie.com/embed/${lesson.youtube_id}` : null)
+            const showPlaceholder = !embedSrc
+            const isScribe = !!embedSrc?.includes('scribehow.com')
             return (
               <div key={lesson.id} className="bg-surface-card border border-surface-rule rounded-2xl p-4 space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -150,11 +155,24 @@ export default function CoursePlayerPage() {
                   <div className="aspect-video rounded-xl bg-stone-100 flex items-center justify-center text-[12px] text-stone-400">
                     <PlayCircle size={16} className="mr-1.5" /> Video coming soon
                   </div>
+                ) : isScribe ? (
+                  // Scribe's own embed snippet specifies this aspect ratio + min-height —
+                  // its step-by-step player needs more vertical room than a plain video.
+                  <div className="rounded-xl overflow-hidden" style={{ aspectRatio: '16 / 12', minHeight: 480 }}>
+                    <iframe
+                      className="w-full h-full"
+                      src={embedSrc}
+                      title={lesson.title}
+                      allow="fullscreen"
+                      style={{ border: 0 }}
+                      allowFullScreen
+                    />
+                  </div>
                 ) : (
                   <div className="aspect-video rounded-xl overflow-hidden">
                     <iframe
                       className="w-full h-full"
-                      src={`https://www.youtube-nocookie.com/embed/${lesson.youtube_id}`}
+                      src={embedSrc}
                       title={lesson.title}
                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                       allowFullScreen
