@@ -22,7 +22,7 @@ import { createRotatedPeriod, nextPeriodConfig, type RotatePeriod } from '@/lib/
 import { ROSTER_SECTION_KEYS, ROSTER_SECTION_LABEL, rosterPerm, type RosterSectionKey } from '@/lib/auth/permissions'
 
 const PERIOD_COLS = 'id,name,start_date,end_date,day_label,night_label'
-const ENTRY_COLS  = 'role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
+const ENTRY_COLS  = 'role_key,shift,employee_id,operator_id,person_name,tags,sort_order,pinned,days'
 
 // Only ever consider the WEEKLY roster. The manual Saturday sheet
 // (kind='saturday') is independent and must never be rotated from, nor block or
