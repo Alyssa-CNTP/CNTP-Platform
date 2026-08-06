@@ -54,6 +54,20 @@ const PAST_SIEVE_COLS = [
   { key:'dust', label:'Dust', unit:'%' },
 ]
 
+// Rosehips carries an extra >40 mesh fraction (per the IPSSOU006 Tea Bag Cut
+// datasheet). We insert it before >60 for Rosehips only, so all other families
+// keep their existing seven columns unchanged.
+function pastSieveCols(family?: string) {
+  if ((family || '').toLowerCase() !== 'rosehips') return PAST_SIEVE_COLS
+  const i = PAST_SIEVE_COLS.findIndex(c => c.key === 'gt60')
+  return [...PAST_SIEVE_COLS.slice(0, i), { key:'gt40', label:'>40', unit:'%' }, ...PAST_SIEVE_COLS.slice(i)]
+}
+// Rosehips bulk density is volumetric — reported as ml/5g (e.g. "<10 ml/5g")
+// rather than cc/100g like the other families.
+function pastBdUnit(family?: string) {
+  return (family || '').toLowerCase() === 'rosehips' ? 'ml/5g' : 'cc/100g'
+}
+
 const PACKAGING_OPTIONS = ['Bulk Bags (500 kg)', '18 kg Bags', 'Vacuum Sealed Boxes']
 
 const SPEC_FAMILIES = ['Rooibos','Green Rooibos','Honeybush','Green Tea','Rosehips']
@@ -105,8 +119,8 @@ interface BatchSample {
   hourly_temp:    string
   has_sieve:      boolean
   has_mb:         boolean
-  gt6: string; gt10: string; gt12: string; gt16: string; gt20: string; gt60: string; dust: string
-  gt6_g: string; gt10_g: string; gt12_g: string; gt16_g: string; gt20_g: string; gt60_g: string; dust_g: string
+  gt6: string; gt10: string; gt12: string; gt16: string; gt20: string; gt40: string; gt60: string; dust: string
+  gt6_g: string; gt10_g: string; gt12_g: string; gt16_g: string; gt20_g: string; gt40_g: string; gt60_g: string; dust_g: string
   moisture:       string
   untapped_bd:    string
   customer_bd:    string
@@ -183,6 +197,7 @@ function getPastSpec(custName: string, field: string, batchSpec: any, batchSpecs
       gt12: {min:batchSpecsOverride.gt12_min, max:batchSpecsOverride.gt12_max},
       gt16: {min:batchSpecsOverride.gt16_min, max:batchSpecsOverride.gt16_max},
       gt20: {min:batchSpecsOverride.gt20_min, max:batchSpecsOverride.gt20_max},
+      gt40: {min:batchSpecsOverride.gt40_min, max:batchSpecsOverride.gt40_max},
       gt60: {min:batchSpecsOverride.gt60_min, max:batchSpecsOverride.gt60_max},
       dust: {min:batchSpecsOverride.dust_min, max:batchSpecsOverride.dust_max},
       moisture:    {min:null, max:batchSpecsOverride.moisture_max},
@@ -214,6 +229,7 @@ function getPastSpec(custName: string, field: string, batchSpec: any, batchSpecs
       gt12: {min: batchSpec.gt12_min, max: batchSpec.gt12_max},
       gt16: {min: batchSpec.gt16_min, max: batchSpec.gt16_max},
       gt20: {min: batchSpec.gt20_min, max: batchSpec.gt20_max},
+      gt40: {min: batchSpec.gt40_min, max: batchSpec.gt40_max},
       gt60: {min: batchSpec.gt60_min, max: batchSpec.gt60_max},
       dust: {min: batchSpec.dust_min, max: batchSpec.dust_max},
       moisture:    {min: null,                     max: batchSpec.moisture_max},
@@ -256,7 +272,7 @@ export function computePastOosFlags(batch: any): { bag: string; time?: string; f
     if (pastChk(s.moisture, mSpec) === 'fail')      fails.push({ field: 'Moisture', value: s.moisture, spec: mSpec })
     const bdSpec = getPastSpec(cust, 'untapped_bd', spec, ov)
     if (pastChk(s.untapped_bd, bdSpec) === 'fail')  fails.push({ field: 'BD', value: s.untapped_bd, spec: bdSpec })
-    if (s.has_sieve) for (const c of PAST_SIEVE_COLS) {
+    if (s.has_sieve) for (const c of pastSieveCols(batch?.product_family)) {
       const sp = getPastSpec(cust, c.key, spec, ov)
       if (pastChk((s as any)[c.key], sp) === 'fail') fails.push({ field: c.label, value: (s as any)[c.key], spec: sp })
     }
@@ -265,8 +281,10 @@ export function computePastOosFlags(batch: any): { bag: string; time?: string; f
   return flags
 }
 
-function checkSieveOrder(row: any): Set<string> {
-  const ordered = ['gt6','gt10','gt12','gt16','gt20','gt60']
+function checkSieveOrder(row: any, family?: string): Set<string> {
+  const ordered = (family || '').toLowerCase() === 'rosehips'
+    ? ['gt6','gt10','gt12','gt16','gt20','gt40','gt60']
+    : ['gt6','gt10','gt12','gt16','gt20','gt60']
   const violations = new Set<string>()
   for (let i = 0; i < ordered.length - 1; i++) {
     const cur  = parseFloat(row[ordered[i]])
@@ -462,7 +480,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   const [batchSpecs, setBatchSpecs] = useState({
     moisture_max:'', bd_min:'', bd_max:'',
     gt6_min:'',gt6_max:'',gt10_min:'',gt10_max:'',gt12_min:'',gt12_max:'',
-    gt16_min:'',gt16_max:'',gt20_min:'',gt20_max:'',gt60_min:'',gt60_max:'',
+    gt16_min:'',gt16_max:'',gt20_min:'',gt20_max:'',gt40_min:'',gt40_max:'',gt60_min:'',gt60_max:'',
     dust_min:'',dust_max:'',
   })
   const [specPreview, setSpec] = useState<any>(null)
@@ -522,6 +540,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
             gt12_min: ss.gt12?.min ?? spec.gt12_min ?? '', gt12_max: ss.gt12?.max ?? spec.gt12_max ?? '',
             gt16_min: ss.gt16?.min ?? spec.gt16_min ?? '', gt16_max: ss.gt16?.max ?? spec.gt16_max ?? '',
             gt20_min: ss.gt20?.min ?? spec.gt20_min ?? '', gt20_max: ss.gt20?.max ?? spec.gt20_max ?? '',
+            gt40_min: ss.gt40?.min ?? spec.gt40_min ?? '', gt40_max: ss.gt40?.max ?? spec.gt40_max ?? '',
             gt60_min: ss.gt60?.min ?? spec.gt60_min ?? '', gt60_max: ss.gt60?.max ?? spec.gt60_max ?? '',
             dust_min: ss.dust?.min ?? spec.dust_min ?? '', dust_max: ss.dust?.max ?? spec.dust_max ?? '',
           })
@@ -533,7 +552,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   function save() {
     if (!form.batch_number.trim()) { setErr('Batch number is required'); return }
     const hasSpecs = batchSpecs.moisture_max !== '' || batchSpecs.bd_min !== '' || batchSpecs.bd_max !== '' ||
-      ['gt6','gt10','gt12','gt16','gt20','gt60','dust'].some(k => (batchSpecs as any)[`${k}_min`] !== '' || (batchSpecs as any)[`${k}_max`] !== '')
+      ['gt6','gt10','gt12','gt16','gt20','gt40','gt60','dust'].some(k => (batchSpecs as any)[`${k}_min`] !== '' || (batchSpecs as any)[`${k}_max`] !== '')
     if (!hasSpecs) { setErr('Enter at least one spec value (moisture, BD, or sieve) before saving.'); return }
     if (Object.values(batchSpecs).some(v => isNegative(v))) { setErr('Spec values cannot be negative.'); return }
     onSave({ ...form, type_grade:`${form.product_family} ${form.grade}`, _spec: specPreview, batch_specs: batchSpecs })
@@ -597,7 +616,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               </div>
               <div className="p-4 space-y-4">
                 <div className="grid grid-cols-3 gap-3">
-                  {[['Moisture Max (%)','moisture_max'],['BD Min (cc/100g)','bd_min'],['BD Max (cc/100g)','bd_max']].map(([label,key]) => (
+                  {[['Moisture Max (%)','moisture_max'],[`BD Min (${pastBdUnit(form.product_family)})`,'bd_min'],[`BD Max (${pastBdUnit(form.product_family)})`,'bd_max']].map(([label,key]) => (
                     <div key={key}>
                       <label className={lbl}>{label}</label>
                       <input type="number" step="0.1" value={(batchSpecs as any)[key]} onChange={e => setSp(key,e.target.value)}
@@ -615,7 +634,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-surface-rule">
-                        {[['>6 mesh','gt6'],['>10 mesh','gt10'],['>12 mesh','gt12'],['>16 mesh','gt16'],['>20 mesh','gt20'],['>60 mesh','gt60'],['Dust','dust']].map(([label,key],i) => (
+                        {pastSieveCols(form.product_family).map((c,i) => [c.key==='dust'?'Dust':`${c.label} mesh`, c.key] as [string,string]).map(([label,key],i) => (
                           <tr key={key} className={i%2===1?'bg-surface/50':''}>
                             <td className="px-3 py-1.5 font-semibold text-text">{label}</td>
                             {['min','max'].map(mm => (
@@ -690,8 +709,8 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     return {
       time: format(now,'HH:mm'), date: format(now,'yyyy-MM-dd'),
       qc_name:'', serial_bin:'', hourly_temp:'', needle_count:'', compares_to_ref:'',
-      gt6:'',gt10:'',gt12:'',gt16:'',gt20:'',gt60:'',dust:'',
-      gt6_g:'',gt10_g:'',gt12_g:'',gt16_g:'',gt20_g:'',gt60_g:'',dust_g:'',
+      gt6:'',gt10:'',gt12:'',gt16:'',gt20:'',gt40:'',gt60:'',dust:'',
+      gt6_g:'',gt10_g:'',gt12_g:'',gt16_g:'',gt20_g:'',gt40_g:'',gt60_g:'',dust_g:'',
       moisture:'', untapped_bd:'', customer_bd:'',
       flow_mass:'400', flow_time:'',
       final_weight_1:'', final_weight_2:'', final_weight_3:'',
@@ -703,20 +722,22 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   const [row, setRow] = useState<any>(initialRow ? { ...blank(), ...initialRow } : blank())
   const set = (k: string, v: any) => setRow((p: any) => ({ ...p, [k]: v }))
   const spec = (field: string) => getPastSpec(batch.customer, field, batch._spec, batch.batch_specs)
+  // Family-aware sieve fractions (Rosehips gets an extra >40 mesh).
+  const sieveCols = pastSieveCols(batch.product_family)
 
   // Auto-calculate % from grams
   function calcPct(gKey: string, val: string) {
     const newRow = { ...row, [gKey]: val }
-    const total = PAST_SIEVE_COLS.reduce((s,c) => { const g = parseFloat(newRow[c.key+'_g']); return s + (isNaN(g)?0:g) }, 0)
+    const total = sieveCols.reduce((s,c) => { const g = parseFloat(newRow[c.key+'_g']); return s + (isNaN(g)?0:g) }, 0)
     if (total > 0) {
       const updates: any = { [gKey]: val }
-      PAST_SIEVE_COLS.forEach(c => { const g = parseFloat(newRow[c.key+'_g']); if (!isNaN(g)) updates[c.key] = ((g/total)*100).toFixed(1) })
+      sieveCols.forEach(c => { const g = parseFloat(newRow[c.key+'_g']); if (!isNaN(g)) updates[c.key] = ((g/total)*100).toFixed(1) })
       setRow((p: any) => ({ ...p, ...updates }))
     } else { set(gKey, val) }
   }
 
-  const total = PAST_SIEVE_COLS.reduce((s,c) => s + (parseFloat(row[c.key]) || 0), 0)
-  const orderViolations = checkSieveOrder(row)
+  const total = sieveCols.reduce((s,c) => s + (parseFloat(row[c.key]) || 0), 0)
+  const orderViolations = checkSieveOrder(row, batch.product_family)
 
   // ── Variation / outlier detection vs the other samples in this batch ──
   // Flag a value only when the batch already has real spread (std > floor)
@@ -732,7 +753,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
       const result = checkOutlier(n, hist, stdFloor)
       if (result?.flagged) warns.push(`${label}: ${n}${unit} far from batch avg ${result.mean.toFixed(1)}${unit}`)
     }
-    if (row.has_sieve) PAST_SIEVE_COLS.forEach(c => checkField(c.key, c.label, row[c.key], 1.0, '%'))
+    if (row.has_sieve) sieveCols.forEach(c => checkField(c.key, c.label, row[c.key], 1.0, '%'))
     if (row.has_mb) {
       checkField('moisture', 'Moisture', row.moisture, 0.3, '%')
       checkField('untapped_bd', 'BD', row.untapped_bd, 5, '')
@@ -750,7 +771,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     if (row.has_mb && !row.untapped_bd?.toString().trim()) { alert('Untapped BD is required'); return }
     if (row.has_mb && !row.moisture?.toString().trim())    { alert('Moisture is required'); return }
     if (row.has_sieve) {
-      const missingSieve = PAST_SIEVE_COLS.filter(c => !row[c.key]?.toString().trim())
+      const missingSieve = sieveCols.filter(c => !row[c.key]?.toString().trim())
       if (missingSieve.length) { alert(`All sieve fields are required — missing: ${missingSieve.map(c => c.label).join(', ')}`); return }
     }
     // Hard sanity bounds — physically implausible values (typos) are blocked
@@ -765,7 +786,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     }
     // No captured value may be negative.
     const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'flow_mass', 'flow_time', 'final_weight_1', 'final_weight_2', 'final_weight_3',
-      ...PAST_SIEVE_COLS.flatMap(c => [c.key, c.key + '_g'])]
+      ...sieveCols.flatMap(c => [c.key, c.key + '_g'])]
     if (negFields.some(k => isNegative(row[k]))) { alert('Values cannot be negative.'); return }
     if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const hr = parseInt((row.time||'').split(':')[0])
@@ -870,7 +891,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-rule">
-                    {PAST_SIEVE_COLS.map((c,i) => {
+                    {sieveCols.map((c,i) => {
                       const sp = spec(c.key)
                       const st = pastChk(row[c.key], sp)
                       const orderFail = orderViolations.has(c.key)
@@ -917,7 +938,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             <div className="bg-purple-50 border-2 border-purple-200 rounded-xl p-4">
               <div className="font-bold text-[12px] text-purple-700 mb-3">💧 Moisture & Bulk Density</div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {[['moisture','Moisture %','moisture'],['untapped_bd','Untapped BD (cc/100g)','untapped_bd'],['customer_bd','Customer BD (cc/100g)',null]].map(([k,l,sk]) => {
+                {[['moisture','Moisture %','moisture'],['untapped_bd',`Untapped BD (${pastBdUnit(batch.product_family)})`,'untapped_bd'],['customer_bd',`Customer BD (${pastBdUnit(batch.product_family)})`,null]].map(([k,l,sk]) => {
                   const sp = sk ? spec(sk as string) : null
                   const st = pastChk(row[k as string], sp)
                   return (
@@ -956,7 +977,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
                       className={`${inp} w-full bg-surface/60 text-text-muted cursor-not-allowed`} />
                   </div>
                   <div>
-                    <label className={lbl}>Bulk Density (cc/100g)</label>
+                    <label className={lbl}>Bulk Density ({pastBdUnit(batch.product_family)})</label>
                     <input type="number" value={row.untapped_bd} readOnly title="Carried over from the QC-measured Untapped BD"
                       placeholder="— enter Untapped BD above"
                       className={`${inp} w-full bg-surface/60 text-text-muted cursor-not-allowed`} />
@@ -1070,7 +1091,7 @@ function RunsOverview({ batches, activeBatch }: { batches: Batch[]; activeBatch:
   const avgTemp   = tempVals.length  ? tempVals.reduce((a,b)=>a+b,0)/tempVals.length   : null
 
   const sieveFails = active.reduce((acc,b) => acc + (b.samples||[]).filter(s =>
-    s.has_sieve && PAST_SIEVE_COLS.some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(b.customer,c.key,b._spec,b.batch_specs))==='fail')
+    s.has_sieve && pastSieveCols(b.product_family).some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(b.customer,c.key,b._spec,b.batch_specs))==='fail')
   ).length, 0)
 
   const trend = (activeBatch?.samples || []).map((s,i) => ({
@@ -1653,10 +1674,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                               <th className="px-2 py-2">Bin/Bag</th>
                               <th className="px-2 py-2">QC</th>
                               <th className="px-2 py-2 text-center border-r-2 border-surface-rule">Temp°C</th>
-                              {PAST_SIEVE_COLS.map(c => <th key={c.key} className="px-1.5 py-2 text-center whitespace-nowrap">{c.label}</th>)}
+                              {pastSieveCols(activeBatch.product_family).map(c => <th key={c.key} className="px-1.5 py-2 text-center whitespace-nowrap">{c.label}</th>)}
                               <th className="px-1.5 py-2 text-center font-bold border-r-2 border-surface-rule">Total</th>
                               <th className="px-2 py-2 text-center">Moist%</th>
-                              <th className="px-2 py-2 text-center">BD cc</th>
+                              <th className="px-2 py-2 text-center">BD {pastBdUnit(activeBatch.product_family)==='ml/5g'?'ml':'cc'}</th>
                               <th className="px-2 py-2 text-center">Flow g/s</th>
                               <th className="px-2 py-2 text-center border-r-2 border-surface-rule">FW (kg)</th>
                               <th className="px-1.5 py-2 text-center">Aroma</th>
@@ -1670,7 +1691,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                           </thead>
                           <tbody>
                             {activeBatch.samples.map((s, i) => ({ s, i })).slice().reverse().map(({ s, i }) => {
-                              const total = PAST_SIEVE_COLS.reduce((sum,c) => sum+(parseFloat(s[c.key as keyof BatchSample] as string)||0), 0)
+                              const total = pastSieveCols(activeBatch.product_family).reduce((sum,c) => sum+(parseFloat(s[c.key as keyof BatchSample] as string)||0), 0)
                               const rowBg = i%2===0 ? '' : 'bg-surface/50'
                               const moistSpec = getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs)
                               const moistVio  = pastChk(s.moisture, moistSpec) === 'fail'
@@ -1689,7 +1710,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     <td className="px-2 py-2.5 text-[10px] text-text-muted">{s.serial_bin||'—'}</td>
                                     <td className="px-2 py-2.5 text-[10px]">{s.qc_name||'—'}</td>
                                     <td className="px-2 py-2.5 text-center text-[10px] border-r-2 border-surface-rule">{s.hourly_temp||'—'}</td>
-                                    {PAST_SIEVE_COLS.map(c => {
+                                    {pastSieveCols(activeBatch.product_family).map(c => {
                                       const val = s[c.key as keyof BatchSample] as string
                                       const sp  = getPastSpec(activeBatch.customer, c.key, activeBatch._spec, activeBatch.batch_specs)
                                       const st  = pastChk(val, sp)
@@ -1796,12 +1817,12 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                   )}
 
                   {/* Out of spec summary */}
-                  {activeBatch.samples.some(s => PAST_SIEVE_COLS.some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(activeBatch.customer,c.key,activeBatch._spec,activeBatch.batch_specs)) === 'fail') || pastChk(s.moisture, getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs)) === 'fail') && (
+                  {activeBatch.samples.some(s => pastSieveCols(activeBatch.product_family).some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(activeBatch.customer,c.key,activeBatch._spec,activeBatch.batch_specs)) === 'fail') || pastChk(s.moisture, getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs)) === 'fail') && (
                     <div className="px-4 py-3 bg-err/5 border border-err/20 rounded-xl">
                       <div className="font-bold text-[12px] text-err mb-2">⚠ Out-of-spec results detected</div>
                       {activeBatch.samples.slice().reverse().map(s => {
                         const fails = [
-                          ...PAST_SIEVE_COLS.filter(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(activeBatch.customer,c.key,activeBatch._spec,activeBatch.batch_specs)) === 'fail').map(c => `${c.label}: ${s[c.key as keyof BatchSample]}%`),
+                          ...pastSieveCols(activeBatch.product_family).filter(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(activeBatch.customer,c.key,activeBatch._spec,activeBatch.batch_specs)) === 'fail').map(c => `${c.label}: ${s[c.key as keyof BatchSample]}%`),
                           pastChk(s.moisture, getPastSpec(activeBatch.customer,'moisture',activeBatch._spec,activeBatch.batch_specs))==='fail' ? `Moisture: ${s.moisture}%` : null,
                         ].filter(Boolean)
                         if (!fails.length) return null
@@ -1960,7 +1981,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                         <table className="w-full text-left text-[10px]">
                                           <thead>
                                             <tr className="bg-brand text-white">
-                                              {['Production Date','Samples','Avg Temp','Avg Moisture%','Avg BD (cc)',...PAST_SIEVE_COLS.map(c=>`Avg ${c.label}%`),'MB','Full'].map(h => <th key={h} className="px-3 py-2 font-semibold whitespace-nowrap">{h}</th>)}
+                                              {['Production Date','Samples','Avg Temp','Avg Moisture%',`Avg BD (${pastBdUnit(b.product_family)==='ml/5g'?'ml':'cc'})`,...pastSieveCols(b.product_family).map(c=>`Avg ${c.label}%`),'MB','Full'].map(h => <th key={h} className="px-3 py-2 font-semibold whitespace-nowrap">{h}</th>)}
                                             </tr>
                                           </thead>
                                           <tbody className="divide-y divide-surface-rule">
@@ -1975,7 +1996,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                                   <td className="px-3 py-2 text-center font-mono">{isNaN(at)?'—':at.toFixed(1)}</td>
                                                   <td className="px-3 py-2 text-center font-mono font-bold" style={{ color:am>8.5?'var(--color-err)':'var(--color-ok)' }}>{isNaN(am)?'—':am.toFixed(2)+'%'}</td>
                                                   <td className="px-3 py-2 text-center font-mono">{isNaN(abd)?'—':abd.toFixed(0)}</td>
-                                                  {PAST_SIEVE_COLS.map(c => { const v = mean(sv, c.key as keyof BatchSample); return <td key={c.key} className="px-2 py-2 text-center font-mono">{isNaN(v)?'—':v.toFixed(1)+'%'}</td> })}
+                                                  {pastSieveCols(b.product_family).map(c => { const v = mean(sv, c.key as keyof BatchSample); return <td key={c.key} className="px-2 py-2 text-center font-mono">{isNaN(v)?'—':v.toFixed(1)+'%'}</td> })}
                                                   <td className="px-3 py-2 text-center font-mono text-text-muted">{mb.length}</td>
                                                   <td className="px-3 py-2 text-center font-mono text-text-muted">{sv.length}</td>
                                                 </tr>
@@ -1991,13 +2012,13 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                       <table className="w-full text-left text-[10px]">
                                         <thead>
                                           <tr className="bg-brand text-white">
-                                            {['#','Type','Date','Time','Bin/Bag','Temp','Moisture%','BD (cc)',...PAST_SIEVE_COLS.map(c=>c.label+'%'),'Total%','Aroma','Flav','Brisk','Str','Pass'].map(h => <th key={h} className="px-3 py-2 font-semibold whitespace-nowrap">{h}</th>)}
+                                            {['#','Type','Date','Time','Bin/Bag','Temp','Moisture%',`BD (${pastBdUnit(b.product_family)==='ml/5g'?'ml':'cc'})`,...pastSieveCols(b.product_family).map(c=>c.label+'%'),'Total%','Aroma','Flav','Brisk','Str','Pass'].map(h => <th key={h} className="px-3 py-2 font-semibold whitespace-nowrap">{h}</th>)}
                                           </tr>
                                         </thead>
                                         <tbody className="divide-y divide-surface-rule">
                                           {samples.map((s, si) => {
-                                            const tot = PAST_SIEVE_COLS.reduce((sum,c) => sum+(parseFloat(s[c.key as keyof BatchSample] as string)||0), 0)
-                                            const hasFail = s.has_sieve && PAST_SIEVE_COLS.some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(b.customer,c.key,b._spec,b.batch_specs))==='fail')
+                                            const tot = pastSieveCols(b.product_family).reduce((sum,c) => sum+(parseFloat(s[c.key as keyof BatchSample] as string)||0), 0)
+                                            const hasFail = s.has_sieve && pastSieveCols(b.product_family).some(c => pastChk(s[c.key as keyof BatchSample] as string, getPastSpec(b.customer,c.key,b._spec,b.batch_specs))==='fail')
                                             return (
                                               <tr key={s.id||si} className={`hover:bg-surface ${hasFail?'bg-err/3 border-l-2 border-l-err':'bg-surface-card'}`}>
                                                 <td className="px-3 py-2 text-center font-bold text-text-muted">{si+1}</td>
@@ -2011,7 +2032,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                                   {s.recheck_done && <span className="text-[8px] text-text-muted ml-1" title={`Re-check ${s.recheck_time||''}`}>→{s.recheck_moisture}% {s.recheck_pass?'✓':'✗'}</span>}
                                                 </td>
                                                 <td className="px-3 py-2 text-center font-mono">{s.untapped_bd||'—'}</td>
-                                                {PAST_SIEVE_COLS.map(c => {
+                                                {pastSieveCols(b.product_family).map(c => {
                                                   const val = s[c.key as keyof BatchSample] as string
                                                   const sp  = getPastSpec(b.customer, c.key, b._spec, b.batch_specs)
                                                   const st  = s.has_sieve ? pastChk(val, sp) : null
