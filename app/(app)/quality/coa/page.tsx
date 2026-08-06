@@ -200,6 +200,10 @@ export default function CoaGeneratorPage() {
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
+  // Delete-a-generated-COA confirmation popup: holds the history row awaiting
+  // confirmation (null = popup closed), plus an in-flight flag.
+  const [deleteTarget, setDeleteTarget] = useState<any>(null)
+  const [deleting, setDeleting]     = useState(false)
   // Queue of COAs the lab manager has signed that still need the QA sign-off.
   const [showQueue, setShowQueue]   = useState(false)
   const [queue, setQueue]           = useState<any[]>([])
@@ -285,6 +289,18 @@ export default function CoaGeneratorPage() {
     setHistory(data ?? [])
   }, [db])
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
+
+  // Delete a generated COA from history (lab manager only) — confirmed via the
+  // popup below. Removes the qms.coa_generated row, then refreshes the list.
+  const deleteCoa = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    const { error } = await db.schema('qms').from('coa_generated').delete().eq('id', deleteTarget.id)
+    setDeleting(false)
+    if (error) { alert('Delete failed: ' + error.message); return }
+    setDeleteTarget(null)
+    loadHistory()
+  }
 
   // COAs the lab manager has signed that are still awaiting the QA sign-off.
   const loadQueue = useCallback(async () => {
@@ -548,8 +564,14 @@ export default function CoaGeneratorPage() {
                       <td className="px-2 py-1 font-mono whitespace-nowrap">{h.doc_no || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">{h.generated_by || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">
-                        <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
-                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
+                            className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
+                          {sigInfo.me.isLab && (
+                            <button onClick={() => setDeleteTarget(h)} title="Delete this generated COA"
+                              className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#b91c1c' }}>🗑 Delete</button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -557,6 +579,34 @@ export default function CoaGeneratorPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Delete-COA confirmation popup */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center no-print" style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!deleting) setDeleteTarget(null) }}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-100">
+              <div className="text-[15px] font-bold text-gray-900">Delete this COA?</div>
+            </div>
+            <div className="px-5 py-4 text-[13px] text-gray-700">
+              <p className="mb-3">This will permanently remove the generated COA for batch{' '}
+                <span className="font-mono font-bold">{deleteTarget.batch_no || '—'}</span>
+                {deleteTarget.customer ? <> ({deleteTarget.customer})</> : null} from the history. This cannot be undone.</p>
+              <div className="text-[11px] text-gray-500">
+                Generated {isoDateTime(deleteTarget.generated_at)}{deleteTarget.generated_by ? <> · by {deleteTarget.generated_by}</> : null}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setDeleteTarget(null)} disabled={deleting}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold text-gray-700 bg-white">Cancel</button>
+              <button onClick={deleteCoa} disabled={deleting}
+                className="px-4 py-2 rounded-lg text-[12px] font-bold text-white" style={{ background: deleting ? '#9ca3af' : '#b91c1c' }}>
+                {deleting ? 'Deleting…' : '🗑 Delete COA'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

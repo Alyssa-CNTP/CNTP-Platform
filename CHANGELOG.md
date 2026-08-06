@@ -3,6 +3,13 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-06 — Gustav (COA history: lab manager can delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added a **🗑 Delete** button to each row of the COA Generator's history ("Generated COAs"), shown **only to the Lab Manager** (per the Staff Directory, `sigInfo.me.isLab`) alongside the existing ✏️ Edit button.
+- Clicking Delete opens a **confirmation popup** naming the batch/customer and generation timestamp; only on confirm is the `qms.coa_generated` row deleted and the history refreshed. Cancel or clicking outside dismisses it. No schema change.
+
 ## 2026-08-06 — Gustav (Rosehips >40 mesh + volumetric ml/5g bulk density)
 
 **Files changed:** `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`
