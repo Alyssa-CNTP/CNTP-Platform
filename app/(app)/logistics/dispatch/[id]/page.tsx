@@ -238,10 +238,11 @@ export default function DispatchDetailPage({ params }: { params: Promise<{ id: s
       }
       if (latest.status === 'signed' && latest.signature) {
         return [id, { signedAudit: {
-          signerName: latest.signature.signer_name,
-          signedAt:   latest.signature.signed_at,
-          ipAddress:  latest.signature.ip_address,
-          userAgent:  latest.signature.user_agent,
+          signerName:     latest.signature.signer_name,
+          signedAt:       latest.signature.signed_at,
+          signatureImage: latest.signature.signature_image,
+          ipAddress:      latest.signature.ip_address,
+          userAgent:      latest.signature.user_agent,
         } }]
       }
       return [id, {}]
