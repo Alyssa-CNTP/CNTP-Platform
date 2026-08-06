@@ -53,6 +53,7 @@ export default function TechnicianPinsPage() {
   const [revealedName, setRevealedName] = useState<string | null>(null)
   const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
   const [revealing, setRevealing] = useState<string | null>(null)
+  const [showPinTyping, setShowPinTyping] = useState(false)
 
   // Fetches the actual PIN on demand — never bulk-loaded with the list (see
   // app/api/maintenance/technicians/manage/route.ts).
@@ -76,7 +77,7 @@ export default function TechnicianPinsPage() {
   useEffect(() => { load() }, [])
 
   function startEdit(tech: Tech) {
-    setError(null)
+    setError(null); setShowPinTyping(false)
     setEditing({ full_name: tech.full_name, pin: '', is_active: tech.is_active })
   }
 
@@ -222,15 +223,23 @@ export default function TechnicianPinsPage() {
             </div>
             <div className="p-5 space-y-4">
               <Field label="4-digit PIN *">
-                <input
-                  value={editing.pin}
-                  inputMode="numeric"
-                  maxLength={4}
-                  autoFocus
-                  onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                  className={INP + ' font-mono tracking-[0.4em] text-center text-[18px]'}
-                  placeholder="••••"
-                />
+                <div className="relative">
+                  <input
+                    type={showPinTyping ? 'text' : 'password'}
+                    value={editing.pin}
+                    inputMode="numeric"
+                    maxLength={4}
+                    autoFocus
+                    onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    className={INP + ' font-mono tracking-[0.4em] text-center text-[18px] pr-10'}
+                    placeholder="••••"
+                  />
+                  <button type="button" onClick={() => setShowPinTyping(s => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                    title={showPinTyping ? 'Hide PIN' : 'Show PIN'}>
+                    {showPinTyping ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
               </Field>
 
               <label className="flex items-center gap-2.5 cursor-pointer">
