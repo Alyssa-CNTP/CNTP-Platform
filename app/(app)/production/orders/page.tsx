@@ -11,7 +11,7 @@ import {
   Loader2, CheckCircle2, Clock, Pen, Play, ChevronRight,
   Filter, X, AlertTriangle, Package, ArrowRight, MoreHorizontal, Pencil, Trash2,
   RotateCcw, Save, Unlock, Archive, BarChart3, List, Gauge, TrendingUp, Undo2,
-  Layers, Scale,
+  Layers, Scale, FileText,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -767,6 +767,10 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
             <BarChart3 size={15} />
           </Link>
         )}
+        <Link href={`/production/orders/${s.id}`} title="View full production order"
+          className="p-1.5 rounded-lg text-text-faint hover:text-brand hover:bg-surface-raised shrink-0 transition-colors">
+          <FileText size={15} />
+        </Link>
 
         {canManage ? (
           <div className="relative shrink-0">
