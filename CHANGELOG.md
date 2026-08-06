@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-06 — Gustav (Rosehips >40 mesh + volumetric ml/5g bulk density)
+
+**Files changed:** `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`
+
+Rosehips (e.g. IPSSOU006 Tea Bag Cut) uses an extra **>40 mesh** fraction and reports bulk density **volumetrically** (`ml/5g`, e.g. "<10 ml/5g") rather than `cc/100g`. Both are now handled **for Rosehips only** — every other family is unchanged.
+
+- **Customer Specifications tab**: added family-aware sieve columns (`sieveColsFor`) so a Rosehips spec row shows an editable **>40** column (inserted between >20 and >60), and a family-aware BD unit label (`bdUnit`) that reads **ml/5g** for Rosehips vs **cc/100g** otherwise. Applies to the grouped table headers/rows and the "+ Add Specification" modal. `gt40_min`/`gt40_max` (which already exist on `qms.customer_specs`) added to the TS type, the add-form, and the numeric-cast save list.
+- **Pasteuriser tab**: added `pastSieveCols(family)` and `pastBdUnit(family)` helpers. For Rosehips runs, the New Run modal's batch-spec table and every sample-capture/display table now include a fillable **>40** mesh row/column, the spec resolver (`getPastSpec`) and OOS/fail detection cover `gt40`, sieve-order validation places >40 between >20 and >60, and Bulk Density / Untapped BD / Customer BD fields are labelled **ml/5g**. Sieve and sample data live in `qms.quality_records.data_json` (JSONB), so `gt40` persists with no schema change.
+
 ## 2026-07-31 — Gustav (Granule flowability test + Quality sidebar re-ordered)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`, `components/layout/Sidebar.tsx`, `supabase/migrations/20260731_001_granule_flow_time.sql` (new, applied to staging)
