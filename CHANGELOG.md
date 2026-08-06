@@ -3,6 +3,13 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-07-31 — Gustav (Granule flowability test + Quality sidebar re-ordered)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `components/layout/Sidebar.tsx`, `supabase/migrations/20260731_001_granule_flow_time.sql` (new, applied to staging)
+
+- Added the **Flowability Test** block to the Granule Line capture forms (add-sample and edit-sample), mirroring the Pasteuriser line: fixed **400 g** sample, **Bulk Density** carried over from the sample's BD, a **Time (s)** field the QC fills in, and an auto-calculated **Mass Flow Rate (g/s) = 400 ÷ time**. Stored as a new `flow_time` column on `qms.granule_samples`.
+- **Re-ordered the Quality sidebar** top-to-bottom to follow the flow: Raw Material → Sieving → Pasteuriser → Granule Line → Final Product Lab Results → COA Generator → Customer Specs → Lab Manager → Maintenance QC.
+
 ## 2026-08-05 — Alyssa (Batch quality: Granule, Pasteuriser and Lab Results joined)
 
 **Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` (new), `app/api/production/yield-analytics/route.ts`, `app/api/production/batch/[key]/route.ts`, `components/production/ProductionDashboard.tsx`
