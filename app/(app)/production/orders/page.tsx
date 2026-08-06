@@ -53,6 +53,8 @@ interface SessionRow {
   variant: string | null
   created_at: string
   submitted_at: string | null
+  sup_name_signoff: string | null
+  sup_signed_at: string | null
   deleted_at: string | null
   edited_at: string | null
   total_input_kg: number
@@ -188,7 +190,7 @@ function OrdersInner() {
       const db = getDb()
 
       const { data: sess } = await db.schema('production').from('prod_sessions')
-        .select('id,section_id,date,shift,status,operator_names,lot_number,variant,production_orders,created_at,submitted_at')
+        .select('id,section_id,date,shift,status,operator_names,lot_number,variant,production_orders,created_at,submitted_at,sup_name_signoff,sup_signed_at')
         .gte('date', dateFrom).lte('date', dateTo)
         .order('date', { ascending: false }).order('created_at', { ascending: false })
         .limit(200)
@@ -710,6 +712,9 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
     s.lot_number,
     s.variant,
     s.production_orders?.length ? `PO ${s.production_orders.join(', ')}` : null,
+    // Surfaced right in the list — previously the only way to see who
+    // actually signed off was opening the session itself.
+    s.status === 'approved' && s.sup_name_signoff ? `Signed off by ${s.sup_name_signoff}` : null,
   ].filter(Boolean)
 
   return (
