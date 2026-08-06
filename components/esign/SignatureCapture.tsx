@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { CheckCircle2 } from 'lucide-react'
+import { CheckCircle2, Eye, X } from 'lucide-react'
 import SignaturePad from '@/components/ui/SignaturePad'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 
@@ -46,6 +46,7 @@ export default function SignatureCapture({ mode, documentLabel, context, audit, 
   const [status, setStatus] = useState<MySignatureStatus | null>(null)
   const [signerName, setSignerName] = useState('')
   const [drawn, setDrawn] = useState<string | null>(null)
+  const [viewerOpen, setViewerOpen] = useState(false)
 
   useEffect(() => {
     if (mode === 'internal' && !audit) getMySignatureStatus().then(setStatus)
@@ -58,14 +59,18 @@ export default function SignatureCapture({ mode, documentLabel, context, audit, 
           <CheckCircle2 size={13} /> Signed by {audit.signerName}
         </div>
         {audit.signatureImage && (
-          // Shown so whoever just signed (or anyone viewing this record) can
-          // visually confirm it's actually their on-file signature — this is
-          // the per-document snapshot already applied to this record, not
-          // the reusable Staff Directory master (that one stays self-only).
-          <div className="rounded-lg border border-surface-rule bg-white px-3 py-2 inline-block">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={audit.signatureImage} alt={`${audit.signerName}'s signature`} style={{ height: 40 }} />
-          </div>
+          // A deliberate view-then-close popup, not an always-on-screen image —
+          // this is the per-document snapshot already applied to this record
+          // (not the reusable Staff Directory master, which stays self-only),
+          // so viewing it here is fine, but it shouldn't just sit open on the
+          // page indefinitely either.
+          <button
+            type="button"
+            onClick={() => setViewerOpen(true)}
+            className="inline-flex items-center gap-1.5 text-[11px] text-brand font-medium hover:underline"
+          >
+            <Eye size={12} /> View signature
+          </button>
         )}
         <p className="text-[11px] text-text-muted">
           {new Date(audit.signedAt).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', dateStyle: 'medium', timeStyle: 'short' })}
@@ -78,6 +83,34 @@ export default function SignatureCapture({ mode, documentLabel, context, audit, 
               {audit.userAgent && <p className="break-all">Device: {audit.userAgent}</p>}
             </div>
           </details>
+        )}
+
+        {viewerOpen && audit.signatureImage && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+            onClick={() => setViewerOpen(false)}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-4 space-y-3"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] font-semibold text-text">{audit.signerName}'s signature</span>
+                <button onClick={() => setViewerOpen(false)} className="p-1 rounded-lg hover:bg-stone-100 text-stone-400">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="rounded-lg border border-surface-rule bg-white px-3 py-4 flex items-center justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={audit.signatureImage} alt={`${audit.signerName}'s signature`} style={{ height: 60 }} />
+              </div>
+              <button onClick={() => setViewerOpen(false)}
+                className="w-full py-2 rounded-xl border border-stone-200 text-[12px] font-medium text-stone-500 hover:bg-stone-50">
+                Close
+              </button>
+            </div>
+          </div>
         )}
       </div>
     )
