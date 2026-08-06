@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-06 — Gustav (COA screen: removed the example template)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Removed the read-only **"📄 Example template — how a completed COA looks (sample data)"** block from the bottom of the COA Generator screen, along with its now-unused `SampleCoa` and `SampleTable` components. The screen now shows only the live batch lookup / generated COA.
+
 ## 2026-08-06 — Gustav (COA history: Quality Manager can also delete a generated COA)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
