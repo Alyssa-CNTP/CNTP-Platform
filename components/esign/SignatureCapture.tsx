@@ -24,6 +24,7 @@ import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/e
 export interface SignatureAudit {
   signerName: string
   signedAt: string
+  signatureImage?: string | null
   ipAddress?: string | null
   userAgent?: string | null
 }
@@ -52,10 +53,20 @@ export default function SignatureCapture({ mode, documentLabel, context, audit, 
 
   if (audit) {
     return (
-      <div className="rounded-xl border border-ok/30 bg-ok-bg/20 p-3 space-y-1">
+      <div className="rounded-xl border border-ok/30 bg-ok-bg/20 p-3 space-y-2">
         <div className="flex items-center gap-1.5 text-status-ok text-[12px] font-semibold">
           <CheckCircle2 size={13} /> Signed by {audit.signerName}
         </div>
+        {audit.signatureImage && (
+          // Shown so whoever just signed (or anyone viewing this record) can
+          // visually confirm it's actually their on-file signature — this is
+          // the per-document snapshot already applied to this record, not
+          // the reusable Staff Directory master (that one stays self-only).
+          <div className="rounded-lg border border-surface-rule bg-white px-3 py-2 inline-block">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={audit.signatureImage} alt={`${audit.signerName}'s signature`} style={{ height: 40 }} />
+          </div>
+        )}
         <p className="text-[11px] text-text-muted">
           {new Date(audit.signedAt).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', dateStyle: 'medium', timeStyle: 'short' })}
         </p>

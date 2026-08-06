@@ -117,6 +117,7 @@ export interface SubjectHistoryRow {
   signature: {
     id: string
     signer_name: string
+    signature_image: string
     signed_at: string
     ip_address: string | null
     user_agent: string | null
