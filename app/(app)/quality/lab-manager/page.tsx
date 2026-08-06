@@ -88,6 +88,7 @@ export default function LabManagerPage() {
   const [revealedName, setRevealedName] = useState<string | null>(null)
   const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
   const [revealing,    setRevealing]    = useState<string | null>(null)
+  const [showPinTyping, setShowPinTyping] = useState(false)
 
   // Fetches the actual PIN on demand — never bulk-loaded with the list (see
   // app/api/quality/lab-assistants/manage/route.ts).
@@ -701,7 +702,7 @@ export default function LabManagerPage() {
                       {asst.is_active ? <UserCheck size={16} className="text-ok" /> : <UserX size={16} />}
                     </button>
                   )}
-                  <button onClick={() => { setPinError(null); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [], employee_id: asst.employee_id ?? null }) }} className="p-2 text-stone-400 hover:text-brand">
+                  <button onClick={() => { setPinError(null); setShowPinTyping(false); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [], employee_id: asst.employee_id ?? null }) }} className="p-2 text-stone-400 hover:text-brand">
                     <Pencil size={15} />
                   </button>
                 </div>
@@ -719,10 +720,17 @@ export default function LabManagerPage() {
                 <div className="p-5 space-y-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">4-digit PIN (leave blank to keep current)</label>
-                    <input value={pinEditing.pin} inputMode="numeric" maxLength={4} autoFocus
-                      onChange={e => setPinEditing({ ...pinEditing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                      className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-brand font-mono tracking-[0.4em] text-center text-[18px]"
-                      placeholder="••••" />
+                    <div className="relative">
+                      <input type={showPinTyping ? 'text' : 'password'} value={pinEditing.pin} inputMode="numeric" maxLength={4} autoFocus
+                        onChange={e => setPinEditing({ ...pinEditing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                        className="w-full px-3 py-2.5 pr-10 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-brand font-mono tracking-[0.4em] text-center text-[18px]"
+                        placeholder="••••" />
+                      <button type="button" onClick={() => setShowPinTyping(s => !s)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                        title={showPinTyping ? 'Hide PIN' : 'Show PIN'}>
+                        {showPinTyping ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Assigned sections</label>
