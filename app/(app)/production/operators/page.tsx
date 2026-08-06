@@ -48,6 +48,7 @@ export default function OperatorsPage() {
   const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
   const [revealing, setRevealing] = useState<string | null>(null)
   const [creatingPerson, setCreatingPerson] = useState(false)
+  const [showPinTyping, setShowPinTyping] = useState(false)
 
   async function load() {
     // Operators go through a server route (not a direct client query) so the
@@ -76,9 +77,9 @@ export default function OperatorsPage() {
     } finally { setRevealing(null) }
   }
 
-  function startAdd()  { setError(null); setCreatingPerson(false); setEditing(emptyForm()) }
+  function startAdd()  { setError(null); setCreatingPerson(false); setShowPinTyping(false); setEditing(emptyForm()) }
   function startEdit(op: Operator) {
-    setError(null); setCreatingPerson(false)
+    setError(null); setCreatingPerson(false); setShowPinTyping(false)
     setEditing({
       id: op.id, name: op.name, section_ids: op.section_ids ?? [], pin: '', active: op.active,
       employeeId: (op as any).employee_id ?? null, newPersonName: '',
@@ -324,11 +325,19 @@ export default function OperatorsPage() {
               </Field>
 
               <Field label={editing.id ? '4-digit PIN (leave blank to keep current)' : '4-digit PIN *'}>
-                <input
-                  value={editing.pin} inputMode="numeric" maxLength={4}
-                  onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                  className={INP + ' font-mono tracking-[0.4em] text-center text-[18px]'} placeholder="••••"
-                />
+                <div className="relative">
+                  <input
+                    type={showPinTyping ? 'text' : 'password'}
+                    value={editing.pin} inputMode="numeric" maxLength={4}
+                    onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    className={INP + ' font-mono tracking-[0.4em] text-center text-[18px] pr-10'} placeholder="••••"
+                  />
+                  <button type="button" onClick={() => setShowPinTyping(s => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                    title={showPinTyping ? 'Hide PIN' : 'Show PIN'}>
+                    {showPinTyping ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
               </Field>
 
               <Field label="Allowed sections *">
