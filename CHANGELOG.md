@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-06 — Gustav (COA history: Quality Manager can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button (added earlier today) to the **Quality Manager** as well as the Lab Manager — now shown when `sigInfo.me.isLab || sigInfo.me.isQa`. Same confirmation popup and delete behaviour.
+
 ## 2026-08-06 — Gustav (COA history: lab manager can delete a generated COA)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

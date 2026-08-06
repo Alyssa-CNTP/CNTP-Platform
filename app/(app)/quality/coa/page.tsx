@@ -567,7 +567,7 @@ export default function CoaGeneratorPage() {
                         <div className="flex items-center gap-2">
                           <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
                             className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
-                          {sigInfo.me.isLab && (
+                          {(sigInfo.me.isLab || sigInfo.me.isQa) && (
                             <button onClick={() => setDeleteTarget(h)} title="Delete this generated COA"
                               className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#b91c1c' }}>🗑 Delete</button>
                           )}
