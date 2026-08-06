@@ -62,15 +62,18 @@ export const NAV: NavItem[] = [
   { href: '/training',                  label: 'Training',                   icon: GraduationCap,   group: 'HR' },
 
   // ── Quality ──
-  { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
-  { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
-  { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
-  { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
-  { href: '/quality/coa',               label: 'COA Generator',              icon: FileSpreadsheet, group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
-  { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
-  { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
+  // Ordered to follow the physical/QC flow: Raw Material → Sieving → Pasteuriser
+  // → Granule Line → Final Product Lab Results → COA Generator → Customer Specs
+  // → Lab Manager → Maintenance QC.
   { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['Quality'], permission: 'can_upload_pdfs' },
   { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['Quality'], permission: 'can_add_sieving_runs' },
+  { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
+  { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
+  { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
+  { href: '/quality/coa',               label: 'COA Generator',              icon: FileSpreadsheet, group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
+  { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
+  { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
+  { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
 
   // ── Maintenance — full module is Maintenance + Management; Production sees only Job Cards ──
   { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
