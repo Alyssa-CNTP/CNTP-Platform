@@ -29,7 +29,7 @@ function fallbackStaff(): Staff[] {
 }
 
 export function useMaintenanceData() {
-  const { displayName } = useAuth()
+  const { displayName, userId } = useAuth()
   const db = getDb()
 
   const [loading, setLoading] = useState(true)
@@ -538,9 +538,19 @@ export function useMaintenanceData() {
     setCompletions(p => p.map(c => (c.template_id === tpl.id && c.period_key === period ? data : c)))
   }
 
-  // Manager allocates a checklist (template + current period) to a technician.
+  // Manager allocates a checklist (template + current period) to a technician —
+  // fires an in-app + email notification to that technician (best-effort; never
+  // blocks the allocation itself). Covers both the manual picker and auto-allocate.
   const allocateChecklist = async (tpl: Template, techName: string) => {
+    const period = tpl.frequency === 'weekly' ? weekKey : moKey
     await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
+    const techUserId = staff.find(s => s.name === techName)?.id
+    if (techName && techUserId) {
+      fetch('/api/maintenance/checklists/notify-assignment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ techUserId, area: tpl.area, frequency: tpl.frequency, period }),
+      }).catch(() => {})
+    }
   }
 
   // Technician submits a completed checklist to the maintenance manager to verify;
@@ -608,7 +618,8 @@ export function useMaintenanceData() {
       workflow: 'planned', area, maint_types: ['Repair'],
       description: `Checklist fault: ${task}`,
       long_desc: notes ? `Checklist note: ${notes}` : '',
-      raised_by: actor || displayName || 'Checklist', ai_suggestion: aiSuggest(task + ' ' + notes),
+      raised_by: actor || displayName || 'Checklist', raised_by_user_id: userId,
+      ai_suggestion: aiSuggest(task + ' ' + notes),
     }).select().single()
     if (err) { setPopup('Could not raise job card: ' + err.message); return }
     setJcs(p => [data, ...p])

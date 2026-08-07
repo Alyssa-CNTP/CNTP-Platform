@@ -11,6 +11,20 @@ Format: date · developer · files changed · description of code changes.
 - Looks the bag up fresh from `qms.v_bag_qc_status` (by `bagging_id`, falling back to serial number for older rows saved before the bag link existed) rather than reusing the pending-QC list, since a sampled bag has already dropped off that list — so the reprinted label's in-process out-of-spec banner stays accurate.
 - `mapDbRow()` now also exposes `bagging_id` (as `baggingId`) so the button can find the right bag; this is additive and doesn't change any existing field.
 
+---
+
+## 2026-08-07 — Gustav (Maintenance: data reset, technician QC visibility, recurring-problem history, checklist/completion notifications)
+
+**Files changed:** `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `lib/maintenance/useMaintenanceData.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/checklists/notify-assignment/route.ts` (new), `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Cleared all existing maintenance job cards** (and their work logs / spares-used / chat / notifications) from **both the production and staging databases**, at Gustav's request — a full reset before real day-to-day use. Every other maintenance table (checklists, calibration, roster, readings, etc.) is untouched.
+- **Fixed a bug where every signed-in user — including technicians — could see the "Satisfactory / Not satisfactory" verification screen on ANY job card**, not just the one they raised (the underlying permission was a blanket "any user can raise a card," not scoped to the actual card). It's now scoped to the real originator of that specific card. On top of that, **technicians never see the satisfactory/clarify screens at all** (that's the originator's and manager's checkpoint) — they instead get an **in-app + email notification when their job card is completed and signed off** by the maintenance manager (also a live toast while the app is open), since that notification was previously missing entirely.
+- **Technicians can now see the QC sign-off results on their own job cards** — a new read-only panel shows the QC officer, when it was done, and the pass/fail breakdown per check, without exposing the editable QC screen (that stays QC-only).
+- **Added a job-card history view for technicians** (previously manager-only) — searchable and filterable by breakdown vs planned, area, and now also by **machine** (new filter), so a technician can look up a specific machine and see what was done last time before starting a new repair — useful for spotting recurring problems.
+- **Checklist allocation now sends a notification** (in-app + email) to the technician when a weekly or monthly checklist is assigned to them — manual allocation and auto-allocate both covered. Phone push notifications are a later step once a phone integration is connected.
+
+---
+
 ## 2026-08-07 — Gustav (Link production bagging to Quality sieving Final QC)
 
 **Files changed:** `supabase/migrations/20260807_001_sieving_bag_qc_link.sql` (new, applied to staging), `app/(app)/quality/sieving/page.tsx`

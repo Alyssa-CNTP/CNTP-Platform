@@ -90,6 +90,10 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
           if (canManage && prev.status !== 'mgr_verify' && c.status === 'mgr_verify') {
             toast(`${c.card_no} is ready for your sign-off — ${c.area}`, 'info')
           }
+          // Technician: the job they worked on has been signed off and closed.
+          if (prev.status !== 'complete' && c.status === 'complete' && c.assigned_user_id === userId) {
+            toast(`${c.card_no} — job completed and signed off. ${c.area}`, 'success')
+          }
         }
       }
 
