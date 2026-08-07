@@ -34,7 +34,9 @@ export default function ScheduledPage() {
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
   const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
   const auth = useAuth()
-  const canManage = deriveMaintRole(auth).canManage
+  const maintRole = deriveMaintRole(auth)
+  const canManage = maintRole.canManage
+  const seesAll = maintRole.seesAll
   // On-duty technicians (auto-suggested for checklist allocation) + the full
   // staff directory for the picker.
   const dutyNow: string[] = derived.dutyNow
@@ -242,16 +244,17 @@ export default function ScheduledPage() {
         // Monthly can be pointed at a past month (audit view); weekly is current week.
         const period = freq === 'weekly' ? weekKey : (monthView || moKey)
         const auditView = freq === 'monthly' && !!monthView && monthView !== moKey
-        // Technicians only see the checklists allocated to them; managers see all.
+        // Technicians only see the checklists allocated to them; managers and the
+        // oversight profiles (IT / admin / Management / production manager) see all.
         const list = templates.filter(t => t.frequency === freq)
-          .filter(cl => canManage || (getComp(cl.id, period)?.assigned_to ?? '') === actor)
+          .filter(cl => seesAll || canManage || (getComp(cl.id, period)?.assigned_to ?? '') === actor)
         return (
           <div>
             <div className="mb-3 flex items-start justify-between gap-2 flex-wrap">
               <div>
               <h2 className="text-sm font-semibold text-text">{freq === 'weekly' ? 'Weekly checklists (WC) — ' + weekKey : 'Monthly checklists (MC) — ' + period}</h2>
               <p className="text-[12px] text-text-muted mt-0.5">
-                {!canManage
+                {!canManage && !seesAll
                   ? 'The checklists allocated to you for this period. Complete each item; a fault can raise a job card.'
                   : freq === 'weekly'
                     ? 'Complete every week. Tap an area to expand the checklist. Every tick records who checked it and when.'
@@ -278,7 +281,7 @@ export default function ScheduledPage() {
                 </button>
               </div>
             </div>
-            {!canManage && list.length === 0 && (
+            {!canManage && !seesAll && list.length === 0 && (
               <div className="card p-4 text-center text-[12px] text-text-faint">Nothing allocated to you for this period yet — the maintenance manager assigns checklists.</div>
             )}
             <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 ${auditView ? 'pointer-events-none opacity-75' : ''}`}>

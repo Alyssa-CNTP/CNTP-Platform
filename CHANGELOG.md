@@ -1588,6 +1588,17 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 
 ---
 
+## 2026-08-07 — Gustav (Maintenance: removed the IT "view as" switcher; oversight roles see every screen)
+
+**Files changed:** `lib/maintenance/roles.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`
+
+- **Removed the "IT — VIEW AS" tab strip.** IT / full admin no longer have to switch between Maintenance Manager / Technician / QC / Raiser to preview each profile — they now see **every panel at once**: the manager board, the QC queue, and their own raised job cards.
+- **Added a `seesAll` oversight flag** to `deriveMaintRole()` covering IT, full admin, Management, the maintenance manager and (new) the **production manager**. This is a **view-only** concern — what a user may *do* inside a job card is still governed by `canManage` / `isTech` / `isQc`, so the allocate → QC → originator → **maintenance manager sign-off** chain is unchanged and no one else can sign off a card.
+- **Production manager can now view all the maintenance screens.** Previously they could open the maintenance module but only ever saw the limited "Raiser" dashboard, and on the Scheduled tab saw **no checklists at all** (the list was filtered to `manager or assigned-to-me`). They now see the full job-card board, the QC queue and every weekly/monthly checklist — read-only, with no allocate/verify/sign-off buttons.
+- Scoped deliberately to the **production_manager role**, not the whole Production department, so operators don't inherit manager-level visibility.
+
+---
+
 ## 2026-08-07 — Gustav (Sieving: re-print a bag label after edits)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
