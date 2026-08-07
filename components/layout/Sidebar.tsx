@@ -13,7 +13,7 @@ import {
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare, KanbanSquare,
   PanelLeftClose, PanelLeftOpen,
   Boxes, PackageOpen,
-  Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
+  Sparkles, Flag, Network, Cpu, Ticket, Flower2,
   CalendarCheck, CalendarRange, Activity, ClipboardCheck,
   FileSpreadsheet, GraduationCap, Printer,
 } from 'lucide-react'
@@ -49,7 +49,7 @@ export const NAV: NavItem[] = [
 
   // ── Operations — cross-role, universal entries ──
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
-  { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'] },
+  { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'], permission: 'can_access_bag_tracking', orPermission: true },
   { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'] },
 
   // ── HR — just two doors in. Staff Directory is people + how they sign in
@@ -123,50 +123,64 @@ export const NAV: NavItem[] = [
   { href: '/users',                     label: 'Users & Roles',              icon: Users,           group: 'Admin', permission: 'can_manage_users' },
 ]
 
-export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boolean; onMobileClose: () => void }) {
-  const [collapsed, setCollapsed] = useState(false)
-  const pathname  = usePathname()
-  const { department, role, displayName, initials, signOut, p, isIT, isFullAdmin } = useAuth()
-
+// Shared visibility rule — same predicate Sidebar renders with, exported so
+// other surfaces (e.g. the command search's page results) show exactly the
+// pages a user could actually reach, no more and no less.
+export function getVisibleNavItems(nav: NavItem[], ctx: {
+  role:        string | null
+  department:  string | null
+  isIT:        boolean
+  isFullAdmin: boolean
+  p:           (key: PermissionKey) => boolean
+}): NavItem[] {
   // Floor operators get a sandboxed, app-like nav — their own dashboard + capture only.
   // No general dashboard, no settings, no other modules.
-  const isFloorOperator = role === 'floor_operator'
-  const FLOOR_NAV: NavItem[] = [
-    { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
-    { href: '/training/my',        label: 'Training',     icon: GraduationCap,   group: 'Production' },
-  ]
+  if (ctx.role === 'floor_operator') {
+    return [
+      { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
+      { href: '/training/my',        label: 'Training',     icon: GraduationCap,   group: 'Production' },
+    ]
+  }
 
-  const isUnassigned = !role && !department
-  const visibleNav = isFloorOperator ? FLOOR_NAV : NAV.filter(item => {
+  const isUnassigned = !ctx.role && !ctx.department
+  return nav.filter(item => {
     // Unassigned users (no role, no department) see only Submit Request + Settings
     if (isUnassigned) return item.href === '/axis/request' || item.href === '/settings'
     if (item.href === '/settings') return true
     if (item.href === '/suggest') return true
-    if (item.itOnly && !isIT && !isFullAdmin) return false
+    if (item.itOnly && !ctx.isIT && !ctx.isFullAdmin) return false
     if (item.href === '/axis/request') return true
-    if (isFullAdmin) return true
+    if (ctx.isFullAdmin) return true
 
     // Core rule: if the item has a permission gate AND the user has that permission
     // explicitly enabled (override), let them through regardless of department.
     // This means permissions are the single source of truth.
     // Department is only used when there is NO explicit permission override.
-    const hasExplicitPermission = item.permission && p(item.permission)
+    const hasExplicitPermission = item.permission && ctx.p(item.permission)
 
     // Developers (senior_developer handled above, co_developer here) see every
     // department's nav — they bypass the department check but still need any
     // permission an item requires (so admin-only items stay hidden).
-    const isDeveloper = role === 'co_developer'
+    const isDeveloper = ctx.role === 'co_developer'
 
     if (!hasExplicitPermission) {
       // No explicit permission — fall back to department check
-      if (item.departments && !isDeveloper && !(department && item.departments.includes(department))) return false
+      if (item.departments && !isDeveloper && !(ctx.department && item.departments.includes(ctx.department))) return false
       // Department matches — still need the permission, unless it's an alternative
       // to department (orPermission), in which case department alone suffices.
-      if (item.permission && !item.orPermission && !p(item.permission)) return false
+      if (item.permission && !item.orPermission && !ctx.p(item.permission)) return false
     }
 
     return true
   })
+}
+
+export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boolean; onMobileClose: () => void }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const pathname  = usePathname()
+  const { department, role, displayName, initials, signOut, p, isIT, isFullAdmin } = useAuth()
+
+  const visibleNav = getVisibleNavItems(NAV, { role, department, isIT, isFullAdmin, p })
 
   const groups: { label: string; items: NavItem[] }[] = []
   for (const item of visibleNav) {
@@ -262,58 +276,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
           )}
         </div>
 
-        {/* ── Search button ────────────────────────────────────── */}
-        <div style={{ padding: collapsed ? '8px 10px' : '8px 10px', borderBottom: '1px solid #EBEBEB' }}>
-          <button
-            onClick={() => window.dispatchEvent(new CustomEvent('open-command-search'))}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: collapsed ? '6px 0' : '6px 10px',
-              justifyContent: collapsed ? 'center' : undefined,
-              borderRadius: 7,
-              border: '1px solid #E5E7EB',
-              background: '#F9FAFB',
-              cursor: 'pointer',
-              color: '#9CA3AF',
-              transition: 'background 120ms, color 120ms, border-color 120ms',
-            }}
-            onMouseEnter={e => {
-              const el = e.currentTarget as HTMLElement
-              el.style.background = '#F3F4F6'
-              el.style.color = '#374151'
-              el.style.borderColor = '#D1D5DB'
-            }}
-            onMouseLeave={e => {
-              const el = e.currentTarget as HTMLElement
-              el.style.background = '#F9FAFB'
-              el.style.color = '#9CA3AF'
-              el.style.borderColor = '#E5E7EB'
-            }}
-          >
-            <Search size={13} style={{ flexShrink: 0 }} />
-            {!collapsed && (
-              <>
-                <span style={{ fontSize: 12, letterSpacing: '-0.01em', flex: 1, textAlign: 'left' }}>
-                  Search lots...
-                </span>
-                <kbd style={{
-                  fontSize: 10,
-                  border: '1px solid #E5E7EB',
-                  borderRadius: 4,
-                  padding: '1px 4px',
-                  fontFamily: 'monospace',
-                  color: '#9CA3AF',
-                  background: '#fff',
-                }}>
-                  {typeof navigator !== 'undefined' && navigator.platform?.startsWith('Mac') ? '⌘K' : 'Ctrl+K'}
-                </kbd>
-              </>
-            )}
-          </button>
-        </div>
+        {/* Search moved to the Topbar, centered — see components/layout/Topbar.tsx */}
 
         {/* ── Navigation ───────────────────────────────────────── */}
         <nav

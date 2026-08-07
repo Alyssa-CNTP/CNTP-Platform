@@ -112,6 +112,8 @@ export type PermissionKey =
   // Ticketing & Workspace
   | 'can_assign_tickets'
   | 'can_access_workspace'
+  // Bag Tracking
+  | 'can_access_bag_tracking'
   // Logistics
   | 'can_access_logistics'
   | 'can_sign_dispatch_doc'            // sign a dispatch document in-app (own on-file signature)
@@ -173,6 +175,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
+  'can_access_bag_tracking',
   'can_access_logistics','can_sign_dispatch_doc','can_request_external_signature','can_verify_dispatch_doc',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
@@ -721,6 +724,14 @@ export const PERMISSION_GROUPS: {
     permissions: [
       { key: 'can_assign_tickets',   label: 'Assign tickets to users (manager role)' },
       { key: 'can_access_workspace', label: 'Access personal workspace board' },
+    ],
+  },
+  {
+    group: 'Bag Tracking',
+    // No single department — Production/Quality get it by department; this
+    // permission grants it to anyone else (e.g. Management, Sales).
+    permissions: [
+      { key: 'can_access_bag_tracking', label: 'Access Bag Tracking (grant to other departments)' },
     ],
   },
   {
