@@ -83,11 +83,10 @@ export default function JobCardsPage() {
   const { jcs } = data
   const { cnt, newCards } = derived
 
-  // IT / full admin get the full view of every profile via a "View as" switcher.
-  const [viewAs, setViewAs] = useState<'manager' | 'tech' | 'qc' | 'raiser'>('manager')
-  const role = baseRole.isAdminView
-    ? { ...baseRole, canManage: viewAs === 'manager', isTech: viewAs === 'tech', isQc: viewAs === 'qc', isRaiser: viewAs === 'raiser' }
-    : baseRole
+  // Oversight profiles (IT / admin / Management / maintenance manager /
+  // production manager) see every panel at once — no "view as" switching.
+  const role = baseRole
+  const seesAll = baseRole.seesAll
 
   const [filt, setFilt] = useState('all')
   const [search, setSearch] = useState('')
@@ -160,22 +159,11 @@ export default function JobCardsPage() {
         </button>
       )}
 
-      {/* IT / full-admin: switch between every profile's view */}
-      {baseRole.isAdminView && (
-        <div className="flex items-center gap-2 mb-4 flex-wrap rounded-lg border border-surface-rule bg-surface-dim p-1.5">
-          <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide px-1.5">IT — view as</span>
-          {([['manager', 'Maintenance Manager'], ['tech', 'Technician'], ['qc', 'QC'], ['raiser', 'Raiser']] as const).map(([v, label]) => (
-            <button key={v} onClick={() => setViewAs(v)}
-              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${viewAs === v ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
-          ))}
-        </div>
-      )}
-
       {/* Shared search + date-range + urgency filter — available in every view */}
       <FilterBar search={search} setSearch={setSearch} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} urg={urg} setUrg={setUrg} />
 
-      {/* ── MANAGER: BOARD ── */}
-      {role.canManage && (
+      {/* ── MANAGER: BOARD ── (also the top section of the full oversight view) */}
+      {(role.canManage || seesAll) && (
         <div>
           <ShiftSummary jcs={jcs} completions={data.completions} cardHref={cardHref} />
 
@@ -226,8 +214,8 @@ export default function JobCardsPage() {
         </div>
       )}
 
-      {/* ── TECHNICIAN VIEW ── */}
-      {!role.canManage && role.isTech && (
+      {/* ── TECHNICIAN VIEW ── (own assigned work; only meaningful for a technician) */}
+      {!role.canManage && !seesAll && role.isTech && (
         <div>
           <div className="card p-3 text-[12px] text-text-muted mb-3">
             Your job cards, <strong className="text-text">{actor}</strong>. Click a row to log work — the timer shows while a job is running. Breakdowns time from the moment they were raised.
@@ -246,8 +234,9 @@ export default function JobCardsPage() {
       )}
 
       {/* ── QC VIEW ── */}
-      {!role.canManage && !role.isTech && role.isQc && (
-        <div>
+      {(seesAll || (!role.canManage && !role.isTech && role.isQc)) && (
+        <div className={seesAll ? 'mt-8' : ''}>
+          {seesAll && <h2 className="text-sm font-semibold text-text mb-2">QC queue</h2>}
           <div className="card p-3 text-[12px] text-text-muted mb-3">
             Job cards awaiting QC post-maintenance checks — click a row to answer YES / NO / N/A; any YES returns the card to the technician with your comment.
           </div>
@@ -259,8 +248,11 @@ export default function JobCardsPage() {
       )}
 
       {/* ── RAISER DASHBOARD (default) ── */}
-      {!role.canManage && !role.isTech && !role.isQc && (
-        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} passes={passes} />
+      {(seesAll || (!role.canManage && !role.isTech && !role.isQc)) && (
+        <div className={seesAll ? 'mt-8' : ''}>
+          {seesAll && <h2 className="text-sm font-semibold text-text mb-2">Job cards you raised</h2>}
+          <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} passes={passes} />
+        </div>
       )}
 
       <BottomSheet open={raiseOpen} onClose={() => setRaiseOpen(false)} center={false}>
