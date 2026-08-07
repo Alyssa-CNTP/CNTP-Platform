@@ -236,6 +236,12 @@ export default function JobCardsPage() {
             cards={jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
             roles={cardRoles}
             empty={`No open job cards assigned to ${actor}.`} />
+
+          {/* History — every technician's completed work, filterable by breakdown
+              vs planned and by machine/area, so recurring problems and prior
+              fixes are easy to find before starting a new job. */}
+          <div className="text-[12px] text-text-muted mt-6 mb-2">Look up what's been done before — filter by machine to spot a recurring problem and see how it was fixed last time.</div>
+          <HistoryPanel jcs={jcs} cardHref={cardHref} />
         </div>
       )}
 
@@ -353,6 +359,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
   const [statusF, setStatusF] = useState<'complete' | 'cancelled' | 'all'>('complete')
   const [typeF, setTypeF] = useState('all')
   const [areaF, setAreaF] = useState('all')
+  const [machF, setMachF] = useState('all')
   const [techF, setTechF] = useState('all')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
@@ -360,6 +367,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
   const closedOf = (j: JobCard) => j.completed_at ?? j.verified_at
   const base = useMemo(() => jcs.filter(j => j.status === 'complete' || j.status === 'cancelled'), [jcs])
   const areas = useMemo(() => Array.from(new Set(base.map(j => j.area).filter(Boolean))).sort(), [base])
+  const machines = useMemo(() => Array.from(new Set(base.map(j => j.machine).filter(Boolean) as string[])).sort(), [base])
   const techs = useMemo(() => Array.from(new Set(base.map(j => j.assigned_to).filter(Boolean) as string[])).sort(), [base])
 
   const ql = q.trim().toLowerCase()
@@ -367,6 +375,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
     if (statusF !== 'all' && j.status !== statusF) return false
     if (typeF !== 'all' && j.workflow !== typeF) return false
     if (areaF !== 'all' && j.area !== areaF) return false
+    if (machF !== 'all' && j.machine !== machF) return false
     if (techF !== 'all' && j.assigned_to !== techF) return false
     const cd = (closedOf(j) ?? '').slice(0, 10)
     if (from && cd && cd < from) return false
@@ -376,8 +385,8 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
     return true
   }).sort((a, b) => (closedOf(b) ?? '').localeCompare(closedOf(a) ?? ''))
 
-  const active = q || from || to || typeF !== 'all' || areaF !== 'all' || techF !== 'all' || statusF !== 'complete'
-  const clear = () => { setQ(''); setFrom(''); setTo(''); setTypeF('all'); setAreaF('all'); setTechF('all'); setStatusF('complete') }
+  const active = q || from || to || typeF !== 'all' || areaF !== 'all' || machF !== 'all' || techF !== 'all' || statusF !== 'complete'
+  const clear = () => { setQ(''); setFrom(''); setTo(''); setTypeF('all'); setAreaF('all'); setMachF('all'); setTechF('all'); setStatusF('complete') }
   const colSel = `${INP} w-full text-[11px] py-1 min-h-0`
 
   return (
@@ -418,7 +427,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
               <th>#</th>
               <th><select className={`${colSel} font-semibold ${typeF !== 'all' ? 'text-brand' : ''}`} value={typeF} onChange={e => setTypeF(e.target.value)}><option value="all">Type ▾</option><option value="breakdown">Breakdown</option><option value="planned">Planned</option></select></th>
               <th><select className={`${colSel} font-semibold ${areaF !== 'all' ? 'text-brand' : ''}`} value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">Area ▾</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></th>
-              <th>Machine</th>
+              <th><select className={`${colSel} font-semibold ${machF !== 'all' ? 'text-brand' : ''}`} value={machF} onChange={e => setMachF(e.target.value)}><option value="all">Machine ▾</option>{machines.map(m => <option key={m} value={m}>{m}</option>)}</select></th>
               <th>Description</th>
               <th><select className={`${colSel} font-semibold ${techF !== 'all' ? 'text-brand' : ''}`} value={techF} onChange={e => setTechF(e.target.value)}><option value="all">Technician ▾</option>{techs.map(t => <option key={t} value={t}>{t}</option>)}</select></th>
               <th>By</th>

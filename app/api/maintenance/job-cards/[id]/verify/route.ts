@@ -68,6 +68,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const { data: files } = await admin.storage.from(BUCKET).list(`card/${cardId}`, { limit: 1000 })
         if (files?.length) await admin.storage.from(BUCKET).remove(files.map(f => `card/${cardId}/${f.name}`))
       } catch (e: any) { console.warn('[verify] photo cleanup skipped:', e?.message) }
+      // Technicians don't see the verify/sign-off screens — let them know the
+      // job they worked on is done.
+      if (existing.assigned_user_id) {
+        const [tech] = await resolveRecipients([existing.assigned_user_id])
+        if (tech) await notify({ recipients: [tech], kind: 'complete', cardId, url: `/maintenance/job-cards/${cardId}`,
+          title: `Job card ${existing.card_no} completed`,
+          body: `${existing.area}: ${existing.description}. Signed off by the maintenance manager — nice work.`,
+          channels: ['inApp', 'email'] })
+      }
     } else {
       const reopen = (existing.reopen_count ?? 0) + 1
       await db.schema('maintenance' as any).from('job_cards')
