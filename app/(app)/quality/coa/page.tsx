@@ -188,7 +188,7 @@ const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none f
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CoaGeneratorPage() {
-  const { p, session } = useAuth()
+  const { p, session, isFullAdmin } = useAuth()
   const canUse = p('can_save_lab_results') || p('can_approve_runs')
   const db = getDb()
 
@@ -567,7 +567,7 @@ export default function CoaGeneratorPage() {
                         <div className="flex items-center gap-2">
                           <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
                             className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
-                          {(sigInfo.me.isLab || sigInfo.me.isQa) && (
+                          {(sigInfo.me.isLab || sigInfo.me.isQa || isFullAdmin) && (
                             <button onClick={() => setDeleteTarget(h)} title="Delete this generated COA"
                               className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#b91c1c' }}>🗑 Delete</button>
                           )}

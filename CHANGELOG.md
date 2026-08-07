@@ -3,6 +3,11 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button visibility to full admins (`isFullAdmin` — the `senior_developer` role, which already bypasses all other permission checks in this app), so IT admins (e.g. Alyssa, Jan) see it too, in addition to the Lab Manager and Quality Manager. Same confirmation popup and delete behaviour, no schema change.
 ## 2026-08-11 — Alyssa (Pasteuriser: register each finished bag in bag_tags so it's scannable)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
