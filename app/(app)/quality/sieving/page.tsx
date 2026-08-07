@@ -803,7 +803,8 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function SievingPage() {
-  const { p } = useAuth(); const canWrite = p('can_add_sieving_runs'); const isAdmin = p('can_delete_sieving_runs')
+  const { p, fullName, displayName } = useAuth(); const canWrite = p('can_add_sieving_runs'); const isAdmin = p('can_delete_sieving_runs')
+  const myName = fullName || displayName || ''
   const db = getDb()
   const qcNames = useQcNames()
 
@@ -833,6 +834,12 @@ export default function SievingPage() {
   const [paLookup,       setPaLookup]       = useState<Record<string,string>>({})
   const [rLookup,        setRLookup]        = useState<Record<string,string>>({})
   const [leafShadeLookup,setLeafShadeLookup]= useState<Record<string,number>>({})
+  // Final QC is now driven by the bags production has actually made: every
+  // Fine Leaf / Coarse Leaf bagging becomes a pending QC (qms.v_pending_bag_qc).
+  const [pendingBags,   setPendingBags]   = useState<any[]>([])
+  const [pendingLoading,setPendingLoading]= useState(false)
+  const [selectedBagId, setSelectedBagId] = useState<string>('')
+  const [printBag,      setPrintBag]      = useState<any>(null)
   const [tableCollapsed, setTableCollapsed] = useState(false)
   const [showOutlierChart, setShowOutlierChart] = useState(true)
   const [chartHighlightId, setChartHighlightId] = useState<any>(null)
@@ -891,15 +898,31 @@ export default function SievingPage() {
       })
   }, [db])
 
+  // Pending Final QC bags — one per Fine Leaf / Coarse Leaf bagging that has
+  // not been sampled yet. Indent Sticks and Rooibos Blocks are excluded by the
+  // view (they get bags and labels but never a QC stamp).
+  const loadPendingBags = useCallback(async () => {
+    setPendingLoading(true)
+    const { data } = await db.schema('qms').from('v_pending_bag_qc')
+      .select('*').order('bagged_at', { ascending: false }).limit(300)
+    setPendingBags(data ?? [])
+    setPendingLoading(false)
+  }, [db])
+  useEffect(() => { loadPendingBags() }, [loadPendingBags])
+
+  // The QC's time is always the moment of capture — never typed or edited.
+  const nowHHMM = () => {
+    const n = new Date()
+    return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`
+  }
+
   const blankForm = () => {
     const now = new Date()
-    const hh = String(now.getHours()).padStart(2,'0')
-    const mm = String(now.getMinutes()).padStart(2,'0')
     return {
       date: now.toISOString().slice(0,10),
       lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
-      runType:'in-process', qcName:'', time:`${hh}:${mm}`, needleCount:'', leafShade:'',
-      bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'',
+      runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
+      bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
     }
   }
   const [form, setForm]           = useState<any>(blankForm())
@@ -1097,11 +1120,11 @@ export default function SievingPage() {
     if (!f.grade)             errs.grade='Grade is required'
     if (!f.variant)           errs.variant='Variant is required'
     if (!f.runType)           errs.runType='Run type is required'
-    if (f.runType==='in-process') {
-      if (!f.serialNumber.trim()) {
-        errs.serialNumber='Serial number is required'
-      }
-      if (!f.time.trim()) errs.time='Time is required'
+    // In-Process no longer carries a serial number (bags are only serialised at
+    // bagging). The time is stamped automatically at capture, so it is never
+    // missing and never user-entered.
+    if (f.runType==='final' && !f.baggingId && !f.serialNumber.trim()) {
+      errs._bag='Pick the bag being sampled from the pending list.'
     }
     if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
@@ -1150,7 +1173,9 @@ export default function SievingPage() {
       variant:       form.variant||null,
       run_type:      form.runType||null,
       qc_name:       form.qcName||null,
-      time_of_run:   form.time||null,
+      // Always the capture moment — the QC cannot type or edit this.
+      time_of_run:   nowHHMM(),
+      bagging_id:    form.baggingId || null,
       needle_count:  form.needleCount||null,
       leaf_shade:    form.leafShade||null,
       bulk_density:  form.bulkDensity||null,
@@ -1191,7 +1216,11 @@ export default function SievingPage() {
       } catch { /* non-fatal */ }
     }
 
-    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle')
+    // A Final QC clears that bag from the pending queue; an out-of-spec
+    // in-process run changes which bags are flagged, so refresh either way.
+    loadPendingBags()
+    if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag })
+    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle'); setSelectedBagId('')
     setLastSaved(new Date()); setSaving(false)
   }
 
@@ -1245,6 +1274,42 @@ export default function SievingPage() {
       setTagLookupState('found')
     } catch { setTagLookupState('idle') }
   }
+
+  // Picking a pending bag pre-fills the Final QC form from production data.
+  // Everything filled here stays editable so the QC can verify/correct it —
+  // except the time, which is always the capture moment.
+  function selectPendingBag(bagId: string) {
+    setSelectedBagId(bagId)
+    if (!bagId) { setLotMsg(''); return }
+    const bag = pendingBags.find((b:any) => String(b.bagging_id) === String(bagId))
+    if (!bag) return
+    const lotKey  = (bag.lot_number || '').trim().toUpperCase().replace(/\s*-\s*/g,'-')
+    const shade   = leafShadeLookup[lotKey]
+    const pa      = paLookup[lotKey]
+    setForm((f:any) => ({
+      ...f,
+      runType:      'final',
+      baggingId:    bag.bagging_id,
+      serialNumber: bag.bag_serial_no || '',
+      lotNumber:    bag.lot_number || '',
+      variant:      bag.variant || f.variant,
+      date:         bag.bag_date || f.date,
+      qcName:       f.qcName || myName,
+      time:         nowHHMM(),
+      ...(pa    ? { paLevel: pa } : {}),
+      ...(shade != null ? { leafShade: String(shade) } : {}),
+    }))
+    const bits = [
+      `📦 Bag ${bag.bag_serial_no || '—'} · ${bag.product} · lot ${bag.lot_number || '—'}`,
+      pa ? `PA: ${pa}` : '',
+      shade != null ? `Shade: ${shade} (from raw material)` : '',
+      bag.inprocess_out_of_spec ? `⚠ In-process sieve OUT OF SPEC at ${String(bag.inprocess_at||'').slice(11,16)}` : '',
+    ].filter(Boolean)
+    setLotMsg(bits.join('  ·  '))
+    setTagLookupState('found')
+  }
+
+  const selectedBag = pendingBags.find((b:any) => String(b.bagging_id) === String(selectedBagId)) || null
 
   const inputSt: React.CSSProperties = { padding:'5px 8px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, width:'100%', boxSizing:'border-box' }
   const errSt: React.CSSProperties   = { fontSize:10, color:'#dc2626', marginTop:2 }
@@ -1357,6 +1422,56 @@ export default function SievingPage() {
       </div>
 
       {/* New Run Form */}
+      {/* Bag label — printed after a Final QC, carrying the two values the QC
+          measured (bulk density + leaf shade) alongside the bag's identity. */}
+      {printBag && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={()=>setPrintBag(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:12,width:'100%',maxWidth:420,overflow:'hidden'}}>
+            <div style={{padding:'12px 16px',background:'#166534',color:'#fff',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontWeight:700,fontSize:14}}>✓ Final QC saved — bag label</span>
+              <button onClick={()=>setPrintBag(null)} style={{background:'rgba(255,255,255,.2)',border:'none',borderRadius:6,color:'#fff',fontSize:18,cursor:'pointer',padding:'0 8px'}}>×</button>
+            </div>
+            <div id="bag-qc-label" style={{padding:18,fontFamily:'monospace',color:'#111'}}>
+              <div style={{textAlign:'center',fontWeight:800,fontSize:15,borderBottom:'2px solid #111',paddingBottom:6,marginBottom:10}}>
+                CAPE NATURAL TEA PRODUCTS
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 10px',fontSize:13}}>
+                <b>SERIAL</b><span>{printBag.serialNumber||'—'}</span>
+                <b>PRODUCT</b><span>{printBag.product||activeProduct}</span>
+                <b>LOT</b><span>{printBag.lotNumber||'—'}</span>
+                <b>GRADE</b><span>{printBag.grade||'—'}</span>
+                <b>VARIANT</b><span>{printBag.variant||'—'}</span>
+                <b>DATE</b><span>{printBag.date||''} {printBag.time||''}</span>
+                <b>QC</b><span>{printBag.qcName||'—'}</span>
+              </div>
+              <div style={{marginTop:12,padding:'10px 12px',border:'2px solid #111',borderRadius:6,display:'flex',justifyContent:'space-around',textAlign:'center'}}>
+                <div>
+                  <div style={{fontSize:10,letterSpacing:'.08em'}}>BULK DENSITY</div>
+                  <div style={{fontSize:22,fontWeight:800}}>{printBag.bulkDensity||'—'}</div>
+                  <div style={{fontSize:9}}>cc/100g</div>
+                </div>
+                <div style={{borderLeft:'1px solid #111'}} />
+                <div>
+                  <div style={{fontSize:10,letterSpacing:'.08em'}}>LEAF SHADE</div>
+                  <div style={{fontSize:22,fontWeight:800}}>{printBag.leafShade||'—'}</div>
+                  <div style={{fontSize:9}}>1–11</div>
+                </div>
+              </div>
+              {printBag.bag?.inprocess_out_of_spec && (
+                <div style={{marginTop:10,padding:'6px 10px',border:'2px solid #991b1b',color:'#991b1b',borderRadius:6,fontSize:11,fontWeight:700,textAlign:'center'}}>
+                  ⚠ IN-PROCESS SIEVE OUT OF SPEC — REVIEW BEFORE RELEASE
+                </div>
+              )}
+            </div>
+            <div style={{padding:'10px 16px',borderTop:'1px solid #eee',display:'flex',justifyContent:'flex-end',gap:8}}>
+              <button onClick={()=>setPrintBag(null)} style={{padding:'8px 16px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Close</button>
+              <button onClick={()=>window.print()} style={{padding:'8px 20px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>🖨 Print label</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showForm && canWrite && (
         <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
@@ -1369,17 +1484,69 @@ export default function SievingPage() {
           <div style={{marginBottom:16}}>
             <label style={{fontSize:10,fontWeight:700,color:errors.runType?'#dc2626':'#6b7280',display:'block',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}}>Run Type *</label>
             <div style={{display:'flex',gap:8}}>
-              {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC','#166534']] as const).map(([val,label,col])=>(
-                <button key={val} type="button" onClick={()=>setF('runType',val)}
+              {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC (bag)','#166534']] as const).map(([val,label,col])=>(
+                <button key={val} type="button" onClick={()=>{
+                  setF('runType',val)
+                  if (val==='in-process') { setSelectedBagId(''); setForm((f:any)=>({...f,baggingId:'',serialNumber:''})); setLotMsg(''); setTagLookupState('idle') }
+                }}
                   style={{flex:1,padding:'13px 16px',borderRadius:8,border:`2px solid ${form.runType===val?col:'#d1d5db'}`,
                     background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
                     fontSize:14,fontWeight:700,cursor:'pointer',transition:'all 0.15s',
                     boxShadow:form.runType===val?`0 2px 8px ${col}44`:'none'}}>
-                  {label}
+                  {label}{val==='final'&&pendingBags.length>0?` · ${pendingBags.length}`:''}
                 </button>
               ))}
             </div>
           </div>
+
+          {/* Final QC — pick the bag production has made. Each bagging of Fine
+              Leaf / Coarse Leaf is a pending QC; the bag carries its own serial,
+              lot, grade and variant so the QC verifies rather than re-types. */}
+          {form.runType==='final' && (
+            <div style={{marginBottom:16,padding:'12px 14px',background:'#f0fdf4',border:'2px solid #86efac',borderRadius:8}}>
+              <label style={{fontSize:10,fontWeight:700,color:errors._bag?'#dc2626':'#166534',display:'block',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}}>
+                Bag awaiting QC * {pendingLoading?'· loading…':`· ${pendingBags.length} pending`}
+              </label>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <select value={selectedBagId} onChange={e=>selectPendingBag(e.target.value)}
+                  style={{...inputSt,padding:'10px 10px',fontSize:13,background:'#fff',borderColor:errors._bag?'#fca5a5':'#86efac',flex:1}}>
+                  <option value="">— select the bag being sampled —</option>
+                  {pendingBags.map((b:any)=>(
+                    <option key={b.bagging_id} value={b.bagging_id}>
+                      {b.bag_serial_no || '(no serial)'} · {b.product} · lot {b.lot_number || '—'}
+                      {b.bagged_at ? ` · ${String(b.bagged_at).slice(0,10)} ${String(b.bagged_at).slice(11,16)}` : ''}
+                      {b.inprocess_out_of_spec ? '  ⚠ OUT OF SPEC' : ''}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={loadPendingBags}
+                  style={{padding:'10px 14px',borderRadius:7,border:'1px solid #86efac',background:'#fff',fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>↻</button>
+              </div>
+              {pendingBags.length===0&&!pendingLoading&&(
+                <div style={{fontSize:11,color:'#6b7280',marginTop:6}}>No bags awaiting QC — a pending entry appears here each time production bags Fine Leaf or Coarse Leaf.</div>
+              )}
+              {errors._bag&&<div style={{fontSize:10,color:'#dc2626',marginTop:4}}>⚠ {errors._bag}</div>}
+
+              {/* The in-process sieve that governed this bag */}
+              {selectedBag&&selectedBag.inprocess_run_id&&(
+                <div style={{marginTop:10,padding:'8px 10px',borderRadius:6,
+                  background:selectedBag.inprocess_out_of_spec?'#fef2f2':'#f8fafc',
+                  border:`1px solid ${selectedBag.inprocess_out_of_spec?'#fca5a5':'#e5e7eb'}`}}>
+                  <div style={{fontSize:10,fontWeight:700,color:selectedBag.inprocess_out_of_spec?'#991b1b':'#374151',marginBottom:2}}>
+                    {selectedBag.inprocess_out_of_spec?'⚠ In-process sieve was OUT OF SPEC for this bag':'✓ In-process sieve in spec'}
+                    {selectedBag.inprocess_at?` — sampled ${String(selectedBag.inprocess_at).slice(11,16)}`:''}
+                  </div>
+                  {selectedBag.inprocess_out_of_spec&&Array.isArray(selectedBag.inprocess_violations)&&(
+                    <ul style={{margin:'2px 0 0 16px',padding:0}}>
+                      {selectedBag.inprocess_violations.map((v:string,i:number)=>(
+                        <li key={i} style={{fontSize:10,color:'#991b1b'}}>{v}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {errors._dupTime&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupTime}</div>}
           {errors._mesh&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10}}>⚠ {errors._mesh}</div>}
@@ -1412,8 +1579,11 @@ export default function SievingPage() {
               <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
-            <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. {form.runType==='in-process'?'*':''}</label>
+            {/* Serial numbers only exist once a bag is made, so In-Process runs
+                no longer carry one. On Final QC it is pre-filled from the bag
+                and stays editable so the QC can verify it. */}
+            {form.runType==='final'&&<div>
+              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. <span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span></label>
               <input value={form.serialNumber}
                 onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
                 onBlur={e=>lookupBagTag(e.target.value)}
@@ -1424,16 +1594,21 @@ export default function SievingPage() {
               {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
               {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
-            </div>
+            </div>}
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>QC Controller *</label>
+              <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                QC Controller * {myName&&form.qcName===myName&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ logged in</span>}
+              </label>
               <QCNameField value={form.qcName} onChange={v=>setF('qcName',v)} names={qcNames} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="qcName"/>
             </div>
+            {/* Time is stamped when the QC saves — deliberately not editable. */}
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.time?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Time {form.runType==='in-process'?'*':''}</label>
-              <input type="text" placeholder="HH:MM" value={form.time} onChange={e=>setF('time',e.target.value)} style={{...inputSt,borderColor:errors.time?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
-              <ErrMsg field="time"/>
+              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                Time <span style={{fontSize:9,color:'#6b7280',fontWeight:400}}>🔒 stamped at capture</span>
+              </label>
+              <input type="text" value={form.time} readOnly title="The time is recorded automatically when you save this run"
+                style={{...inputSt,padding:'9px 10px',fontSize:13,background:'#f3f4f6',color:'#6b7280',cursor:'not-allowed'}}/>
             </div>
           </div>
 
