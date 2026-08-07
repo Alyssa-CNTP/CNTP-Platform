@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, ScanLine, ShoppingCart, Pencil, XCircle } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
+import { useAuth } from '@/lib/auth/context'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
 import { VoiceCapture } from './VoiceCapture'
@@ -33,6 +34,7 @@ export interface JobCardRoles {
 
 export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: JobCardRoles; compact?: boolean }) {
   const { ui, actions, derived, data, actor } = useMaintenanceContext()
+  const { userId } = useAuth()
   const { drafts, setDrafts, alloc, setAlloc, spForm, setSpForm } = ui
   const { cardLogs, cardSpares } = derived
   const { qcFor } = actions
@@ -85,7 +87,13 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const canManage = roles.canManage
   const isTech = roles.isTech || canManage
   const isQc = roles.isQc || canManage
-  const isRaiser = roles.isRaiser || canManage
+  // The "raiser" steps (clarify / satisfactory verification) are for whoever
+  // actually raised THIS card — not a blanket permission. Technicians never see
+  // them even if they happen to be the raiser (that's the manager's / QC's /
+  // originator's checkpoint, not the repairer's); they get a completion
+  // notification instead. Manager can always act as a fallback.
+  const isCardRaiser = !!userId && !!j.raised_by_user_id && j.raised_by_user_id === userId
+  const isRaiser = canManage || (isCardRaiser && !roles.isTech)
 
   // What does this card need next, for this user?
   const act: { label: string; primary: boolean } =
@@ -364,6 +372,10 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               <button className={`${PRIMARY} mt-2.5`} onClick={() => actions.resubmit(j)}>Resubmit job card</button>
             </div>
           )}
+          {/* clarify stage — non-originator view */}
+          {j.status === 'clarify' && !isRaiser && (
+            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting clarification from the originator ({j.raised_by}).</div></div>
+          )}
 
           {/* assigned → technician ACCEPTS, then STARTS (two distinct steps). The
               work timer only begins on "Start job". */}
@@ -504,6 +516,28 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                 </div>
               )}
               <button className={`${PRIMARY} mt-2.5`} onClick={() => actions.qcSubmit(j)}>Submit QC check</button>
+            </div>
+          )}
+
+          {/* Read-only QC sign-off for the technician on their OWN card — the
+              pass/fail breakdown once QC has actually run, so they can see what
+              was checked (and why it bounced back, if it did) without an
+              editable screen. Persists across verify / mgr_verify / complete. */}
+          {roles.isTech && !canManage && !!j.qc_name && (j.assigned_user_id === userId || j.assigned_to === actor) && (
+            <div className={PANEL}>
+              <div className="text-[12px] font-semibold text-text mb-1">QC sign-off</div>
+              <div className="text-[12px] text-text-muted mb-2">
+                <span className="text-text font-medium">QC Officer:</span> {j.qc_name}{j.qc_done_at ? ` · ${fmtT(j.qc_done_at)}` : ''}
+              </div>
+              {QC_CHECKS.map((q, i) => {
+                const v = normQc((j.qc_checks ?? [])[i] ?? 'na')
+                return (
+                  <div key={i} className="flex items-center gap-1.5 mb-1">
+                    <span className={`w-11 text-center py-1 rounded-md text-[10px] font-semibold ${v === 'yes' ? 'bg-err/10 text-err border border-err/30' : v === 'no' ? 'bg-ok/10 text-ok border border-ok/30' : 'bg-surface-dim text-text border border-surface-rule'}`}>{v.toUpperCase()}</span>
+                    <span className="text-[12px] text-text-muted">{q}</span>
+                  </div>
+                )
+              })}
             </div>
           )}
 
