@@ -95,7 +95,9 @@ const ROUTE_GUARDS: Array<{
 
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },
-  { prefix: '/tags',       departments: ['Production'] },
+  // Was Production-only, missing Quality entirely (a bug — the Sidebar link
+  // showed for Quality but the route redirected them straight back out).
+  { prefix: '/tags',       departments: ['Production','Quality'], permission: 'can_access_bag_tracking', orPermission: true },
 
   // HR — Staff Directory views OTHER people's records, so it requires
   // can_access_hr. Training (/training core) stays universal — see below.

@@ -146,6 +146,15 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Cross-department — Production/Quality get it by department; this
+    // permission grants it to anyone outside those departments.
+    module: 'Bag Tracking',
+    resources: [
+      { key: 'bag_tracking.access', label: 'Bag Tracking module', read: 'can_access_bag_tracking',
+        note: 'Grant Read to give a non-Production/Quality user the page.' },
+    ],
+  },
+  {
     // Cross-department — Production/Quality/Management get it by department;
     // this permission grants it to anyone outside those departments.
     module: 'Logistics',
