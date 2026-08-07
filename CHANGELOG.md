@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Gustav (Sieving: re-print a bag label after edits)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Added a **🖨 Re-print** button next to ✏️/🗑 on every Final QC row in the sieving history table, so a label can be printed again any time — including after correcting a value via the inline editor.
+- Looks the bag up fresh from `qms.v_bag_qc_status` (by `bagging_id`, falling back to serial number for older rows saved before the bag link existed) rather than reusing the pending-QC list, since a sampled bag has already dropped off that list — so the reprinted label's in-process out-of-spec banner stays accurate.
+- `mapDbRow()` now also exposes `bagging_id` (as `baggingId`) so the button can find the right bag; this is additive and doesn't change any existing field.
+
 ## 2026-08-07 — Gustav (Link production bagging to Quality sieving Final QC)
 
 **Files changed:** `supabase/migrations/20260807_001_sieving_bag_qc_link.sql` (new, applied to staging), `app/(app)/quality/sieving/page.tsx`
