@@ -3,6 +3,126 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/dashboard/CommandCentre.tsx`
+
+- Commented out the four **Logistics** nav entries (Overview, Dispatch, Receiving, Warehouse) in the sidebar — the module isn't in active use yet.
+- Blocked direct URL access to `/logistics/*` too: added a `disabled` flag to `ROUTE_GUARDS` so anyone but the full admin gets redirected to `/home` if they try to reach it directly, instead of relying on the nav link alone.
+- Removed the **Open GRNs** KPI tile from the Command Centre dashboard (and its `logistics.grns` count fetch), since it linked into the now-hidden module.
+- Nothing was deleted — the Logistics pages, `lib/logistics/*`, and the `can_access_logistics` permission are untouched. To bring it back: drop `disabled: true` from the `/logistics` route guard and uncomment the Sidebar entries.
+- Promoted to production from staging PR #555.
+
+## 2026-08-06 — Gustav (COA screen: removed the example template)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Removed the read-only **"📄 Example template — how a completed COA looks (sample data)"** block from the bottom of the COA Generator screen, along with its now-unused `SampleCoa` and `SampleTable` components. The screen now shows only the live batch lookup / generated COA.
+
+## 2026-08-06 — Gustav (COA history: Quality Manager can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button (added earlier today) to the **Quality Manager** as well as the Lab Manager — now shown when `sigInfo.me.isLab || sigInfo.me.isQa`. Same confirmation popup and delete behaviour.
+
+## 2026-08-06 — Gustav (COA history: lab manager can delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added a **🗑 Delete** button to each row of the COA Generator's history ("Generated COAs"), shown **only to the Lab Manager** (per the Staff Directory, `sigInfo.me.isLab`) alongside the existing ✏️ Edit button.
+- Clicking Delete opens a **confirmation popup** naming the batch/customer and generation timestamp; only on confirm is the `qms.coa_generated` row deleted and the history refreshed. Cancel or clicking outside dismisses it. No schema change.
+
+## 2026-08-06 — Gustav (Rosehips >40 mesh + volumetric ml/5g bulk density)
+
+**Files changed:** `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`
+
+Rosehips (e.g. IPSSOU006 Tea Bag Cut) uses an extra **>40 mesh** fraction and reports bulk density **volumetrically** (`ml/5g`, e.g. "<10 ml/5g") rather than `cc/100g`. Both are now handled **for Rosehips only** — every other family is unchanged.
+
+- **Customer Specifications tab**: added family-aware sieve columns (`sieveColsFor`) so a Rosehips spec row shows an editable **>40** column (inserted between >20 and >60), and a family-aware BD unit label (`bdUnit`) that reads **ml/5g** for Rosehips vs **cc/100g** otherwise. Applies to the grouped table headers/rows and the "+ Add Specification" modal. `gt40_min`/`gt40_max` (which already exist on `qms.customer_specs`) added to the TS type, the add-form, and the numeric-cast save list.
+- **Pasteuriser tab**: added `pastSieveCols(family)` and `pastBdUnit(family)` helpers. For Rosehips runs, the New Run modal's batch-spec table and every sample-capture/display table now include a fillable **>40** mesh row/column, the spec resolver (`getPastSpec`) and OOS/fail detection cover `gt40`, sieve-order validation places >40 between >20 and >60, and Bulk Density / Untapped BD / Customer BD fields are labelled **ml/5g**. Sieve and sample data live in `qms.quality_records.data_json` (JSONB), so `gt40` persists with no schema change.
+
+## 2026-07-31 — Gustav (Granule flowability test + Quality sidebar re-ordered)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `components/layout/Sidebar.tsx`, `supabase/migrations/20260731_001_granule_flow_time.sql` (new, applied to staging)
+
+- Added the **Flowability Test** block to the Granule Line capture forms (add-sample and edit-sample), mirroring the Pasteuriser line: fixed **400 g** sample, **Bulk Density** carried over from the sample's BD, a **Time (s)** field the QC fills in, and an auto-calculated **Mass Flow Rate (g/s) = 400 ÷ time**. Stored as a new `flow_time` column on `qms.granule_samples`.
+- **Re-ordered the Quality sidebar** top-to-bottom to follow the flow: Raw Material → Sieving → Pasteuriser → Granule Line → Final Product Lab Results → COA Generator → Customer Specs → Lab Manager → Maintenance QC.
+
+## 2026-08-05 — Alyssa (Batch quality: Granule, Pasteuriser and Lab Results joined)
+
+**Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` (new), `app/api/production/yield-analytics/route.ts`, `app/api/production/batch/[key]/route.ts`, `components/production/ProductionDashboard.tsx`
+
+**⚠ Requires running `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` in the Supabase SQL Editor (staging first, then production) before the new columns return data.**
+
+Closes the last open item from the production dashboard redesign plan: `production.v_batch_quality`/`v_batch_360` (added 2026-07-21) deliberately left out Granule, Pasteuriser and Lab Results quality, pending "confirmation against the live qms schema, rather than guessing." That confirmation is now done — by reading the actual, working queries inside the quality capture pages themselves, not guessed:
+
+- **Granule Line**: `qms.granule_runs(batch_number)` joined to `qms.granule_samples(run_id, moisture, bulk_density)`.
+- **Pasteuriser**: `qms.quality_records(batch_number, workflow='pasteuriser_run')` — moisture and bulk density live inside `data_json->'samples'`, unnested per run rather than being flat columns.
+- **Lab Results (final-product COA)**: `qms.lab_results(batch_no, overall_status, date_issued)` — pass/fail per batch.
+- **Deliberately NOT joined**: raw-material `quality_records` (`workcenter='rawMaterial'`) — that's pesticide/EU-MRL residue compliance for incoming raw leaf, not moisture/bulk-density/waste, and its batch numbering predates any processed batch_key. A separate decision if that data is ever wanted on the batch view.
+- No `qms.*` table or quality-module page was touched — this only adds read-only `SELECT`s from the existing view layer, same pattern as the sieving/`sd_runs` join already there.
+- Wired into `yield-analytics` and the batch-360 detail route, and surfaced on the dashboard's Batches table: a coalesced Bulk density column (a batch only ever has one of sieving/granule/pasteuriser quality, so coalescing never mixes two lines' numbers), a new Moisture % column, and the QC pass/fail flag now considers all four quality sources instead of only sieving's.
+
+## 2026-08-05 — Alyssa (Production dashboard redesign, Phases 1–4)
+
+**Files changed:** `components/production/ProductionTabs.tsx`, `components/production/ProductionDashboard.tsx`, `components/layout/WarehouseMap.tsx` (deleted), `app/(app)/production/energy/page.tsx` (new), `app/(app)/production/shift-reports/page.tsx` (new), `app/api/production/shift-report/route.ts`, `lib/production/shift-report-builder.ts` (new), `app/api/production/shift-report/cron/route.ts` (new), `app/api/production/shift-report/recent/route.ts` (new), `.github/workflows/shift-report-generate.yml` (new), `app/api/production/manager-kpis/route.ts`
+
+Planned redesign of the production dashboard, shipped as 4 small independently-reviewable PRs rather than one large one (#536–#539).
+
+- **Phase 1 — dashboard shell**: added Energy and Shift Reports tabs to the Production hub's tab bar. Removed the Factory Floor Plan and Energy widgets that were duplicated inside the main dashboard body (Floor Plan already had, and still has, its own tab; Energy moved to its own new tab). Deleted `components/layout/WarehouseMap.tsx`, a confirmed byte-identical stale duplicate of the one the home page actually uses. Labeling pass: added the active date window to section subtitles that were missing it, and added a "Line" column (section codes) to the Batches table so it's clear which line each batch came from.
+- **Phase 2 — per-line throughput**: added a kg/hr column to the existing "Section status · today" table (which already showed kg in/out — debagging in / bagging out for Sieving Tower & Pasteuriser — per earlier floor feedback about unclear labels), reusing the same run-time/crew-time throughput basis already computed for Production Orders' Analytics view rather than building a second, competing number.
+- **Phase 3 — auto-generated shift reports**: extracted the shift-report assembly and save/audit logic out of the route handler into `lib/production/shift-report-builder.ts` so it can be called from outside an HTTP request. Added a cron endpoint (dual-auth: `Bearer CRON_SECRET` or a signed-in user, mirroring the existing roster cron) and a GitHub Action that fires at 16:00 and 01:00 SAST (shift end) to auto-generate a **draft** report — submit/approve and their e-signatures remain entirely manual, unchanged. Added a real "Recent reports" list to the Shift Reports tab, linking into the existing, unmodified `/supervisor/report` page.
+- **Phase 4 — quality data surfaced**: leaf shade and PA level were already columns on `qms.sd_runs` (and partly already fetched) but not shown anywhere on the dashboard — added them to the PSD/machine-settings correlation table and the Batches table. Granule moisture/bulk-density, lab-results/COA quality, and pasteuriser/raw-material quality remain a deliberate follow-up, gated on confirming the live `qms` schema's join columns against `production.batches` before writing a migration.
+
+Also shipped earlier the same day (#534/#535): fixed the sieving mesh-config label mismatch ("12H/18H/40H" → "12#/18#/40#"), realigned Organic's sieving mesh config to match Conventional's (12#→18#→40#, was 10#→18#→40#), fixed a bag-scan bug where a stray space or lowercase entry silently broke the `bag_tags` lookup, and swapped the Production Dashboard nav icon.
+
+## 2026-08-05 — Alyssa (Sieving mesh-config label, scan sanitization, production dashboard icon)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `components/production/AcumaticaSummary.tsx`, `components/production/ProductionDashboard.tsx`, `components/production/SievingTowerForm.tsx`, `components/production/live/ScanInput.tsx`, `lib/production/capture-config.ts`, `app/api/production/live/bag/[serial]/route.ts`
+
+Reported while scoping a production dashboard redesign: the sieving tower's mesh configuration wasn't reading correctly on the dashboard, and bag scans on the floor weren't auto-populating (looked like a Supabase storage issue but wasn't).
+
+- **Mesh label fix**: the sieve-config checkboxes/summary were labelled `12H/18H/40H` instead of the `#` mesh-size notation used everywhere else (`12#/18#/40#`). Same underlying `sieve12/18/40` fields, just relabelled.
+- **Organic sieving config realigned to Conventional**: per floor request, Organic's mesh stack was `10#→18#→40#` (set up years ago to boost leaf output), which shifted more material into the coarse-leaf fraction and caused visual inconsistency between Organic and Conventional grades. Added `SIEVING_MESH_CONFIG`/`SIEVING_MESH_CONFIG_PREVIOUS` in `capture-config.ts` recording both are now `12#→18#→40#`. Quality's QC pass/fail spec matrix (`qms.sd_runs` acceptance ranges in `app/(app)/quality/sieving/page.tsx`) was explicitly left untouched — that's a separate, documented QA decision (IPS-SIEV spec ranges), not covered by this change.
+- **Production dashboard**: added a "Sieving Tower — mesh configuration" comparison card (Conventional vs Organic, current + previous stack) under Machine KPIs & throughput.
+- **Bag scan fix**: `ScanInput` only did `.trim()` before calling `onScan`, so a stray space (scanner double-fire) or a lowercase manual entry broke the exact-match `bag_tags.serial_number` lookup silently — looked like "not found"/"traceability is lacking" on the floor. Wired in the existing (but previously unused-here) `sanitizeSerial()` helper in both `ScanInput` and the `/api/production/live/bag/[serial]` lookup route.
+- **Production Dashboard nav icon**: swapped `Factory` → `ChartNoAxesCombined` per request.
+
+## 2026-08-05 — Alyssa (Training lessons: switched embedded video from YouTube to Scribe)
+
+**Files changed:** `supabase/migrations/20260722_004_lesson_embed_url.sql` (new), `app/(app)/training/course/[slug]/page.tsx`, `app/(app)/training/manage/[id]/page.tsx`, `app/api/training/courses/[id]/route.ts`
+
+The org is now recording training walkthroughs with Scribe (scribehow.com) instead of YouTube. Scribe's embed is a full iframe URL (not a bare video ID like YouTube's), so the lesson model generalizes to hold any embeddable URL rather than being YouTube-specific.
+
+- **New `hr.training_lessons.embed_url` column** (nullable text) holds the full embed URL for any provider. `youtube_id` is kept for backward compatibility — the player and editor both prefer `embed_url` when present and fall back to building a YouTube embed from `youtube_id` for any pre-existing rows.
+- **Course editor** (`/training/manage/[id]`): the "YouTube video ID" field is now "Embed URL (Scribe, YouTube, etc.)" — takes any provider's full embed URL. Existing YouTube lessons load pre-filled with the equivalent full URL so re-saving carries them over to the new column automatically.
+- **Course player** (`/training/course/[slug]`): renders Scribe embeds with Scribe's own recommended sizing (16/12 aspect ratio, 480px min-height — its step-by-step player needs more vertical room than a plain video) and a minimal `allow="fullscreen"`, versus the existing 16:9 + YouTube's fuller `allow` list for legacy YouTube lessons.
+- **Migration also repoints the already-seeded Sieving Tower lesson** at the new Scribe walkthrough (`How_To_Capture_And_Submit_Production_Data_At_CNTP`), replacing its YouTube placeholder.
+
+**Before this shows on staging:** run `supabase/migrations/20260722_004_lesson_embed_url.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
+## 2026-08-05 — Alyssa (Job cards: fixed scroll cutoff, missing signature after approval, and a misleading numbering error)
+
+**Files changed:** `app/(app)/layout.tsx`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`
+
+Reported: couldn't scroll all the way to the bottom of a job card (cuts off mid Sign-offs); clicking Verify & Sign to approve doesn't show the signature anywhere; and an auto-numbering error ("is migration 20260729_003 applied?") on both staging and production.
+
+- **Scroll cutoff**: the app shell (`app/(app)/layout.tsx`) sized itself with `h-screen` (100vh) while `html`/`body` were already deliberately set to `100dvh` for mobile browser chrome. On a device where the address bar is visible, 100vh is taller than what's actually on screen — the shell (and the job card page's fixed action bar inside it) ended up partly below the real fold, not just scrolled short. Switched to `h-dvh` to match, and wired the codebase's own already-written-but-unused `.page-content` safety class (`min-height:0` + iOS momentum scrolling) onto the main scroll container.
+- **Signature not shown after approval**: `JobCardApprovalsPanel`'s "Verify & Sign to Approve" button called the decide API successfully but then just removed the card from the pending list — it never read back the response, so the freshly-stamped supervisor signature was never shown anywhere, and there was no way back into that specific card afterward (the drafts panel only lists `status='draft'` cards). Added an `onApproved` callback, wired on both job card pages to their existing `resumeDraft()`, so approving a card now loads it right back up — signature and all.
+- **Numbering error**: the message was the same generic guess regardless of what actually failed (missing migration vs. a permission grant vs. something else), which made it undiagnosable without direct database access. Now shows the real Postgres error message/code alongside the migration hint.
+
+## 2026-08-05 — Alyssa (Job cards now visible to Sales — customer, blend, batch, tonnage, date — and wired into the batch spine)
+
+**Files changed:** `supabase/migrations/20260805_001_job_cards_batch_spine_link.sql` (new), `lib/production/batch-spine.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/granule/[id]/decide/route.ts`, `components/sales/ProductionBatchesTab.tsx` (new), `app/(app)/sales/page.tsx`
+
+Asked: does the customer/blend/tonnage info on a job card get saved anywhere sales can see it? Confirmed by investigation: no — the Sales page is fed entirely by invoiced Acumatica AR data with zero awareness of production batches, and job cards weren't wired into the existing canonical batch spine (`production.batches`/`normalize_batch()`) the way every other capture table already is. Scoped with the user to visibility only (no actuals-vs-demand comparison yet — Acumatica has no open-order/demand data to compare against), and to close the batch-spine gap rather than build a Sales-only one-off.
+
+- **Job cards now join the batch spine** at the moment they're approved (not on every draft save, since a draft's batch number can still change) — new `resolveBatchId()` helper normalizes the batch number and upserts it into `production.batches`, same pattern the original spine migration already uses for `prod_sessions`/`bag_tags`/etc.
+- **New "Production" tab on the Sales page** — every approved job card (Pasteuriser + Granule), customer/blend/batch/planned mass/date, searchable by customer/product/batch. Each row links straight into the existing `/traceability?batch=` view for full yield/QC history — no new detail view needed.
+- Deliberately labelled the mass figure "planned mass" (the job card's own stated target, not a verified actual yield) — the next natural step, once real demand data exists to compare against, is joining through the now-present `batch_id` to the real captured output.
+
 ## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
 
 **Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
