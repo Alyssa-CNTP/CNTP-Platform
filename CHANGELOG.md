@@ -3,6 +3,25 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Gustav (Link production bagging to Quality sieving Final QC)
+
+**Files changed:** `supabase/migrations/20260807_001_sieving_bag_qc_link.sql` (new, applied to staging), `app/(app)/quality/sieving/page.tsx`
+
+Ties the sieving tower's bagged outputs to the Quality sieving runs so a Final QC is driven by the bag production actually made, instead of being typed from scratch.
+
+**Database (additive only — one nullable column plus views; no existing row or column changed):**
+- `qms.sd_runs.bagging_id` (nullable) — hard link to `production.prod_bagging`.
+- `qms.norm_sd_product()` / `qms.norm_lot()` / `qms.sd_product_needs_qc()` — production and quality do not share a vocabulary (`RB Blocks`, `Indent Sticks - Conventional`, `Sieved Fine Leaf: Export Blend - Conventional` vs `Fine Leaf` / `Blocks`), so both sides are normalised rather than string-matched.
+- `qms.v_bag_events`, `qms.v_sd_inprocess`, `qms.v_bag_inprocess_link`, `qms.v_bag_qc_status`, `qms.v_pending_bag_qc`.
+- **Pending QC is derived, not stored** — every Fine Leaf / Coarse Leaf bagging is pending until a `final` run links to it, so the queue cannot drift out of sync. **Indent Sticks and Rooibos Blocks still get bags/serials/labels but never require a QC stamp.**
+- **In-process → bag link:** the in-process lot is the *input material* lot, so a bag is matched to the last in-process run on the **same production day, at or before the bagging time**, via the session's de-bagging input lot (or a direct lot match). A bag inherits that run's spec result, so an out-of-spec sieve **flags every bag made after it** and shows exactly which fractions were out.
+
+**Quality → Sieving screen:**
+- **Final QC is now a pending-bag picker**, not a free-form run type: the dropdown lists bags awaiting QC with serial, product, lot, bagging time and an ⚠ OUT OF SPEC marker, and shows the governing in-process violations once a bag is picked. Serial / lot / variant / date / PA level / leaf shade pre-fill from production + raw material and stay editable so the QC verifies rather than re-types; the QC enters bulk density.
+- **In-Process no longer has a serial number** (bags are only serialised at bagging).
+- **Time is stamped at capture for both run types** and is no longer editable.
+- QC Controller defaults to the logged-in user (still editable).
+- **Bag label** printable after a Final QC, showing bulk density and leaf shade, plus an out-of-spec warning banner where applicable.
 ## 2026-08-07 — Alyssa (Production dashboard v2: filterable pivot/grid)
 
 **Files changed:** `components/production/PivotDashboard.tsx` (new), `components/production/ProductionDashboard.tsx` (deleted), `app/(app)/production/dashboard/page.tsx`, `app/api/production/dashboard-rows/route.ts` (new), `app/api/production/dashboard-supply/route.ts` (new)
