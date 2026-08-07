@@ -205,6 +205,7 @@ function mapDbRow(r: any) {
     comment:      r.comment||'',
     paLevel:      r.pa_level||'',
     passStatus:   r.pass_status||'Pass',
+    baggingId:    r.bagging_id||'',
     violations:   Array.isArray(r.violations)?r.violations:(typeof r.violations==='string'?JSON.parse(r.violations||'[]'):[]),
     gramValues:   typeof r.gram_values==='object'&&r.gram_values!=null?r.gram_values:{},
     editHistory:  Array.isArray(r.edit_history)?r.edit_history:[],
@@ -1311,6 +1312,22 @@ export default function SievingPage() {
 
   const selectedBag = pendingBags.find((b:any) => String(b.bagging_id) === String(selectedBagId)) || null
 
+  // Re-print a bag label from the history table — after edits to that row, or
+  // any time later. Looks the bag up fresh (not just the pending list, since a
+  // sampled bag has already dropped off it) so the in-process spec banner is
+  // still accurate even for an old run.
+  async function reprintLabel(row: any) {
+    let bag: any = null
+    if (row.baggingId) {
+      const { data } = await db.schema('qms').from('v_bag_qc_status').select('*').eq('bagging_id', row.baggingId).maybeSingle()
+      bag = data
+    } else if (row.serialNumber) {
+      const { data } = await db.schema('qms').from('v_bag_qc_status').select('*').eq('bag_serial_no', row.serialNumber).order('bagged_at', { ascending: false }).limit(1)
+      bag = data?.[0] ?? null
+    }
+    setPrintBag({ ...row, bag })
+  }
+
   const inputSt: React.CSSProperties = { padding:'5px 8px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, width:'100%', boxSizing:'border-box' }
   const errSt: React.CSSProperties   = { fontSize:10, color:'#dc2626', marginTop:2 }
   const ErrMsg = ({ field }: { field:string }) => errors[field] ? <div style={errSt}>⚠ {errors[field]}</div> : null
@@ -1815,6 +1832,13 @@ export default function SievingPage() {
                         ✏️
                       </button>
                       <button onClick={()=>deleteRun(row.id)} style={{background:'none',border:'none',color:'#dc2626',cursor:'pointer',fontSize:12,padding:'0 2px'}} title="Delete">🗑</button>
+                      {row.runType==='final'&&(
+                        <button onClick={()=>reprintLabel(row)}
+                          style={{background:'none',border:'1px solid #86efac',borderRadius:4,color:'#166534',cursor:'pointer',fontSize:11,padding:'2px 5px',marginTop:2,display:'block'}}
+                          title="Re-print this bag's label — reflects any edits made to this row">
+                          🖨
+                        </button>
+                      )}
                     </td>}
                     <td style={{padding:'3px 8px',fontFamily:'monospace',fontSize:10,whiteSpace:'nowrap'}}>{row.date}</td>
                     {!specDef.noLotNumber&&<td style={{padding:'3px 8px',fontWeight:700,fontFamily:'monospace',fontSize:10,whiteSpace:'nowrap'}}>{row.lotNumber}</td>}
