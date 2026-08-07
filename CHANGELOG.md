@@ -3,6 +3,18 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Alyssa (Bag Tracking permission toggle + search moved to a command palette in the Topbar)
+
+**Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/layout/Topbar.tsx`, `components/search/CommandSearch.tsx`
+
+Asked why Bag Tracking (`/tags`) wasn't on the Users & Roles permissions page: it never had a `can_access_*` permission key — access was pure department membership (Production/Quality), so there was nothing to toggle for anyone outside those departments. Also found the route guard only listed `Production`, not `Quality` — a latent bug where the Quality sidebar link led to an immediate bounce back to `/home`.
+
+- **New `can_access_bag_tracking` permission** — added to `PermissionKey`/`ALL_PERMISSION_KEYS`, a new "Bag Tracking" group in `PERMISSION_GROUPS`, and a matching module in the master `PERMISSION_MATRIX`, following the same cross-department-grant pattern as Logistics/Maintenance. Production/Quality keep access by department as before (`orPermission: true`) — this only adds a way to grant it to other departments (e.g. Management, Sales).
+- **Fixed the `/tags` route guard** to include `Quality` (previously `Production` only), matching what the Sidebar already showed.
+- **Search moved from the Sidebar to the Topbar**, centered between the page title and the right-side status indicators — a more prominent, "always there" spot regardless of sidebar collapse state, matching where modern apps (Linear, Notion, GitHub) put global search.
+- **Search now finds pages, not just batch/lot records.** Added a client-side, instant "Pages" section to the command palette (Cmd/Ctrl+K) that fuzzy-matches the same nav items the Sidebar shows — filtered through the exact same permission/department predicate (extracted into an exported `getVisibleNavItems()` in `Sidebar.tsx`) so search never surfaces a page a user would then get bounced from. The existing batch/lot/bag/signal record search (server-side, `/api/search/batch`) is unchanged and still runs alongside it.
+- Promoted to production from staging PR #558.
+
 ## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
 
 **Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/dashboard/CommandCentre.tsx`

@@ -1,14 +1,17 @@
 'use client'
 // components/search/CommandSearch.tsx
-// Global Cmd+K / Ctrl+K batch search — queries across qms, production, sales.
-// Drop this once into the app layout; the Sidebar search button fires the same event.
+// Global Cmd+K / Ctrl+K command palette — searches app pages (client-side,
+// instant) plus batch/lot/bag records across qms, production, sales (server).
+// Drop this once into the app layout; the Topbar's search trigger fires the same event.
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  Search, Beaker, Factory, Package, TrendingUp,
+  Search, Beaker, Factory, Package, TrendingUp, Compass, Home,
   X, Loader2, ChevronRight,
 } from 'lucide-react'
+import { useAuth } from '@/lib/auth/context'
+import { NAV, getVisibleNavItems, type NavItem } from '@/components/layout/Sidebar'
 
 interface QualityRecord {
   id: string; lot_number: string; product_type: string
@@ -63,6 +66,10 @@ function SectionHeader({ icon, label, count }: { icon: React.ReactNode; label: s
   )
 }
 
+// Home isn't in NAV (Sidebar renders it as a standalone item above the
+// groups), but it's a page like any other as far as search is concerned.
+const HOME_ITEM: NavItem = { href: '/home', label: 'Home', icon: Home, group: 'General' }
+
 export default function CommandSearch() {
   const [open,    setOpen]    = useState(false)
   const [query,   setQuery]   = useState('')
@@ -71,6 +78,22 @@ export default function CommandSearch() {
   const inputRef = useRef<HTMLInputElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const router   = useRouter()
+  const { department, role, p, isIT, isFullAdmin } = useAuth()
+
+  // Pages this user could actually reach — same predicate the Sidebar renders
+  // with, so search never surfaces a link that then bounces them at the guard.
+  const searchablePages = useMemo(
+    () => [HOME_ITEM, ...getVisibleNavItems(NAV, { role, department, isIT, isFullAdmin, p })],
+    [role, department, isIT, isFullAdmin, p]
+  )
+
+  const pageMatches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return searchablePages
+      .filter(item => item.label.toLowerCase().includes(q) || item.group.toLowerCase().includes(q))
+      .slice(0, 8)
+  }, [query, searchablePages])
 
   // Open on Cmd+K / Ctrl+K, or custom event from sidebar button
   useEffect(() => {
@@ -112,7 +135,7 @@ export default function CommandSearch() {
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [query, doSearch])
 
-  const total = results.quality.length + results.production.length + results.bags.length + results.sales.length
+  const total = pageMatches.length + results.quality.length + results.production.length + results.bags.length + results.sales.length
 
   if (!open) return null
 
@@ -136,7 +159,7 @@ export default function CommandSearch() {
             ref={inputRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search by lot number, batch, product..."
+            placeholder="Search pages, lot numbers, batches, product..."
             className="flex-1 text-sm outline-none placeholder:text-gray-400"
           />
           {query && (
@@ -149,9 +172,33 @@ export default function CommandSearch() {
 
         {/* Results */}
         <div className="max-h-[60vh] overflow-y-auto">
-          {query.length >= 2 && !loading && total === 0 && (
+          {query.length >= 1 && !loading && total === 0 && (
             <div className="py-10 text-center text-sm text-gray-400">
               No results for <span className="font-mono text-gray-600">"{query}"</span>
+            </div>
+          )}
+
+          {/* Pages — client-side, instant, shown first */}
+          {pageMatches.length > 0 && (
+            <div>
+              <SectionHeader icon={<Compass size={12} />} label="Pages" count={pageMatches.length} />
+              {pageMatches.map(item => {
+                const Icon = item.icon
+                return (
+                  <button
+                    key={item.href}
+                    onClick={() => { router.push(item.href); setOpen(false) }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition-colors"
+                  >
+                    <Icon size={14} className="text-gray-400 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-800">{item.label}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">{item.group}</div>
+                    </div>
+                    <ChevronRight size={14} className="text-gray-300 shrink-0" />
+                  </button>
+                )
+              })}
             </div>
           )}
 
@@ -261,9 +308,9 @@ export default function CommandSearch() {
           {/* Empty state hint */}
           {!query && (
             <div className="py-8 px-4 text-center">
-              <p className="text-sm text-gray-400">Type a lot number, batch ID, or product name</p>
+              <p className="text-sm text-gray-400">Type a page name, lot number, batch ID, or product name</p>
               <p className="text-xs text-gray-300 mt-1">
-                e.g. <span className="font-mono">GS-2026-001</span> or <span className="font-mono">RSFG/RA-02726</span>
+                e.g. <span className="font-mono">bag tracking</span>, <span className="font-mono">GS-2026-001</span> or <span className="font-mono">RSFG/RA-02726</span>
               </p>
             </div>
           )}
@@ -275,7 +322,7 @@ export default function CommandSearch() {
             <kbd className="font-mono border border-gray-200 rounded px-1">esc</kbd> close
           </span>
           <span className="text-[10px] text-gray-400 ml-auto">
-            Searches Quality · Production · Sales
+            Searches Pages · Quality · Production · Sales
           </span>
         </div>
       </div>

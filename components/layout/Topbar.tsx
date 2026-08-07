@@ -8,7 +8,7 @@
 // variant='sales'       — Sales pages (amber, Acumatica status, YTD)
 // variant='management'  — Management (violet accent)
 
-import { Menu, Beaker, RefreshCw, TrendingUp, BarChart2, Database, Activity } from 'lucide-react'
+import { Menu, Beaker, RefreshCw, TrendingUp, BarChart2, Database, Activity, Search } from 'lucide-react'
 import { format } from 'date-fns'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -85,6 +85,52 @@ function chipStyle(color: string): React.CSSProperties {
     borderRadius: '5px',
     textTransform: 'uppercase' as const,
   }
+}
+
+// ── Global search trigger — centered in the topbar, opens CommandSearch ────────
+// (CommandSearch itself listens for this event and for Cmd/Ctrl+K globally.)
+function SearchTrigger() {
+  return (
+    <button
+      onClick={() => window.dispatchEvent(new CustomEvent('open-command-search'))}
+      className="flex items-center gap-2"
+      style={{
+        width: '100%',
+        maxWidth: 360,
+        padding: '6px 10px',
+        borderRadius: 8,
+        border: '1px solid rgba(28,25,23,0.1)',
+        background: 'rgba(255,255,255,0.6)',
+        color: '#A8A29E',
+        cursor: 'pointer',
+        transition: 'background 120ms, border-color 120ms, color 120ms',
+      }}
+      onMouseEnter={e => {
+        const el = e.currentTarget as HTMLElement
+        el.style.background = 'rgba(255,255,255,0.95)'
+        el.style.borderColor = 'rgba(28,25,23,0.18)'
+        el.style.color = '#57534E'
+      }}
+      onMouseLeave={e => {
+        const el = e.currentTarget as HTMLElement
+        el.style.background = 'rgba(255,255,255,0.6)'
+        el.style.borderColor = 'rgba(28,25,23,0.1)'
+        el.style.color = '#A8A29E'
+      }}
+      aria-label="Search pages, lots and batches"
+    >
+      <Search size={13} style={{ flexShrink: 0 }} />
+      <span className="hidden sm:inline" style={{ fontSize: 12, letterSpacing: '-0.01em', flex: 1, textAlign: 'left' }}>
+        Search pages, lots, batches…
+      </span>
+      <kbd className="hidden sm:inline-flex" style={{
+        fontSize: 10, border: '1px solid rgba(28,25,23,0.12)', borderRadius: 4,
+        padding: '1px 4px', fontFamily: 'var(--font-mono)', color: '#A8A29E', background: 'rgba(255,255,255,0.7)',
+      }}>
+        {typeof navigator !== 'undefined' && navigator.platform?.startsWith('Mac') ? '⌘K' : 'Ctrl+K'}
+      </kbd>
+    </button>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,7 +261,12 @@ export default function Topbar({
           </div>
         </div>
 
-        <div style={{ flex: 1 }} />
+        {/* Centered search — sits in the space between the title and the
+            variant-specific right-side indicators, not dead-center of the
+            whole header (so it doesn't fight the title on narrow screens). */}
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0, padding: '0 12px' }}>
+          <SearchTrigger />
+        </div>
 
         {/* ── Right side — variant-specific indicators ─────────────────────── */}
         <div className="hidden sm:flex" style={{ alignItems: 'center', gap: 10 }}>
