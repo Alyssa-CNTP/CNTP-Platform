@@ -15,7 +15,8 @@ import { TrendsPanel } from '@/components/maintenance/TrendsPanel'
 
 export default function MaintenanceDashboard() {
   const auth = useAuth()
-  const canManage = deriveMaintRole(auth).canManage
+  // View-only concern (which alerts to surface), so the oversight profiles count.
+  const seesAll = deriveMaintRole(auth).seesAll
   const { loading, error, data, derived } = useMaintenanceContext()
   const { duty, newCards, annualRows } = derived
   const dueSoon = annualRows.filter(a => a.days <= 60).length
@@ -41,7 +42,7 @@ export default function MaintenanceDashboard() {
       {error && <div className="card p-3 text-[12px] text-err border border-err/30">{error}</div>}
 
       {/* New job cards awaiting allocation — prominent manager alert */}
-      {canManage && newCards.length > 0 && (
+      {seesAll && newCards.length > 0 && (
         <Link href="/maintenance/job-cards"
           className="block rounded-xl border border-warn/30 bg-warn/5 px-4 py-3 hover:bg-warn/10 transition">
           <div className="flex items-center gap-3">
