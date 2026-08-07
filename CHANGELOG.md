@@ -132,6 +132,7 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 - Looks the bag up fresh from `qms.v_bag_qc_status` (by `bagging_id`, falling back to serial number for older rows saved before the bag link existed) rather than reusing the pending-QC list, since a sampled bag has already dropped off that list — so the reprinted label's in-process out-of-spec banner stays accurate.
 - `mapDbRow()` now also exposes `bagging_id` (as `baggingId`) so the button can find the right bag; this is additive and doesn't change any existing field.
 
+<<<<<<< HEAD
 ---
 
 ## 2026-08-07 — Gustav (Maintenance: data reset, technician QC visibility, recurring-problem history, checklist/completion notifications)
@@ -146,6 +147,8 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 
 ---
 
+=======
+>>>>>>> 0b822b6 (Sieving: allow re-printing a bag label after edits (#564))
 ## 2026-08-07 — Gustav (Link production bagging to Quality sieving Final QC)
 
 **Files changed:** `supabase/migrations/20260807_001_sieving_bag_qc_link.sql` (new, applied to staging), `app/(app)/quality/sieving/page.tsx`
