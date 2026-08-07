@@ -7,7 +7,7 @@ import { format, subDays, parseISO } from 'date-fns'
 import {
   RefreshCw, RotateCcw, ChevronRight, CheckCircle2, Clock,
   ClipboardList, ArrowRight, Target, Settings2, BarChart2,
-  Tag, Scale, DollarSign, TrendingUp, Activity, Package,
+  Tag, Scale, DollarSign, TrendingUp, Activity,
   AlertTriangle, FlaskConical,
 } from 'lucide-react'
 import Link from 'next/link'
@@ -82,7 +82,6 @@ export default function CommandCentre() {
   const [tagCount,       setTagCount]       = useState(0)
   const [tagKg,          setTagKg]          = useState(0)
   const [signalCount,    setSignalCount]    = useState<number | null>(null)
-  const [openGrns,       setOpenGrns]       = useState<number | null>(null)
 
   const today = format(new Date(), 'yyyy-MM-dd')
   const d30   = format(subDays(new Date(), 30), 'yyyy-MM-dd')
@@ -138,16 +137,6 @@ export default function CommandCentre() {
         .select('id', { count: 'exact', head: true })
       setSignalCount(count ?? 0)
     } catch { /* no signals table */ }
-
-    // Best-effort open GRNs
-    try {
-      const { count } = await (db as any)
-        .schema('logistics')
-        .from('grns')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'open')
-      setOpenGrns(count ?? 0)
-    } catch { /* no logistics schema access */ }
 
     setLoading(false)
     setRefreshing(false)
@@ -242,13 +231,6 @@ export default function CommandCentre() {
       numericValue: signalCount,
       color: 'info',
       href:  '/intelligence', icon: <FlaskConical size={18} />,
-    } as KpiItem,
-    openGrns != null && {
-      id: 'grns', label: 'Open GRNs', sublabel: 'pending',
-      value: String(openGrns),
-      numericValue: openGrns,
-      color: openGrns > 0 ? 'warn' : 'ok',
-      href:  '/logistics/receiving', icon: <Package size={18} />,
     } as KpiItem,
     {
       id: 'sessions', label: 'Count Sessions', sublabel: '30 days',
