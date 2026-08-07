@@ -3,6 +3,26 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Alyssa (Production dashboard v2: filterable pivot/grid)
+
+**Files changed:** `components/production/PivotDashboard.tsx` (new), `components/production/ProductionDashboard.tsx` (deleted), `app/(app)/production/dashboard/page.tsx`, `app/api/production/dashboard-rows/route.ts` (new), `app/api/production/dashboard-supply/route.ts` (new)
+
+Full redesign of the production dashboard, from a stacked report (one section per metric type) into a filterable pivot/grid tool grouped by domain — the concept iterated and approved as an interactive mockup earlier this session.
+
+- **Domains, not metric sections**: Floor, Quality, Machine, Supply & demand, Solar — each its own pivot view, not a scroll of unrelated widgets.
+- **Your own filters**: date range, shift, line, variant — combine freely, entirely client-side against `/api/production/dashboard-rows` (new — row-level, unaggregated, so the client can slice any way without another round trip).
+- **Pivot table + chart**: rows = line, columns switch between date/variant, metric switches per domain, with row/column totals computed the same way as the cells (not summed from what's displayed). Every heading has an ⓘ explaining exactly how the number was calculated.
+- **Floor plan strip**: material-flow order (Sieving → Refining 1 → Refining 2 → Granule → Blender → Pasteuriser), doubles as a line filter, links to the full `/production/floor-plan`.
+- **Output mix + Batches**: same real data as before (`/api/production/yield-analytics`), restyled.
+- **Needs action**: yield-below-85%, QC fails, and machine check failures — one shared panel instead of buried per-section warnings.
+- **AI Analyst**: reused the existing `AiAnalystPanel` (`/api/production/dashboard-insights` + `/api/production/ask`) fed the current filtered view, instead of building a new mock chat UI.
+
+**Two deliberate scope decisions, not oversights:**
+- **Grade dropped as a pivot dimension.** It's an output-bag-level choice (Export/Export Blend/Domestic via `getAcumaticaCode`), not a session-level field — input isn't graded, so "yield by grade" has no clean meaning without an allocation rule this app doesn't have. Kept Date and Variant, both real session-level fields.
+- **Supply & demand ships incomplete, honestly.** Confirmed there is no real Acumatica production-order sync anywhere in this codebase — `prod_sessions.production_orders` is an operator-typed reference label, never validated against a real order or quantity (the existing Acumatica sync only covers sales/CRM Generic Inquiries; a production-order GI has never been run — matches this changelog's own earlier note that Phase 3 automatic PO ingest is still pending the GI name). "Supply" here means actual output delivered against a PO reference. "Demand" is shown explicitly as unavailable — needs material planning/forecasting, which doesn't exist yet — rather than fabricated.
+
+Verified with a full `next build` (Turbopack), not just `tsc --noEmit`.
+
 ## 2026-08-07 — Alyssa (Bag Tracking permission toggle + search moved to a command palette in the Topbar)
 
 **Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/layout/Topbar.tsx`, `components/search/CommandSearch.tsx`
