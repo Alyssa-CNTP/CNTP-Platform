@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button visibility to full admins (`isFullAdmin` — the `senior_developer` role, which already bypasses all other permission checks in this app), so IT admins (e.g. Alyssa, Jan) see it too, in addition to the Lab Manager and Quality Manager. Same confirmation popup and delete behaviour, no schema change.
+
 ## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
 
 **Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/dashboard/CommandCentre.tsx`
