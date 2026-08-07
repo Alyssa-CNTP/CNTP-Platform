@@ -32,6 +32,9 @@ const ROUTE_GUARDS: Array<{
   // grant a module to someone outside its department via a toggle without
   // forcing every in-department user to also hold the permission.
   orPermission?: boolean
+  // When true, the route is hidden/disabled for everyone except the full
+  // admin — used to take a module out of service without deleting its code.
+  disabled?:     boolean
 }> = [
   // AXIS — IT only (except /axis/request, excluded in guard logic)
   { prefix: '/axis/consideration', itOnly: true },
@@ -68,8 +71,11 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
   { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 
-  // Logistics (barcode-driven receiving, warehouse, dispatch)
-  { prefix: '/logistics',        departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  // Logistics (barcode-driven receiving, warehouse, dispatch) — module is
+  // built but not in use yet; disabled so nobody outside full admin can
+  // reach it by URL. Drop `disabled` (and restore the Sidebar entries) to
+  // bring it back.
+  { prefix: '/logistics',        departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true, disabled: true },
 
   // Management — /status is IT's platform-diagnostics module.
   // Cross-department: can_view_management grants access from any department.
@@ -327,6 +333,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       .sort((a, b) => b.prefix.length - a.prefix.length)[0]
 
     if (!guard) return
+
+    // Disabled module — blocked for everyone except the full admin
+    if (guard.disabled && !isFullAdmin) { router.replace('/home'); return }
 
     // IT-only routes (AXIS internals) — only IT dept or full admin
     if (guard.itOnly && !isIT && !isFullAdmin) { router.replace('/home'); return }

@@ -12,7 +12,7 @@ import {
   Microscope, FileText, BookOpen, Layers, Settings,
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare, KanbanSquare,
   PanelLeftClose, PanelLeftOpen,
-  Boxes, PackageOpen, Warehouse as WarehouseIcon, Truck,
+  Boxes, PackageOpen,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2, Search,
   CalendarCheck, CalendarRange, Activity, ClipboardCheck,
   FileSpreadsheet, GraduationCap, Printer,
@@ -95,11 +95,13 @@ export const NAV: NavItem[] = [
   { href: '/marketing',                 label: 'Marketing Hub',              icon: Sparkles,        group: 'Marketing', departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
   { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['Marketing','Sales','Management'], permission: 'can_access_intelligence' as PermissionKey },
 
-  // ── Logistics ──
-  { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
-  { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
-  { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
-  { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  // ── Logistics — module hidden for now (not in use); routes are also
+  // blocked in app/(app)/layout.tsx's ROUTE_GUARDS (disabled: true). Re-add
+  // these entries and drop that flag to bring it back.
+  // { href: '/logistics',                 label: 'Overview',                   icon: Boxes,           group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  // { href: '/logistics/dispatch',        label: 'Dispatch',                   icon: Truck,           group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  // { href: '/logistics/receiving',       label: 'Receiving',                  icon: PackageOpen,     group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
+  // { href: '/logistics/warehouse',       label: 'Warehouse',                  icon: WarehouseIcon,   group: 'Logistics', departments: ['Production','Quality','Management'], permission: 'can_access_logistics', orPermission: true },
 
   // ── Management ──
   { href: '/management',                label: 'Operations Review',          icon: BarChart2,       group: 'Management', departments: ['Management'], permission: 'can_view_management' },

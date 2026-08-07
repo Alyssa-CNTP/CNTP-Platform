@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/dashboard/CommandCentre.tsx`
+
+- Commented out the four **Logistics** nav entries (Overview, Dispatch, Receiving, Warehouse) in the sidebar — the module isn't in active use yet.
+- Blocked direct URL access to `/logistics/*` too: added a `disabled` flag to `ROUTE_GUARDS` so anyone but the full admin gets redirected to `/home` if they try to reach it directly, instead of relying on the nav link alone.
+- Removed the **Open GRNs** KPI tile from the Command Centre dashboard (and its `logistics.grns` count fetch), since it linked into the now-hidden module.
+- Nothing was deleted — the Logistics pages, `lib/logistics/*`, and the `can_access_logistics` permission are untouched. To bring it back: drop `disabled: true` from the `/logistics` route guard and uncomment the Sidebar entries.
+
 ## 2026-08-06 — Gustav (COA screen: removed the example template)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
