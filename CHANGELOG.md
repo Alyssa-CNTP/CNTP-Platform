@@ -393,6 +393,17 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 
 ---
 
+## 2026-08-09 — Gustav (Maintenance: mobile layout fixes for the checklists and shift summary)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Weekly / monthly checklist cards were unreadable on a phone.** The card header put the text and the controls (allocate dropdown + print + status badge) in one row with the controls fixed at `w-44` and `shrink-0`, which starved the text column down to a few characters — so `QM-FM-033/0 · 8 tasks` wrapped to one token per line and the "Last completed…" line ran underneath the dropdown. The header now **stacks on mobile** (text full-width on top, controls on their own row below) and sits side-by-side from `sm:` up. The allocate dropdown flexes to the available width on mobile instead of forcing 176px, the doc-ref line truncates with an ellipsis instead of wrapping, and the status badge no longer splits across two lines.
+- **Shift summary buttons were clipped** — "Evening 16:00–01:00" ran off the right edge. The controls now wrap, and on mobile the two buttons show just **Day** / **Evening** (splitting the row evenly) with the time ranges appearing from `sm:` up.
+- Checklist task rows now wrap, so the notes field drops to its own line instead of being crushed when the "→ Job card" fault button appears.
+- Annual / calibration search box is full-width on mobile instead of a fixed 220px.
+
+---
+
 ## 2026-08-07 — Gustav (Maintenance: removed the IT "view as" switcher; oversight roles see every screen)
 
 **Files changed:** `lib/maintenance/roles.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`
