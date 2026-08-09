@@ -304,12 +304,14 @@ export default function ScheduledPage() {
                 const isReading = isJojo || cl.doc_ref === 'Database'
                 return (
                   <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
-                    <div className="p-3 cursor-pointer flex justify-between items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
+                    {/* Mobile: the meta text takes the full width and the controls
+                        drop to their own row underneath. Desktop: side by side. */}
+                    <div className="p-3 cursor-pointer flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
+                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                        <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
                         <div className="min-w-0">
                           <div className="text-[13px] font-semibold text-text leading-tight">{cl.area}</div>
-                          <div className="text-[11px] text-text-faint">{cl.doc_ref} · {cl.tasks.length} tasks</div>
+                          <div className="text-[11px] text-text-faint whitespace-nowrap overflow-hidden text-ellipsis">{cl.doc_ref} · {cl.tasks.length} tasks</div>
                           <div className={`text-[10px] mt-0.5 ${prev || done ? 'text-text-muted' : 'text-err'}`}>
                             {done && comp ? <>✓ Completed by <strong className="text-ok">{comp.completed_by || '—'}</strong> ({fmtD(comp.updated_at ?? null)})</>
                               : prev ? <>Last: {prev.period_key} by <strong className="text-text">{prev.completed_by || '—'}</strong></>
@@ -318,10 +320,10 @@ export default function ScheduledPage() {
                           {assigned && <div className="text-[10px] mt-0.5"><span className={`badge ${assignedToMe ? 'badge-info' : 'badge-gray'}`}>→ {assigned}{assignedToMe ? ' (you)' : ''}</span></div>}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-1.5 sm:shrink-0" onClick={e => e.stopPropagation()}>
                         {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
                         {canManage && (
-                          <select className={`${INP} w-44 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                          <select className={`${INP} flex-1 min-w-0 sm:flex-none sm:w-44 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
                             value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
                             <option value="">Allocate…</option>
                             {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
@@ -330,8 +332,8 @@ export default function ScheduledPage() {
                         )}
                         <button title="Print this checklist"
                           onClick={() => printChecklistOne(cl, comp, period)}
-                          className="inline-flex items-center justify-center w-7 h-7 rounded-md text-text-muted hover:bg-surface-dim hover:text-text transition"><Printer size={13} /></button>
-                        <span className={`badge ${done ? 'badge-ok' : doneN > 0 ? 'badge-warn' : 'badge-gray'}`}>{done ? 'DONE' : doneN > 0 ? doneN + '/' + cl.tasks.length : 'NOT STARTED'}</span>
+                          className="inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-text-muted hover:bg-surface-dim hover:text-text transition"><Printer size={13} /></button>
+                        <span className={`badge shrink-0 whitespace-nowrap ${done ? 'badge-ok' : doneN > 0 ? 'badge-warn' : 'badge-gray'}`}>{done ? 'DONE' : doneN > 0 ? doneN + '/' + cl.tasks.length : 'NOT STARTED'}</span>
                       </div>
                     </div>
                     {isOpen && (
@@ -383,15 +385,15 @@ export default function ScheduledPage() {
                                 <span className={`text-[12px] flex-1 ${s.done && !s.fault ? 'text-text-muted' : 'text-text'}`}>{task}</span>
                                 {s.done && s.by && <span className="text-[10px] text-text-faint whitespace-nowrap shrink-0">{s.by} {fmtT(s.at ?? null)}</span>}
                               </div>
-                              <div className="flex gap-1.5 mt-1" style={{ marginLeft: 28 }}>
-                                <select className={`${INP} w-28 text-[11px] py-1 min-h-0 ${!s.done ? 'border-warn text-warn' : s.fault ? 'border-err text-err' : ''}`}
+                              <div className="flex gap-1.5 mt-1 flex-wrap" style={{ marginLeft: 28 }}>
+                                <select className={`${INP} w-28 shrink-0 text-[11px] py-1 min-h-0 ${!s.done ? 'border-warn text-warn' : s.fault ? 'border-err text-err' : ''}`}
                                   value={!s.done ? '' : s.fault ? 'YES' : 'NO'}
                                   onChange={e => { if (e.target.value) answerTask(cl, ti, e.target.value === 'YES') }}>
                                   <option value="" disabled>Select…</option>
                                   <option value="NO">No fault ✓</option>
                                   <option value="YES">Fault</option>
                                 </select>
-                                <input className={`${INP} flex-1 text-[11px] py-1 min-h-0`} placeholder={s.fault ? 'Describe the issue…' : 'Notes…'}
+                                <input className={`${INP} flex-1 min-w-[140px] text-[11px] py-1 min-h-0`} placeholder={s.fault ? 'Describe the issue…' : 'Notes…'}
                                   value={drafts['t' + cl.id + '-' + ti] ?? s.notes ?? ''}
                                   onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
                                   onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
@@ -453,11 +455,11 @@ export default function ScheduledPage() {
             <span className="badge badge-err">{annualRows.filter(a => a.days <= 0).length} overdue</span>
             <span className="badge badge-warn">{annualRows.filter(a => a.days > 0 && a.days <= 30).length} due ≤30d</span>
             <span className="badge badge-info">{annualRows.filter(a => a.days > 30 && a.days <= 60).length} due ≤60d</span>
-            <select className={`${INP} w-auto ml-auto`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
+            <select className={`${INP} w-auto sm:ml-auto`} value={annualCat} onChange={e => setAnnualCat(e.target.value)}>
               <option value="all">All categories</option>
               {Array.from(new Set(annualRows.map(a => a.category).filter(Boolean))).sort().map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            <input className={`${INP} w-[220px]`} placeholder="Search asset / serial / supplier…" value={annualSearch} onChange={e => setAnnualSearch(e.target.value)} />
+            <input className={`${INP} w-full sm:w-[220px]`} placeholder="Search asset / serial / supplier…" value={annualSearch} onChange={e => setAnnualSearch(e.target.value)} />
           </div>
 
           {/* Card grid — one card per asset so the full name + every field is readable
