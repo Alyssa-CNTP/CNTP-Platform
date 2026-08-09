@@ -303,10 +303,14 @@ function ShiftSummary({ jcs, completions, cardHref }: { jcs: JobCard[]; completi
     <div className="card p-4 mb-6">
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <h2 className="text-sm font-semibold text-text">Shift summary</h2>
-        <div className="flex gap-1.5 items-center">
+        {/* Mobile: the shift buttons drop to their own row and shed the time
+            ranges so nothing is clipped off the right edge. */}
+        <div className="flex gap-1.5 items-center flex-wrap w-full sm:w-auto">
           <input className={`${INP} w-36 min-h-0 py-1.5`} type="date" value={date} onChange={ev => setDate(ev.target.value)} />
-          <button className={SEG(shift === 'day')} onClick={() => setShift('day')}>Day 07:00–16:00</button>
-          <button className={SEG(shift === 'evening')} onClick={() => setShift('evening')}>Evening 16:00–01:00</button>
+          <div className="flex gap-1.5 flex-1 min-w-0 sm:flex-none">
+            <button className={`${SEG(shift === 'day')} flex-1 sm:flex-none`} onClick={() => setShift('day')}>Day<span className="hidden sm:inline"> 07:00–16:00</span></button>
+            <button className={`${SEG(shift === 'evening')} flex-1 sm:flex-none`} onClick={() => setShift('evening')}>Evening<span className="hidden sm:inline"> 16:00–01:00</span></button>
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
