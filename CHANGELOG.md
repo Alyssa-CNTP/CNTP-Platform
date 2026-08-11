@@ -3,6 +3,16 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (Master Inventory & BOMs are now read-only — Acumatica is the master, import going forward)
+
+**Files changed:** `app/(app)/production/inventory/page.tsx`, `app/(app)/production/blends/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+Removed the ability to add, edit or delete Master Inventory items and BOMs (including adding/removing components on an existing BOM) directly in the app. Acumatica remains the single master for both stock items and BOM structure — new/changed records arrive via import (Master Inventory already has one at `/admin/inventory-import`; BOMs don't yet, but no manual editing should happen here in the meantime either way).
+
+- **Master Inventory** (`/production/inventory`): dropped the "Add item" form, inline cell editing, and the Active/Inactive checkbox toggle. Now a plain read-only table (search + active-only filter still work).
+- **BOMs** (`/production/blends`): dropped "Add" (new BOM), "Add component" on an existing BOM, inline component editing (ingredient column, qty%), and both delete affordances (component and whole BOM). The Blender-only "editable work centre" distinction is gone too — every work centre is now browse-only, consistently. Search, work-centre filter, the unresolved-item-link flag, the parent-blend panel, and "Generate job card" from a Pasteuriser BOM are all unchanged.
+- **Removed the now-dead permissions** `can_edit_inventory`, `can_delete_inventory`, `can_edit_blends`, `can_delete_blends` from `PermissionKey`, `ALL_PERMISSION_KEYS`, `PERMISSION_GROUPS`, role defaults, and the `PERMISSION_MATRIX` (which now shows both modules as read-only) — nothing in the app checked them anymore once the UI came out, so leaving them would just be confusing dead toggles on the Users & Roles page. `can_view_inventory`/`can_view_blends` are untouched; viewing still works exactly as before.
+
 ## 2026-08-11 — Alyssa (Bag label design: confirmed final layout, PPLB + browser preview)
 
 **Files changed:** `lib/production/label-pplb.ts`, `lib/production/label-print.ts`
