@@ -24,9 +24,9 @@ function clean(s: string): string {
 
 // ── Geometry ────────────────────────────────────────────────────────────────
 // Argox CP-2140EX / CP-2140EX PRO, 203dpi = 8 dots/mm.
-// Landscape label 100mm × 50mm = 800 × 400 dots. Origin top-left.
+// Landscape label 100mm × 49.2mm = 800 × 394 dots. Origin top-left.
 const W = 800
-const H = 400
+const H = 394
 
 // PPLB bitmap font cell sizes in dots at multiplier 1 — used to centre text.
 const FONT_W: Record<number, number> = { 1: 8, 2: 10, 3: 12, 4: 14, 5: 32 }
@@ -45,7 +45,7 @@ function code128WidthDots(data: string, narrowDots: number): number {
 /**
  * Bag tag in PPLB (EPL2-compatible), for the Argox printers.
  *
- * Layout — "barcode hero", balanced for a 100 × 50mm landscape label:
+ * Layout — "barcode hero", balanced for a 100 × 49.2mm landscape label:
  *   product name + section          top-left
  *   TYPE/GRADE badge                top-right, filled black box, white text
  *   Code 128 barcode                centred, ~18.5mm tall (spec: 25-35mm was
@@ -100,7 +100,7 @@ export function buildLabelPplb(bag: OutputBag): string {
   const lines: string[] = [
     'N',                 // clear buffer
     `q${W}`,             // width 100mm
-    `Q${H},24`,          // length 50mm, 3mm gap
+    `Q${H},24`,          // length 49.2mm, 3mm gap
     'D8',                // darkness
     'S4',                // speed
 
