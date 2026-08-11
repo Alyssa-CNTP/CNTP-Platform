@@ -6,7 +6,7 @@
 // Current: browser print to regular printer (100mm × 75mm page size)
 
 import type { OutputBag } from './live-types'
-import { VARIANT_LABELS, GRADE_LABELS } from './live-types'
+import { GRADE_LABELS } from './live-types'
 import { encodeCode128, getCode128Width } from '@/lib/production/code128'
 
 // Type = the organic/RA classification (RA CON / CON / ORG / RA ORG).
@@ -20,7 +20,6 @@ const GRADE_FULL: Record<string, string> = {
 }
 
 function buildLabelHtml(bag: OutputBag): string {
-  const typeLabel  = VARIANT_LABELS[bag.variant] ?? bag.variant
   const gradeShort = GRADE_FULL[bag.grade] ?? GRADE_LABELS[bag.grade] ?? bag.grade
 
   const dateFormatted = new Date(bag.created_at).toLocaleDateString('en-ZA', {
@@ -58,12 +57,12 @@ function buildLabelHtml(bag: OutputBag): string {
   .product-name { font-size: 11pt; font-weight: 800; line-height: 1.1; }
   .section-name { font-size: 7pt; color: #444; margin-top: 0.5mm; }
   .type-grade-box {
-    border: 1.5px solid #000; padding: 1mm 2.5mm; text-align: center;
+    border: 1.5px solid #000; padding: 1mm 2.5mm; text-align: left;
     min-width: 22mm; flex-shrink: 0;
   }
-  .type-grade-box .tg-line {
-    font-size: 8pt; font-weight: 800; line-height: 1.3;
-  }
+  .type-grade-box .tg-label { font-size: 5.5pt; font-weight: 700; letter-spacing: 0.08em; }
+  .type-grade-box .tg-value { font-size: 8pt; font-weight: 800; line-height: 1.15; margin-bottom: 0.8mm; }
+  .type-grade-box .tg-value:last-child { margin-bottom: 0; }
   .barcode-area {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -97,8 +96,10 @@ function buildLabelHtml(bag: OutputBag): string {
       <div class="section-name">${bag.section_name}</div>
     </div>
     <div class="type-grade-box">
-      <div class="tg-line">TYPE: ${typeLabel}</div>
-      <div class="tg-line">GRADE: ${bag.grade} ${gradeShort}</div>
+      <div class="tg-label">TYPE</div>
+      <div class="tg-value">${bag.variant}</div>
+      <div class="tg-label">GRADE</div>
+      <div class="tg-value">${bag.grade} ${gradeShort}</div>
     </div>
   </div>
 
