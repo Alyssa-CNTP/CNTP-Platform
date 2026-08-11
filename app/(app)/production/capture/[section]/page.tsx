@@ -1129,6 +1129,52 @@ function CaptureScreen() {
     await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
     if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
 
+    // ── Pasteuriser finished-product bags ──────────────────────────────────────
+    // Every other section registers each output bag in bag_tags at bagging time,
+    // so it can be scanned/tracked downstream. Pasteuriser output is captured as
+    // bag *ranges* (a count + optional start/end number), so we expand each range
+    // into individual bag_tags rows here — one scannable finished bag per unit.
+    // Serial carries the batch/lot number + the physical bag number:
+    // "{LOT}-{NNN}" (e.g. 26244-CON-SFC-001). Rebuilt on every save: upsert the
+    // current set, then prune only still-in_stock rows that dropped out (e.g. the
+    // operator lowered the count) — anything already moved/dispatched downstream
+    // is left untouched.
+    if (isPasteuriser(sectionId)) {
+      const outBags: any[] = []
+      const seen = new Set<string>()
+      prods.forEach(p => {
+        const pd = p.data as PasteuriserData
+        ;(pd.outputs ?? []).forEach(line => {
+          const count = Math.max(0, Math.floor(n(line.bagCount)))
+          const lot   = upperCode(line.lot || pd.batchNo || '')
+          if (count === 0 || !lot) return
+          const startNo = parseInt(line.startBag, 10)
+          const bagW    = n(line.bagWeight) || n(pd.weightPerBag) || null
+          for (let i = 0; i < count; i++) {
+            const physicalNo = Number.isFinite(startNo) ? startNo + i : i + 1
+            const serial = `${lot}-${String(physicalNo).padStart(3, '0')}`
+            if (seen.has(serial)) continue   // overlapping ranges within a batch — keep first
+            seen.add(serial)
+            outBags.push({
+              serial_number: serial, section_id: 'pasteuriser', session_id: sid,
+              product_type: line.item || pd.item || 'Rooibos Final Product',
+              variant: p.variant || null, weight_kg: bagW, lot_number: lot,
+              acumatica_id: line.itemCode || pd.itemCode || null,
+              status: 'in_stock', consumed: false,
+              batch_id: bidFor(lot) ?? sessionBatchId,
+            })
+          }
+        })
+      })
+      if (outBags.length) {
+        await db.schema('production').from('bag_tags').upsert(outBags as any, { onConflict: 'serial_number' })
+      }
+      const { data: existingOut } = await db.schema('production').from('bag_tags')
+        .select('serial_number').eq('session_id', sid).eq('section_id', 'pasteuriser').eq('status', 'in_stock')
+      const stale = ((existingOut as any[]) ?? []).map(r => r.serial_number as string).filter(s => !seen.has(s))
+      if (stale.length) await db.schema('production').from('bag_tags').delete().in('serial_number', stale)
+    }
+
     let mbA = 0, mbB = 0, mbC = 0, mbD = 0
     if (sectionId.startsWith('refining')) {
       prods.forEach(p => {
