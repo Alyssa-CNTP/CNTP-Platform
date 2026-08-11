@@ -3,6 +3,16 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (Production dashboard follow-up: chart tooltips, PO product descriptions, quality who/when)
+
+**Files changed:** `components/production/PivotDashboard.tsx`, `app/api/production/dashboard-rows/route.ts`, `app/api/production/dashboard-supply/route.ts`
+
+- **Charts weren't interactable.** `PivotChart` (Floor/Quality/Machine) and `SolarChart` now put a native `<title>` tooltip on every point/bar — the date-mode line charts previously only marked the single last point per line, so hovering anywhere else on the line showed nothing.
+- **PO reference codes were unreadable without memorizing them.** There's no real Acumatica production-order sync in this codebase (`prod_sessions.production_orders` is an operator-typed label, not a synced order), so `dashboard-supply` now derives a **Product** column from what was actually bagged under that PO reference (`prod_bagging.product_type`) — the honest signal actually available. Added a matching `SupplyChart` trend chart (daily output for the top 8 PO references by volume), since the Supply & demand tab previously had no chart at all.
+- **Quality → production connection now surfaces who/when.** `dashboard-rows` adds `checkOperator`/`checkSupervisor`/`lastCheckedAt`/`lastCheckActor` (machine checks, from `check_records`/`check_events`) and `qcName`/`qcCheckedAt` (quality runs, from `qms.sd_runs`/`granule_runs`/`granule_samples`/`quality_records`). New **"Quality checks — who & when"** detail table on the Quality tab lists every QC-tracked line-shift with its reading, pass/fail result, and who recorded it, out-of-spec rows highlighted. The Needs Action panel's flag text for QC fails and machine check failures now includes the same who/when detail instead of just the metric.
+
+---
+
 ## 2026-08-09 — Gustav (Maintenance: mobile layout fixes for the checklists and shift summary)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`
