@@ -34,7 +34,10 @@ interface Row {
   inputKg: number; outputKg: number; hours: number | null; bags: number; toleranceKg: number
   checkTotal: number | null; checkOk: number | null; checkFlagged: number | null; checkFailed: number | null
   vsdHz: number | null
+  checkOperator: string | null; checkSupervisor: string | null
+  lastCheckedAt: string | null; lastCheckActor: string | null
   moisture: number | null; bulkDensity: number | null; paLevel: number | null; passed: boolean | null
+  qcName: string | null; qcCheckedAt: string | null
 }
 
 type Domain = 'floor' | 'quality' | 'machine' | 'supply' | 'solar'
@@ -50,6 +53,22 @@ const avgOr = (rows: Row[], k: keyof Row): number | null => {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
 }
 const fmtDateLabel = (iso: string) => format(new Date(iso + 'T12:00:00'), 'd MMM')
+// A quality/check timestamp in this app is one of three shapes: a bare date
+// ("2026-08-05", nothing to show as a time), a real UTC instant with a "Z" or
+// offset (check_events.recorded_at, quality_records.created_at — convert to
+// SAST), or "date" + a floor-operator-entered SAST wall-clock time glued on
+// with no timezone marker (sd_runs.time_of_run, granule_samples.sample_time —
+// already SAST, just read the clock portion back out, don't re-convert it).
+const fmtTime = (v: string | null): string | null => {
+  if (!v || v.length <= 10) return null
+  const hasOffset = v.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(v)
+  if (hasOffset) {
+    const d = new Date(v)
+    if (isNaN(d.getTime())) return null
+    return new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(d)
+  }
+  return v.split('T')[1]?.slice(0, 5) ?? null
+}
 
 // ── Metric configs — the "how it was calculated" text shown in each info tip ──
 interface MetricConf {
@@ -173,8 +192,10 @@ export default function PivotDashboard() {
     const out: Flag[] = []
     if (domain === 'machine') {
       filteredRows.forEach(r => {
-        if ((r.checkFailed ?? 0) > 0) out.push({ sev: 'crit', date: r.date, shift: r.shift, title: `${r.sectionName} — ${r.checkFailed} failed check(s)`, body: `A machine check failed on ${fmtDateLabel(r.date)} ${r.shift}.` })
-        else if ((r.checkFlagged ?? 0) >= 2) out.push({ sev: 'warn', date: r.date, shift: r.shift, title: `${r.sectionName} — ${r.checkFlagged} flagged checks`, body: `Multiple out-of-spec readings on ${fmtDateLabel(r.date)} ${r.shift}.` })
+        const who = r.checkOperator ? ` Logged by ${r.checkOperator}${r.checkSupervisor ? `, supervisor ${r.checkSupervisor}` : ''}.` : ''
+        const when = fmtTime(r.lastCheckedAt); const at = when ? ` Last check ${when} SAST${r.lastCheckActor ? ` (${r.lastCheckActor})` : ''}.` : ''
+        if ((r.checkFailed ?? 0) > 0) out.push({ sev: 'crit', date: r.date, shift: r.shift, title: `${r.sectionName} — ${r.checkFailed} failed check(s)`, body: `A machine check failed on ${fmtDateLabel(r.date)} ${r.shift}.${who}${at}` })
+        else if ((r.checkFlagged ?? 0) >= 2) out.push({ sev: 'warn', date: r.date, shift: r.shift, title: `${r.sectionName} — ${r.checkFlagged} flagged checks`, body: `Multiple out-of-spec readings on ${fmtDateLabel(r.date)} ${r.shift}.${who}${at}` })
       })
     } else if (domain === 'supply') {
       // No demand figure to compare against yet — see the Supply & demand card's note.
@@ -182,7 +203,11 @@ export default function PivotDashboard() {
       filteredRows.forEach(r => {
         const yieldPct = r.inputKg ? r.outputKg / r.inputKg * 100 : null
         if (yieldPct != null && yieldPct < 85) out.push({ sev: 'crit', date: r.date, shift: r.shift, title: `${r.sectionName} — yield ${yieldPct.toFixed(1)}%`, body: `Below the 85% floor — check the mass balance for ${fmtDateLabel(r.date)} ${r.shift}.` })
-        if (r.passed === false) out.push({ sev: 'warn', date: r.date, shift: r.shift, title: `${r.sectionName} — QC fail`, body: `${r.variant ?? 'Unknown variant'} sample failed spec on ${fmtDateLabel(r.date)} ${r.shift} — hold the batch pending re-check.` })
+        if (r.passed === false) {
+          const who = r.qcName ? ` Checked by ${r.qcName}` : ''
+          const when = fmtTime(r.qcCheckedAt); const at = when ? ` at ${when} SAST` : ''
+          out.push({ sev: 'warn', date: r.date, shift: r.shift, title: `${r.sectionName} — QC fail`, body: `${r.variant ?? 'Unknown variant'} sample failed spec on ${fmtDateLabel(r.date)} ${r.shift}.${who}${at} — hold the batch pending re-check.` })
+        }
       })
     }
     return out.sort((a, b) => b.date.localeCompare(a.date))
@@ -425,6 +450,9 @@ export default function PivotDashboard() {
         </>
       )}
 
+      {/* Quality checks — who & when, straight from the quality↔production join */}
+      {domain === 'quality' && <QualityDetailTable rows={filteredRows} />}
+
       {/* Supply & demand */}
       {domain === 'supply' && supply && (
         <div className="card p-4">
@@ -437,11 +465,12 @@ export default function PivotDashboard() {
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-[12px]">
-              <thead><tr className="border-b border-surface-rule">{['PO reference', 'Output supplied', 'Sessions', 'Lines', 'First', 'Last'].map(h => <th key={h} className="text-left px-2.5 py-2 text-[10.5px] uppercase tracking-wide text-text-faint font-semibold">{h}</th>)}</tr></thead>
+              <thead><tr className="border-b border-surface-rule">{['PO reference', 'Product', 'Output supplied', 'Sessions', 'Lines', 'First', 'Last'].map(h => <th key={h} className="text-left px-2.5 py-2 text-[10.5px] uppercase tracking-wide text-text-faint font-semibold">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-surface-rule">
                 {supply.orders.slice(0, 30).map((o: any) => (
                   <tr key={o.poRef} className="hover:bg-surface-dim/40">
                     <td className="px-2.5 py-2 font-mono text-text">{o.poRef}</td>
+                    <td className="px-2.5 py-2 text-text-muted">{o.product ?? '—'}</td>
                     <td className="px-2.5 py-2 font-mono">{o.outputKg.toLocaleString()} kg</td>
                     <td className="px-2.5 py-2 font-mono">{o.sessions}</td>
                     <td className="px-2.5 py-2">{o.sections.map((s: any) => <span key={s.id} className="inline-block w-2 h-2 rounded-full mr-1" style={{ background: s.colorHex }} title={s.name} />)}</td>
@@ -455,6 +484,8 @@ export default function PivotDashboard() {
           </div>
         </div>
       )}
+
+      {domain === 'supply' && supply && supply.orders.length > 0 && <SupplyChart orders={supply.orders} />}
 
       {/* Solar */}
       {domain === 'solar' && (
@@ -581,18 +612,22 @@ function PivotChart({ pivot, colDim, activeMetric }: { pivot: { cols: string[]; 
     const stepX = innerW / Math.max(1, pivot.cols.length - 1)
     marks = pivot.body.map((row: any) => {
       const pts: string[] = []; let last: { x: number; y: number; v: number } | null = null
+      const pointMarks: ReactElement[] = []
       row.cells.forEach((v: number | null, i: number) => {
         if (v == null) return
         const x = padL + stepX * i, y = padT + innerH - v / maxV * innerH
         pts.push(`${x.toFixed(1)},${y.toFixed(1)}`); last = { x, y, v }
+        pointMarks.push(
+          <circle key={`pt-${row.id}-${i}`} cx={x} cy={y} r={4} fill={row.colorHex} stroke="var(--surface-card)" strokeWidth={1}>
+            <title>{`${row.name} — ${fmtDateLabel(pivot.cols[i])}: ${activeMetric.fmt(v)}`}</title>
+          </circle>
+        )
       })
       return (
         <g key={row.id}>
           {pts.length > 0 && <polyline points={pts.join(' ')} fill="none" stroke={row.colorHex} strokeWidth={2.5} />}
-          {last && <>
-            <circle cx={(last as any).x} cy={(last as any).y} r={4} fill={row.colorHex} />
-            <text x={(last as any).x + 7} y={(last as any).y - 6} fontSize={12} fontWeight={600} fill={row.colorHex}>{activeMetric.fmt((last as any).v)}</text>
-          </>}
+          {pointMarks}
+          {last && <text x={(last as any).x + 7} y={(last as any).y - 6} fontSize={12} fontWeight={600} fill={row.colorHex}>{activeMetric.fmt((last as any).v)}</text>}
         </g>
       )
     })
@@ -609,7 +644,7 @@ function PivotChart({ pivot, colDim, activeMetric }: { pivot: { cols: string[]; 
       pivot.body.forEach((row: any, ri: number) => {
         const v = row.cells[ci]; if (v == null) return
         const bh = v / maxV * innerH, bx = gx + barGap + ri * (barW + barGap), by = padT + innerH - bh
-        marks.push(<rect key={row.id + c} x={bx} y={by} width={barW} height={bh} fill={row.colorHex} rx={2} />)
+        marks.push(<rect key={row.id + c} x={bx} y={by} width={barW} height={bh} fill={row.colorHex} rx={2}><title>{`${row.name} — ${c}: ${activeMetric.fmt(v)}`}</title></rect>)
         if (barW >= 16) marks.push(<text key={'v' + row.id + c} x={bx + barW / 2} y={by - 5} textAnchor="middle" fontSize={10.5} fill="var(--text-muted)">{activeMetric.fmt(v)}</text>)
       })
     })
@@ -621,6 +656,106 @@ function PivotChart({ pivot, colDim, activeMetric }: { pivot: { cols: string[]; 
       <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>{gridLines}{marks}</svg>
       <div className="flex flex-wrap gap-3.5 mt-3.5">
         {pivot.body.map((row: any) => <span key={row.id} className="inline-flex items-center gap-1.5 text-[13px] font-medium text-text-muted"><span className="w-2.5 h-2.5 rounded-full" style={{ background: row.colorHex }} />{row.name}</span>)}
+      </div>
+    </div>
+  )
+}
+
+// ── Supply chart — daily output trend for the top PO references by volume ──
+function SupplyChart({ orders }: { orders: any[] }) {
+  const top = [...orders].sort((a, b) => b.outputKg - a.outputKg).slice(0, 8)
+  const allDates = [...new Set(top.flatMap(o => Object.keys(o.byDate || {})))].sort()
+  if (!allDates.length) return null
+  const W = 1180, H = 320, padL = 54, padB = 30, padT = 16, padR = 16
+  const innerW = W - padL - padR, innerH = H - padT - padB
+  const maxV = Math.max(...top.flatMap(o => allDates.map(d => o.byDate[d] || 0))) * 1.18 || 1
+  const stepX = innerW / Math.max(1, allDates.length - 1)
+  const everyN = Math.ceil(allDates.length / 8)
+  const palette = [C.brand, C.accent, C.azure, C.warn, C.err, C.ok, C.info, C.gray]
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center gap-1.5 mb-3">
+        <h3 className="text-[14.5px] font-semibold text-text">Output supplied over time — top PO references</h3>
+        <InfoTip text="Daily bagged output (kg) for the 8 largest PO references by total output in this window. Source: prod_bagging, via /api/production/dashboard-supply." />
+      </div>
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
+        {[0, 1, 2, 3, 4].map(g => {
+          const y = padT + innerH - innerH * g / 4
+          return <g key={g}><line x1={padL} y1={y} x2={W - padR} y2={y} stroke="var(--surface-rule)" /><text x={padL - 10} y={y + 4} textAnchor="end" fontSize={12} fill="var(--text-faint)">{Math.round(maxV * g / 4).toLocaleString()}</text></g>
+        })}
+        {top.map((o, oi) => {
+          const color = palette[oi % palette.length]
+          const pts: string[] = []
+          const pointMarks: ReactElement[] = []
+          allDates.forEach((d, i) => {
+            const v = o.byDate[d]
+            if (v == null) return
+            const x = padL + stepX * i, y = padT + innerH - v / maxV * innerH
+            pts.push(`${x.toFixed(1)},${y.toFixed(1)}`)
+            pointMarks.push(
+              <circle key={`${o.poRef}-${i}`} cx={x} cy={y} r={3.5} fill={color}>
+                <title>{`${o.poRef} — ${fmtDateLabel(d)}: ${Math.round(v).toLocaleString()} kg`}</title>
+              </circle>
+            )
+          })
+          return <g key={o.poRef}>{pts.length > 0 && <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth={2.5} />}{pointMarks}</g>
+        })}
+        {allDates.map((d, i) => (i % everyN !== 0 && i !== allDates.length - 1) ? null : (
+          <text key={'x' + d} x={padL + stepX * i} y={H - 8} textAnchor="middle" fontSize={12} fill="var(--text-faint)">{fmtDateLabel(d)}</text>
+        ))}
+      </svg>
+      <div className="flex flex-wrap gap-3.5 mt-3.5">
+        {top.map((o, oi) => (
+          <span key={o.poRef} className="inline-flex items-center gap-1.5 text-[13px] font-medium text-text-muted">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: palette[oi % palette.length] }} />{o.poRef}{o.product ? ` — ${o.product}` : ''}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Quality detail — who ran each QC-tracked line-shift, and when ──────────
+function QualityDetailTable({ rows }: { rows: Row[] }) {
+  const qcRows = [...rows]
+    .filter(r => r.passed != null || r.moisture != null || r.bulkDensity != null || r.paLevel != null)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.sectionName.localeCompare(b.sectionName))
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center gap-1.5 mb-3">
+        <h3 className="text-[14.5px] font-semibold text-text">Quality checks — who &amp; when</h3>
+        <InfoTip text="Every QC-tracked line-shift in the current filters, with the reading, pass/fail result, and who recorded the check. Out-of-spec rows are highlighted." />
+        <span className="ml-auto text-[11.5px] text-text-faint">{qcRows.length} QC-tracked line-shift(s)</span>
+      </div>
+      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+        <table className="w-full text-[12px]">
+          <thead className="sticky top-0 bg-surface-card">
+            <tr className="border-b border-surface-rule">
+              {['Date', 'Shift', 'Line', 'Variant', 'Moisture', 'Bulk density', 'PA %', 'Result', 'Checked by', 'Checked at'].map(h => (
+                <th key={h} className="text-left px-2.5 py-2 text-[10.5px] uppercase tracking-wide text-text-faint font-semibold whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-surface-rule">
+            {qcRows.map(r => (
+              <tr key={r.sessionId} className={`hover:bg-surface-dim/40 ${r.passed === false ? 'bg-err/5' : ''}`}>
+                <td className="px-2.5 py-2 text-text-muted whitespace-nowrap">{fmtDateLabel(r.date)}</td>
+                <td className="px-2.5 py-2 text-text-muted">{r.shift}</td>
+                <td className="px-2.5 py-2 font-medium text-text whitespace-nowrap"><span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ background: r.colorHex }} />{r.sectionName}</td>
+                <td className="px-2.5 py-2 text-text-muted">{r.variant ?? '—'}</td>
+                <td className="px-2.5 py-2 font-mono">{r.moisture != null ? `${r.moisture.toFixed(1)}%` : '—'}</td>
+                <td className="px-2.5 py-2 font-mono">{r.bulkDensity != null ? Math.round(r.bulkDensity) : '—'}</td>
+                <td className="px-2.5 py-2 font-mono">{r.paLevel != null ? `${r.paLevel.toFixed(1)}%` : '—'}</td>
+                <td className="px-2.5 py-2">{r.passed == null ? <span className="text-text-faint">—</span> : r.passed ? <span className="text-ok font-semibold">Pass</span> : <span className="text-err font-semibold">Fail</span>}</td>
+                <td className="px-2.5 py-2 text-text-muted whitespace-nowrap">{r.qcName ?? '—'}</td>
+                <td className="px-2.5 py-2 text-text-muted font-mono whitespace-nowrap">{fmtTime(r.qcCheckedAt) ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!qcRows.length && <div className="text-center text-[12px] text-text-faint py-6">No QC-tracked line-shifts in range.</div>}
       </div>
     </div>
   )
@@ -643,8 +778,8 @@ function SolarChart({ days }: { days: any[] }) {
           const hSolar = solar / maxV * innerH, hGrid = grid / maxV * innerH, ySolar = padT + innerH - hSolar
           return (
             <g key={d.day}>
-              <rect x={gx} y={ySolar} width={barW} height={hSolar} fill={C.warn} rx={2} />
-              <rect x={gx} y={ySolar - hGrid} width={barW} height={hGrid} fill={C.accent} rx={2} />
+              <rect x={gx} y={ySolar} width={barW} height={hSolar} fill={C.warn} rx={2}><title>{`${fmtDateLabel(d.day)} — Solar: ${Math.round(solar).toLocaleString()} kWh`}</title></rect>
+              <rect x={gx} y={ySolar - hGrid} width={barW} height={hGrid} fill={C.accent} rx={2}><title>{`${fmtDateLabel(d.day)} — Grid: ${Math.round(grid).toLocaleString()} kWh`}</title></rect>
               <text x={gx + barW / 2} y={ySolar - hGrid - 6} textAnchor="middle" fontSize={10.5} fill="var(--text-muted)">{Math.round(solar + grid).toLocaleString()}</text>
               {(i % everyN === 0 || i === days.length - 1) && <text x={gx + barW / 2} y={H - 8} textAnchor="middle" fontSize={12} fill="var(--text-faint)">{fmtDateLabel(d.day)}</text>}
             </g>
