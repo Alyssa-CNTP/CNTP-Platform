@@ -393,6 +393,18 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 
 ---
 
+## 2026-08-11 — Alyssa (Bag label design: confirmed final layout, PPLB + browser preview)
+
+**Files changed:** `lib/production/label-pplb.ts`, `lib/production/label-print.ts`
+
+Confirmed final bag-tag design (100×50mm landscape, Argox CP-2140EX/PPLB), applied identically to the physical printer template and the browser-print HTML fallback so the two never drift apart again:
+
+- TYPE/GRADE: solid filled black badge, single reversed-white line (e.g. `CON - Export`) top-right — replaces an earlier bordered 4-line box that was never actually approved.
+- Header: product name (bold, larger) + section name (thin, smaller) sit inline on one line, not stacked.
+- No separator rule between the barcode and the footer.
+- Footer's three columns (LOT/BATCH, WEIGHT, DATE) spread left/center/right instead of all left-aligned.
+- This is the locked-in design — don't redesign it again without an explicit request.
+
 ## 2026-08-11 — Alyssa (HR training: Supervisor Hub — Managing Shifts & Reports course + assessment)
 
 **Files changed:** `supabase/migrations/20260811_001_supervisor_hub_course.sql` (new)
