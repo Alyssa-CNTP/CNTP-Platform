@@ -188,7 +188,11 @@ async function lookupSerial(serial: string): Promise<{
       product_type: data.product_type || '',
       variant:      data.variant || '',
     }
-  } catch {
+  } catch (e) {
+    // A thrown error here is a real DB/network failure, not a genuinely-absent
+    // bag — log it so "serial only, fields blank" can be told apart from a
+    // truly-unregistered bag when diagnosing scan issues.
+    console.error('[RefiningCapture] serial lookup failed', e)
     return null
   }
 }
