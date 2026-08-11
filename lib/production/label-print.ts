@@ -3,7 +3,7 @@
 // 1. Replace window.open/print with ZPL commands sent to http://localhost:9100 (Zebra)
 // 2. ZPL template stored in lib/production/label-zpl.ts
 // 3. Module width changes: moduleWidth: 0.3 (Zebra 203dpi) or 0.5 (300dpi)
-// Current: browser print to regular printer (100mm × 75mm page size)
+// Current: browser print to regular printer (100mm × 49.2mm page size)
 
 import type { OutputBag } from './live-types'
 import { GRADE_LABELS } from './live-types'
@@ -45,15 +45,15 @@ function buildLabelHtml(bag: OutputBag): string {
 <meta charset="UTF-8">
 <title>Bag Label — ${bag.serial_number}</title>
 <style>
-  @page { size: 100mm 50mm; margin: 0; }
+  @page { size: 100mm 49.2mm; margin: 0; }
   @media print {
-    html, body { margin: 0; padding: 0; width: 100mm; height: 50mm; }
+    html, body { margin: 0; padding: 0; width: 100mm; height: 49.2mm; }
     .no-print { display: none !important; }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
-    width: 100mm; height: 50mm;
+    width: 100mm; height: 49.2mm;
     padding: 1.5mm 2.5mm;
     display: flex; flex-direction: column;
     background: #fff; color: #000;
