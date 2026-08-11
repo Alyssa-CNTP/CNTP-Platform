@@ -9,18 +9,27 @@ import type { OutputBag } from './live-types'
 import { GRADE_LABELS } from './live-types'
 import { encodeCode128, getCode128Width } from '@/lib/production/code128'
 
-// Type = the organic/RA classification (RA CON / CON / ORG / RA ORG).
-// Grade = the export/domestic classification (Export A / Export Blend B / Domestic C).
-// These are the two things an operator must read at a glance, so they get their
-// own clearly-labelled fields — not one cramped badge.
 const GRADE_FULL: Record<string, string> = {
   'A': 'Export',
   'B': 'Export Blend',
   'C': 'Domestic / Local',
 }
 
+// Full Acumatica variant word → short code shown in the TYPE/GRADE badge —
+// must match capture-config.ts VARIANT_OPTIONS short values.
+const VARIANT_SHORT: Record<string, string> = {
+  'Conventional':    'CON',
+  'Organic':         'ORG',
+  'RA-Conventional': 'RA CON',
+  'RA-Organic':      'RA ORG',
+  'FT-ORG':          'FT ORG',
+  'FT-CON':          'FT CON',
+}
+
 function buildLabelHtml(bag: OutputBag): string {
-  const gradeShort = GRADE_FULL[bag.grade] ?? GRADE_LABELS[bag.grade] ?? bag.grade
+  const gradeShort   = GRADE_FULL[bag.grade] ?? GRADE_LABELS[bag.grade] ?? bag.grade
+  const variantShort = VARIANT_SHORT[bag.variant] ?? bag.variant
+  const badgeText     = `${variantShort} - ${gradeShort}`
 
   const dateFormatted = new Date(bag.created_at).toLocaleDateString('en-ZA', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -43,7 +52,7 @@ function buildLabelHtml(bag: OutputBag): string {
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: 'Arial Narrow', Arial, Helvetica, sans-serif;
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
     width: 100mm; height: 50mm;
     padding: 1.5mm 2.5mm;
     display: flex; flex-direction: column;
@@ -53,16 +62,14 @@ function buildLabelHtml(bag: OutputBag): string {
     display: flex; align-items: flex-start; justify-content: space-between;
     margin-bottom: 1mm;
   }
-  .header-left { display: flex; flex-direction: column; }
-  .product-name { font-size: 11pt; font-weight: 800; line-height: 1.1; }
-  .section-name { font-size: 7pt; color: #444; margin-top: 0.5mm; }
-  .type-grade-box {
-    border: 1.5px solid #000; padding: 1mm 2.5mm; text-align: left;
-    min-width: 22mm; flex-shrink: 0;
+  .header-left { display: flex; align-items: baseline; gap: 1.8mm; }
+  .product-name { font-size: 13.5pt; font-weight: 800; line-height: 1.1; }
+  .section-name { font-size: 8pt; font-weight: 300; color: #555; }
+  .type-grade-badge {
+    background: #000; color: #fff; padding: 1.5mm 2.8mm; text-align: center;
+    min-width: 20mm; flex-shrink: 0;
+    font-size: 7pt; font-weight: 700; white-space: nowrap;
   }
-  .type-grade-box .tg-label { font-size: 5.5pt; font-weight: 700; letter-spacing: 0.08em; }
-  .type-grade-box .tg-value { font-size: 8pt; font-weight: 800; line-height: 1.15; margin-bottom: 0.8mm; }
-  .type-grade-box .tg-value:last-child { margin-bottom: 0; }
   .barcode-area {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -74,12 +81,13 @@ function buildLabelHtml(bag: OutputBag): string {
     font-size: 10pt; font-weight: 700;
     letter-spacing: 0.15em; margin-top: 1mm; text-align: center;
   }
-  .rule { border: none; border-top: 0.5mm solid #000; margin: 0.5mm 2.5mm; }
   .footer-row {
     display: grid; grid-template-columns: 1fr 1fr 1fr;
     padding: 0 2.5mm;
   }
-  .footer-cell {}
+  .footer-cell { text-align: center; }
+  .footer-cell:first-child { text-align: left; }
+  .footer-cell:last-child { text-align: right; }
   .footer-label { font-size: 5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #666; font-weight: 700; }
   .footer-value { font-size: 8pt; font-weight: 800; line-height: 1.2; }
   .print-btn {
@@ -95,20 +103,13 @@ function buildLabelHtml(bag: OutputBag): string {
       <div class="product-name">${bag.product_type}</div>
       <div class="section-name">${bag.section_name}</div>
     </div>
-    <div class="type-grade-box">
-      <div class="tg-label">TYPE</div>
-      <div class="tg-value">${bag.variant}</div>
-      <div class="tg-label">GRADE</div>
-      <div class="tg-value">${bag.grade} ${gradeShort}</div>
-    </div>
+    <div class="type-grade-badge">${badgeText}</div>
   </div>
 
   <div class="barcode-area">
     ${barcodeSvg}
     <div class="serial">${bag.serial_number}</div>
   </div>
-
-  <hr class="rule">
 
   <div class="footer-row">
     <div class="footer-cell">
