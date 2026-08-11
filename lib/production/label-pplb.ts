@@ -11,33 +11,47 @@ function clean(s: string): string {
   return String(s ?? '').replace(/"/g, "'").replace(/[\r\n]/g, ' ')
 }
 
-// Estimated Code 128 (Set B) symbol width in dots, so the barcode can be
-// centered regardless of serial length/format. Modules: START(11) + one 11-module
-// symbol per data char + CHECK(11) + STOP(13).
+// ── Geometry ────────────────────────────────────────────────────────────────
+// Argox CP-2140EX / CP-2140EX PRO, 203dpi = 8 dots/mm.
+// Landscape label 100mm × 50mm = 800 × 400 dots. Origin top-left.
+const W = 800
+const H = 400
+
+// PPLB bitmap font cell sizes in dots at multiplier 1 — used to centre text.
+const FONT_W: Record<number, number> = { 1: 8, 2: 10, 3: 12, 4: 14, 5: 32 }
+
+function centreX(text: string, font: number, mult = 1): number {
+  const w = text.length * FONT_W[font] * mult
+  return Math.max(8, Math.round((W - w) / 2))
+}
+
+// Code 128 symbol width in dots. Set B worst case: START(11) + 11 per data char
+// + CHECK(11) + STOP(13). Used to centre the barcode for any serial length.
 function code128WidthDots(data: string, narrowDots: number): number {
-  const modules = 11 * (data.length + 2) + 13
-  return modules * narrowDots
+  return (11 * (data.length + 2) + 13) * narrowDots
 }
 
 /**
- * Argox CP-2140EX label in PPLB (EPL2-compatible) command language.
+ * Bag tag in PPLB (EPL2-compatible), for the Argox printers.
  *
- * PPLB command set (Eltron/EPL2 style):
- *   N                         clear image buffer
- *   q<dots>                   label width
- *   Q<dots>,<gap>             label length, gap between labels
- *   D<0-15>                   print density/darkness
- *   S<speed>                  print speed
+ * Layout — "barcode hero", balanced for a 100 × 50mm landscape label:
+ *   product name + section          top-left
+ *   TYPE / GRADE box                top-right
+ *   Code 128 barcode                centred, ~18.5mm tall (spec: 25-35mm was
+ *                                   over half the label height and forced the
+ *                                   header/footer against the edges)
+ *   serial in human-readable text   centred beneath the barcode
+ *   LOT/BATCH · WEIGHT · DATE       footer row, three columns
+ *
+ * PPLB command reference:
+ *   N                                 clear image buffer
+ *   q<dots> / Q<dots>,<gap>           label width / length,gap
+ *   D<0-15> / S<speed>                darkness / print speed
  *   A x,y,rot,font,hm,vm,rev,"data"   text
  *   B x,y,rot,type,nw,wd,h,HRI,"data" barcode ("1" = Code 128)
- *   LO x,y,width,height               filled black box (used as a line when height is small)
+ *   LO x,y,width,height               filled black box (thin = rule line)
  *   X x1,y1,thickness,x2,y2           box outline
- *   P<copies>                 print
- *
- * Geometry: 203dpi = 8 dots/mm. Label is landscape, 100mm × 50mm = 800 × 400 dots.
- * Barcode is horizontally centered with generous quiet zone (spec: ≥5–10mm each
- * side) and sized to 25–35mm of vertical height, per the printed-tag spec. Origin
- * is top-left. Commands terminated with CRLF.
+ *   P<copies>                         print
  */
 export function buildLabelPplb(bag: OutputBag): string {
   const gradeShort = GRADE_SHORT[bag.grade] ?? bag.grade
@@ -51,53 +65,50 @@ export function buildLabelPplb(bag: OutputBag): string {
   const productName = clean(bag.product_type).slice(0, 26)
   const sectionName = clean(bag.section_name).slice(0, 30)
   const serial      = clean(bag.serial_number)
+  const variant     = clean(bag.variant)
+  const gradeText   = `${clean(bag.grade)} ${clean(gradeShort)}`.trim()
 
-  const CANVAS_WIDTH = 800   // 100mm
-  const NARROW       = 2     // dots per module
+  // Narrow bar 3 dots makes the symbol span ~2/3 of the label width — wider bars
+  // scan more reliably than the previous 2-dot version, and it fills the dead
+  // space either side while keeping a quiet zone well above the 5mm minimum.
+  const NARROW = 3
+  const barcodeW = code128WidthDots(serial, NARROW)
+  const barcodeX = Math.max(40, Math.round((W - barcodeW) / 2))
+  const BARCODE_Y = 90
+  const BARCODE_H = 150   // ~18.5mm
 
-  // Centre the barcode horizontally; clamp so it never eats into the minimum
-  // 5mm (40 dot) quiet zone even for an unusually long serial.
-  const barcodeWidth = code128WidthDots(serial, NARROW)
-  const minMargin     = 40
-  const barcodeX = Math.max(minMargin, Math.round((CANVAS_WIDTH - barcodeWidth) / 2))
-
-  // Minimalist layout — only the fields an operator actually needs at a glance:
-  // product/section, type+grade, barcode+serial, lot/weight/date.
   const lines: string[] = [
     'N',                 // clear buffer
-    'q800',              // width 100mm
-    'Q400,24',           // length 50mm, gap 3mm
+    `q${W}`,             // width 100mm
+    `Q${H},24`,          // length 50mm, 3mm gap
     'D8',                // darkness
     'S4',                // speed
 
-    // Header: product name (font 3) + section (font 1)
-    `A20,8,0,3,1,1,N,"${productName}"`,
-    `A20,44,0,1,1,1,N,"${sectionName}"`,
+    // ── Header ──
+    `A20,12,0,4,1,1,N,"${productName}"`,
+    `A20,42,0,1,1,1,N,"${sectionName}"`,
 
-    // Type + Grade — bordered box, top-right.
-    'X560,4,2,780,84',
-    `A568,8,0,1,1,1,N,"TYPE"`,
-    `A568,22,0,2,1,1,N,"${clean(bag.variant)}"`,
-    `A568,46,0,1,1,1,N,"GRADE"`,
-    `A568,60,0,2,1,1,N,"${clean(bag.grade)} ${clean(gradeShort)}"`,
+    // ── Type / grade box, top-right ──
+    'X556,6,2,792,78',
+    `A566,12,0,1,1,1,N,"TYPE"`,
+    `A566,26,0,3,1,1,N,"${variant}"`,
+    `A566,48,0,1,1,1,N,"GRADE"`,
+    `A566,60,0,2,1,1,N,"${gradeText}"`,
 
-    // Barcode — Code 128, centred, ~27.5mm tall (220 dots, within the 25–35mm
-    // spec), narrow bar 2 dots, HRI off (serial printed separately below).
-    `B${barcodeX},92,0,1,${NARROW},${NARROW},220,N,"${serial}"`,
+    // ── Barcode, centred (HRI off — serial is printed below in a real font) ──
+    `B${barcodeX},${BARCODE_Y},0,1,${NARROW},${NARROW},${BARCODE_H},N,"${serial}"`,
 
-    // Serial text (font 3), aligned under the barcode's left edge
-    `A${barcodeX},320,0,3,1,1,N,"${serial}"`,
+    // ── Serial, centred under the barcode ──
+    `A${centreX(serial, 4)},250,0,4,1,1,N,"${serial}"`,
 
-    // Separator line
-    'LO20,344,760,2',
-
-    // Footer — 3 columns: label (font 1) over value (font 2)
-    `A20,356,0,1,1,1,N,"LOT/BATCH"`,
-    `A20,372,0,2,1,1,N,"${clean(lotValue)}"`,
-    `A290,356,0,1,1,1,N,"WEIGHT"`,
-    `A290,372,0,2,1,1,N,"${clean(weightValue)}"`,
-    `A560,356,0,1,1,1,N,"DATE"`,
-    `A560,372,0,2,1,1,N,"${clean(dateFormatted)}"`,
+    // ── Footer ──
+    `LO20,292,760,2`,
+    `A20,304,0,1,1,1,N,"LOT/BATCH"`,
+    `A20,322,0,3,1,1,N,"${clean(lotValue)}"`,
+    `A290,304,0,1,1,1,N,"WEIGHT"`,
+    `A290,322,0,3,1,1,N,"${clean(weightValue)}"`,
+    `A560,304,0,1,1,1,N,"DATE"`,
+    `A560,322,0,3,1,1,N,"${clean(dateFormatted)}"`,
 
     'P1',                // print 1 copy
   ]
