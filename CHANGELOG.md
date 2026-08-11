@@ -3,6 +3,20 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (HR training: Supervisor Hub — Managing Shifts & Reports course + assessment)
+
+**Files changed:** `supabase/migrations/20260811_001_supervisor_hub_course.sql` (new)
+
+Second real course in the LMS (after Sieving Tower), for production supervisors — built from a live read of the current Supervisor Hub (`components/supervisor/HubTabs.tsx` + each tab's page), not a generic guess.
+
+- Seed course **Supervisor Hub — Managing Shifts & Reports** (`hr.training_courses` slug `supervisor-hub-operations`, active, pass 0.75), embedding a Scribe walkthrough (`Managing_Supervisor_Hub_Tasks_and_Shift_Reports`) via the general `embed_url` lesson field shipped for the Sieving course's Scribe switch.
+- **17-question / 18-mark assessment** covering all six hub tabs: Dashboard (summary-only, no controls of its own), Roster (Today's sections = live section assignment with no submit step; Staffing = fortnightly grid, and the non-obvious rule that editing an already-submitted roster moves it to `changes_pending` rather than resetting to draft), Sign-off (what actually lands in the queue), Shift Report (generated from capture/mass-balance/timesheets/checks/maintenance data — Supervisor notes is the only typed field — draft → submitted → approved, reopenable after approval), Team (Ratings kept as two independent Performance/Accuracy scores on purpose, vs Timesheets), and Messages (per-line channels, no approval workflow).
+- **Standalone course — no SOP/competency mapping.** Unlike Sieving Tower, there's no floor-machine SOP this maps to (it's hub/software competency, not a physical skill), so a pass goes straight to `competent` on the course itself with no practical sign-off gate. Can be wired to a Supervisor SOP/competency record later if that tracking is wanted.
+
+**Before this shows on staging:** run `supabase/migrations/20260811_001_supervisor_hub_course.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
 ## 2026-08-11 — Alyssa (Production dashboard follow-up: chart tooltips, PO product descriptions, quality who/when)
 
 **Files changed:** `components/production/PivotDashboard.tsx`, `app/api/production/dashboard-rows/route.ts`, `app/api/production/dashboard-supply/route.ts`
