@@ -178,8 +178,8 @@ function YieldAnalytics({ dateFrom }: { dateFrom: string }) {
     const { data } = await db
       .schema('production')
       .from('bag_tags')
-      .select('section_id, weight_kg, tag_date')
-      .gte('tag_date', dateFrom)
+      .select('section_id, weight_kg, created_at')
+      .gte('created_at', dateFrom)
       .not('weight_kg', 'is', null)
     setRows(data ?? [])
     setLoading(false)
@@ -192,7 +192,7 @@ function YieldAnalytics({ dateFrom }: { dateFrom: string }) {
 
     const agg: Record<string, Record<string, number>> = {}
     for (const r of rows) {
-      const month = (r.tag_date as string).slice(0, 7)
+      const month = (r.created_at as string).slice(0, 7)
       const sid = r.section_id as string
       if (!agg[sid]) agg[sid] = {}
       agg[sid][month] = (agg[sid][month] ?? 0) + (r.weight_kg ?? 0)
@@ -558,8 +558,8 @@ function InventoryVelocityAnalytics() {
     const { data } = await db
       .schema('production')
       .from('bag_tags')
-      .select('section_id,section_name,lot_number,weight_kg,tag_date,consumed_at_section')
-      .gte('tag_date', cutoff)
+      .select('section_id,lot_number,weight_kg,created_at,consumed_at_section')
+      .gte('created_at', cutoff)
       .not('weight_kg', 'is', null)
       .limit(1000)
     setBags(data ?? [])
@@ -572,7 +572,7 @@ function InventoryVelocityAnalytics() {
       section: b.section_id as string,
       label:   sLabel(b.section_id as string),
       kg:      (b.weight_kg as number) ?? 0,
-      days:    Math.floor((today.getTime() - new Date((b.tag_date as string) + 'T12:00:00').getTime()) / 86_400_000),
+      days:    Math.floor((today.getTime() - new Date(b.created_at as string).getTime()) / 86_400_000),
       consumed: !!b.consumed_at_section,
     }))
 
