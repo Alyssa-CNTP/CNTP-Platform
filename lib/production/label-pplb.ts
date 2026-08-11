@@ -42,6 +42,10 @@ export function buildLabelPplb(bag: OutputBag): string {
   const sectionName = clean(bag.section_name).slice(0, 30)
   const serial      = clean(bag.serial_number)
 
+  // Minimalist layout — only the fields an operator actually needs at a glance:
+  // product/section, type+grade, barcode+serial, lot/weight/date. No QC status
+  // (not known at bagging time) and no brand footer — the extra whitespace at
+  // the bottom is intentional, not empty space to fill.
   const lines: string[] = [
     'N',                 // clear buffer
     'q800',              // width 100mm
@@ -53,15 +57,8 @@ export function buildLabelPplb(bag: OutputBag): string {
     `A20,16,0,4,1,1,N,"${productName}"`,
     `A20,56,0,2,1,1,N,"${sectionName}"`,
 
-    // Type (CON/ORG/RA CON/RA ORG) and Grade (A/B/C + word) — two clearly
-    // captioned rows, not one cramped unlabelled badge. Grade shows the
-    // LETTER as well as the word (previously dropped) since that's what a
-    // floor operator sorts pallets by at a glance. Values use the existing
-    // short codes (bag.variant/bag.grade) rather than long descriptive
-    // names — comfortably fits this box width; a full name like "RA
-    // Conventional" would not. Exact dot positions are conservative but not
-    // yet confirmed against a physical print (no printer has been tested
-    // end-to-end — see the print-system health page).
+    // Type (CON/ORG/RA CON/RA ORG) and Grade (letter + word) in a single
+    // bordered box, top-right.
     'X560,8,2,795,88',
     `A568,11,0,1,1,1,N,"TYPE"`,
     `A568,25,0,3,1,1,N,"${clean(bag.variant)}"`,
@@ -77,18 +74,13 @@ export function buildLabelPplb(bag: OutputBag): string {
     // Separator line
     'LO20,228,760,2',
 
-    // Footer — 4 columns: label (font 1) over value (font 2)
+    // Footer — 3 columns: label (font 1) over value (font 2)
     `A20,240,0,1,1,1,N,"LOT/BATCH"`,
     `A20,258,0,2,1,1,N,"${clean(lotValue)}"`,
-    `A220,240,0,1,1,1,N,"WEIGHT"`,
-    `A220,258,0,2,1,1,N,"${clean(weightValue)}"`,
-    `A400,240,0,1,1,1,N,"DATE"`,
-    `A400,258,0,2,1,1,N,"${clean(dateFormatted)}"`,
-    `A580,240,0,1,1,1,N,"QC STATUS"`,
-    `A580,258,0,2,1,1,N,"Pending"`,
-
-    // Brand footer
-    `A20,300,0,1,1,1,N,"CNTP  BLACKHEATH  BHW"`,
+    `A280,240,0,1,1,1,N,"WEIGHT"`,
+    `A280,258,0,2,1,1,N,"${clean(weightValue)}"`,
+    `A540,240,0,1,1,1,N,"DATE"`,
+    `A540,258,0,2,1,1,N,"${clean(dateFormatted)}"`,
 
     'P1',                // print 1 copy
   ]
