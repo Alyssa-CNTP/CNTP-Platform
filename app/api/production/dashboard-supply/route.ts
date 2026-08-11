@@ -37,16 +37,27 @@ export async function GET(req: NextRequest) {
     const sessions = (sessRaw as any[]) ?? []
     const sessionIds = sessions.map(s => s.id)
 
-    let mb: any[] = []
+    let mb: any[] = [], bagging: any[] = []
     for (let i = 0; i < sessionIds.length; i += 200) {
-      const { data } = await db.schema('production').from('prod_mass_balance')
-        .select('session_id,total_output_b_kg,total_output_c_kg,total_output_d_kg')
-        .in('session_id', sessionIds.slice(i, i + 200))
-      mb = mb.concat(data ?? [])
+      const slice = sessionIds.slice(i, i + 200)
+      const [mbRes, bagRes] = await Promise.all([
+        db.schema('production').from('prod_mass_balance')
+          .select('session_id,total_output_b_kg,total_output_c_kg,total_output_d_kg')
+          .in('session_id', slice),
+        // product_type per bag — the only real "what is this PO actually for"
+        // signal available, since production_orders is just a typed-in label
+        // with no linked description anywhere in this codebase.
+        db.schema('production').from('prod_bagging')
+          .select('session_id,product_type,kg').in('session_id', slice),
+      ])
+      mb = mb.concat(mbRes.data ?? [])
+      bagging = bagging.concat(bagRes.data ?? [])
     }
     const outputBySession = new Map(mb.map(m => [m.session_id, num(m.total_output_b_kg) + num(m.total_output_c_kg) + num(m.total_output_d_kg)]))
+    const baggingBySession = new Map<string, any[]>()
+    bagging.forEach(b => { const a = baggingBySession.get(b.session_id) ?? []; a.push(b); baggingBySession.set(b.session_id, a) })
 
-    interface PoAgg { poRef: string; outputKg: number; sessions: number; sections: Set<string>; firstDate: string; lastDate: string }
+    interface PoAgg { poRef: string; outputKg: number; sessions: number; sections: Set<string>; firstDate: string; lastDate: string; products: Map<string, number>; byDate: Map<string, number> }
     const byPo = new Map<string, PoAgg>()
     let sessionsWithoutPo = 0
     let outputWithoutPo = 0
@@ -60,10 +71,15 @@ export async function GET(req: NextRequest) {
         continue
       }
       for (const ref of refs) {
-        const row = byPo.get(ref) ?? { poRef: ref, outputKg: 0, sessions: 0, sections: new Set<string>(), firstDate: s.date, lastDate: s.date }
+        const row = byPo.get(ref) ?? { poRef: ref, outputKg: 0, sessions: 0, sections: new Set<string>(), firstDate: s.date, lastDate: s.date, products: new Map<string, number>(), byDate: new Map<string, number>() }
         row.outputKg += output
         row.sessions++
         row.sections.add(s.section_id)
+        row.byDate.set(s.date, (row.byDate.get(s.date) ?? 0) + output)
+        for (const b of (baggingBySession.get(s.id) ?? [])) {
+          const pt = b.product_type || 'Unspecified'
+          row.products.set(pt, (row.products.get(pt) ?? 0) + num(b.kg))
+        }
         if (s.date < row.firstDate) row.firstDate = s.date
         if (s.date > row.lastDate) row.lastDate = s.date
         byPo.set(ref, row)
@@ -71,13 +87,22 @@ export async function GET(req: NextRequest) {
     }
 
     const orders = [...byPo.values()]
-      .map(r => ({
-        poRef: r.poRef,
-        outputKg: Math.round(r.outputKg),
-        sessions: r.sessions,
-        sections: [...r.sections].map(id => ({ id, name: sectionMeta(id).name, code: sectionMeta(id).code, colorHex: sectionMeta(id).colorHex })),
-        firstDate: r.firstDate, lastDate: r.lastDate,
-      }))
+      .map(r => {
+        const productsSorted = [...r.products.entries()].sort((a, b) => b[1] - a[1])
+        return {
+          poRef: r.poRef,
+          outputKg: Math.round(r.outputKg),
+          sessions: r.sessions,
+          sections: [...r.sections].map(id => ({ id, name: sectionMeta(id).name, code: sectionMeta(id).code, colorHex: sectionMeta(id).colorHex })),
+          firstDate: r.firstDate, lastDate: r.lastDate,
+          // "Product" is derived from what was actually bagged under this PO —
+          // there's no real description field for the PO reference itself.
+          product: productsSorted.length
+            ? productsSorted.slice(0, 2).map(([name]) => name).join(' + ') + (productsSorted.length > 2 ? ' + other' : '')
+            : null,
+          byDate: Object.fromEntries(r.byDate),
+        }
+      })
       .sort((a, b) => b.lastDate.localeCompare(a.lastDate))
 
     return NextResponse.json({
