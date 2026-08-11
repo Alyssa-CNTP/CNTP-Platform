@@ -6,6 +6,17 @@ const GRADE_SHORT: Record<string, string> = {
   C: 'Domestic',
 }
 
+// Full Acumatica variant word → short code shown in the TYPE/GRADE badge —
+// must match capture-config.ts VARIANT_OPTIONS short values.
+const VARIANT_SHORT: Record<string, string> = {
+  'Conventional':    'CON',
+  'Organic':         'ORG',
+  'RA-Conventional': 'RA CON',
+  'RA-Organic':      'RA ORG',
+  'FT-ORG':          'FT ORG',
+  'FT-CON':          'FT CON',
+}
+
 // Escape/strip characters that would break an EPL2 quoted string.
 function clean(s: string): string {
   return String(s ?? '').replace(/"/g, "'").replace(/[\r\n]/g, ' ')
@@ -36,7 +47,7 @@ function code128WidthDots(data: string, narrowDots: number): number {
  *
  * Layout — "barcode hero", balanced for a 100 × 50mm landscape label:
  *   product name + section          top-left
- *   TYPE / GRADE box                top-right
+ *   TYPE/GRADE badge                top-right, filled black box, white text
  *   Code 128 barcode                centred, ~18.5mm tall (spec: 25-35mm was
  *                                   over half the label height and forced the
  *                                   header/footer against the edges)
@@ -60,13 +71,22 @@ export function buildLabelPplb(bag: OutputBag): string {
     day: '2-digit', month: '2-digit', year: 'numeric',
   })
 
-  const lotValue    = bag.lot_number || 'N/A'
-  const weightValue = `${bag.weight_kg} kg`
-  const productName = clean(bag.product_type).slice(0, 26)
-  const sectionName = clean(bag.section_name).slice(0, 30)
-  const serial      = clean(bag.serial_number)
-  const variant     = clean(bag.variant)
-  const gradeText   = `${clean(bag.grade)} ${clean(gradeShort)}`.trim()
+  const lotValue     = bag.lot_number || 'N/A'
+  const weightValue  = `${bag.weight_kg} kg`
+  const productName  = clean(bag.product_type).slice(0, 26)
+  const sectionName  = clean(bag.section_name).slice(0, 30)
+  const serial       = clean(bag.serial_number)
+  const variantShort = clean(VARIANT_SHORT[bag.variant] ?? bag.variant)
+
+  // TYPE/GRADE badge: filled black box, single reversed (white) line, e.g.
+  // "CON - Export" — the two facts an operator needs at a glance, no separate
+  // labels. Falls back to a smaller font if the combination is too wide.
+  const badgeText  = `${variantShort} - ${clean(gradeShort)}`
+  const BADGE_X0 = 540, BADGE_Y0 = 6, BADGE_W = 252, BADGE_H = 44
+  const badgeFont  = badgeText.length * FONT_W[3] <= BADGE_W - 12 ? 3 : 2
+  const badgeTextW = badgeText.length * FONT_W[badgeFont]
+  const badgeTextX = Math.max(BADGE_X0 + 6, Math.round(BADGE_X0 + (BADGE_W - badgeTextW) / 2))
+  const badgeTextY = BADGE_Y0 + (badgeFont === 3 ? 15 : 17)
 
   // Narrow bar 3 dots makes the symbol span ~2/3 of the label width — wider bars
   // scan more reliably than the previous 2-dot version, and it fills the dead
@@ -88,12 +108,9 @@ export function buildLabelPplb(bag: OutputBag): string {
     `A20,12,0,4,1,1,N,"${productName}"`,
     `A20,42,0,1,1,1,N,"${sectionName}"`,
 
-    // ── Type / grade box, top-right ──
-    'X556,6,2,792,78',
-    `A566,12,0,1,1,1,N,"TYPE"`,
-    `A566,26,0,3,1,1,N,"${variant}"`,
-    `A566,48,0,1,1,1,N,"GRADE"`,
-    `A566,60,0,2,1,1,N,"${gradeText}"`,
+    // ── Type / grade badge, top-right: filled black box, reversed white text ──
+    `LO${BADGE_X0},${BADGE_Y0},${BADGE_W},${BADGE_H}`,
+    `A${badgeTextX},${badgeTextY},0,${badgeFont},1,1,R,"${badgeText}"`,
 
     // ── Barcode, centred (HRI off — serial is printed below in a real font) ──
     `B${barcodeX},${BARCODE_Y},0,1,${NARROW},${NARROW},${BARCODE_H},N,"${serial}"`,
