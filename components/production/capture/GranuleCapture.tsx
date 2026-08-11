@@ -189,23 +189,33 @@ export function granuleTotals(d: GranuleData) {
   return { cols, totalA, water, cStar, dustOut, wasteF, D, E, G, H, balance, yieldPct, runningHours }
 }
 
-// ── Per-lot serial: DD-MM-YY-NNN, sequence continues across days for one lot ─────
+// ── Granule output serial ───────────────────────────────────────────────────────
+// The serial carries the shift LOT NUMBER as its stem, plus a per-lot bag
+// sequence — e.g. lot "26244-CON-GRAN" → "26244-CON-GRAN-001". The lot is the
+// granule line's real identifier (see project spec), so it leads the serial
+// while remaining stored separately in bag_tags.lot_number. When no lot is set
+// yet, fall back to the section-prefixed daily serial "GL-DDMMYY-NNN" so a bag
+// is never left without a unique, findable tag. Sequence continues across days
+// for one lot.
 
 async function nextGranuleSerial(lot: string, localSerials: string[]): Promise<string> {
   const now = new Date()
-  const dd = String(now.getDate()).padStart(2, '0')
-  const mm = String(now.getMonth() + 1).padStart(2, '0')
-  const yy = String(now.getFullYear()).slice(-2)
+  const ddmmyy = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getFullYear()).slice(-2)}`
+  const lotStem = lot.trim()
+  const stem = lotStem || `GL-${ddmmyy}`
   const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
   let maxSeq = localSerials.reduce((mx, s) => Math.max(mx, seqOf(s)), 0)
-  if (lot) {
-    try {
-      const { data } = await getDb().schema('production').from('bag_tags')
-        .select('serial_number').eq('lot_number', lot).limit(4000)
-      ;(data ?? []).forEach((r: any) => { maxSeq = Math.max(maxSeq, seqOf(r.serial_number)) })
-    } catch { /* offline — fall back to local max */ }
-  }
-  return `${dd}-${mm}-${yy}-${String(maxSeq + 1).padStart(3, '0')}`
+  try {
+    // With a lot, number continues per-lot (matches old rows via lot_number);
+    // without one, number continues per section-day via the GL- serial prefix.
+    const { data } = lotStem
+      ? await getDb().schema('production').from('bag_tags')
+          .select('serial_number').eq('lot_number', lotStem).limit(4000)
+      : await getDb().schema('production').from('bag_tags')
+          .select('serial_number').ilike('serial_number', `${stem}-%`).limit(4000)
+    ;(data ?? []).forEach((r: any) => { maxSeq = Math.max(maxSeq, seqOf(r.serial_number)) })
+  } catch { /* offline — fall back to local max */ }
+  return `${stem}-${String(maxSeq + 1).padStart(3, '0')}`
 }
 
 // ── Style constants ─────────────────────────────────────────────────────────────
@@ -243,7 +253,12 @@ async function lookupSerial(serial: string) {
       lot_number: data.lot_number || '', weight_kg: data.weight_kg ? String(data.weight_kg) : '',
       product_type: data.product_type || '', variant: data.variant || '',
     }
-  } catch { return null }
+  } catch (e) {
+    // A thrown error is a real DB/network failure, not an absent bag — log it so
+    // "serial only, fields blank" can be told apart from a truly-unregistered bag.
+    console.error('[GranuleCapture] serial lookup failed', e)
+    return null
+  }
 }
 
 function dustKeyForProduct(productType: string): string {
