@@ -324,6 +324,20 @@ Fixed the core reason scanning/looking up a bag serial in the debagging inputs a
 
 **Known follow-ups (not in this change):** (1) Pasteuriser output lines are bag *ranges* and are never written to `bag_tags`, so pasteuriser finished bags aren't scannable yet — needs a per-bag vs per-line data-model decision. (2) Several live analytics/reconciliation components (`OperationalTrends`, `CommandCentre`, `BatchReconciliationPanel`) query the same non-existent `bag_tags` columns and silently show no data — flagged as a separate fix. (3) The legacy, unrouted `*Form.tsx`/`BagScanner.tsx` and `lib/qr/serial.ts` are dead code with a stale serial format — candidates for deletion.
 
+## 2026-08-11 — Alyssa (Pasteuriser: register each finished bag in bag_tags so it's scannable)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Pasteuriser was the only section whose output never reached `bag_tags` — its finished product is captured as bag *ranges* (a count + optional start/end bag number), so its bags were invisible to scanning and Bag Tracking. Now, on every save, each Pasteuriser output range is expanded into **individual finished-bag rows** in `production.bag_tags`, one scannable bag per unit.
+
+- **Serial = `{LOT}-{NNN}`** (e.g. `26244-CON-SFC-001`) — carries the batch/lot number (per spec) plus the physical bag number. If the operator entered a start bag number, the serials map to it (`start … start+count-1`); otherwise they number `001…`.
+- **Rebuilt on every save**, mirroring how `prod_bagging` is handled: upsert the current set, then prune only still-`in_stock` rows that dropped out (e.g. the operator lowered the count). Anything already moved/dispatched downstream is left untouched, so this never clobbers later state. No new migration — `bag_tags` already exists; `batch_id` is linked like the other sections.
+- Each finished bag now shows up in Bag Tracking (`/tags`) and can be looked up/scanned, with its lot's quality history attached (see the per-bag history change).
+
+**Known follow-up:** the Pasteuriser output *line* still keeps its own range-level serial for the on-screen label button; per-bag label **printing** (one label per expanded bag) is a separate task and matters only once floor label printing is switched on (currently `LABEL_PRINTING_ENABLED = false`).
+
+**To verify on staging:** capture a Pasteuriser session with an output line (e.g. 5 bags), save, then open Bag Tracking — the 5 individual `{LOT}-NNN` bags should appear and be lookup-able.
+
 ## 2026-08-11 — Alyssa (Bag Tracking: show a single bag's quality history)
 
 **Files changed:** `app/(app)/tags/page.tsx`
