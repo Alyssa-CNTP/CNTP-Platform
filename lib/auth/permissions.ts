@@ -66,13 +66,10 @@ export type PermissionKey =
   | 'can_approve_reopen_request'  // decide a supervisor's "request to reopen this PO" (Supervisor Hub)
   | 'can_edit_bag_tag'
   | 'can_delete_bag_tag'
-  // Production — Master Inventory & Blends (BOM)
+  // Production — Master Inventory & Blends (BOM) — both read-only, Acumatica
+  // is the master and data arrives via import, not manual add/edit.
   | 'can_view_inventory'
-  | 'can_edit_inventory'
-  | 'can_delete_inventory'
   | 'can_view_blends'
-  | 'can_edit_blends'
-  | 'can_delete_blends'
   // Production — Pasteuriser job cards (BOM-driven generation + approval)
   | 'can_generate_job_cards'   // production manager: pick a BOM code, auto-fill ratios, send for approval
   | 'can_approve_job_cards'    // production supervisor: approve/reject a generated job card
@@ -163,8 +160,8 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
   'can_edit_session','can_delete_session','can_approve_reopen_request','can_edit_bag_tag','can_delete_bag_tag',
-  'can_view_inventory','can_edit_inventory','can_delete_inventory',
-  'can_view_blends','can_edit_blends','can_delete_blends',
+  'can_view_inventory',
+  'can_view_blends',
   'can_generate_job_cards','can_approve_job_cards',
   'can_generate_job_cards_granule','can_approve_job_cards_granule',
   'can_view_shift_report','can_edit_shift_report','can_submit_shift_report','can_approve_shift_report',
@@ -344,9 +341,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_approve_session: true, can_export_csv: true,
     can_edit_session: true, can_delete_session: true,
     can_edit_bag_tag: true, can_delete_bag_tag: true,
-    // Master Inventory & Blends (BOM) — supervisors keep these current
-    can_view_inventory: true, can_edit_inventory: true,
-    can_view_blends: true, can_edit_blends: true,
+    // Master Inventory & Blends (BOM) — read-only, Acumatica is the master
+    can_view_inventory: true,
+    can_view_blends: true,
     // Pasteuriser + Granule job cards — supervisor approves what the manager generates
     can_approve_job_cards: true, can_approve_job_cards_granule: true,
     // Shift report — the supervisor writes it and sends it up; the manager signs.
@@ -644,13 +641,11 @@ export const PERMISSION_GROUPS: {
   {
     group: 'Production — Master Inventory & Blends',
     department: 'Production',
+    // Read-only — Acumatica is the master for both stock items and BOM
+    // structure; data arrives via import, not manual add/edit in the app.
     permissions: [
-      { key: 'can_view_inventory',   label: 'View Master Inventory' },
-      { key: 'can_edit_inventory',   label: 'Add & edit inventory items' },
-      { key: 'can_delete_inventory', label: 'Deactivate inventory items' },
-      { key: 'can_view_blends',      label: 'View BOMs page (all work centres)' },
-      { key: 'can_edit_blends',      label: 'Add & edit Blender BOMs and their components' },
-      { key: 'can_delete_blends',    label: 'Delete Blender BOMs and components' },
+      { key: 'can_view_inventory', label: 'View Master Inventory' },
+      { key: 'can_view_blends',    label: 'View BOMs page (all work centres)' },
     ],
   },
   {
