@@ -143,10 +143,10 @@ export async function resolveExistingBlendRunNo(bomId: string, date: string): Pr
   const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const { start, end } = productionDayRange(date)
   const { data } = await getDb().schema('production').from('bag_tags')
-    .select('serial_number').ilike('serial_number', `${bomId}/%`)
+    .select('serial_number').ilike('serial_number', `${bomId}-%`)
     .gte('created_at', start).lt('created_at', end)
   const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
-  const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)
+  const runPattern = new RegExp(`^${escaped}-(\\d+)-`)
   const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
   return runs.length ? Math.max(...runs) : null
 }
@@ -539,12 +539,13 @@ export function BlenderCapture({
   const patch = (p: Partial<BlenderData>) => onChange({ ...value, ...p })
   const bomId = value.bomId
 
-  // The real serial convention for a blend's output bags — confirmed from actual
-  // operator reports: {blendCode}/{runNo}-{bagNo}, e.g. SFC-KUN25-C/1-01. runNo
+  // The serial convention for a blend's output bags carries the BLEND CODE as
+  // its stem: {blendCode}-{runNo}-{bagNo}, e.g. SFCKUN25-1-01. runNo
   // distinguishes separate runs of the same blend (resolved once per production,
   // from whatever's already in bag_tags for this code); bagNo is sequential
-  // within that run. Falls back to the generic section serial if somehow called
-  // before a blend is chosen (shouldn't happen — the bagging tab is gated on it).
+  // within that run. "-" (not "/") keeps the serial URL-safe for route-param
+  // lookups. Falls back to the generic section serial if somehow called before a
+  // blend is chosen (shouldn't happen — the bagging tab is gated on it).
   async function genBlendSerial(): Promise<string> {
     if (!bomId) return genSerial()
     if (bagSeqRef.current === null || runNoRef.current === null) {
@@ -553,23 +554,28 @@ export function BlenderCapture({
       // comment. Without this, a blend code that ran on an earlier day (even
       // weeks ago) would push today's first run past 1.
       const { start, end } = productionDayRange(date)
+      // Serial is "{blend}-{run}-{bag}" (e.g. SFCKUN25-1-01). The blend code is
+      // always the exact stem, so run/bag stay unambiguously parseable even when
+      // the blend code itself contains dashes. We use "-" (not "/") so the serial
+      // is URL-safe — a "/" breaks route-param lookups like /api/.../bag/[serial]
+      // and the Bag Tracking deep-links.
       const { data: bagRows } = await getDb().schema('production').from('bag_tags')
-        .select('serial_number').ilike('serial_number', `${bomId}/%`)
+        .select('serial_number').ilike('serial_number', `${bomId}-%`)
         .gte('created_at', start).lt('created_at', end)
       const serials = ((bagRows as any[]) ?? []).map(r => r.serial_number as string)
       let runNo = value.outputRunNo
       if (!runNo) {
-        const runPattern = new RegExp(`^${escaped}\\/(\\d+)-`)
+        const runPattern = new RegExp(`^${escaped}-(\\d+)-`)
         const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
         runNo = (runs.length ? Math.max(...runs) : 0) + 1
         patch({ outputRunNo: runNo })
       }
       runNoRef.current = runNo
-      const bagPattern = new RegExp(`^${escaped}\\/${runNo}-(\\d+)$`)
+      const bagPattern = new RegExp(`^${escaped}-${runNo}-(\\d+)$`)
       bagSeqRef.current = serials.reduce((max, s) => { const m = s.match(bagPattern); return m ? Math.max(max, parseInt(m[1], 10)) : max }, 0)
     }
     bagSeqRef.current += 1
-    return `${bomId}/${runNoRef.current}-${String(bagSeqRef.current).padStart(2, '0')}`
+    return `${bomId}-${runNoRef.current}-${String(bagSeqRef.current).padStart(2, '0')}`
   }
 
   // Prefill from the shift assignment once, purely as a convenience default —

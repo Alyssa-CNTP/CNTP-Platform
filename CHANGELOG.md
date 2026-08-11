@@ -3,6 +3,53 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (Pasteuriser: register each finished bag in bag_tags so it's scannable)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Pasteuriser was the only section whose output never reached `bag_tags` — its finished product is captured as bag *ranges* (a count + optional start/end bag number), so its bags were invisible to scanning and Bag Tracking. Now, on every save, each Pasteuriser output range is expanded into **individual finished-bag rows** in `production.bag_tags`, one scannable bag per unit.
+
+- **Serial = `{LOT}-{NNN}`** (e.g. `26244-CON-SFC-001`) — carries the batch/lot number (per spec) plus the physical bag number. If the operator entered a start bag number, the serials map to it (`start … start+count-1`); otherwise they number `001…`.
+- **Rebuilt on every save**, mirroring how `prod_bagging` is handled: upsert the current set, then prune only still-`in_stock` rows that dropped out (e.g. the operator lowered the count). Anything already moved/dispatched downstream is left untouched, so this never clobbers later state. No new migration — `bag_tags` already exists; `batch_id` is linked like the other sections.
+- Each finished bag now shows up in Bag Tracking (`/tags`) and can be looked up/scanned, with its lot's quality history attached (see the per-bag history change).
+
+**Known follow-up:** the Pasteuriser output *line* still keeps its own range-level serial for the on-screen label button; per-bag label **printing** (one label per expanded bag) is a separate task and matters only once floor label printing is switched on (currently `LABEL_PRINTING_ENABLED = false`).
+
+**To verify on staging:** capture a Pasteuriser session with an output line (e.g. 5 bags), save, then open Bag Tracking — the 5 individual `{LOT}-NNN` bags should appear and be lookup-able.
+
+## 2026-08-11 — Alyssa (Bag Tracking: show a single bag's quality history)
+
+**Files changed:** `app/(app)/tags/page.tsx`
+
+Extended the per-bag detail modal (`/tags` → tap a bag) so a scanned/looked-up bag now shows its **quality** history, not just its scan events and genealogy. Quality is keyed by lot/batch (there's no per-serial quality), so a bag inherits the quality of the lot it belongs to — the modal now matches the bag's `lot_number` against the same three sources the batch-reconciliation panel uses (pasteuriser runs, lab results, raw-material entries) and lists them with a deep link to each quality page. This closes the last gap toward "the entire history of a single bag" in one place: details → genealogy → **quality** → scan events.
+
+- Also fixed the genealogy input-bag list to derive `section_name` (from the section registry) and `tag_date`/`captured_at` (from `created_at`) — they were loaded via `select('*')` without the mapping the main list already does, so the input bags' section pill label was blank.
+- Added the real `notes` field to the local `ScanEvent` type (the `scan_events` table has it; the type had dropped it).
+
+## 2026-08-11 — Alyssa (Fix bag_tags phantom-column drift in analytics; delete stale dead code)
+
+**Files changed:** `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/dashboard/CommandCentre.tsx`, `components/shared/BatchReconciliationPanel.tsx`; **deleted:** `components/production/BagScanner.tsx`, `SievingTowerForm.tsx`, `GranuleLineForm.tsx`, `RefiningForms.tsx`, `BlenderForms.tsx`, `PasteuriserForm.tsx`, `lib/qr/serial.ts`, `lib/qr/print.ts`
+
+Follow-up to the bag-scan lookup fix. Same root cause (`bag_tags` has no `section_name`/`tag_date` columns) was silently breaking several live analytics surfaces — the queries errored and the components showed empty data.
+
+- **OperationalTrends** (both the `layout` and `management` copies): the 6-month throughput query and the ageing/dwell query selected/filtered/ordered by `tag_date` and `section_name`. Switched to `created_at` (dropped the unused `section_name` select, and the `+ 'T12:00:00'` date hack that assumed a bare date). These charts were showing nothing before.
+- **CommandCentre**: "today's tagged weight" KPI filtered `bag_tags.tag_date = today` → now `created_at >= today`.
+- **BatchReconciliationPanel**: the per-batch bags query selected `section_name`/`tag_date` and ordered by `tag_date`. Now selects `created_at`, orders by it, and maps each row to the existing shape (deriving `section_name` from `SECTION_CONFIG`, `tag_date` from `created_at`) so the rest of the panel is untouched.
+- **Deleted dead code:** the old form-based capture components (`*Form.tsx` + `BagScanner.tsx`) and `lib/qr/serial.ts`/`print.ts`. None were imported by any live route (the live capture flow uses the `*Capture.tsx` components); `lib/qr/serial.ts` also carried a stale serial-format spec that contradicted the real generators, a trap for future edits. Verified no remaining importers before removal; build is green.
+
+## 2026-08-11 — Alyssa (Fix debagging bag-scan lookup + make Granule/Blender output serials consistent)
+
+**Files changed:** `lib/production/validate-scan.ts`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/capture/RefiningCapture.tsx`
+
+Fixed the core reason scanning/looking up a bag serial in the debagging inputs autofilled only the serial and left every other field blank (sometimes with "Database error looking up serial. Try again."), and made two sections' output serials consistent with their real business identifier.
+
+- **Root cause of the "Database error" (Blender + Pasteuriser debagging):** `validateBagScan` selected two columns that don't exist on `production.bag_tags` — `section_name` and `tag_date`. PostgREST rejected every lookup, the `catch` returned a generic `not_found`, and the capture dialogs then skipped all autofill. Fixed the SELECT to use the real columns (`section_id`, `created_at`) and now derive `section_name` from the section registry (`SECTION_CONFIG`) and `tag_date` from `created_at`, so callers reading those fields keep working. This was the actual bug behind the reported symptom — verified against the migration schema and `database.types.ts`.
+- **Granule output serial now carries its LOT NUMBER:** was a prefix-less `DD-MM-YY-NNN` (e.g. `11-08-26-001`), which was inconsistent with every other section and could collide across sections on the same date. Now `{lot}-{NNN}` (e.g. `26244-CON-GRAN-001`), with the lot as the stem and a per-lot sequence; falls back to `GL-DDMMYY-NNN` if no lot is set yet. `lot_number` is still stored separately. Only new bags are affected; existing bags stay findable by exact match.
+- **Blender output serial is now URL-safe:** was `{blend}/{run}-{bag}` (e.g. `SFC-KUN25-C/1-01`). The `/` breaks route-param lookups (`/api/.../bag/[serial]`) and Bag Tracking deep-links. Changed to `{blend}-{run}-{bag}` (e.g. `SFCKUN25-1-01`); both run-number resolvers (`genBlendSerial` and `resolveExistingBlendRunNo`) updated to parse the new separator. Blend code still leads the serial.
+- **Refining/Granule lookup diagnosability:** their `lookupSerial` helpers swallowed real DB/network errors as "not found" (indistinguishable from a genuinely-unregistered bag). Now they log the error so "serial only, fields blank" can be told apart from a truly-absent bag.
+
+**Known follow-ups (not in this change):** (1) Pasteuriser output lines are bag *ranges* and are never written to `bag_tags`, so pasteuriser finished bags aren't scannable yet — needs a per-bag vs per-line data-model decision. (2) Several live analytics/reconciliation components (`OperationalTrends`, `CommandCentre`, `BatchReconciliationPanel`) query the same non-existent `bag_tags` columns and silently show no data — flagged as a separate fix. (3) The legacy, unrouted `*Form.tsx`/`BagScanner.tsx` and `lib/qr/serial.ts` are dead code with a stale serial format — candidates for deletion.
+
 ## 2026-08-11 — Alyssa (Master Inventory & BOMs are now read-only — Acumatica is the master, import going forward)
 
 **Files changed:** `app/(app)/production/inventory/page.tsx`, `app/(app)/production/blends/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`

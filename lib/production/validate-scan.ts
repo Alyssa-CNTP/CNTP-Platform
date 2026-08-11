@@ -23,6 +23,7 @@
 
 import { getDb } from '@/lib/supabase/db'
 import { normaliseVariant } from '@/lib/constants/manufacturing'
+import { SECTION_CONFIG } from '@/lib/production/live-types'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ export async function validateBagScan(
       .from('bag_tags')
       .select(`
         serial_number, product_type, lot_number, weight_kg, variant,
-        section_id, section_name, acumatica_id, tag_date,
+        section_id, acumatica_id, created_at,
         consumed_at_section, consumed_at_session
       `)
       .eq('serial_number', serial.trim())
@@ -185,9 +186,12 @@ export async function validateBagScan(
       weight_kg:           tag.weight_kg            ?? null,
       variant:             tag.variant              ?? null,
       section_id:          tag.section_id           || '',
-      section_name:        tag.section_name         || '',
+      // bag_tags has no section_name/tag_date columns — derive them so callers
+      // that read tag.section_name / tag.tag_date keep working. section name
+      // comes from the section registry; date is the bag's created_at.
+      section_name:        SECTION_CONFIG[tag.section_id]?.name || tag.section_id || '',
       acumatica_id:        tag.acumatica_id         ?? null,
-      tag_date:            tag.tag_date             ?? null,
+      tag_date:            tag.created_at           ?? null,
       consumed_at_section: tag.consumed_at_section  ?? null,
     },
   }

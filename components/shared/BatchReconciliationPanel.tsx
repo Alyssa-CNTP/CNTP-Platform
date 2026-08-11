@@ -15,6 +15,7 @@
 
 import { useState, useEffect } from 'react'
 import { getDb } from '@/lib/supabase/db'
+import { SECTION_CONFIG } from '@/lib/production/live-types'
 import { format, parseISO } from 'date-fns'
 import {
   X, Package, Activity, FlaskConical, ClipboardList,
@@ -307,12 +308,19 @@ export default function BatchReconciliationPanel({
     const { data: bagData } = await db
       .schema('production')
       .from('bag_tags')
-      .select('serial_number,section_id,section_name,weight_kg,tag_date,destination,consumed_at_section,consumed_weight_kg,acumatica_id')
+      .select('serial_number,section_id,weight_kg,created_at,destination,consumed_at_section,consumed_weight_kg,acumatica_id')
       .eq('lot_number', bn)
-      .order('tag_date', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(100)
 
-    const bags        = (bagData ?? []) as BagTagRecord[]
+    // bag_tags has no section_name/tag_date columns — derive section_name from
+    // the section registry and use created_at (date part) as tag_date so the
+    // rest of this panel keeps working unchanged.
+    const bags = ((bagData ?? []) as any[]).map(b => ({
+      ...b,
+      section_name: SECTION_CONFIG[b.section_id]?.name ?? b.section_id,
+      tag_date: (b.created_at as string)?.slice(0, 10) ?? '',
+    })) as BagTagRecord[]
     const totalBagKg  = bags.reduce((s, b) => s + (b.weight_kg ?? 0), 0)
 
     // ── Scans ─────────────────────────────────────────────────────────────────
