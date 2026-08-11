@@ -17,6 +17,7 @@ import {
   Search, X, Package, Printer, ArrowRight, Clock, ChevronRight,
   Filter, Activity, BarChart3, Layers, AlertTriangle, CheckCircle2,
   Loader2, Eye, Scan, TrendingUp, MapPin, History, Database, Calendar,
+  FlaskConical, ExternalLink,
 } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -47,7 +48,16 @@ interface ScanEvent {
   session_id:    string | null
   action:        string | null
   weight_kg:     number | null
+  notes:         string | null
   scanned_at:    string
+}
+
+interface QualityRow {
+  source: string
+  ref:    string
+  date:   string
+  detail: string
+  href:   string
 }
 
 // ── Barcode — Code 128 via JsBarcode injected once ────────────────────────────
@@ -227,8 +237,10 @@ interface TagDetailProps {
 function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
   const [events,       setEvents]       = useState<ScanEvent[]>([])
   const [inputBags,    setInputBags]    = useState<BagTag[]>([])
+  const [quality,      setQuality]      = useState<QualityRow[]>([])
   const [loadingEvts,  setLoadingEvts]  = useState(true)
   const [loadingGene,  setLoadingGene]  = useState(true)
+  const [loadingQual,  setLoadingQual]  = useState(true)
 
   // Load scan events for this serial
   useEffect(() => {
@@ -259,12 +271,41 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
         getDb().schema('production').from('bag_tags')
           .select('*')
           .in('serial_number', serials)
-          .then(({ data: bags }: { data: BagTag[] | null }) => {
-            setInputBags((bags as BagTag[]) || [])
+          .then(({ data: bags }: { data: any[] | null }) => {
+            setInputBags(((bags as any[]) || []).map(b => ({
+              ...b,
+              section_name: SECTION_DISPLAY[b.section_id] ?? b.section_id,
+              tag_date:     (b.created_at ?? '').slice(0, 10),
+              captured_at:  b.created_at,
+            })) as BagTag[])
             setLoadingGene(false)
           })
       })
   }, [tag.prod_session_id])
+
+  // Load quality records for this bag. Quality is keyed by lot/batch (not by
+  // serial), so a bag inherits the quality of the lot it belongs to. Mirrors the
+  // batch-reconciliation panel's three sources: pasteuriser runs, lab results,
+  // and raw-material entries, matched by the bag's lot_number.
+  useEffect(() => {
+    const lot = (tag.lot_number || '').trim()
+    if (!lot || lot === 'NOT TRACKED') { setQuality([]); setLoadingQual(false); return }
+    setLoadingQual(true)
+    const db = getDb()
+    Promise.all([
+      db.from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', lot).limit(10),
+      db.from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', lot).limit(10),
+      db.from('raw_material_entries').select('id,received_date,lot_number,grade').ilike('lot_number', lot).limit(10),
+    ]).then(([past, lab, raw]: any[]) => {
+      const rows: QualityRow[] = []
+      ;(past?.data ?? []).forEach((r: any) => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))
+      ;(lab?.data  ?? []).forEach((r: any) => rows.push({ source: 'Lab result',  ref: String(r.id ?? '').slice(0, 8), date: r.sample_date ?? '', detail: `Result: ${r.result_status ?? 'pending'}`, href: '/quality/lab-results' }))
+      ;(raw?.data  ?? []).forEach((r: any) => rows.push({ source: 'Raw material', ref: String(r.id ?? '').slice(0, 8), date: r.received_date ?? '', detail: `Grade ${r.grade ?? '—'}`, href: '/quality/raw-material' }))
+      rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      setQuality(rows)
+      setLoadingQual(false)
+    }).catch(() => { setQuality([]); setLoadingQual(false) })
+  }, [tag.lot_number])
 
   const isConsumed = Boolean(tag.consumed_at_section)
 
@@ -392,6 +433,38 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
                 </span>
               )}
             </div>
+          </div>
+
+          {/* ── Quality ── */}
+          <div>
+            <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2.5 flex items-center gap-1.5">
+              <FlaskConical size={11} /> Quality {loadingQual ? '' : `(${quality.length})`}
+            </p>
+            {loadingQual ? (
+              <div className="flex items-center gap-2 text-[11px] text-stone-400 py-2">
+                <Loader2 size={12} className="animate-spin" /> Loading quality…
+              </div>
+            ) : quality.length === 0 ? (
+              <p className="text-[11px] text-stone-400 italic">
+                {tag.lot_number && tag.lot_number !== 'NOT TRACKED'
+                  ? `No quality records found for lot ${tag.lot_number}.`
+                  : 'No lot / batch on this bag to match quality records against.'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-[10px] text-stone-400 italic">Matched by lot / batch {tag.lot_number}:</p>
+                {quality.map((q, i) => (
+                  <Link key={i} href={q.href}
+                    className="flex items-center gap-2 bg-stone-50 rounded-lg px-3 py-2 border border-stone-100 hover:bg-stone-100 transition">
+                    <FlaskConical size={12} className="text-stone-400 shrink-0" />
+                    <span className="text-[11px] font-semibold text-stone-700 shrink-0">{q.source}</span>
+                    <span className="font-mono text-[10px] text-stone-500 truncate">{q.detail}</span>
+                    {q.date && <span className="font-mono text-[10px] text-stone-400 ml-auto shrink-0">{q.date.slice(0, 10)}</span>}
+                    <ExternalLink size={11} className="text-stone-300 shrink-0" />
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* ── Scan events timeline ── */}

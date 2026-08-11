@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (Bag Tracking: show a single bag's quality history)
+
+**Files changed:** `app/(app)/tags/page.tsx`
+
+Extended the per-bag detail modal (`/tags` → tap a bag) so a scanned/looked-up bag now shows its **quality** history, not just its scan events and genealogy. Quality is keyed by lot/batch (there's no per-serial quality), so a bag inherits the quality of the lot it belongs to — the modal now matches the bag's `lot_number` against the same three sources the batch-reconciliation panel uses (pasteuriser runs, lab results, raw-material entries) and lists them with a deep link to each quality page. This closes the last gap toward "the entire history of a single bag" in one place: details → genealogy → **quality** → scan events.
+
+- Also fixed the genealogy input-bag list to derive `section_name` (from the section registry) and `tag_date`/`captured_at` (from `created_at`) — they were loaded via `select('*')` without the mapping the main list already does, so the input bags' section pill label was blank.
+- Added the real `notes` field to the local `ScanEvent` type (the `scan_events` table has it; the type had dropped it).
+
 ## 2026-08-11 — Alyssa (Fix bag_tags phantom-column drift in analytics; delete stale dead code)
 
 **Files changed:** `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/dashboard/CommandCentre.tsx`, `components/shared/BatchReconciliationPanel.tsx`; **deleted:** `components/production/BagScanner.tsx`, `SievingTowerForm.tsx`, `GranuleLineForm.tsx`, `RefiningForms.tsx`, `BlenderForms.tsx`, `PasteuriserForm.tsx`, `lib/qr/serial.ts`, `lib/qr/print.ts`
