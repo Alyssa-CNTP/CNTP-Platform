@@ -64,61 +64,68 @@ export async function GET(req: NextRequest) {
 
     // ── Machine checks ───────────────────────────────────────────────────────
     const { data: recRaw } = await db.schema('production').from('check_records')
-      .select('id,section_id,date,shift')
+      .select('id,section_id,date,shift,operator_name,supervisor_name')
       .gte('date', from).lte('date', to)
     const records = (recRaw as any[]) ?? []
     const recordIds = records.map(r => r.id)
     let events: any[] = []
     for (let i = 0; i < recordIds.length; i += 200) {
       const { data } = await db.schema('production').from('check_events')
-        .select('record_id,check_key,value_num,status')
+        .select('record_id,check_key,value_num,status,recorded_at,actor_name')
         .in('record_id', recordIds.slice(i, i + 200))
       events = events.concat(data ?? [])
     }
     const recordById = new Map(records.map(r => [r.id, r]))
+    const recordByKey = new Map(records.map(r => [`${r.section_id}|${r.date}|${r.shift}`, r]))
     // Keyed by section+date+shift — check_records is unique on that triple.
-    const checksByKey = new Map<string, { total: number; ok: number; flagged: number; fail: number; vsd: number[] }>()
+    const checksByKey = new Map<string, { total: number; ok: number; flagged: number; fail: number; vsd: number[]; lastCheckedAt: string | null; lastActorName: string | null }>()
     for (const e of events) {
       const rec = recordById.get(e.record_id)
       if (!rec) continue
       const key = `${rec.section_id}|${rec.date}|${rec.shift}`
-      const c = checksByKey.get(key) ?? { total: 0, ok: 0, flagged: 0, fail: 0, vsd: [] }
+      const c = checksByKey.get(key) ?? { total: 0, ok: 0, flagged: 0, fail: 0, vsd: [], lastCheckedAt: null, lastActorName: null }
       c.total++
       if (e.status === 'ok') c.ok++
       else if (e.status === 'flagged') c.flagged++
       else if (e.status === 'fail') c.fail++
       if (e.check_key === 'infeed_vsd' && e.value_num != null) c.vsd.push(Number(e.value_num))
+      if (e.recorded_at && (!c.lastCheckedAt || e.recorded_at > c.lastCheckedAt)) { c.lastCheckedAt = e.recorded_at; c.lastActorName = e.actor_name ?? null }
       checksByKey.set(key, c)
     }
 
     // ── Quality — matched by section + date (see header note) ──────────────
-    const qcByKey = new Map<string, { moisture: number | null; bulkDensity: number | null; paLevel: number | null; passed: boolean | null }>()
-    const mergeQc = (section: string, date: string, patch: Partial<{ moisture: number | null; bulkDensity: number | null; paLevel: number | null; passed: boolean | null }>) => {
+    // qcName / checkedAt answer "who did it, when" for whichever QC-tracked
+    // line the row belongs to — sieving/granule/pasteuriser each surface this
+    // differently (see the three blocks below), so it's normalized here.
+    const qcByKey = new Map<string, { moisture: number | null; bulkDensity: number | null; paLevel: number | null; passed: boolean | null; qcName: string | null; checkedAt: string | null }>()
+    const mergeQc = (section: string, date: string, patch: Partial<{ moisture: number | null; bulkDensity: number | null; paLevel: number | null; passed: boolean | null; qcName: string | null; checkedAt: string | null }>) => {
       const key = `${section}|${date}`
-      const cur = qcByKey.get(key) ?? { moisture: null, bulkDensity: null, paLevel: null, passed: null }
+      const cur = qcByKey.get(key) ?? { moisture: null, bulkDensity: null, paLevel: null, passed: null, qcName: null, checkedAt: null }
       qcByKey.set(key, { ...cur, ...patch })
     }
     {
       const { data } = await (db as any).schema('qms').from('sd_runs')
-        .select('date,bulk_density,pa_level,pass_status')
+        .select('date,bulk_density,pa_level,pass_status,qc_name,time_of_run')
         .gte('date', from).lte('date', to)
       for (const r of (data ?? [])) {
         mergeQc('sieving', r.date, {
           bulkDensity: num(r.bulk_density), paLevel: num(r.pa_level),
           passed: r.pass_status ? r.pass_status === 'pass' : null,
+          qcName: r.qc_name || null,
+          checkedAt: r.time_of_run ? `${r.date}T${r.time_of_run}` : r.date,
         })
       }
     }
     {
       const { data: runs } = await (db as any).schema('qms').from('granule_runs')
-        .select('id,production_date,overall_status')
+        .select('id,production_date,overall_status,qc_name')
         .gte('production_date', from).lte('production_date', to)
       const runList = runs ?? []
       const runIds = runList.map((r: any) => r.id)
       let samples: any[] = []
       for (let i = 0; i < runIds.length; i += 200) {
         const { data } = await (db as any).schema('qms').from('granule_samples')
-          .select('run_id,moisture,bulk_density').in('run_id', runIds.slice(i, i + 200))
+          .select('run_id,moisture,bulk_density,sample_time').in('run_id', runIds.slice(i, i + 200))
         samples = samples.concat(data ?? [])
       }
       const samplesByRun = new Map<number, any[]>()
@@ -127,16 +134,19 @@ export async function GET(req: NextRequest) {
         const ss = samplesByRun.get(r.id) ?? []
         const moisture = ss.map(s => num(s.moisture)).filter((n): n is number => n != null)
         const bd = ss.map(s => num(s.bulk_density)).filter((n): n is number => n != null)
+        const lastSampleTime = ss.map(s => s.sample_time).filter(Boolean).sort().slice(-1)[0]
         mergeQc('granule', r.production_date, {
           moisture: moisture.length ? moisture.reduce((a, b) => a + b, 0) / moisture.length : null,
           bulkDensity: bd.length ? bd.reduce((a, b) => a + b, 0) / bd.length : null,
           passed: r.overall_status ? r.overall_status === 'Pass' : null,
+          qcName: r.qc_name || null,
+          checkedAt: lastSampleTime ? `${r.production_date}T${lastSampleTime}` : r.production_date,
         })
       }
     }
     {
       const { data } = await (db as any).schema('qms').from('quality_records')
-        .select('data_json,created_at')
+        .select('data_json,created_at,uploaded_by')
         .eq('workcenter', 'pasteuriser').eq('workflow', 'pasteuriser_run')
         .gte('created_at', from).lte('created_at', `${to}T23:59:59`)
       for (const r of (data ?? [])) {
@@ -149,6 +159,8 @@ export async function GET(req: NextRequest) {
           mergeQc('pasteuriser', date, {
             moisture: moisture.length ? moisture.reduce((a: number, b: number) => a + b, 0) / moisture.length : null,
             bulkDensity: bd.length ? bd.reduce((a: number, b: number) => a + b, 0) / bd.length : null,
+            qcName: r.uploaded_by || null,
+            checkedAt: r.created_at,
           })
         }
       }
@@ -182,8 +194,12 @@ export async function GET(req: NextRequest) {
         checkTotal: checks?.total ?? null, checkOk: checks?.ok ?? null,
         checkFlagged: checks?.flagged ?? null, checkFailed: checks?.fail ?? null,
         vsdHz: checks?.vsd.length ? checks.vsd.reduce((a, b) => a + b, 0) / checks.vsd.length : null,
+        checkOperator: recordByKey.get(checkKey)?.operator_name ?? null,
+        checkSupervisor: recordByKey.get(checkKey)?.supervisor_name ?? null,
+        lastCheckedAt: checks?.lastCheckedAt ?? null, lastCheckActor: checks?.lastActorName ?? null,
         moisture: qc?.moisture ?? null, bulkDensity: qc?.bulkDensity ?? null,
         paLevel: qc?.paLevel ?? null, passed: qc?.passed ?? null,
+        qcName: qc?.qcName ?? null, qcCheckedAt: qc?.checkedAt ?? null,
       }
     })
 
