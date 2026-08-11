@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (Fix bag_tags phantom-column drift in analytics; delete stale dead code)
+
+**Files changed:** `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/dashboard/CommandCentre.tsx`, `components/shared/BatchReconciliationPanel.tsx`; **deleted:** `components/production/BagScanner.tsx`, `SievingTowerForm.tsx`, `GranuleLineForm.tsx`, `RefiningForms.tsx`, `BlenderForms.tsx`, `PasteuriserForm.tsx`, `lib/qr/serial.ts`, `lib/qr/print.ts`
+
+Follow-up to the bag-scan lookup fix. Same root cause (`bag_tags` has no `section_name`/`tag_date` columns) was silently breaking several live analytics surfaces — the queries errored and the components showed empty data.
+
+- **OperationalTrends** (both the `layout` and `management` copies): the 6-month throughput query and the ageing/dwell query selected/filtered/ordered by `tag_date` and `section_name`. Switched to `created_at` (dropped the unused `section_name` select, and the `+ 'T12:00:00'` date hack that assumed a bare date). These charts were showing nothing before.
+- **CommandCentre**: "today's tagged weight" KPI filtered `bag_tags.tag_date = today` → now `created_at >= today`.
+- **BatchReconciliationPanel**: the per-batch bags query selected `section_name`/`tag_date` and ordered by `tag_date`. Now selects `created_at`, orders by it, and maps each row to the existing shape (deriving `section_name` from `SECTION_CONFIG`, `tag_date` from `created_at`) so the rest of the panel is untouched.
+- **Deleted dead code:** the old form-based capture components (`*Form.tsx` + `BagScanner.tsx`) and `lib/qr/serial.ts`/`print.ts`. None were imported by any live route (the live capture flow uses the `*Capture.tsx` components); `lib/qr/serial.ts` also carried a stale serial-format spec that contradicted the real generators, a trap for future edits. Verified no remaining importers before removal; build is green.
+
 ## 2026-08-11 — Alyssa (Fix debagging bag-scan lookup + make Granule/Blender output serials consistent)
 
 **Files changed:** `lib/production/validate-scan.ts`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/capture/RefiningCapture.tsx`

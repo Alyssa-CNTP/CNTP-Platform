@@ -108,7 +108,7 @@ export default function CommandCentre() {
         .order('submitted_at', { ascending: false }),
       db.from('bag_tags')
         .select('weight_kg')
-        .eq('tag_date', today),
+        .gte('created_at', today),   // bag_tags has no tag_date column — bags created today onward
     ])
 
     const sessions = (sessRes.data as ScSession[]) ?? []
