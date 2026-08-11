@@ -26,7 +26,7 @@ export async function GET(_req: NextRequest, { params }: { params: { key: string
 
     // ── Consolidated header ────────────────────────────────────────────────────
     const { data: b360, error: bErr } = await db.schema('production').from('v_batch_360')
-      .select('batch_id,batch_key,display_lot,variant,first_section,sections,session_count,total_input_kg,total_output_kg,yield_pct,first_date,last_date,bulk_density_latest,leaf_shade_latest,pa_level_latest,all_passed,sd_run_count,pa_ta_level,residue_grade,has_quality')
+      .select('batch_id,batch_key,display_lot,variant,first_section,sections,session_count,total_input_kg,total_output_kg,yield_pct,first_date,last_date,bulk_density_latest,leaf_shade_latest,pa_level_latest,all_passed,sd_run_count,pa_ta_level,residue_grade,has_quality,granule_moisture_latest,granule_bulk_density_latest,granule_all_passed,has_granule_quality,pasteuriser_moisture_latest,pasteuriser_bd_latest,has_pasteuriser_quality,lab_overall_status_latest,has_lab_result')
       .eq('batch_key', key)
       .maybeSingle()
     if (bErr) throw bErr
@@ -90,6 +90,21 @@ export async function GET(_req: NextRequest, { params }: { params: { key: string
         residueGrade: b360.residue_grade || null,
         allPassed: b360.all_passed,
         sdRunCount: b360.sd_run_count || 0,
+        granule: {
+          hasQuality: !!b360.has_granule_quality,
+          moisture: num(b360.granule_moisture_latest),
+          bulkDensity: num(b360.granule_bulk_density_latest),
+          allPassed: b360.granule_all_passed,
+        },
+        pasteuriser: {
+          hasQuality: !!b360.has_pasteuriser_quality,
+          moisture: num(b360.pasteuriser_moisture_latest),
+          bulkDensity: num(b360.pasteuriser_bd_latest),
+        },
+        labResult: {
+          hasResult: !!b360.has_lab_result,
+          overallStatus: b360.lab_overall_status_latest || null,
+        },
       },
       sessions: sess.map(s => ({
         sessionId: s.session_id, sectionId: s.section_id, date: s.date, shift: s.shift, status: s.status,

@@ -71,14 +71,15 @@ export async function GET() {
       (onShiftRows ?? []).map((r: any) => normName(r.person_name)).filter(Boolean)
     )
 
-    // 4. Assemble.
+    // 4. Assemble. Deliberately no `pin` field here — the actual value is only
+    // ever fetched on demand, per-person, via the reveal route below, so it's
+    // never sitting in the browser for every technician just because the list loaded.
     const techs = [...nameMap.entries()].map(([norm, { display, role }]) => {
       const authRow = authByName.get(norm)
       return {
         full_name: display,
         role,
         has_pin:   !!authRow,
-        pin:       authRow?.pin ?? null,
         is_active: authRow?.active ?? true,
         on_shift:  onShiftNames.has(norm),
         user_id:   authRow?.user_id ?? null,

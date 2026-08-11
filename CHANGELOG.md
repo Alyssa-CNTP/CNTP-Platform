@@ -3,6 +3,113 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-11 — Alyssa (HR training: Supervisor Hub — Managing Shifts & Reports course + assessment)
+
+**Files changed:** `supabase/migrations/20260811_001_supervisor_hub_course.sql` (new)
+
+Second real course in the LMS (after Sieving Tower), for production supervisors — built from a live read of the current Supervisor Hub (`components/supervisor/HubTabs.tsx` + each tab's page), not a generic guess.
+
+- Seed course **Supervisor Hub — Managing Shifts & Reports** (`hr.training_courses` slug `supervisor-hub-operations`, active, pass 0.75), embedding a Scribe walkthrough (`Managing_Supervisor_Hub_Tasks_and_Shift_Reports`) via the general `embed_url` lesson field shipped for the Sieving course's Scribe switch.
+- **17-question / 18-mark assessment** covering all six hub tabs: Dashboard (summary-only, no controls of its own), Roster (Today's sections = live section assignment with no submit step; Staffing = fortnightly grid, and the non-obvious rule that editing an already-submitted roster moves it to `changes_pending` rather than resetting to draft), Sign-off (what actually lands in the queue), Shift Report (generated from capture/mass-balance/timesheets/checks/maintenance data — Supervisor notes is the only typed field — draft → submitted → approved, reopenable after approval), Team (Ratings kept as two independent Performance/Accuracy scores on purpose, vs Timesheets), and Messages (per-line channels, no approval workflow).
+- **Standalone course — no SOP/competency mapping.** Unlike Sieving Tower, there's no floor-machine SOP this maps to (it's hub/software competency, not a physical skill), so a pass goes straight to `competent` on the course itself with no practical sign-off gate. Can be wired to a Supervisor SOP/competency record later if that tracking is wanted.
+
+**Before this shows on staging:** run `supabase/migrations/20260811_001_supervisor_hub_course.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
+## 2026-08-11 — Alyssa (Production dashboard follow-up: chart tooltips, PO product descriptions, quality who/when)
+
+**Files changed:** `components/production/PivotDashboard.tsx`, `app/api/production/dashboard-rows/route.ts`, `app/api/production/dashboard-supply/route.ts`
+
+- **Charts weren't interactable.** `PivotChart` (Floor/Quality/Machine) and `SolarChart` now put a native `<title>` tooltip on every point/bar — the date-mode line charts previously only marked the single last point per line, so hovering anywhere else on the line showed nothing.
+- **PO reference codes were unreadable without memorizing them.** There's no real Acumatica production-order sync in this codebase (`prod_sessions.production_orders` is an operator-typed label, not a synced order), so `dashboard-supply` now derives a **Product** column from what was actually bagged under that PO reference (`prod_bagging.product_type`) — the honest signal actually available. Added a matching `SupplyChart` trend chart (daily output for the top 8 PO references by volume), since the Supply & demand tab previously had no chart at all.
+- **Quality → production connection now surfaces who/when.** `dashboard-rows` adds `checkOperator`/`checkSupervisor`/`lastCheckedAt`/`lastCheckActor` (machine checks, from `check_records`/`check_events`) and `qcName`/`qcCheckedAt` (quality runs, from `qms.sd_runs`/`granule_runs`/`granule_samples`/`quality_records`). New **"Quality checks — who & when"** detail table on the Quality tab lists every QC-tracked line-shift with its reading, pass/fail result, and who recorded it, out-of-spec rows highlighted. The Needs Action panel's flag text for QC fails and machine check failures now includes the same who/when detail instead of just the metric.
+
+---
+
+## 2026-08-09 — Gustav (Maintenance: mobile layout fixes for the checklists and shift summary)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Weekly / monthly checklist cards were unreadable on a phone.** The card header put the text and the controls (allocate dropdown + print + status badge) in one row with the controls fixed at `w-44` and `shrink-0`, which starved the text column down to a few characters — so `QM-FM-033/0 · 8 tasks` wrapped to one token per line and the "Last completed…" line ran underneath the dropdown. The header now **stacks on mobile** (text full-width on top, controls on their own row below) and sits side-by-side from `sm:` up. The allocate dropdown flexes to the available width on mobile instead of forcing 176px, the doc-ref line truncates with an ellipsis instead of wrapping, and the status badge no longer splits across two lines.
+- **Shift summary buttons were clipped** — "Evening 16:00–01:00" ran off the right edge. The controls now wrap, and on mobile the two buttons show just **Day** / **Evening** (splitting the row evenly) with the time ranges appearing from `sm:` up.
+- Checklist task rows now wrap, so the notes field drops to its own line instead of being crushed when the "→ Job card" fault button appears.
+- Annual / calibration search box is full-width on mobile instead of a fixed 220px.
+
+---
+
+## 2026-08-07 — Gustav (Maintenance: removed the IT "view as" switcher; oversight roles see every screen)
+
+**Files changed:** `lib/maintenance/roles.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`
+
+- **Removed the "IT — VIEW AS" tab strip.** IT / full admin no longer have to switch between Maintenance Manager / Technician / QC / Raiser to preview each profile — they now see **every panel at once**: the manager board, the QC queue, and their own raised job cards.
+- **Added a `seesAll` oversight flag** to `deriveMaintRole()` covering IT, full admin, Management, the maintenance manager and (new) the **production manager**. This is a **view-only** concern — what a user may *do* inside a job card is still governed by `canManage` / `isTech` / `isQc`, so the allocate → QC → originator → **maintenance manager sign-off** chain is unchanged and no one else can sign off a card.
+- **Production manager can now view all the maintenance screens.** Previously they could open the maintenance module but only ever saw the limited "Raiser" dashboard, and on the Scheduled tab saw **no checklists at all** (the list was filtered to `manager or assigned-to-me`). They now see the full job-card board, the QC queue and every weekly/monthly checklist — read-only, with no allocate/verify/sign-off buttons.
+- Scoped deliberately to the **production_manager role**, not the whole Production department, so operators don't inherit manager-level visibility.
+
+---
+
+## 2026-08-07 — Gustav (Sieving: re-print a bag label after edits)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Added a **🖨 Re-print** button next to ✏️/🗑 on every Final QC row in the sieving history table, so a label can be printed again any time — including after correcting a value via the inline editor.
+- Looks the bag up fresh from `qms.v_bag_qc_status` (by `bagging_id`, falling back to serial number for older rows saved before the bag link existed) rather than reusing the pending-QC list, since a sampled bag has already dropped off that list — so the reprinted label's in-process out-of-spec banner stays accurate.
+- `mapDbRow()` now also exposes `bagging_id` (as `baggingId`) so the button can find the right bag; this is additive and doesn't change any existing field.
+
+---
+
+## 2026-08-07 — Gustav (Maintenance: data reset, technician QC visibility, recurring-problem history, checklist/completion notifications)
+
+**Files changed:** `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `lib/maintenance/useMaintenanceData.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/checklists/notify-assignment/route.ts` (new), `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Cleared all existing maintenance job cards** (and their work logs / spares-used / chat / notifications) from **both the production and staging databases**, at Gustav's request — a full reset before real day-to-day use. Every other maintenance table (checklists, calibration, roster, readings, etc.) is untouched.
+- **Fixed a bug where every signed-in user — including technicians — could see the "Satisfactory / Not satisfactory" verification screen on ANY job card**, not just the one they raised (the underlying permission was a blanket "any user can raise a card," not scoped to the actual card). It's now scoped to the real originator of that specific card. On top of that, **technicians never see the satisfactory/clarify screens at all** (that's the originator's and manager's checkpoint) — they instead get an **in-app + email notification when their job card is completed and signed off** by the maintenance manager (also a live toast while the app is open), since that notification was previously missing entirely.
+- **Technicians can now see the QC sign-off results on their own job cards** — a new read-only panel shows the QC officer, when it was done, and the pass/fail breakdown per check, without exposing the editable QC screen (that stays QC-only).
+- **Added a job-card history view for technicians** (previously manager-only) — searchable and filterable by breakdown vs planned, area, and now also by **machine** (new filter), so a technician can look up a specific machine and see what was done last time before starting a new repair — useful for spotting recurring problems.
+- **Checklist allocation now sends a notification** (in-app + email) to the technician when a weekly or monthly checklist is assigned to them — manual allocation and auto-allocate both covered. Phone push notifications are a later step once a phone integration is connected.
+
+---
+
+## 2026-08-07 — Gustav (Link production bagging to Quality sieving Final QC)
+
+**Files changed:** `supabase/migrations/20260807_001_sieving_bag_qc_link.sql` (new, applied to staging), `app/(app)/quality/sieving/page.tsx`
+
+Ties the sieving tower's bagged outputs to the Quality sieving runs so a Final QC is driven by the bag production actually made, instead of being typed from scratch.
+
+**Database (additive only — one nullable column plus views; no existing row or column changed):**
+- `qms.sd_runs.bagging_id` (nullable) — hard link to `production.prod_bagging`.
+- `qms.norm_sd_product()` / `qms.norm_lot()` / `qms.sd_product_needs_qc()` — production and quality do not share a vocabulary (`RB Blocks`, `Indent Sticks - Conventional`, `Sieved Fine Leaf: Export Blend - Conventional` vs `Fine Leaf` / `Blocks`), so both sides are normalised rather than string-matched.
+- `qms.v_bag_events`, `qms.v_sd_inprocess`, `qms.v_bag_inprocess_link`, `qms.v_bag_qc_status`, `qms.v_pending_bag_qc`.
+- **Pending QC is derived, not stored** — every Fine Leaf / Coarse Leaf bagging is pending until a `final` run links to it, so the queue cannot drift out of sync. **Indent Sticks and Rooibos Blocks still get bags/serials/labels but never require a QC stamp.**
+- **In-process → bag link:** the in-process lot is the *input material* lot, so a bag is matched to the last in-process run on the **same production day, at or before the bagging time**, via the session's de-bagging input lot (or a direct lot match). A bag inherits that run's spec result, so an out-of-spec sieve **flags every bag made after it** and shows exactly which fractions were out.
+
+**Quality → Sieving screen:**
+- **Final QC is now a pending-bag picker**, not a free-form run type: the dropdown lists bags awaiting QC with serial, product, lot, bagging time and an ⚠ OUT OF SPEC marker, and shows the governing in-process violations once a bag is picked. Serial / lot / variant / date / PA level / leaf shade pre-fill from production + raw material and stay editable so the QC verifies rather than re-types; the QC enters bulk density.
+- **In-Process no longer has a serial number** (bags are only serialised at bagging).
+- **Time is stamped at capture for both run types** and is no longer editable.
+- QC Controller defaults to the logged-in user (still editable).
+- **Bag label** printable after a Final QC, showing bulk density and leaf shade, plus an out-of-spec warning banner where applicable.
+## 2026-08-07 — Alyssa (Production dashboard v2: filterable pivot/grid)
+
+**Files changed:** `components/production/PivotDashboard.tsx` (new), `components/production/ProductionDashboard.tsx` (deleted), `app/(app)/production/dashboard/page.tsx`, `app/api/production/dashboard-rows/route.ts` (new), `app/api/production/dashboard-supply/route.ts` (new)
+
+Full redesign of the production dashboard, from a stacked report (one section per metric type) into a filterable pivot/grid tool grouped by domain — the concept iterated and approved as an interactive mockup earlier this session.
+
+- **Domains, not metric sections**: Floor, Quality, Machine, Supply & demand, Solar — each its own pivot view, not a scroll of unrelated widgets.
+- **Your own filters**: date range, shift, line, variant — combine freely, entirely client-side against `/api/production/dashboard-rows` (new — row-level, unaggregated, so the client can slice any way without another round trip).
+- **Pivot table + chart**: rows = line, columns switch between date/variant, metric switches per domain, with row/column totals computed the same way as the cells (not summed from what's displayed). Every heading has an ⓘ explaining exactly how the number was calculated.
+- **Floor plan strip**: material-flow order (Sieving → Refining 1 → Refining 2 → Granule → Blender → Pasteuriser), doubles as a line filter, links to the full `/production/floor-plan`.
+- **Output mix + Batches**: same real data as before (`/api/production/yield-analytics`), restyled.
+- **Needs action**: yield-below-85%, QC fails, and machine check failures — one shared panel instead of buried per-section warnings.
+- **AI Analyst**: reused the existing `AiAnalystPanel` (`/api/production/dashboard-insights` + `/api/production/ask`) fed the current filtered view, instead of building a new mock chat UI.
+
+**Two deliberate scope decisions, not oversights:**
+- **Grade dropped as a pivot dimension.** It's an output-bag-level choice (Export/Export Blend/Domestic via `getAcumaticaCode`), not a session-level field — input isn't graded, so "yield by grade" has no clean meaning without an allocation rule this app doesn't have. Kept Date and Variant, both real session-level fields.
+- **Supply & demand ships incomplete, honestly.** Confirmed there is no real Acumatica production-order sync anywhere in this codebase — `prod_sessions.production_orders` is an operator-typed reference label, never validated against a real order or quantity (the existing Acumatica sync only covers sales/CRM Generic Inquiries; a production-order GI has never been run — matches this changelog's own earlier note that Phase 3 automatic PO ingest is still pending the GI name). "Supply" here means actual output delivered against a PO reference. "Demand" is shown explicitly as unavailable — needs material planning/forecasting, which doesn't exist yet — rather than fabricated.
+
+Verified with a full `next build` (Turbopack), not just `tsc --noEmit`.
+
 ## 2026-08-07 — Alyssa (Bag Tracking permission toggle + search moved to a command palette in the Topbar)
 
 **Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/layout/Topbar.tsx`, `components/search/CommandSearch.tsx`
@@ -13,7 +120,12 @@ Asked why Bag Tracking (`/tags`) wasn't on the Users & Roles permissions page: i
 - **Fixed the `/tags` route guard** to include `Quality` (previously `Production` only), matching what the Sidebar already showed.
 - **Search moved from the Sidebar to the Topbar**, centered between the page title and the right-side status indicators — a more prominent, "always there" spot regardless of sidebar collapse state, matching where modern apps (Linear, Notion, GitHub) put global search.
 - **Search now finds pages, not just batch/lot records.** Added a client-side, instant "Pages" section to the command palette (Cmd/Ctrl+K) that fuzzy-matches the same nav items the Sidebar shows — filtered through the exact same permission/department predicate (extracted into an exported `getVisibleNavItems()` in `Sidebar.tsx`) so search never surfaces a page a user would then get bounced from. The existing batch/lot/bag/signal record search (server-side, `/api/search/batch`) is unchanged and still runs alongside it.
-- Promoted to production from staging PR #558.
+
+## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button visibility to full admins (`isFullAdmin` — the `senior_developer` role, which already bypasses all other permission checks in this app), so IT admins (e.g. Alyssa, Jan) see it too, in addition to the Lab Manager and Quality Manager. Same confirmation popup and delete behaviour, no schema change.
 
 ## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
 
@@ -23,7 +135,6 @@ Asked why Bag Tracking (`/tags`) wasn't on the Users & Roles permissions page: i
 - Blocked direct URL access to `/logistics/*` too: added a `disabled` flag to `ROUTE_GUARDS` so anyone but the full admin gets redirected to `/home` if they try to reach it directly, instead of relying on the nav link alone.
 - Removed the **Open GRNs** KPI tile from the Command Centre dashboard (and its `logistics.grns` count fetch), since it linked into the now-hidden module.
 - Nothing was deleted — the Logistics pages, `lib/logistics/*`, and the `can_access_logistics` permission are untouched. To bring it back: drop `disabled: true` from the `/logistics` route guard and uncomment the Sidebar entries.
-- Promoted to production from staging PR #555.
 
 ## 2026-08-06 — Gustav (COA screen: removed the example template)
 
@@ -203,7 +314,7 @@ No schema change — this reuses `prodTotals()` and the `productions` array alre
 
 ---
 
-## 2026-07-30 — Alyssa (PRODUCTION: Fix: roster rotation now keeps pins (and per-person days))
+## 2026-07-30 — Alyssa (Fix: roster rotation now keeps pins (and per-person days))
 
 **Files changed:** `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`
 
@@ -408,8 +519,6 @@ Requires migrations `20260730_001` and `20260730_002` (see manual steps at the e
 2. Run `supabase/migrations/20260730_002_roster_daily_changes.sql` on staging (adds the `changes_pending` status and `production.roster_change_log`). Until it is applied, the roster still saves and submits — it just won't record the itemised change history.
 3. Both migrations need applying to the **production** project separately when this is promoted.
 
----
-
 ## 2026-07-30 — Alyssa (Staff Directory: edit a person from their profile; one action per list row)
 
 **Files changed:** `components/production/EmployeeModal.tsx` (new, shared), `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
@@ -476,8 +585,6 @@ New polymorphic `esign` schema (`signature_requests` + append-only `signatures`)
 - **New `InventoryPickerModal`** — a full search + filter modal (item class, group, grade, variant, plus free text) showing every match in a scrollable table with a "showing X of Y" count, instead of the old 30-result-capped, empty-until-you-type 224px dropdown. The lightweight `ItemPicker` used during live production capture is untouched — its quick single-lookup UX is fine there.
 - **"Add blend"** now supports adding every initial component in one sitting (repeatable rows) instead of only a first component.
 - **New "Unresolved item links" quick filter** — click the existing stat tile to filter the list to BOMs with an item that doesn't resolve in Master Inventory.
-
----
 
 ## 2026-07-29 — Alyssa (Job card: resumable drafts — there was previously no way back into a saved draft)
 

@@ -1,6 +1,7 @@
 'use client'
 import { useRef, useState, useCallback } from 'react'
 import { ScanLine } from 'lucide-react'
+import { sanitizeSerial } from '@/lib/production/scan-utils'
 
 interface Props {
   onScan: (serial: string) => void
@@ -27,7 +28,7 @@ export default function ScanInput({
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== 'Enter') return
-    const val = inputRef.current?.value.trim() ?? ''
+    const val = sanitizeSerial(inputRef.current?.value ?? '')
     if (!val) return
     e.preventDefault()
     if (inputRef.current) inputRef.current.value = ''

@@ -31,6 +31,21 @@ export const NEEDS_VARIANT = new Set(['sieving', 'refining1', 'refining2', 'gran
 
 export const SECTION_ORDER = ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'smallblender', 'pasteuriser'] as const
 
+// Sieving Tower physical mesh screen stack, per variant family. This is a
+// standing machine setup (changed only when screens are physically swapped),
+// not a per-session captured value. Updated 2026-08-05: Organic was
+// 10# → 18# → 40# (set up years ago to boost leaf output), which shifted more
+// material into the coarse-leaf fraction and produced visual inconsistency
+// between Organic and Conventional grades. Realigned to match Conventional.
+export const SIEVING_MESH_CONFIG: Record<'conventional' | 'organic', string[]> = {
+  conventional: ['12#', '18#', '40#'],
+  organic:      ['12#', '18#', '40#'],
+}
+export const SIEVING_MESH_CONFIG_PREVIOUS: Record<'conventional' | 'organic', string[]> = {
+  conventional: ['12#', '18#', '40#'],
+  organic:      ['10#', '18#', '40#'],
+}
+
 export interface SectionMeta {
   id: string
   name: string
@@ -140,6 +155,7 @@ export interface KnownPrinter {
 // with `Test-NetConnection <ip> -Port 9100` (= True) from a same-subnet machine
 // before relying on it.
 export const KNOWN_PRINTERS: KnownPrinter[] = [
+  { id: '26E55064', label: 'Argox CP-2140EX PRO — 26E55064 (Sieving)', ip: '192.168.0.115', lang: 'pplb' },
   { id: 'argox-pasteuriser', label: 'Argox CP-2140EX — Pasteuriser', ip: '192.168.0.55', lang: 'pplb' },
 ]
 
@@ -150,7 +166,7 @@ export const KNOWN_PRINTERS: KnownPrinter[] = [
 // each new Argox is given a static IP on port 9100.
 export const SECTION_PRINTER: Record<string, PrinterConfig> = {
   pasteuriser: { ip: '192.168.0.55', lang: 'pplb' },  // Argox CP-2140EX (confirmed)
-  sieving:     { ip: '', lang: 'pplb' },              // new Argox — set IP in Stock Control
+  sieving:     { ip: '192.168.0.115', lang: 'pplb' }, // Argox CP-2140EX PRO — 26E55064 (confirmed)
   refining1:   { ip: '', lang: 'pplb' },
   refining2:   { ip: '', lang: 'pplb' },
   granule:     { ip: '', lang: 'pplb' },

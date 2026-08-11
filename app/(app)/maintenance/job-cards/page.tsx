@@ -83,11 +83,10 @@ export default function JobCardsPage() {
   const { jcs } = data
   const { cnt, newCards } = derived
 
-  // IT / full admin get the full view of every profile via a "View as" switcher.
-  const [viewAs, setViewAs] = useState<'manager' | 'tech' | 'qc' | 'raiser'>('manager')
-  const role = baseRole.isAdminView
-    ? { ...baseRole, canManage: viewAs === 'manager', isTech: viewAs === 'tech', isQc: viewAs === 'qc', isRaiser: viewAs === 'raiser' }
-    : baseRole
+  // Oversight profiles (IT / admin / Management / maintenance manager /
+  // production manager) see every panel at once — no "view as" switching.
+  const role = baseRole
+  const seesAll = baseRole.seesAll
 
   const [filt, setFilt] = useState('all')
   const [search, setSearch] = useState('')
@@ -160,22 +159,11 @@ export default function JobCardsPage() {
         </button>
       )}
 
-      {/* IT / full-admin: switch between every profile's view */}
-      {baseRole.isAdminView && (
-        <div className="flex items-center gap-2 mb-4 flex-wrap rounded-lg border border-surface-rule bg-surface-dim p-1.5">
-          <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide px-1.5">IT — view as</span>
-          {([['manager', 'Maintenance Manager'], ['tech', 'Technician'], ['qc', 'QC'], ['raiser', 'Raiser']] as const).map(([v, label]) => (
-            <button key={v} onClick={() => setViewAs(v)}
-              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold transition ${viewAs === v ? 'bg-brand text-white shadow-sm' : 'text-text-muted hover:text-text'}`}>{label}</button>
-          ))}
-        </div>
-      )}
-
       {/* Shared search + date-range + urgency filter — available in every view */}
       <FilterBar search={search} setSearch={setSearch} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} urg={urg} setUrg={setUrg} />
 
-      {/* ── MANAGER: BOARD ── */}
-      {role.canManage && (
+      {/* ── MANAGER: BOARD ── (also the top section of the full oversight view) */}
+      {(role.canManage || seesAll) && (
         <div>
           <ShiftSummary jcs={jcs} completions={data.completions} cardHref={cardHref} />
 
@@ -226,8 +214,8 @@ export default function JobCardsPage() {
         </div>
       )}
 
-      {/* ── TECHNICIAN VIEW ── */}
-      {!role.canManage && role.isTech && (
+      {/* ── TECHNICIAN VIEW ── (own assigned work; only meaningful for a technician) */}
+      {!role.canManage && !seesAll && role.isTech && (
         <div>
           <div className="card p-3 text-[12px] text-text-muted mb-3">
             Your job cards, <strong className="text-text">{actor}</strong>. Click a row to log work — the timer shows while a job is running. Breakdowns time from the moment they were raised.
@@ -236,12 +224,19 @@ export default function JobCardsPage() {
             cards={jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
             roles={cardRoles}
             empty={`No open job cards assigned to ${actor}.`} />
+
+          {/* History — every technician's completed work, filterable by breakdown
+              vs planned and by machine/area, so recurring problems and prior
+              fixes are easy to find before starting a new job. */}
+          <div className="text-[12px] text-text-muted mt-6 mb-2">Look up what's been done before — filter by machine to spot a recurring problem and see how it was fixed last time.</div>
+          <HistoryPanel jcs={jcs} cardHref={cardHref} />
         </div>
       )}
 
       {/* ── QC VIEW ── */}
-      {!role.canManage && !role.isTech && role.isQc && (
-        <div>
+      {(seesAll || (!role.canManage && !role.isTech && role.isQc)) && (
+        <div className={seesAll ? 'mt-8' : ''}>
+          {seesAll && <h2 className="text-sm font-semibold text-text mb-2">QC queue</h2>}
           <div className="card p-3 text-[12px] text-text-muted mb-3">
             Job cards awaiting QC post-maintenance checks — click a row to answer YES / NO / N/A; any YES returns the card to the technician with your comment.
           </div>
@@ -253,8 +248,11 @@ export default function JobCardsPage() {
       )}
 
       {/* ── RAISER DASHBOARD (default) ── */}
-      {!role.canManage && !role.isTech && !role.isQc && (
-        <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} passes={passes} />
+      {(seesAll || (!role.canManage && !role.isTech && !role.isQc)) && (
+        <div className={seesAll ? 'mt-8' : ''}>
+          {seesAll && <h2 className="text-sm font-semibold text-text mb-2">Job cards you raised</h2>}
+          <RaiserView actor={actor} jcs={jcs} cardRoles={cardRoles} passes={passes} />
+        </div>
       )}
 
       <BottomSheet open={raiseOpen} onClose={() => setRaiseOpen(false)} center={false}>
@@ -305,10 +303,14 @@ function ShiftSummary({ jcs, completions, cardHref }: { jcs: JobCard[]; completi
     <div className="card p-4 mb-6">
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <h2 className="text-sm font-semibold text-text">Shift summary</h2>
-        <div className="flex gap-1.5 items-center">
+        {/* Mobile: the shift buttons drop to their own row and shed the time
+            ranges so nothing is clipped off the right edge. */}
+        <div className="flex gap-1.5 items-center flex-wrap w-full sm:w-auto">
           <input className={`${INP} w-36 min-h-0 py-1.5`} type="date" value={date} onChange={ev => setDate(ev.target.value)} />
-          <button className={SEG(shift === 'day')} onClick={() => setShift('day')}>Day 07:00–16:00</button>
-          <button className={SEG(shift === 'evening')} onClick={() => setShift('evening')}>Evening 16:00–01:00</button>
+          <div className="flex gap-1.5 flex-1 min-w-0 sm:flex-none">
+            <button className={`${SEG(shift === 'day')} flex-1 sm:flex-none`} onClick={() => setShift('day')}>Day<span className="hidden sm:inline"> 07:00–16:00</span></button>
+            <button className={`${SEG(shift === 'evening')} flex-1 sm:flex-none`} onClick={() => setShift('evening')}>Evening<span className="hidden sm:inline"> 16:00–01:00</span></button>
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
@@ -353,6 +355,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
   const [statusF, setStatusF] = useState<'complete' | 'cancelled' | 'all'>('complete')
   const [typeF, setTypeF] = useState('all')
   const [areaF, setAreaF] = useState('all')
+  const [machF, setMachF] = useState('all')
   const [techF, setTechF] = useState('all')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
@@ -360,6 +363,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
   const closedOf = (j: JobCard) => j.completed_at ?? j.verified_at
   const base = useMemo(() => jcs.filter(j => j.status === 'complete' || j.status === 'cancelled'), [jcs])
   const areas = useMemo(() => Array.from(new Set(base.map(j => j.area).filter(Boolean))).sort(), [base])
+  const machines = useMemo(() => Array.from(new Set(base.map(j => j.machine).filter(Boolean) as string[])).sort(), [base])
   const techs = useMemo(() => Array.from(new Set(base.map(j => j.assigned_to).filter(Boolean) as string[])).sort(), [base])
 
   const ql = q.trim().toLowerCase()
@@ -367,6 +371,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
     if (statusF !== 'all' && j.status !== statusF) return false
     if (typeF !== 'all' && j.workflow !== typeF) return false
     if (areaF !== 'all' && j.area !== areaF) return false
+    if (machF !== 'all' && j.machine !== machF) return false
     if (techF !== 'all' && j.assigned_to !== techF) return false
     const cd = (closedOf(j) ?? '').slice(0, 10)
     if (from && cd && cd < from) return false
@@ -376,8 +381,8 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
     return true
   }).sort((a, b) => (closedOf(b) ?? '').localeCompare(closedOf(a) ?? ''))
 
-  const active = q || from || to || typeF !== 'all' || areaF !== 'all' || techF !== 'all' || statusF !== 'complete'
-  const clear = () => { setQ(''); setFrom(''); setTo(''); setTypeF('all'); setAreaF('all'); setTechF('all'); setStatusF('complete') }
+  const active = q || from || to || typeF !== 'all' || areaF !== 'all' || machF !== 'all' || techF !== 'all' || statusF !== 'complete'
+  const clear = () => { setQ(''); setFrom(''); setTo(''); setTypeF('all'); setAreaF('all'); setMachF('all'); setTechF('all'); setStatusF('complete') }
   const colSel = `${INP} w-full text-[11px] py-1 min-h-0`
 
   return (
@@ -418,7 +423,7 @@ function HistoryPanel({ jcs, cardHref }: { jcs: JobCard[]; cardHref: (j: JobCard
               <th>#</th>
               <th><select className={`${colSel} font-semibold ${typeF !== 'all' ? 'text-brand' : ''}`} value={typeF} onChange={e => setTypeF(e.target.value)}><option value="all">Type ▾</option><option value="breakdown">Breakdown</option><option value="planned">Planned</option></select></th>
               <th><select className={`${colSel} font-semibold ${areaF !== 'all' ? 'text-brand' : ''}`} value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">Area ▾</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></th>
-              <th>Machine</th>
+              <th><select className={`${colSel} font-semibold ${machF !== 'all' ? 'text-brand' : ''}`} value={machF} onChange={e => setMachF(e.target.value)}><option value="all">Machine ▾</option>{machines.map(m => <option key={m} value={m}>{m}</option>)}</select></th>
               <th>Description</th>
               <th><select className={`${colSel} font-semibold ${techF !== 'all' ? 'text-brand' : ''}`} value={techF} onChange={e => setTechF(e.target.value)}><option value="all">Technician ▾</option>{techs.map(t => <option key={t} value={t}>{t}</option>)}</select></th>
               <th>By</th>

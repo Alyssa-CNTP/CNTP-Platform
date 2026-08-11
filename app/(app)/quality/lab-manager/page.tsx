@@ -77,7 +77,7 @@ export default function LabManagerPage() {
   const [tab, setTab] = useState<'approvals' | 'daily' | 'history' | 'pins'>('approvals')
 
   // ── Lab assistant PINs ─────────────────────────────────────────────────────
-  interface LabAsst { full_name: string; role: string; has_pin: boolean; pin: string | null; section_ids: string[]; is_active: boolean; user_id: string | null; employee_id: string | null }
+  interface LabAsst { full_name: string; role: string; has_pin: boolean; section_ids: string[]; is_active: boolean; user_id: string | null; employee_id: string | null }
   interface PinForm { full_name: string; pin: string; section_ids: string[]; employee_id: string | null }
   const [labAsstList,  setLabAsstList]  = useState<LabAsst[]>([])
   const [labAsstLoad,  setLabAsstLoad]  = useState(false)
@@ -85,7 +85,23 @@ export default function LabManagerPage() {
   const [pinSaving,    setPinSaving]    = useState(false)
   const [pinError,     setPinError]     = useState<string | null>(null)
   const [pinQuery,     setPinQuery]     = useState('')
-  const [revealedPin,  setRevealedPin]  = useState<string | null>(null)
+  const [revealedName, setRevealedName] = useState<string | null>(null)
+  const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
+  const [revealing,    setRevealing]    = useState<string | null>(null)
+  const [showPinTyping, setShowPinTyping] = useState(false)
+
+  // Fetches the actual PIN on demand — never bulk-loaded with the list (see
+  // app/api/quality/lab-assistants/manage/route.ts).
+  async function revealPin(fullName: string) {
+    if (revealedName === fullName) { setRevealedName(null); return }
+    if (revealedPins[fullName]) { setRevealedName(fullName); return }
+    setRevealing(fullName)
+    try {
+      const res = await fetch(`/api/quality/lab-assistants/manage/reveal?name=${encodeURIComponent(fullName)}`)
+      const json = await res.json()
+      if (res.ok) { setRevealedPins(p => ({ ...p, [fullName]: json.pin })); setRevealedName(fullName) }
+    } finally { setRevealing(null) }
+  }
 
   const ROLE_LABELS: Record<string, string> = { qc_supervisor: 'QC Supervisor', qc: 'QC', lab_analyst: 'Lab Analyst', incoming_goods_qc: 'Incoming Goods QC' }
 
@@ -668,11 +684,11 @@ export default function LabManagerPage() {
                       {!asst.has_pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      {asst.pin ? (
+                      {asst.has_pin ? (
                         <>
-                          <span className="font-mono text-[12px] text-text-muted tracking-widest">{revealedPin === asst.full_name ? asst.pin : '••••'}</span>
-                          <button onClick={() => setRevealedPin(revealedPin === asst.full_name ? null : asst.full_name)} className="text-stone-400 hover:text-text p-0.5" title={revealedPin === asst.full_name ? 'Hide PIN' : 'Reveal PIN'}>
-                            {revealedPin === asst.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
+                          <span className="font-mono text-[12px] text-text-muted tracking-widest">{revealedName === asst.full_name ? revealedPins[asst.full_name] : '••••'}</span>
+                          <button onClick={() => revealPin(asst.full_name)} disabled={revealing === asst.full_name} className="text-stone-400 hover:text-text p-0.5 disabled:opacity-40" title={revealedName === asst.full_name ? 'Hide PIN' : 'Reveal PIN'}>
+                            {revealing === asst.full_name ? <Loader2 size={12} className="animate-spin" /> : revealedName === asst.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
                           </button>
                           {asst.section_ids?.length > 0 && <><span className="text-[11px] text-text-faint">·</span><span className="text-[11px] text-text-muted font-mono">{asst.section_ids.map(s => sectionMeta(s).code).join(' · ')}</span></>}
                         </>
@@ -686,7 +702,7 @@ export default function LabManagerPage() {
                       {asst.is_active ? <UserCheck size={16} className="text-ok" /> : <UserX size={16} />}
                     </button>
                   )}
-                  <button onClick={() => { setPinError(null); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [], employee_id: asst.employee_id ?? null }) }} className="p-2 text-stone-400 hover:text-brand">
+                  <button onClick={() => { setPinError(null); setShowPinTyping(false); setPinEditing({ full_name: asst.full_name, pin: '', section_ids: asst.section_ids ?? [], employee_id: asst.employee_id ?? null }) }} className="p-2 text-stone-400 hover:text-brand">
                     <Pencil size={15} />
                   </button>
                 </div>
@@ -704,10 +720,17 @@ export default function LabManagerPage() {
                 <div className="p-5 space-y-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">4-digit PIN (leave blank to keep current)</label>
-                    <input value={pinEditing.pin} inputMode="numeric" maxLength={4} autoFocus
-                      onChange={e => setPinEditing({ ...pinEditing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                      className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-brand font-mono tracking-[0.4em] text-center text-[18px]"
-                      placeholder="••••" />
+                    <div className="relative">
+                      <input type={showPinTyping ? 'text' : 'password'} value={pinEditing.pin} inputMode="numeric" maxLength={4} autoFocus
+                        onChange={e => setPinEditing({ ...pinEditing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                        className="w-full px-3 py-2.5 pr-10 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-brand font-mono tracking-[0.4em] text-center text-[18px]"
+                        placeholder="••••" />
+                      <button type="button" onClick={() => setShowPinTyping(s => !s)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                        title={showPinTyping ? 'Hide PIN' : 'Show PIN'}>
+                        {showPinTyping ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Assigned sections</label>

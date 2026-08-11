@@ -19,6 +19,7 @@ interface Spec {
   gt12_min: number|null; gt12_max: number|null
   gt16_min: number|null; gt16_max: number|null
   gt20_min: number|null; gt20_max: number|null
+  gt40_min: number|null; gt40_max: number|null
   gt60_min: number|null; gt60_max: number|null
   dust_min: number|null; dust_max: number|null
   moisture_max: number|null; bulk_density_min: number|null; bulk_density_max: number|null
@@ -32,6 +33,16 @@ const SIEVE_COLS = [
   {key:'gt16',label:'>16'},{key:'gt20',label:'>20'},{key:'gt60',label:'>60'},
   {key:'dust',label:'Dust'},
 ]
+// Rosehips uses a >40 mesh (per IPSSOU006 Tea Bag Cut datasheet). We add it
+// (between >20 and >60) only for Rosehips, so other families are unaffected.
+const ROSEHIPS_GT40 = {key:'gt40',label:'>40'}
+function sieveColsFor(family:string){
+  if(family!=='Rosehips') return SIEVE_COLS
+  const i = SIEVE_COLS.findIndex(c=>c.key==='gt60')
+  return [...SIEVE_COLS.slice(0,i), ROSEHIPS_GT40, ...SIEVE_COLS.slice(i)]
+}
+// Rosehips bulk density is volumetric (ml/5g, e.g. "<10 ml/5g") rather than cc/100g.
+function bdUnit(family:string){ return family==='Rosehips' ? 'ml/5g' : 'cc/100g' }
 const FAMILIES = ['Rooibos','Green Rooibos','Honeybush','Green Tea','Rosehips']
 const GRADES: Record<string,string[]> = {
   'Rooibos':['Super Grade','Super Fine Cut','Super Export','Fine Super Export','Long Cut','Short Cut','Choice','Espresso'],
@@ -41,7 +52,7 @@ const VARIANTS = ['Conventional','Organic','RA-Conventional','RA-Organic']
 const EMPTY = () => ({
   product_family:'Rooibos',grade:'Super Grade',variant:'Conventional',customer:'',sieve_type:'standard',
   gt6_min:'',gt6_max:'',gt10_min:'',gt10_max:'',gt12_min:'',gt12_max:'',
-  gt16_min:'',gt16_max:'',gt20_min:'',gt20_max:'',gt60_min:'',gt60_max:'',
+  gt16_min:'',gt16_max:'',gt20_min:'',gt20_max:'',gt40_min:'',gt40_max:'',gt60_min:'',gt60_max:'',
   dust_min:'',dust_max:'',moisture_max:'',bulk_density_min:'',bulk_density_max:'',bd_target:'',notes:'',
 })
 
@@ -132,7 +143,7 @@ export default function CustomerSpecsPage() {
     if(!addForm.product_family||!addForm.grade||!addForm.variant){setAddErr('Product family, grade and variant are required');return}
     setAddSaving(true);setAddErr('')
     const body:any={...addForm}
-    ;['gt6_min','gt6_max','gt10_min','gt10_max','gt12_min','gt12_max','gt16_min','gt16_max','gt20_min','gt20_max','gt60_min','gt60_max','dust_min','dust_max','moisture_max','bulk_density_min','bulk_density_max','bd_target']
+    ;['gt6_min','gt6_max','gt10_min','gt10_max','gt12_min','gt12_max','gt16_min','gt16_max','gt20_min','gt20_max','gt40_min','gt40_max','gt60_min','gt60_max','dust_min','dust_max','moisture_max','bulk_density_min','bulk_density_max','bd_target']
       .forEach(k=>{body[k]=numOrNull(body[k])})
     body.customer=addForm.customer||'';body.notes=addForm.notes||null
     const {data:saved,error}=await db.schema('qms').from('customer_specs').insert(body).select().single()
@@ -238,7 +249,7 @@ export default function CustomerSpecsPage() {
                     <th style={{padding:'5px 8px',textAlign:'center',fontSize:10}}>Max %</th>
                   </tr></thead>
                   <tbody>
-                    {SIEVE_COLS.map(({key,label},i)=>(
+                    {sieveColsFor(addForm.product_family).map(({key,label},i)=>(
                       <tr key={key} style={{background:i%2===0?'#fff':'#f9fafb',borderBottom:'1px solid #f3f4f6'}}>
                         <td style={{padding:'4px 8px',fontWeight:600}}>{label} mesh</td>
                         {(['min','max'] as const).map(mm=>(
@@ -255,7 +266,7 @@ export default function CustomerSpecsPage() {
                 </table>
               </div>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-                {[['Moisture Max (%)','moisture_max'],['BD Min (cc/100g)','bulk_density_min'],['BD Max (cc/100g)','bulk_density_max'],['BD Target','bd_target']].map(([lbl,key])=>(
+                {[['Moisture Max (%)','moisture_max'],[`BD Min (${bdUnit(addForm.product_family)})`,'bulk_density_min'],[`BD Max (${bdUnit(addForm.product_family)})`,'bulk_density_max'],['BD Target','bd_target']].map(([lbl,key])=>(
                   <div key={key}>
                     <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>{lbl}</label>
                     <input type="number" step="0.1" value={addForm[key]} onChange={e=>setAddForm((p:any)=>({...p,[key]:e.target.value}))}
@@ -297,16 +308,16 @@ export default function CustomerSpecsPage() {
                     <th style={{padding:'6px 8px',textAlign:'left',color:'#fff',fontSize:9,textTransform:'uppercase',whiteSpace:'nowrap'}}>Grade</th>
                     <th style={{padding:'6px 6px',color:'#fff',fontSize:9,textTransform:'uppercase'}}>Variant</th>
                     <th style={{padding:'6px 8px',color:'#fde68a',fontSize:9,fontWeight:800,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap',background:'#1a3f60'}}>CUSTOMER</th>
-                    {SIEVE_COLS.map(c=>(
+                    {sieveColsFor(family).map(c=>(
                       <th key={c.key} colSpan={2} style={{padding:'4px 4px',textAlign:'center',color:'#bfdbfe',fontSize:9,borderLeft:'1px solid #2d5f8f'}}>{c.label}%</th>
                     ))}
                     <th style={{padding:'6px 4px',color:'#bfdbfe',fontSize:9,borderLeft:'2px solid #2d5f8f',whiteSpace:'nowrap'}}>Moist≤</th>
-                    <th colSpan={2} style={{padding:'4px 4px',textAlign:'center',color:'#bfdbfe',fontSize:9,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap'}}>BD cc/100g</th>
+                    <th colSpan={2} style={{padding:'4px 4px',textAlign:'center',color:'#bfdbfe',fontSize:9,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap'}}>BD {bdUnit(family)}</th>
                     {canWrite&&<th style={{padding:'4px 4px',color:'#f87171',fontSize:9}}></th>}
                   </tr>
                   <tr style={{background:'#f0f4f8',borderBottom:'1px solid #dbeafe'}}>
                     <th/><th/><th style={{fontSize:9,color:'#6b7280',borderLeft:'1px solid #e5e7eb'}}>name</th>
-                    {SIEVE_COLS.map(c=>(
+                    {sieveColsFor(family).map(c=>(
                       <>{/* Fragment needs key on outer element */}
                         <th key={c.key+'min'} style={{fontSize:8,color:'#9ca3af',textAlign:'center',borderLeft:'1px solid #e5e7eb'}}>min</th>
                         <th key={c.key+'max'} style={{fontSize:8,color:'#9ca3af',textAlign:'center'}}>max</th>
@@ -328,7 +339,7 @@ export default function CustomerSpecsPage() {
                           ?<EC id={row.id} col="customer" value={row.customer??null} width={90} onSave={saveField} savedKey={`${row.id}_customer`}/>
                           :<span style={{fontFamily:'monospace',fontSize:10}}>{row.customer||'—'}</span>}
                       </td>
-                      {SIEVE_COLS.map(c=>(
+                      {sieveColsFor(family).map(c=>(
                         <>
                           <td key={c.key+'min'} style={{padding:'5px 2px',textAlign:'center',borderLeft:'1px solid #f3f4f6'}}>
                             {canWrite?<EC id={row.id} col={`${c.key}_min`} value={(row as any)[`${c.key}_min`]} onSave={saveField} savedKey={`${row.id}_${c.key}_min`}/>

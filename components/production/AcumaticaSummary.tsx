@@ -113,7 +113,7 @@ function SievingSummary({ d, date, shift }: { d: any; date: string; shift: strin
           ['Form', 'PR-FM-027/6'],
           ['Date / Shift', `${date} · ${shift}`],
           ['Operators', d.shiftOps || '—'],
-          ['Sieve config', [d.sieve12 && '12H', d.sieve18 && '18H', d.sieve40 && '40H'].filter(Boolean).join(' · ') || '—'],
+          ['Sieve config', [d.sieve12 && '12#', d.sieve18 && '18#', d.sieve40 && '40#'].filter(Boolean).join(' · ') || '—'],
           ['Scale std / actual', `${d.stdWt || '—'} / ${d.actualWt || '—'} kg`],
           ['Checked by', d.checkedBy || '—'],
         ].map(([l, v]) => (

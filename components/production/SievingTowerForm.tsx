@@ -596,7 +596,7 @@ export function SievingForm({ locked, onData, shift, sessionId, savedData, dateP
             <span className="text-[10px] text-stone-400">Pre-checked — uncheck if different</span>
           </div>
           <div className="flex gap-5">
-            {([['12H',sieve12,setSieve12],['18H',sieve18,setSieve18],['40H',sieve40,setSieve40]] as any[]).map(([lbl,val,set])=>(
+            {([['12#',sieve12,setSieve12],['18#',sieve18,setSieve18],['40#',sieve40,setSieve40]] as any[]).map(([lbl,val,set])=>(
               <label key={lbl} className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={val} onChange={(e:any)=>set(e.target.checked)} disabled={locked} className="w-4 h-4 accent-brand"/>
                 <span className="font-mono text-[13px] text-text">{lbl}</span>

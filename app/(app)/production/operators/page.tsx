@@ -8,7 +8,12 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
-import type { Operator } from '@/lib/supabase/database.types'
+import type { Operator as OperatorRow } from '@/lib/supabase/database.types'
+
+// The server list route (GET /api/production/operators) never includes the
+// raw pin — it's replaced with a has_pin boolean; the actual value is only
+// ever fetched on demand via GET /api/production/operators/[id]/pin.
+type Operator = Omit<OperatorRow, 'pin'> & { has_pin: boolean }
 
 interface FormState {
   id?: string
@@ -39,25 +44,44 @@ export default function OperatorsPage() {
   const [error, setError]         = useState<string | null>(null)
   const [query,       setQuery]      = useState('')
   const [activeOnly,  setActiveOnly] = useState(true)
-  const [revealedPin, setRevealedPin] = useState<string | null>(null)
+  const [revealedId, setRevealedId] = useState<string | null>(null)
+  const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
+  const [revealing, setRevealing] = useState<string | null>(null)
   const [creatingPerson, setCreatingPerson] = useState(false)
+  const [showPinTyping, setShowPinTyping] = useState(false)
 
   async function load() {
+    // Operators go through a server route (not a direct client query) so the
+    // actual PIN is never in the response at all — only `has_pin`. It's only
+    // ever fetched on demand, per operator, via GET /api/production/operators/[id]/pin.
     const [opsRes, empRes] = await Promise.all([
-      getDb().schema('production').from('operators').select('*').order('name'),
+      fetch('/api/production/operators'),
       getDb().schema('production').from('employees').select('id,name,display_name,operator_id').order('name'),
     ])
-    setOperators((opsRes.data as Operator[]) ?? [])
+    const opsJson = await opsRes.json().catch(() => [])
+    setOperators(opsRes.ok && Array.isArray(opsJson) ? opsJson : [])
     setEmployees((empRes.data as EmployeeOption[]) ?? [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
 
-  function startAdd()  { setError(null); setCreatingPerson(false); setEditing(emptyForm()) }
+  // Fetches the actual PIN on demand — never bulk-loaded with the list.
+  async function revealPin(op: Operator) {
+    if (revealedId === op.id) { setRevealedId(null); return }
+    if (revealedPins[op.id]) { setRevealedId(op.id); return }
+    setRevealing(op.id)
+    try {
+      const res = await fetch(`/api/production/operators/${op.id}/pin`)
+      const json = await res.json()
+      if (res.ok) { setRevealedPins(p => ({ ...p, [op.id]: json.pin })); setRevealedId(op.id) }
+    } finally { setRevealing(null) }
+  }
+
+  function startAdd()  { setError(null); setCreatingPerson(false); setShowPinTyping(false); setEditing(emptyForm()) }
   function startEdit(op: Operator) {
-    setError(null); setCreatingPerson(false)
+    setError(null); setCreatingPerson(false); setShowPinTyping(false)
     setEditing({
-      id: op.id, name: op.name, section_ids: op.section_ids ?? [], pin: op.pin ?? '', active: op.active,
+      id: op.id, name: op.name, section_ids: op.section_ids ?? [], pin: '', active: op.active,
       employeeId: (op as any).employee_id ?? null, newPersonName: '',
     })
   }
@@ -72,7 +96,11 @@ export default function OperatorsPage() {
   async function save() {
     if (!editing) return
     if (!editing.name.trim())       { setError('Name is required'); return }
-    if (!/^\d{4}$/.test(editing.pin)) { setError('PIN must be exactly 4 digits'); return }
+    // A blank PIN when editing an existing operator means "keep the current
+    // one" (see the field's hint text) — only require the format when
+    // creating, or when they've actually typed a new value.
+    const changingPin = !editing.id || editing.pin !== ''
+    if (changingPin && !/^\d{4}$/.test(editing.pin)) { setError('PIN must be exactly 4 digits'); return }
     if (editing.section_ids.length === 0) { setError('Assign at least one section'); return }
     // New PINs must be tied to a Staff Directory person — either pick an
     // existing one or create it inline. Existing operators can be edited
@@ -116,13 +144,14 @@ export default function OperatorsPage() {
   }
 
   async function toggleActive(op: Operator) {
+    // No `pin` here — omitting it tells the PATCH route to keep the current one.
     await fetch('/api/production/operators', {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         id: op.id, name: op.name, display_name: op.display_name,
         operator_code: op.operator_code, role: op.role,
-        section_ids: op.section_ids, pin: op.pin, active: !op.active,
+        section_ids: op.section_ids, active: !op.active,
       }),
     }).catch(() => {})
     await load()
@@ -203,20 +232,21 @@ export default function OperatorsPage() {
                 <div className="font-semibold text-[14px] text-text flex items-center gap-2 flex-wrap">
                   {op.display_name || op.name}
                   {op.operator_code && <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded">{op.operator_code}</span>}
-                  {!op.pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
+                  {!op.has_pin && <span className="text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">No PIN</span>}
                 </div>
                 <div className="flex items-center gap-2 mt-0.5">
-                  {op.pin ? (
+                  {op.has_pin ? (
                     <>
                       <span className="font-mono text-[12px] text-text-muted tracking-widest">
-                        {revealedPin === op.id ? op.pin : '••••'}
+                        {revealedId === op.id ? revealedPins[op.id] : '••••'}
                       </span>
                       <button
-                        onClick={() => setRevealedPin(revealedPin === op.id ? null : op.id ?? null)}
-                        className="text-stone-400 hover:text-text p-0.5"
-                        title={revealedPin === op.id ? 'Hide PIN' : 'Reveal PIN'}
+                        onClick={() => revealPin(op)}
+                        disabled={revealing === op.id}
+                        className="text-stone-400 hover:text-text p-0.5 disabled:opacity-40"
+                        title={revealedId === op.id ? 'Hide PIN' : 'Reveal PIN'}
                       >
-                        {revealedPin === op.id ? <EyeOff size={12} /> : <Eye size={12} />}
+                        {revealing === op.id ? <Loader2 size={12} className="animate-spin" /> : revealedId === op.id ? <EyeOff size={12} /> : <Eye size={12} />}
                       </button>
                       <span className="text-[11px] text-text-faint">·</span>
                     </>
@@ -294,12 +324,20 @@ export default function OperatorsPage() {
                 </p>
               </Field>
 
-              <Field label="4-digit PIN *">
-                <input
-                  value={editing.pin} inputMode="numeric" maxLength={4}
-                  onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                  className={INP + ' font-mono tracking-[0.4em] text-center text-[18px]'} placeholder="••••"
-                />
+              <Field label={editing.id ? '4-digit PIN (leave blank to keep current)' : '4-digit PIN *'}>
+                <div className="relative">
+                  <input
+                    type={showPinTyping ? 'text' : 'password'}
+                    value={editing.pin} inputMode="numeric" maxLength={4}
+                    onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    className={INP + ' font-mono tracking-[0.4em] text-center text-[18px] pr-10'} placeholder="••••"
+                  />
+                  <button type="button" onClick={() => setShowPinTyping(s => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                    title={showPinTyping ? 'Hide PIN' : 'Show PIN'}>
+                    {showPinTyping ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
               </Field>
 
               <Field label="Allowed sections *">

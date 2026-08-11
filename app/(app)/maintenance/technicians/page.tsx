@@ -11,7 +11,6 @@ interface Tech {
   full_name: string
   role:      string
   has_pin:   boolean
-  pin:       string | null
   is_active: boolean
   on_shift:  boolean
   user_id:   string | null
@@ -51,7 +50,23 @@ export default function TechnicianPinsPage() {
   const [error,      setError]      = useState<string | null>(null)
   const [query,       setQuery]      = useState('')
   const [activeOnly,  setActiveOnly] = useState(true)
-  const [revealedPin, setRevealedPin] = useState<string | null>(null)
+  const [revealedName, setRevealedName] = useState<string | null>(null)
+  const [revealedPins, setRevealedPins] = useState<Record<string, string>>({})
+  const [revealing, setRevealing] = useState<string | null>(null)
+  const [showPinTyping, setShowPinTyping] = useState(false)
+
+  // Fetches the actual PIN on demand — never bulk-loaded with the list (see
+  // app/api/maintenance/technicians/manage/route.ts).
+  async function revealPin(fullName: string) {
+    if (revealedName === fullName) { setRevealedName(null); return }
+    if (revealedPins[fullName]) { setRevealedName(fullName); return }
+    setRevealing(fullName)
+    try {
+      const res = await fetch(`/api/maintenance/technicians/manage/reveal?name=${encodeURIComponent(fullName)}`)
+      const json = await res.json()
+      if (res.ok) { setRevealedPins(p => ({ ...p, [fullName]: json.pin })); setRevealedName(fullName) }
+    } finally { setRevealing(null) }
+  }
 
   async function load() {
     const res  = await fetch('/api/maintenance/technicians/manage')
@@ -62,7 +77,7 @@ export default function TechnicianPinsPage() {
   useEffect(() => { load() }, [])
 
   function startEdit(tech: Tech) {
-    setError(null)
+    setError(null); setShowPinTyping(false)
     setEditing({ full_name: tech.full_name, pin: '', is_active: tech.is_active })
   }
 
@@ -166,17 +181,18 @@ export default function TechnicianPinsPage() {
                   {tech.on_shift && (
                     <span className="text-[10px] font-semibold text-brand bg-brand/10 px-1.5 py-0.5 rounded">On shift</span>
                   )}
-                  {tech.has_pin && tech.pin ? (
+                  {tech.has_pin ? (
                     <span className="flex items-center gap-1">
                       <span className="font-mono text-[11px] text-stone-500 tracking-widest">
-                        {revealedPin === tech.full_name ? tech.pin : '••••'}
+                        {revealedName === tech.full_name ? revealedPins[tech.full_name] : '••••'}
                       </span>
                       <button
-                        onClick={() => setRevealedPin(revealedPin === tech.full_name ? null : tech.full_name)}
-                        className="text-stone-400 hover:text-text p-0.5"
-                        title={revealedPin === tech.full_name ? 'Hide PIN' : 'Reveal PIN'}
+                        onClick={() => revealPin(tech.full_name)}
+                        disabled={revealing === tech.full_name}
+                        className="text-stone-400 hover:text-text p-0.5 disabled:opacity-40"
+                        title={revealedName === tech.full_name ? 'Hide PIN' : 'Reveal PIN'}
                       >
-                        {revealedPin === tech.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
+                        {revealing === tech.full_name ? <Loader2 size={12} className="animate-spin" /> : revealedName === tech.full_name ? <EyeOff size={12} /> : <Eye size={12} />}
                       </button>
                     </span>
                   ) : !tech.has_pin ? (
@@ -207,15 +223,23 @@ export default function TechnicianPinsPage() {
             </div>
             <div className="p-5 space-y-4">
               <Field label="4-digit PIN *">
-                <input
-                  value={editing.pin}
-                  inputMode="numeric"
-                  maxLength={4}
-                  autoFocus
-                  onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                  className={INP + ' font-mono tracking-[0.4em] text-center text-[18px]'}
-                  placeholder="••••"
-                />
+                <div className="relative">
+                  <input
+                    type={showPinTyping ? 'text' : 'password'}
+                    value={editing.pin}
+                    inputMode="numeric"
+                    maxLength={4}
+                    autoFocus
+                    onChange={e => setEditing({ ...editing, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    className={INP + ' font-mono tracking-[0.4em] text-center text-[18px] pr-10'}
+                    placeholder="••••"
+                  />
+                  <button type="button" onClick={() => setShowPinTyping(s => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-text"
+                    title={showPinTyping ? 'Hide PIN' : 'Show PIN'}>
+                    {showPinTyping ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
               </Field>
 
               <label className="flex items-center gap-2.5 cursor-pointer">

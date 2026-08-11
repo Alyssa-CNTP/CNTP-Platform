@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient, resolveEmployeeId } from '@/lib/auth/server-helpers'
 import { notify } from '@/lib/notifications'
 import { resolveRecipients } from '@/lib/notifications/recipients'
+import { resolveBatchId } from '@/lib/production/batch-spine'
 
 // A production supervisor approves or rejects a job card a manager sent for
 // approval. Approving IS the supervisor's "Verify & Sign" — their signature is
@@ -51,7 +52,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const now = new Date().toISOString()
   const patch: any = decision === 'approved'
     ? { status: 'approved', approved_by: caller.userId, approved_at: now, rejected_reason: null,
-        sig_production_supervisor: supervisorSignature }
+        sig_production_supervisor: supervisorSignature,
+        batch_id: await resolveBatchId(card.batch_number, 'pasteuriser') }
     : { status: 'rejected', rejected_reason: reason }
 
   const { data: updated, error: uErr } = await admin.from('job_cards_pasteuriser')

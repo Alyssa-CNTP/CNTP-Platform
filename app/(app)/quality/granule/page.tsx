@@ -420,7 +420,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
     qc_name:      now.getHours() >= 16 ? '' : (run.qc_name || ''),
     dryer_number: lastSample?.dryer_number || '',
     bulk_bag_serial: '',
-    sieving_done: true, moisture: '', bulk_density: '', dryer_temp: '',
+    sieving_done: true, moisture: '', bulk_density: '', dryer_temp: '', flow_time: '',
     compares_to_ref: true, final_weight_ok: true,
     sieve_g: null as any, sieve_pct: null as any,
     bag_type: 'bulk', weight_1: '', weight_2: '', weight_3: '',
@@ -623,6 +623,25 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
             ))}
           </div>
 
+          {/* Flowability Test — fixed 400 g sample; QC enters the time; mass flow
+              rate = 400 g ÷ time. Bulk density carries over from the field above. */}
+          {(() => {
+            const fTime = parseFloat(form.flow_time)
+            const rate = !isNaN(fTime) && fTime > 0 ? 400 / fTime : null
+            return (
+              <div className="bg-teal-500/5 border border-teal-500/30 rounded-xl p-4">
+                <div className="font-bold text-[11px] text-teal-600 mb-3">⏱️ Flowability Test</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+                  <div><label className={lbl}>Mass of Tea (g)</label><input value="400" readOnly className={`${inp} w-full opacity-60`} /></div>
+                  <div><label className={lbl}>Bulk Density (cc/100g)</label><input value={form.bulk_density || ''} readOnly placeholder="— enter BD above" className={`${inp} w-full opacity-60`} /></div>
+                  <div><label className={lbl}>Time (s)</label><input type="number" min="0" step="any" value={form.flow_time} onChange={e => set('flow_time', e.target.value)} placeholder="QC fills in" className={`${inp} w-full`} /></div>
+                  <div><label className={lbl}>Mass Flow Rate (g/s)</label><div className={`${inp} w-full ${rate != null ? 'font-bold text-teal-600' : 'text-text-faint'}`}>{rate != null ? rate.toFixed(1) : '—'}</div></div>
+                </div>
+                <div className="text-[10px] text-text-muted mt-2">Mass flow rate = 400 g ÷ time, calculated automatically per sample.</div>
+              </div>
+            )
+          })()}
+
           {/* Bag serial — typed directly, not auto-generated */}
           <div>
             <label className={`${lbl} ${errors.some(e => e.startsWith('Bulk Bag Serial')) ? 'text-err' : ''}`}>Bulk Bag Serial *</label>
@@ -768,7 +787,7 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
   const [form, setForm]                 = useState({
     sample_time: sample.sample_time || '', sample_date: sample.sample_date || new Date().toISOString().split('T')[0],
     dryer_number: sample.dryer_number || '', bulk_bag_serial: sample.bulk_bag_serial || '',
-    moisture: sample.moisture ?? '', bulk_density: sample.bulk_density ?? '', dryer_temp: sample.dryer_temp ?? '',
+    moisture: sample.moisture ?? '', bulk_density: sample.bulk_density ?? '', dryer_temp: sample.dryer_temp ?? '', flow_time: sample.flow_time ?? '',
     sieving_done: sample.sieving_done !== false, compares_to_ref: sample.compares_to_ref !== false, final_weight_ok: sample.final_weight_ok !== false,
     qc_comment: sample.qc_comment || '',
   })
@@ -892,6 +911,25 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
               </div>
             ))}
           </div>
+
+          {/* Flowability Test — fixed 400 g sample; QC enters the time; mass flow rate = 400 g ÷ time. */}
+          {(() => {
+            const fTime = parseFloat(form.flow_time)
+            const rate = !isNaN(fTime) && fTime > 0 ? 400 / fTime : null
+            return (
+              <div className="bg-teal-500/5 border border-teal-500/30 rounded-xl p-4">
+                <div className="font-bold text-[11px] text-teal-600 mb-3">⏱️ Flowability Test</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+                  <div><label className={lbl}>Mass of Tea (g)</label><input value="400" readOnly className={`${inp} w-full opacity-60`} /></div>
+                  <div><label className={lbl}>Bulk Density (cc/100g)</label><input value={form.bulk_density || ''} readOnly placeholder="— enter BD above" className={`${inp} w-full opacity-60`} /></div>
+                  <div><label className={lbl}>Time (s)</label><input type="number" min="0" step="any" value={form.flow_time} onChange={e => set('flow_time', e.target.value)} placeholder="QC fills in" className={`${inp} w-full`} /></div>
+                  <div><label className={lbl}>Mass Flow Rate (g/s)</label><div className={`${inp} w-full ${rate != null ? 'font-bold text-teal-600' : 'text-text-faint'}`}>{rate != null ? rate.toFixed(1) : '—'}</div></div>
+                </div>
+                <div className="text-[10px] text-text-muted mt-2">Mass flow rate = 400 g ÷ time, calculated automatically per sample.</div>
+              </div>
+            )
+          })()}
+
           <div className="flex gap-5 flex-wrap">
             {([['sieving_done','Sieving done'],['compares_to_ref','Compares to reference'],['final_weight_ok','Final product weight OK']] as const).map(([key, label]) => (
               <label key={key} className="flex items-center gap-2 cursor-pointer text-[12px] font-medium">
@@ -2128,7 +2166,7 @@ export default function GranulePage() {
       run_id: form.run_id, sample_time: form.sample_time || '', sample_date: form.sample_date || '',
       dryer_number: form.dryer_number || '', bulk_bag_serial: form.bulk_bag_serial || '',
       sieving_done: form.sieving_done !== false, moisture: form.moisture || null, bulk_density: form.bulk_density || null,
-      dryer_temp: form.dryer_temp || null, compares_to_ref: form.compares_to_ref !== false, final_weight_ok: form.final_weight_ok !== false,
+      dryer_temp: form.dryer_temp || null, flow_time: form.flow_time || null, compares_to_ref: form.compares_to_ref !== false, final_weight_ok: form.final_weight_ok !== false,
       sieve_g: form.sieve_g || {}, sieve_pct: form.sieve_pct || {}, violations,
       bag_type: form.bag_type || 'bulk', weight_1: form.weight_1 || null, weight_2: form.weight_2 || null, weight_3: form.weight_3 || null,
       dryer2_running: form.dryer2_running || false, dryer2_moisture: form.dryer2_moisture || null,
@@ -2257,7 +2295,7 @@ export default function GranulePage() {
     const { data: saved, error } = await db.schema('qms').from('granule_samples').update({
       sample_time: form.sample_time || '', sample_date: form.sample_date || '', dryer_number: form.dryer_number || '',
       bulk_bag_serial: form.bulk_bag_serial || '', moisture: form.moisture || null, bulk_density: form.bulk_density || null,
-      dryer_temp: form.dryer_temp || null, compares_to_ref: form.compares_to_ref !== false, final_weight_ok: form.final_weight_ok !== false,
+      dryer_temp: form.dryer_temp || null, flow_time: form.flow_time || null, compares_to_ref: form.compares_to_ref !== false, final_weight_ok: form.final_weight_ok !== false,
       sieving_done: form.sieving_done !== false, sieve_g: form.sieve_g || {}, sieve_pct: form.sieve_pct || {}, violations,
       qc_comment: form.qc_comment || '',
     }).eq('id', sampleId).select().single()
