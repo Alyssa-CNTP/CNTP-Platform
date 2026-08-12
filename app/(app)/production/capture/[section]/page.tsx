@@ -71,6 +71,12 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 // WORK_CENTRE_FOR_SECTION keys off this same pair).
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
 const isPasteuriser = (id: string) => id === 'pasteuriser'
+// RefiningOutputBag.logged_at is a UTC ISO instant; prod_bagging.bagging_time
+// is a bare "time" column with no timezone, so this renders the wall-clock
+// time in Africa/Johannesburg — the same convention Granule/Blender/
+// Pasteuriser already use for their own per-bag b.time.
+const bagLoggedAtToTime = (iso?: string | null) =>
+  iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : null
 
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
@@ -951,6 +957,13 @@ function CaptureScreen() {
               product_type: b.productType, acumatica_id: b.code || null,
               variant: prod.variant,
               kg: n(b.weight),
+              // The exact moment this bag was added on the Refining (sieving
+              // tower) screen — set client-side as RefiningOutputBag.logged_at
+              // when the operator adds it. Carried through so downstream
+              // consumers (Quality's Final QC picker) show the true bagging
+              // time instead of when the whole session was last saved — every
+              // other output section already does this via its own b.time.
+              bagging_time: bagLoggedAtToTime(b.logged_at),
             })
           })
         })
