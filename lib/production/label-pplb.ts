@@ -126,9 +126,12 @@ export function buildLabelPplb(bag: OutputBag): string {
     // stacked over a correspondingly bigger section name. Section name's y is
     // pushed well below the product name's y — vm2 roughly doubles the glyph
     // height, and the first physical print showed the two lines overlapping
-    // at the old 44-dot gap. All header/badge/footer text is uppercase now. ──
-    `A20,6,0,4,2,2,N,"${productName}"`,
-    `A20,66,0,3,1,1,N,"${sectionName}"`,
+    // at the old 44-dot gap. All header/badge/footer text is uppercase now.
+    // For Fine Leaf, the text also starts at x24/y20 instead of x20/y6 — the
+    // inner border's top edge sits at y12, and the tall vm2 text was starting
+    // above it and printing straight through the line. ──
+    `A${isFineLeaf ? 24 : 20},${isFineLeaf ? 20 : 6},0,4,2,2,N,"${productName}"`,
+    `A${isFineLeaf ? 24 : 20},78,0,3,1,1,N,"${sectionName}"`,
 
     // ── Type / grade badge, top-right: filled black box, reversed white text ──
     `LO${BADGE_X0},${BADGE_Y0},${BADGE_W},${BADGE_H}`,
