@@ -76,7 +76,9 @@ export function buildLabelPplb(bag: OutputBag): string {
 
   const lotValue     = bag.lot_number || 'N/A'
   const weightValue  = `${bag.weight_kg} kg`
-  const productName  = clean(bag.product_type).slice(0, 26)
+  // Shorter cap than before — the header font is now much larger (see below),
+  // so it can't fit as many characters across the available width.
+  const productName  = clean(bag.product_type).slice(0, 18)
   const sectionName  = clean(bag.section_name).slice(0, 30)
   const serial       = clean(bag.serial_number)
   const variantShort = clean(VARIANT_SHORT[bag.variant] ?? bag.variant)
@@ -109,9 +111,12 @@ export function buildLabelPplb(bag: OutputBag): string {
     'D8',                // darkness
     'S4',                // speed
 
-    // ── Header ──
-    `A20,12,0,4,1,1,N,"${productName}"`,
-    `A20,42,0,1,1,1,N,"${sectionName}"`,
+    // ── Header — no colour-coded paper anymore (one printer/roll per station),
+    // so the product name has to carry the Fine/Coarse Leaf distinction on its
+    // own: doubled size (hm2,vm2) instead of the old single-size inline line,
+    // stacked over a correspondingly bigger section name. ──
+    `A20,6,0,4,2,2,N,"${productName}"`,
+    `A20,50,0,3,1,1,N,"${sectionName}"`,
 
     // ── Type / grade badge, top-right: filled black box, reversed white text ──
     `LO${BADGE_X0},${BADGE_Y0},${BADGE_W},${BADGE_H}`,
