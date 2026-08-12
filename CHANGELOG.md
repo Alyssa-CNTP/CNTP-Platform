@@ -3,6 +3,18 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Alyssa (Refining 1/2 debagging: scan-first flow with a bag-record confirmation popup — PROTOTYPE)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`
+
+Reworked Refining debagging around scanning as the main path (prototype for review before rolling out to Granule/Blender/Pasteuriser). Instead of inline fields that quietly failed when a scanner didn't send Enter, the operator now:
+
+1. Scans a bag into a single **"Scan a bag to debag"** field at the top (auto-fires ~350 ms after the serial settles — no Enter/tap needed).
+2. A **confirmation popup** opens showing that bag's record from `bag_tags` — product type, weight, variant, lot/batch, **where it was made**, when — plus a validity line for this section (✓ valid · ⚠ already consumed / wrong variant · not registered). Powered by the shared `validateBagScan`.
+3. **"Consume into Refining 1"** registers it as debagged-in here (so Bag Tracking shows exactly where it was scanned in) and clears the field for the next scan. Already-consumed bags are blocked; variant/finished-product mismatches warn but allow "Consume anyway"; not-found offers **"Enter manually"**.
+
+**Pick from system** and **Enter manually** are kept as smaller side options ("No barcode, or no scanner?") beneath — scanning is the primary source. Only Refining 1 & 2 for now (they share the capture component); other sections unchanged pending review.
+
 ## 2026-08-12 — Alyssa (Refining/Granule debagging: scan now auto-fills, no Enter/Look-up tap)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
