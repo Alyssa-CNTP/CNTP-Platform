@@ -1583,21 +1583,20 @@ export default function SievingPage() {
                 <b>SERIAL</b><span>{printBag.serialNumber||'—'}</span>
                 <b>PRODUCT</b><span>{printBag.product||activeProduct}</span>
                 <b>LOT</b><span>{printBag.lotNumber||'—'}</span>
-                <b>PA LEVEL</b><span>{printBag.paLevel||'—'}</span>
-                <b>RESIDUE</b><span>{printBag.residue||'—'}</span>
               </div>
-              <div style={{marginTop:12,padding:'10px 12px',border:'2px solid #111',borderRadius:6,display:'flex',justifyContent:'space-around',textAlign:'center'}}>
-                <div>
-                  <div style={{fontSize:10,letterSpacing:'.08em'}}>BULK DENSITY</div>
-                  <div style={{fontSize:22,fontWeight:800}}>{printBag.bulkDensity||'—'}</div>
-                  <div style={{fontSize:9}}>cc/100g</div>
-                </div>
-                <div style={{borderLeft:'1px solid #111'}} />
-                <div>
-                  <div style={{fontSize:10,letterSpacing:'.08em'}}>LEAF SHADE</div>
-                  <div style={{fontSize:22,fontWeight:800}}>{printBag.leafShade||'—'}</div>
-                  <div style={{fontSize:9}}>1–11</div>
-                </div>
+              <div style={{marginTop:12,border:'2px solid #111',borderRadius:6,display:'grid',gridTemplateColumns:'1fr 1fr'}}>
+                {([
+                  ['BULK DENSITY', printBag.bulkDensity, 'cc/100g'],
+                  ['LEAF SHADE',   printBag.leafShade,   '1–11'],
+                  ['PA LEVEL',     printBag.paLevel,      ''],
+                  ['RESIDUE',      printBag.residue,      ''],
+                ] as [string, any, string][]).map(([label, value, unit], i) => (
+                  <div key={label} style={{textAlign:'center',padding:'10px 8px',borderTop:i>=2?'1px solid #111':undefined,borderLeft:i%2===1?'1px solid #111':undefined}}>
+                    <div style={{fontSize:10,letterSpacing:'.08em'}}>{label}</div>
+                    <div style={{fontSize:22,fontWeight:800}}>{value||'—'}</div>
+                    {unit && <div style={{fontSize:9}}>{unit}</div>}
+                  </div>
+                ))}
               </div>
               {printBag.bag?.inprocess_out_of_spec && (
                 <div style={{marginTop:10,padding:'6px 10px',border:'2px solid #991b1b',color:'#991b1b',borderRadius:6,fontSize:11,fontWeight:700,textAlign:'center'}}>
