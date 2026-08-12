@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Sieving: live "bag ready for QC" pop-up)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260812_001_prod_bagging_realtime.sql` (new, applied to staging + production)
+
+- The Sieving page now pops up the moment production bags a new **Fine Leaf** or **Coarse Leaf** output — via a live Supabase Realtime subscription on `production.prod_bagging` (`INSERT`), not polling. Rooibos Blocks / Indent Sticks are ignored (no QC stamp, as before).
+- Each pop-up shows the bag's serial, lot, and the **time production actually bagged it** (not the QC's own capture time — that stays locked to the moment the QC saves, per the existing rule). Clicking **"Sample now"** switches to that bag's product tab, re-fetches the pending queue so the fully-enriched bag record is used (PA level, leaf shade, in-process out-of-spec status all pre-filled, exactly like the manual picker), opens Final QC pre-selected on that exact bag, and scrolls the form into view. Dismissing a pop-up only clears the nudge — the bag stays in the persistent "N pending" queue, so nothing is ever silently lost even if a pop-up is missed or the page isn't open when it fires.
+- `loadPendingBags()` now returns the fetched rows (not just setting state) so the pop-up's click handler can use the fresh list immediately rather than racing a state update; `selectPendingBag()` was split into a reusable `applyBagToForm(bag)` so the manual dropdown and the pop-up pre-fill identically.
+- New migration enables Realtime on `production.prod_bagging` (`ALTER PUBLICATION supabase_realtime ADD TABLE ...`) — metadata-only, no data/RLS/behaviour change, applied to both staging and production immediately since it's harmless in either order.
+
 ## 2026-08-12 — Gustav (Sieving: Serial No. dropdown in the row editor)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
