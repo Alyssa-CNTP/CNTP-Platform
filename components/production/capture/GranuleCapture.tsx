@@ -340,6 +340,16 @@ function DustInputRow({
     }
   }, [row.serial, onUpdate])
 
+  // Auto-look up on scan — a hardware scanner fills the serial but usually
+  // doesn't send Enter, so fire the lookup once the serial settles and let the
+  // fields populate on their own. Debounced; skipped when locked/manual.
+  useEffect(() => {
+    if (locked || row.secured || row.inputMode === 'manual' || !row.serial.trim()) return
+    const t = setTimeout(() => { triggerLookup() }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.serial])
+
   const complete = !!row.serial.trim() && !!row.dustKey && n(row.weight) > 0
 
   return (
@@ -355,7 +365,7 @@ function DustInputRow({
         <label className={LBL}>Bag serial no.</label>
         <div className="flex gap-2">
           <input ref={inputRef} data-serial="true" type="text" value={row.serial} disabled={locked}
-            placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
+            placeholder={row.inputMode === 'scan' ? 'Scan or type — fills in automatically' : 'Type serial no.'}
             onChange={e => onUpdate('serial', sanitizeSerial(e.target.value))}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); triggerLookup() } }}
             className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />

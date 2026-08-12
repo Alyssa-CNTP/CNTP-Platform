@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Alyssa (Refining/Granule debagging: scan now auto-fills, no Enter/Look-up tap)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+The Refining and Granule debagging serial inputs only ran the bag lookup on **Enter** or a **"Look up"** tap. A hardware scanner fills the serial in one fast burst but usually doesn't send Enter, so the operator was left with the serial in the box and every other field blank — "scan it in, nothing populates." (This is why "Pick from system" worked but scanning didn't — the pick path queries `bag_tags` immediately, the scan path waited for an Enter that never came.)
+
+Now the lookup fires **automatically** once the scanned/typed serial settles (400 ms debounce), so the operator just scans a bag and Product type / Weight / Variant / Lot populate on their own — the behaviour they expected. Enter and the "Look up" button still work; auto-lookup is skipped once the row is locked or switched to manual entry, and manual typing still resolves after a short pause. Placeholders updated to "fills in automatically".
+
 ## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`

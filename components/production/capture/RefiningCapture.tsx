@@ -235,6 +235,19 @@ function ScanRow({
     if (e.key === 'Enter') { e.preventDefault(); triggerLookup() }
   }
 
+  // Auto-look up on scan. A hardware scanner fills the serial in one fast burst
+  // but usually doesn't send Enter, so the operator was left with the serial in
+  // the box and every other field blank. Fire the same lookup the button does
+  // once the serial settles — scan a bag and its details populate on their own,
+  // no extra tap. Debounced so manual typing also resolves after a short pause;
+  // skipped once locked or switched to manual entry.
+  useEffect(() => {
+    if (locked || row.secured || row.inputMode === 'manual' || !row.serial.trim()) return
+    const t = setTimeout(() => { triggerLookup() }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.serial])
+
   const needsLot = row.productType === 'Coarse Leaf'
   const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!needsLot || !!row.lot.trim())
 
@@ -257,7 +270,7 @@ function ScanRow({
             type="text"
             value={row.serial}
             disabled={locked}
-            placeholder={row.inputMode === 'scan' ? 'Scan or type — press Enter to look up' : 'Type serial no.'}
+            placeholder={row.inputMode === 'scan' ? 'Scan or type — fills in automatically' : 'Type serial no.'}
             onChange={e => onUpdate('serial', sanitizeSerial(e.target.value))}
             onKeyDown={handleKeyDown}
             className={INP + ' flex-1'}
