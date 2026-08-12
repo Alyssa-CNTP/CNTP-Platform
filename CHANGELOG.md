@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Alyssa (Fix capture save 400: stop writing phantom columns to prod_debagging/prod_bagging)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Saving a capture session returned `400 (Bad Request)` on the `prod_debagging`/`prod_bagging` insert, so sessions weren't persisting. Root cause: the save wrote two columns the tables don't have — `grade` (Sieving debag row; the table uses `org_or_conv`, no migration ever added `grade`) and `production_ref` (Blender/Pasteuriser debag + bag rows). Both are write-only — never read back anywhere (the blend/lot reference is already in `lot_number`/`acumatica_id`). Removed all five write sites; no DB migration.
+
 ## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
