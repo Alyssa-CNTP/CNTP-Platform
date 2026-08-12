@@ -83,12 +83,14 @@ export function buildLabelPplb(bag: OutputBag): string {
 
   // TYPE/GRADE badge: filled black box, single reversed (white) line, e.g.
   // "CON - Export" — the two facts an operator needs at a glance, no separate
-  // labels. Falls back to a smaller font if the combination is too wide.
+  // labels. Grade B ("Export Blend") makes this noticeably longer than grade A
+  // ("Export") — drop to the smaller font well before the box edge, not right
+  // up against it, so it never looks cramped/clipped like "CON - Export Blen".
   const badgeText  = `${variantShort} - ${clean(gradeShort)}`
-  const BADGE_X0 = 540, BADGE_Y0 = 6, BADGE_W = 252, BADGE_H = 44
-  const badgeFont  = badgeText.length * FONT_W[3] <= BADGE_W - 12 ? 3 : 2
+  const BADGE_X0 = 528, BADGE_Y0 = 6, BADGE_W = 264, BADGE_H = 44
+  const badgeFont  = badgeText.length <= 14 ? 3 : 2
   const badgeTextW = badgeText.length * FONT_W[badgeFont]
-  const badgeTextX = Math.max(BADGE_X0 + 6, Math.round(BADGE_X0 + (BADGE_W - badgeTextW) / 2))
+  const badgeTextX = Math.max(BADGE_X0 + 8, Math.round(BADGE_X0 + (BADGE_W - badgeTextW) / 2))
   const badgeTextY = BADGE_Y0 + (badgeFont === 3 ? 15 : 17)
 
   // Narrow bar 3 dots makes the symbol span ~2/3 of the label width — wider bars
