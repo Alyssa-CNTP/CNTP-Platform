@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Bag label: remove the "Cape Natural Tea Products" header)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Removed the "CAPE NATURAL TEA PRODUCTS" header line and its border from the printed QC bag label. Purely visual, no data change.
+
 ## 2026-08-12 — Gustav (Bag label: PA Level and Residue join the Bulk Density/Leaf Shade box)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
