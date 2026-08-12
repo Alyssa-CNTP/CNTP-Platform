@@ -155,6 +155,7 @@ export interface KnownPrinter {
 // with `Test-NetConnection <ip> -Port 9100` (= True) from a same-subnet machine
 // before relying on it.
 export const KNOWN_PRINTERS: KnownPrinter[] = [
+  { id: '26E55064', label: 'Argox CP-2140EX PRO — 26E55064 (Sieving)', ip: '192.168.0.115', lang: 'pplb' },
   { id: 'argox-pasteuriser', label: 'Argox CP-2140EX — Pasteuriser', ip: '192.168.0.55', lang: 'pplb' },
 ]
 
@@ -165,7 +166,7 @@ export const KNOWN_PRINTERS: KnownPrinter[] = [
 // each new Argox is given a static IP on port 9100.
 export const SECTION_PRINTER: Record<string, PrinterConfig> = {
   pasteuriser: { ip: '192.168.0.55', lang: 'pplb' },  // Argox CP-2140EX (confirmed)
-  sieving:     { ip: '', lang: 'pplb' },              // new Argox — set IP in Stock Control
+  sieving:     { ip: '192.168.0.115', lang: 'pplb' }, // Argox CP-2140EX PRO — 26E55064 (confirmed)
   refining1:   { ip: '', lang: 'pplb' },
   refining2:   { ip: '', lang: 'pplb' },
   granule:     { ip: '', lang: 'pplb' },
