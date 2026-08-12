@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Refining/Sieving Tower: carry each bag's real add-time into bagging_time)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Root-caused why the Sieving Final QC picker showed the same timestamp for many different bags: `production.prod_bagging` rows for Refining (the sieving tower) never carried a `bagging_time` at all, and `persist()` fully deletes-and-reinserts every bag row for a session on every save (explicit save, 30s autosave, and submit) — so their `created_at` was really "when this session was last saved," identical across every bag in it and drifting forward the whole time the operator kept the screen open. Not a Quality-side bug; the per-bag time simply didn't exist yet on the production side.
+
+- `RefiningOutputBag.logged_at` already captures the exact moment the operator adds each output bag (set in `addOutputBag()`) — it just wasn't being carried through to the database. Granule/Blender/Pasteuriser already pass their own equivalent (`b.time`) into `bagging_time`; Refining was the one section that didn't.
+- `buildBag()`'s Refining branch now sets `bagging_time` from `b.logged_at` via a new `bagLoggedAtToTime()` helper, formatted the same way Granule's `clockNow()` already is (`Africa/Johannesburg`, `HH:MM`) so it matches the sibling sections' convention exactly.
+- No migration needed — `bagging_time` already exists on `prod_bagging`. Only affects **new** bags recorded after this deploys; existing rows keep falling back to the session's `created_at` as before (unchanged, no regression).
+- Once this is live, `qms.v_bag_events.bagged_at` (already shipped) picks up the real per-bag time automatically with no further Quality-side change, since it already prefers `bagging_time` over `created_at`.
+
 ## 2026-08-12 — Gustav (Sieving: live "bag ready for QC" pop-up)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260812_001_prod_bagging_realtime.sql` (new, applied to staging + production)
