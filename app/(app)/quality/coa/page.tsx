@@ -188,7 +188,7 @@ const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none f
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CoaGeneratorPage() {
-  const { p, session } = useAuth()
+  const { p, session, isFullAdmin } = useAuth()
   const canUse = p('can_save_lab_results') || p('can_approve_runs')
   const db = getDb()
 
@@ -200,6 +200,10 @@ export default function CoaGeneratorPage() {
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
+  // Delete-a-generated-COA confirmation popup: holds the history row awaiting
+  // confirmation (null = popup closed), plus an in-flight flag.
+  const [deleteTarget, setDeleteTarget] = useState<any>(null)
+  const [deleting, setDeleting]     = useState(false)
   // Queue of COAs the lab manager has signed that still need the QA sign-off.
   const [showQueue, setShowQueue]   = useState(false)
   const [queue, setQueue]           = useState<any[]>([])
@@ -285,6 +289,18 @@ export default function CoaGeneratorPage() {
     setHistory(data ?? [])
   }, [db])
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
+
+  // Delete a generated COA from history (lab manager only) — confirmed via the
+  // popup below. Removes the qms.coa_generated row, then refreshes the list.
+  const deleteCoa = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    const { error } = await db.schema('qms').from('coa_generated').delete().eq('id', deleteTarget.id)
+    setDeleting(false)
+    if (error) { alert('Delete failed: ' + error.message); return }
+    setDeleteTarget(null)
+    loadHistory()
+  }
 
   // COAs the lab manager has signed that are still awaiting the QA sign-off.
   const loadQueue = useCallback(async () => {
@@ -548,8 +564,14 @@ export default function CoaGeneratorPage() {
                       <td className="px-2 py-1 font-mono whitespace-nowrap">{h.doc_no || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">{h.generated_by || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">
-                        <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
-                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
+                            className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
+                          {(sigInfo.me.isLab || sigInfo.me.isQa || isFullAdmin) && (
+                            <button onClick={() => setDeleteTarget(h)} title="Delete this generated COA"
+                              className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#b91c1c' }}>🗑 Delete</button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -557,6 +579,34 @@ export default function CoaGeneratorPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Delete-COA confirmation popup */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center no-print" style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!deleting) setDeleteTarget(null) }}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-100">
+              <div className="text-[15px] font-bold text-gray-900">Delete this COA?</div>
+            </div>
+            <div className="px-5 py-4 text-[13px] text-gray-700">
+              <p className="mb-3">This will permanently remove the generated COA for batch{' '}
+                <span className="font-mono font-bold">{deleteTarget.batch_no || '—'}</span>
+                {deleteTarget.customer ? <> ({deleteTarget.customer})</> : null} from the history. This cannot be undone.</p>
+              <div className="text-[11px] text-gray-500">
+                Generated {isoDateTime(deleteTarget.generated_at)}{deleteTarget.generated_by ? <> · by {deleteTarget.generated_by}</> : null}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setDeleteTarget(null)} disabled={deleting}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold text-gray-700 bg-white">Cancel</button>
+              <button onClick={deleteCoa} disabled={deleting}
+                className="px-4 py-2 rounded-lg text-[12px] font-bold text-white" style={{ background: deleting ? '#9ca3af' : '#b91c1c' }}>
+                {deleting ? 'Deleting…' : '🗑 Delete COA'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -775,111 +825,6 @@ export default function CoaGeneratorPage() {
           </div>
         </>
       )}
-
-      {/* ── Filled-in example template (always shown, read-only) ── */}
-      <SampleCoa />
-    </div>
-  )
-}
-
-// ─── Filled-in example template ───────────────────────────────────────────────
-// A read-only, fully-populated sample COA so anyone can see exactly how a
-// generated certificate looks and what each block maps to. Uses the real
-// 26138-CON-SG example values. Purely illustrative — not saved anywhere.
-
-function SampleCoa() {
-  const [open, setOpen] = useState(true)
-  const header: [string, string][] = [
-    ['DATE OF ISSUE', '02.06.2026'], ['BATCH NUMBER', '26138-CON-SG'],
-    ['INVOICE No.', 'BH-INV0000189'], ['GRADE', 'Super Grade'],
-    ['DESTINATION', 'Motherwell Investments (Pty) Ltd'], ['QUANTITY OF BAGS', '1600 x 18kg'],
-    ['ORDER NUMBER', 'PO 1185'], ['PRODUCTION DATE', 'May 2026'],
-    ["QUANTITY (Kg's)", '28 800kg'], ['BEST BEFORE DATE', 'May 2029'],
-  ]
-  const micro: CoaLine[] = [
-    { label: 'Total Plate Count', spec: '<300 000', result: '140' },
-    { label: 'E.coli', spec: 'Not Detected', result: 'Not detected' },
-    { label: 'Salmonella', spec: 'Absent/25g', result: 'Absent' },
-    { label: 'Yeast', spec: '<5000', result: '20' },
-    { label: 'Mould', spec: '<5000', result: '<10' },
-  ]
-  const other: CoaLine[] = [
-    { label: 'Moisture', spec: '<10%', result: '7,9%' },
-    { label: 'Bulk Density', spec: '280 – 340cc/100g', result: '287cc/100g' },
-    { label: 'Foreign Material', spec: '<1%', result: '0.0%' },
-    { label: 'Pesticide residue', spec: COA_WORDING.residueRegulation, result: 'Complies' },
-    { label: 'Sensorical Properties', spec: COA_WORDING.sensorical, result: 'Complies' },
-  ]
-  return (
-    <div className="mt-8 no-print">
-      <button onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-2 text-[12px] font-semibold text-gray-600 mb-2">
-        <span>{open ? '▼' : '▶'}</span> 📄 Example template — how a completed COA looks (sample data)
-      </button>
-      {open && (
-        <div className="bg-white border border-gray-300 rounded-lg p-6 text-[12px] opacity-95" style={{ color: '#111' }}>
-          <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 inline-block">
-            Illustrative sample only — batch 26138-CON-SG. Enter a real batch above to generate an editable COA.
-          </div>
-          <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="Cape Natural Tea Products" style={{ height: 56, width: 'auto', objectFit: 'contain' }} />
-            <div className="flex-1 text-center font-bold text-[16px] tracking-wide">CERTIFICATE OF ANALYSIS</div>
-            <div style={{ width: 56 }} />
-          </div>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
-            {header.map(([l, v]) => (
-              <div key={l} className="flex items-center gap-2">
-                <span className="font-bold text-[10px] uppercase text-gray-600 w-[130px] shrink-0">{l}</span>
-                <span className="flex-1 text-[12px] border-b border-dashed border-gray-200 pb-0.5">{v}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mb-3">
-            <div className="font-bold text-[11px] uppercase mb-1">Description of Goods</div>
-            <div className="text-[11px] italic">{COA_WORDING.descriptionConventional}</div>
-          </div>
-          <SampleTable title="Microbiological Analyses" cols={['Organism', "Specification (cfu's/g)", "Result (cfu's/g)"]} lines={micro} />
-          <SampleTable title="Other Analysis" cols={['Description', 'Specification', 'Result']} lines={other} />
-          <div className="flex justify-between gap-8 mt-10">
-            {COA_WORDING.signatories.map((s, i) => (
-              <div key={i} style={{ flex: 1, maxWidth: 260 }}>
-                <div style={{ borderTop: '1px solid #111', marginTop: 34, paddingTop: 3 }} />
-                <div className="text-[11px] font-semibold">{s.title}</div>
-                <div className="text-[11px]">{s.name}</div>
-              </div>
-            ))}
-          </div>
-          <div className="text-center mt-8">
-            {COA_WORDING.companyFooter.map((line, i) => (
-              <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function SampleTable({ title, cols, lines }: { title: string; cols: string[]; lines: CoaLine[] }) {
-  return (
-    <div className="mb-3">
-      <div className="font-bold text-[11px] uppercase mb-1">{title}</div>
-      <table className="w-full border-collapse text-[11px]" style={{ tableLayout: 'fixed' }}>
-        <colgroup><col style={{ width: '32%' }} /><col style={{ width: '38%' }} /><col style={{ width: '30%' }} /></colgroup>
-        <thead>
-          <tr>{cols.map((c, i) => <th key={i} className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold">{c}</th>)}</tr>
-        </thead>
-        <tbody>
-          {lines.map((l, i) => (
-            <tr key={i}>
-              <td className="border border-gray-300 px-2 py-1">{l.label}</td>
-              <td className="border border-gray-300 px-2 py-1 text-center">{l.spec}</td>
-              <td className="border border-gray-300 px-2 py-1 text-center font-semibold">{l.result}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   )
 }
