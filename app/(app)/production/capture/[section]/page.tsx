@@ -889,7 +889,6 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            production_ref: bd.bomId || null,
             local_or_export: r.destination || null,
             notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
@@ -906,7 +905,6 @@ function CaptureScreen() {
             // bag_serial_no is a FK to bag_tags — only set for scan/system bags
             // guaranteed to be there; a manual serial goes in notes to avoid an FK failure.
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            production_ref: pd.blendCode || null,
             notes: [r.stream === 'postsieve' ? 'post-sieve' : null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
             lot_number: r.lot || pd.batchNo || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
@@ -927,7 +925,7 @@ function CaptureScreen() {
             // Preserve the operator's physical bag number in notes for traceability.
             bag_serial_no: null, notes: r.bag_no || null,
             lot_number: r.lot || prod.lot || null,
-            product_type: '500kg Farm Bag', variant: prod.variant, grade: prod.grade || null,
+            product_type: '500kg Farm Bag', variant: prod.variant,
             kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
             delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
             is_spillage: false,
@@ -984,7 +982,6 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: prod.lot || null,
-            production_ref: bomId || null,
             product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
             kg: n(b.weight), bagging_time: b.time || null,
           })
@@ -999,7 +996,6 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
-            production_ref: pd.blendCode || null,
             product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: prod.variant,
             kg, bagging_time: l.time || null,
           })
