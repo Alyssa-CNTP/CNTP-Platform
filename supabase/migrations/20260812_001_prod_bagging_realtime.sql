@@ -1,0 +1,11 @@
+-- 20260812_001_prod_bagging_realtime.sql
+--
+-- Enables Supabase Realtime on production.prod_bagging so the Quality
+-- Sieving page can pop up a "bag ready for QC" alert the instant production
+-- bags a new Fine Leaf / Coarse Leaf output, instead of only finding out on
+-- next page load / refresh.
+--
+-- Metadata-only change (adds the table to the supabase_realtime publication)
+-- — no data, RLS, or existing-read/write behaviour is affected. Safe to apply
+-- independently of the app code deploying, in either order.
+ALTER PUBLICATION supabase_realtime ADD TABLE production.prod_bagging;
