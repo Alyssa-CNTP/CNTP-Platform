@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Sieving output serials went from `ST-DDMMYY-NNN` (one shared daily counter) to **`ST{TYPE}-DDMMYY-NNN`** with a per-type daily sequence, e.g. Fine Leaf → `STFL-120826-003`, so bag counts per output type are readable off the serial/barcode. Type codes (name-matched): FL, CL, RS, IS, RB, BD, PD, WD, BE; two-letter fallback otherwise. Existing `ST-…` bags stay findable; no DB change.
+
 ## 2026-08-12 — Alyssa (Fix capture save 400: stop writing phantom columns to prod_debagging/prod_bagging)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`

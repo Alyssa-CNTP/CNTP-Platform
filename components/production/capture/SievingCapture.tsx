@@ -11,6 +11,45 @@ import { BatchKeypadField } from '@/components/production/capture/BatchKeypadFie
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 
+// ── Sieving output serial ─────────────────────────────────────────────────────
+// Format: ST{TYPE}-DDMMYY-NNN  (e.g. Fine Leaf → STFL-120826-003).
+// A 2-letter output-type code plus a per-type daily sequence, so the number of
+// bags of each output type is readable straight off the serial and its barcode
+// (the barcode encodes serial_number verbatim). Each type counts independently.
+const SIEVING_TYPE_ABBR: Array<[RegExp, string]> = [
+  [/fine leaf/i,               'FL'],
+  [/coarse leaf/i,             'CL'],
+  [/rolsiev|rol siev/i,        'RS'],
+  [/indent stick/i,            'IS'],
+  [/rb block|\bblock/i,        'RB'],
+  [/brown dust/i,              'BD'],
+  [/powder dust/i,             'PD'],
+  [/white dust/i,              'WD'],
+  [/bucket elevator|spillage/i,'BE'],
+]
+function sievingAbbr(productType: string): string {
+  for (const [re, code] of SIEVING_TYPE_ABBR) if (re.test(productType || '')) return code
+  // Unknown/one-off product: first two letters of its name, so it's still a
+  // stable per-type stem rather than colliding with everything else.
+  const letters = (productType || '').replace(/[^A-Za-z]/g, '').toUpperCase()
+  return letters.slice(0, 2) || 'XX'
+}
+async function nextSievingSerial(productType: string, localSerials: string[]): Promise<string> {
+  const now = new Date()
+  const ddmmyy = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getFullYear()).slice(-2)}`
+  const prefix = `ST${sievingAbbr(productType)}-${ddmmyy}-`
+  const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
+  // Seed the per-type sequence from bags already tagged under this exact prefix
+  // (this session's local bags + anything persisted for the same type + day).
+  let maxSeq = localSerials.filter(s => s.startsWith(prefix)).reduce((mx, s) => Math.max(mx, seqOf(s)), 0)
+  try {
+    const { data } = await getDb().schema('production').from('bag_tags')
+      .select('serial_number').ilike('serial_number', `${prefix}%`).limit(4000)
+    ;(data ?? []).forEach((r: any) => { maxSeq = Math.max(maxSeq, seqOf(r.serial_number)) })
+  } catch { /* offline — fall back to local max */ }
+  return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`
+}
+
 export interface SpillageRow { id: string; kg: string }
 export interface DebagRow {
   id: string; bag_no: string; lot: string; gross: string; nett: string
@@ -188,7 +227,7 @@ export function SievingCapture({
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
-    const serial = genSerial()
+    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial))
     const grade  = gradeLetter || 'A'
     const now    = new Date().toISOString()
     const bag: OutputBag = {
