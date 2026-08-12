@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Sieving: Final QC bag picker filtered to the active sieve tab)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- The "Bag awaiting QC" dropdown on Final QC now only lists bags matching the **currently open sieve tab** (`tabPendingBags = pendingBags.filter(b => b.product === activeProduct)`) — previously it showed every pending Fine Leaf **and** Coarse Leaf bag together regardless of which tab was open, so a QC on the Fine Leaf tab could pick and sample a Coarse Leaf bag by mistake.
+- The pending count on the "Final QC (bag) · N" toggle and the dropdown label now reflect the active tab's count, not the total across both sieves.
+- Empty state now says which product has no bags awaiting QC, and correctly notes that Rooibos Blocks / Indent Sticks never require a QC stamp instead of showing a generic "no bags" message.
+- Serial number continues to be pulled straight from the bag's own record (`production.prod_bagging.bag_serial_no`) rather than typed — so once the new bag serial format is in place, this form picks it up automatically with no further change needed here.
+
 ## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
