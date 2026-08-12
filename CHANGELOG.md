@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Sieving output bag serials were `ST-DDMMYY-NNN` — one shared daily counter across all output types, so you couldn't tell types apart or count them from the serial. Now each Sieving output serial encodes its **output type** with a per-type daily sequence: **`ST{TYPE}-DDMMYY-NNN`**, e.g. Fine Leaf → `STFL-120826-003`. Because the barcode encodes the serial verbatim, the type and the running count are readable straight off the bag/scan.
+
+Type codes (matched on the product name, so they work whether the operator picks a suggested output or a full Master-Inventory item): **FL** Fine Leaf · **CL** Coarse Leaf · **RS** Rolsiev Sticks · **IS** Indent Sticks · **RB** RB Blocks · **BD** Brown Dust · **PD** Powder Dust · **WD** White Dust · **BE** Bucket Elevator / Spillage. Anything unmatched falls back to the first two letters of its name. The sequence is per type per day (so `STFL-…-005` = the 5th Fine Leaf bag that day). Existing `ST-…` bags stay findable; only new bags use the new format. No DB change.
+
 ## 2026-08-12 — Gustav (Sieving: Final QC bag picker filtered to the active sieve tab)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
