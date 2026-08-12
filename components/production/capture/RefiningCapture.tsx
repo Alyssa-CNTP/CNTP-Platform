@@ -6,6 +6,7 @@ import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
+import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
@@ -26,7 +27,7 @@ export interface RefiningInputBag {
   inputMode: 'scan' | 'manual' | 'system'
   secured: boolean
   logged_at?: string
-  notInSystem?: boolean      // true when serial was scanned but not found in bag_tags
+  notInSystem?: boolean | string   // 'true'/'' string flag set via onUpdate; true when scanned but not found in bag_tags
 }
 
 export interface RefiningOutputBag {
@@ -489,6 +490,116 @@ function OutputWeightGroup({
   )
 }
 
+// ── Scan-first debagging (prototype) ──────────────────────────────────────────
+// The primary way to debag: one field, scan a bag, a popup shows that bag's
+// record from bag_tags and whether it's a valid input here, then confirm to
+// consume it into this section. Pick-from-system / manual stay as side options.
+
+function ScanBox({ serial, busy, color, onChange, onScan }: {
+  serial: string; busy: boolean; color: string
+  onChange: (v: string) => void; onScan: (s: string) => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  // Auto-fire once the scanned serial settles — a hardware scanner types the
+  // whole serial in one burst and usually doesn't send Enter, so we don't make
+  // the operator tap anything: scan and the record pops up.
+  useEffect(() => {
+    const s = serial.trim()
+    if (!s) return
+    const t = setTimeout(() => onScan(s), 350)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial])
+  return (
+    <div className="rounded-2xl border-2 p-4" style={{ borderColor: color + '40', background: color + '08' }}>
+      <label className="text-[11px] font-bold uppercase tracking-widest flex items-center gap-1.5" style={{ color }}>
+        <Package size={14} /> Scan a bag to debag
+      </label>
+      <div className="flex gap-2 mt-2">
+        <input ref={ref} data-serial="true" autoFocus value={serial}
+          onChange={e => onChange(sanitizeSerial(e.target.value))}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onScan(serial) } }}
+          placeholder="Scan barcode or type serial…" autoCapitalize="characters" spellCheck={false}
+          className={INP + ' flex-1 text-[15px]'} />
+        <button onClick={() => onScan(serial)} disabled={!serial.trim() || busy}
+          className="px-4 rounded-xl text-white text-[13px] font-semibold disabled:opacity-40 shrink-0" style={{ background: color }}>
+          {busy ? '…' : 'Look up'}
+        </button>
+      </div>
+      <p className="text-[11px] text-stone-400 mt-1.5">Scan a bag — its record opens so you can confirm and consume it here.</p>
+    </div>
+  )
+}
+
+function BagScanModal({ serial, result, sectionLabel, onConsume, onManual, onClose }: {
+  serial: string; result: ScanValidationResult; sectionLabel: string
+  onConsume: () => void; onManual: () => void; onClose: () => void
+}) {
+  const tag     = result.tag
+  const status  = result.status
+  const found   = status !== 'not_found'
+  const blocked = status === 'already_consumed'     // hard stop — used elsewhere
+  const isWarn  = status === 'wrong_variant' || status === 'wrong_type' || status === 'finished_product'
+  const rows: [string, string][] = tag ? [
+    ['Product type', tag.product_type || '—'],
+    ['Weight',       tag.weight_kg != null ? `${tag.weight_kg} kg` : '—'],
+    ['Variant',      tag.variant || '—'],
+    ['Lot / Batch',  (tag.lot_number && tag.lot_number !== 'NOT TRACKED') ? tag.lot_number : '—'],
+    ['Made at',      tag.section_name || tag.section_id || '—'],
+    ['Tagged',       tag.tag_date ? tag.tag_date.slice(0, 10) : '—'],
+  ] : []
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-stone-100">
+          <div>
+            <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest mb-1">Scanned bag</p>
+            <h2 className="font-mono font-bold text-[18px] text-stone-900 tracking-wide break-all">{serial}</h2>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-stone-100 text-stone-400 shrink-0"><X size={16} /></button>
+        </div>
+        <div className="px-5 py-4 space-y-4">
+          {found && tag ? (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {rows.map(([l, v]) => (
+                  <div key={l} className="bg-stone-50 rounded-xl p-3 border border-stone-100">
+                    <div className="text-[9px] font-semibold text-stone-400 uppercase tracking-wide mb-1">{l}</div>
+                    <div className="font-mono text-[12px] font-bold text-stone-800 break-all">{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div className={`rounded-xl px-3 py-2.5 text-[12px] font-medium flex items-start gap-2 ${
+                status === 'ok'  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : blocked        ? 'bg-red-50 text-red-700 border border-red-200'
+                :                  'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                {status === 'ok' ? <Check size={14} className="mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="mt-0.5 shrink-0" />}
+                <span>{status === 'ok' ? `Valid input for ${sectionLabel} — ready to consume.` : result.message}</span>
+              </div>
+              {blocked
+                ? <button onClick={onClose} className="w-full py-3 rounded-xl bg-stone-100 text-stone-600 text-[14px] font-medium">Close</button>
+                : <button onClick={onConsume} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-semibold">
+                    <PackageCheck size={16} /> {isWarn ? 'Consume anyway' : `Consume into ${sectionLabel}`}
+                  </button>}
+            </>
+          ) : (
+            <>
+              <div className="rounded-xl px-3 py-3 text-[12px] bg-amber-50 text-amber-700 border border-amber-200 flex items-start gap-2">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <span>{result.message || `Serial "${serial}" isn't registered in the system.`}</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={onClose} className="flex-1 py-3 rounded-xl bg-stone-100 text-stone-600 text-[14px] font-medium">Close</button>
+                <button onClick={onManual} className="flex-1 py-3 rounded-xl bg-brand text-white text-[14px] font-semibold">Enter manually</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function RefiningCapture({
@@ -506,6 +617,11 @@ export function RefiningCapture({
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   const [addMode, setAddMode] = useState<RefiningInputBag['inputMode']>('scan')
   const [showSystemPick, setShowSystemPick] = useState(false)
+  // Scan-first debagging state (see ScanBox / BagScanModal)
+  const [scanSerial, setScanSerial] = useState('')
+  const [scanBusy, setScanBusy] = useState(false)
+  const [scanModal, setScanModal] = useState<{ serial: string; result: ScanValidationResult } | null>(null)
+  const sectionLabel = SECTION_CONFIG[sectionId]?.name ?? 'this section'
   const [items, setItems] = useState<InventoryItem[]>([])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
 
@@ -590,6 +706,41 @@ export function RefiningCapture({
     patch({ inputs: [...locked_, row] })
     markBagConsumed(bag.serial_number, sectionId, null, bag.weight_kg ?? undefined, operatorId ?? null)
     setShowSystemPick(false)
+  }
+
+  // ── Scan-first debagging handlers ────────────────────────────────────────────
+  const runScan = useCallback(async (raw: string) => {
+    const serial = sanitizeSerial(raw).trim()
+    if (!serial) return
+    setScanBusy(true)
+    const result = await validateBagScan(serial, { sessionVariant: variantWord })
+    setScanBusy(false)
+    setScanModal({ serial, result })
+  }, [variantWord])
+
+  // Confirm from the popup → add the scanned bag as a consumed input here.
+  function consumeScanned(tag: NonNullable<ScanValidationResult['tag']>) {
+    const t = nowISO()
+    const locked_ = lockCompleted(value.inputs)
+    const bagDate = tag.tag_date
+      ? (() => { const d = new Date(tag.tag_date as string); return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getFullYear()).slice(-2)}` })()
+      : ''
+    const row: RefiningInputBag = {
+      id: crypto.randomUUID(), serial: tag.serial_number,
+      productType: tag.product_type, variant: tag.variant || variantWord || '',
+      weight: tag.weight_kg != null ? String(tag.weight_kg) : '',
+      lot: (tag.lot_number && tag.lot_number !== 'NOT TRACKED') ? tag.lot_number : '',
+      deliveryDate: bagDate, inputMode: 'scan', secured: true, logged_at: t,
+    }
+    patch({ inputs: [...locked_, row] })
+    markBagConsumed(tag.serial_number, sectionId, null, n(row.weight) || undefined, operatorId ?? null)
+    setScanModal(null); setScanSerial('')
+  }
+
+  // Not found → fall back to a manual entry row prefilled with the scanned serial.
+  function manualFromScan(serial: string) {
+    addManualRow('manual', { serial })
+    setScanModal(null); setScanSerial('')
   }
 
   // ── Output group helpers ───────────────────────────────────────────────────
@@ -692,8 +843,20 @@ export function RefiningCapture({
       {tab === 'debag' && (
         <>
           <p className="text-[12px] text-stone-500 px-1">
-            Record every input bag fed into the machine. Scan the barcode, pick from the system, or enter manually.
+            Scan each bag fed into the machine — its record opens to confirm. Pick from the system or enter manually if it has no barcode.
           </p>
+
+          {/* Primary flow: scan a bag → confirmation popup → consume */}
+          {!locked && (
+            <ScanBox serial={scanSerial} busy={scanBusy} color={DEBAG_COLOR}
+              onChange={setScanSerial} onScan={runScan} />
+          )}
+          {scanModal && (
+            <BagScanModal serial={scanModal.serial} result={scanModal.result} sectionLabel={sectionLabel}
+              onConsume={() => scanModal.result.tag && consumeScanned(scanModal.result.tag)}
+              onManual={() => manualFromScan(scanModal.serial)}
+              onClose={() => setScanModal(null)} />
+          )}
 
           {/* Locked input rows — grouped by product type so a shift with several
               materials never turns into one long, easy-to-lose-count list. Rows
@@ -759,30 +922,21 @@ export function RefiningCapture({
               onPick={handleSystemPick} onClose={() => setShowSystemPick(false)} />
           )}
 
-          {/* Add input bag — mode selector */}
+          {/* Side options — scanning above is the main path; these cover a bag
+              with no barcode or when no scanner is on hand. */}
           {!locked && !showSystemPick && (
-            <div className="space-y-2">
-              <div className="flex rounded-xl border border-stone-200 overflow-hidden bg-white">
-                {INPUT_MODES.map(m => (
-                  <button key={m.id} onClick={() => setAddMode(m.id)}
-                    className={`flex-1 py-2 text-[12px] font-medium transition-colors ${addMode === m.id ? 'bg-brand text-white' : 'text-stone-500 hover:bg-stone-50'}`}>
-                    {m.label}
-                  </button>
-                ))}
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-stone-400 px-1">No barcode, or no scanner?</p>
+              <div className="flex gap-2">
+                <button onClick={() => setShowSystemPick(true)}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-[12px] font-medium text-stone-500 hover:text-brand hover:border-brand/40 transition-colors border-stone-200">
+                  <Search size={14} /> Pick from system
+                </button>
+                <button onClick={() => addManualRow('manual')}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-[12px] font-medium text-stone-500 hover:text-brand hover:border-brand/40 transition-colors border-stone-200">
+                  <Plus size={14} /> Enter manually
+                </button>
               </div>
-              <p className="text-[11px] text-stone-400 px-1">{INPUT_MODES.find(m => m.id === addMode)?.hint}</p>
-              {addMode === 'system'
-                ? <button onClick={() => setShowSystemPick(true)}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
-                    style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
-                    <Search size={15} /> Browse in-stock bags
-                  </button>
-                : <button onClick={() => addManualRow(addMode)}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed text-[13px] font-medium transition-colors"
-                    style={{ borderColor: DEBAG_COLOR + '50', color: DEBAG_COLOR }}>
-                    <Plus size={15} /> {addMode === 'scan' ? 'Add bag to scan' : 'Add bag manually'}
-                  </button>
-              }
             </div>
           )}
 

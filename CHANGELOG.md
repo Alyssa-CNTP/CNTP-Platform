@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Alyssa (Refining 1/2 debagging: scan-first flow with a bag-record confirmation popup — PROTOTYPE)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`
+
+Reworked Refining debagging around scanning as the main path (prototype for review before rolling out to Granule/Blender/Pasteuriser). A single **"Scan a bag to debag"** field auto-looks-up (`validateBagScan`) once the serial settles and opens a **confirmation popup** with the bag's `bag_tags` record — product type, weight, variant, lot/batch, where it was made, when — plus a validity line (✓ valid · ⚠ already consumed / wrong variant · not registered). **"Consume into Refining 1"** registers it as debagged-in here; already-consumed is blocked, mismatches warn+allow, not-found offers **"Enter manually"**. Pick-from-system and manual kept as side options. Refining 1 & 2 only, for review.
+
 ## 2026-08-12 — Gustav (Refining/Sieving Tower: carry each bag's real add-time into bagging_time)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
