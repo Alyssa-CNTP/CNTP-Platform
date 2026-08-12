@@ -1576,9 +1576,6 @@ export default function SievingPage() {
               <button onClick={()=>setPrintBag(null)} style={{background:'rgba(255,255,255,.2)',border:'none',borderRadius:6,color:'#fff',fontSize:18,cursor:'pointer',padding:'0 8px'}}>×</button>
             </div>
             <div id="bag-qc-label" style={{padding:18,fontFamily:'monospace',color:'#111'}}>
-              <div style={{textAlign:'center',fontWeight:800,fontSize:15,borderBottom:'2px solid #111',paddingBottom:6,marginBottom:10}}>
-                CAPE NATURAL TEA PRODUCTS
-              </div>
               <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 10px',fontSize:13}}>
                 <b>SERIAL</b><span>{printBag.serialNumber||'—'}</span>
                 <b>PRODUCT</b><span>{printBag.product||activeProduct}</span>
