@@ -104,12 +104,21 @@ export function buildLabelPplb(bag: OutputBag): string {
   const BARCODE_Y = 90
   const BARCODE_H = 150   // ~18.5mm
 
+  // Fine Leaf is the "more important" product — since the paper roll can no
+  // longer colour-code it, it gets a double border around the whole label
+  // instead. Coarse Leaf and everything else stays plain. Compare against the
+  // untruncated product type, not the header's shortened display string.
+  const isFineLeaf = bag.product_type === 'Fine Leaf'
+
   const lines: string[] = [
     'N',                 // clear buffer
     `q${W}`,             // width 100mm
     `Q${H},24`,          // length 49.2mm, 3mm gap
     'D8',                // darkness
     'S4',                // speed
+
+    // ── Fine Leaf double border ──
+    ...(isFineLeaf ? [`X4,4,2,${W - 4},${H - 4}`, `X12,12,2,${W - 12},${H - 12}`] : []),
 
     // ── Header — no colour-coded paper anymore (one printer/roll per station),
     // so the product name has to carry the Fine/Coarse Leaf distinction on its
