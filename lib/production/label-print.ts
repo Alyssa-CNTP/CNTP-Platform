@@ -30,6 +30,9 @@ function buildLabelHtml(bag: OutputBag): string {
   const gradeShort   = GRADE_FULL[bag.grade] ?? GRADE_LABELS[bag.grade] ?? bag.grade
   const variantShort = VARIANT_SHORT[bag.variant] ?? bag.variant
   const badgeText     = `${variantShort} - ${gradeShort}`
+  // Fine Leaf is the "more important" product — since the paper roll can no
+  // longer colour-code it, it gets a double border around the label instead.
+  const isFineLeaf = bag.product_type === 'Fine Leaf'
 
   const dateFormatted = new Date(bag.created_at).toLocaleDateString('en-ZA', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -57,6 +60,7 @@ function buildLabelHtml(bag: OutputBag): string {
     padding: 1.5mm 2.5mm;
     display: flex; flex-direction: column;
     background: #fff; color: #000;
+    ${isFineLeaf ? 'border: 1.5px solid #000; outline: 1.5px solid #000; outline-offset: 2px;' : ''}
   }
   .header {
     display: flex; align-items: flex-start; justify-content: space-between;
