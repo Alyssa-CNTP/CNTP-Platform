@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Bag label: PA Level and Residue join the Bulk Density/Leaf Shade box)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- PA Level and Residue were shown as plain text rows next to Serial/Product/Lot; moved them into the same bordered, large-value box style as Bulk Density and Leaf Shade, as a 2×2 grid (Bulk Density / Leaf Shade on top, PA Level / Residue below), each divided by the same border lines. Purely visual — no data change.
+
 ## 2026-08-12 — Gustav (Sieving: fresh pending-QC start date + redesigned bag label)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, DB: `qms.v_pending_bag_qc` view (staging + production)
