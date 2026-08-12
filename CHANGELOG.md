@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Sieving: fresh pending-QC start date + redesigned bag label)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, DB: `qms.v_pending_bag_qc` view (staging + production)
+
+- **Pending Final QC queue now only surfaces bags from 2026-08-13 onward** (`qms.v_pending_bag_qc` filtered to `bag_date >= '2026-08-13'`). The existing backlog (bags from before the per-bag `bagging_time` fix landed) is deliberately left as historical — not retro-QC'd. Nothing destructive: no data changed, the old bags are simply excluded from the pending list/pop-up/dropdown; they remain fully visible in the Runs table and reprintable as before.
+- **Bag label redesigned**: removed Grade, Variant, Date and QC; added **PA Level** (as recorded on the run) and **Residue** (the lot's R-grade from raw-material residue analysis, same source as the existing auto-fill lookup). Serial, Product, Lot, Bulk Density and Leaf Shade unchanged.
+- New `lotKeyOf()` helper factors out the lot-normalisation used to key into `paLookup`/`rLookup`/`leafShadeLookup`, now shared by the label's residue lookup too.
+
 ## 2026-08-12 — Alyssa (Refining 1/2 debagging: scan-first flow with a bag-record confirmation popup — PROTOTYPE)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`

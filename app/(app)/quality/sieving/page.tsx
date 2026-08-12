@@ -161,6 +161,10 @@ const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sdIsOrg(v: string) { return v==='ORG' || v==='RA-ORG' || v==='FT-ORG' || v.toLowerCase().includes('organic') }
+// Same normalisation used everywhere a lot number keys into paLookup/
+// rLookup/leafShadeLookup, so a bag's lot always matches its raw-material
+// record regardless of dash spacing ("GS-0098" / "GS 0098" / "gs-0098").
+function lotKeyOf(lot: string | null | undefined) { return (lot || '').trim().toUpperCase().replace(/\s*-\s*/g, '-') }
 // Mirrors qms.norm_sd_product() (supabase/migrations/20260807_001_sieving_bag_qc_link.sql)
 // — used client-side to classify a raw production.prod_bagging Realtime insert
 // payload, since a SQL function can't be called from the browser.
@@ -1258,7 +1262,7 @@ export default function SievingPage() {
     // A Final QC clears that bag from the pending queue; an out-of-spec
     // in-process run changes which bags are flagged, so refresh either way.
     loadPendingBags()
-    if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag })
+    if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag, residue: rLookup[lotKeyOf(mapped.lotNumber)] || null })
     setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle'); setSelectedBagId('')
     setLastSaved(new Date()); setSaving(false)
   }
@@ -1418,7 +1422,7 @@ export default function SievingPage() {
       const { data } = await db.schema('qms').from('v_bag_qc_status').select('*').eq('bag_serial_no', row.serialNumber).order('bagged_at', { ascending: false }).limit(1)
       bag = data?.[0] ?? null
     }
-    setPrintBag({ ...row, bag })
+    setPrintBag({ ...row, bag, residue: rLookup[lotKeyOf(row.lotNumber)] || null })
   }
 
   const inputSt: React.CSSProperties = { padding:'5px 8px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, width:'100%', boxSizing:'border-box' }
@@ -1579,10 +1583,8 @@ export default function SievingPage() {
                 <b>SERIAL</b><span>{printBag.serialNumber||'—'}</span>
                 <b>PRODUCT</b><span>{printBag.product||activeProduct}</span>
                 <b>LOT</b><span>{printBag.lotNumber||'—'}</span>
-                <b>GRADE</b><span>{printBag.grade||'—'}</span>
-                <b>VARIANT</b><span>{printBag.variant||'—'}</span>
-                <b>DATE</b><span>{printBag.date||''} {printBag.time||''}</span>
-                <b>QC</b><span>{printBag.qcName||'—'}</span>
+                <b>PA LEVEL</b><span>{printBag.paLevel||'—'}</span>
+                <b>RESIDUE</b><span>{printBag.residue||'—'}</span>
               </div>
               <div style={{marginTop:12,padding:'10px 12px',border:'2px solid #111',borderRadius:6,display:'flex',justifyContent:'space-around',textAlign:'center'}}>
                 <div>
