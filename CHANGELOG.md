@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Sieving: Serial No. dropdown in the row editor)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- The inline row editor's **Serial No.** field is no longer free-type-only — it now offers a dropdown (via `<datalist>`) of real serials bagged for the product currently open, each showing its lot and bagging time, sourced from `qms.v_bag_events` (all bagged serials, not just pending ones, since an edit may need to correct a serial on an already-sampled or historical run). Still a plain editable text field underneath, so existing hand-typed legacy serials (e.g. `12.08.06`) that predate the bag-link feature keep working untouched.
+- New `bagSerialOptions` load (per active product tab) alongside the existing PA/R-grade/leaf-shade lookups; passed into `InlineEditForm` as `bagSerials`.
 ## 2026-08-12 — Alyssa (Refining/Granule debagging: scan now auto-fills, no Enter/Look-up tap)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
