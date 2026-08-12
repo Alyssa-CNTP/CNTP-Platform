@@ -629,9 +629,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   )
 }
 
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
+  bagSerials?: {serial:string;lot:string;baggedAt:string}[]
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -704,6 +705,16 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
               <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
               {key==='qcName' ? (
                 <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
+              ) : key==='serialNumber' ? (
+                <>
+                  <input list="edit-serial-dl" value={fields.serialNumber} onChange={e=>setF('serialNumber',e.target.value)}
+                    placeholder="Pick or type a serial" style={inputSt}/>
+                  <datalist id="edit-serial-dl">
+                    {(bagSerials||[]).map(b=>(
+                      <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
+                    ))}
+                  </datalist>
+                </>
               ) : (
                 <input type={type} min={type==='number'?0:undefined} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
               )}
@@ -841,6 +852,19 @@ export default function SievingPage() {
   const [pendingLoading,setPendingLoading]= useState(false)
   const [selectedBagId, setSelectedBagId] = useState<string>('')
   const [printBag,      setPrintBag]      = useState<any>(null)
+  // Serial numbers actually assigned to bags of the product currently open, so
+  // the inline row editor can offer a dropdown instead of free-typing one —
+  // sourced from every bagging (not just pending ones), since an edit may need
+  // to correct a serial on an already-sampled or historical run.
+  const [bagSerialOptions, setBagSerialOptions] = useState<{serial:string;lot:string;baggedAt:string}[]>([])
+  useEffect(() => {
+    db.schema('qms').from('v_bag_events').select('bag_serial_no,lot_number,bagged_at')
+      .eq('product', activeProduct).not('bag_serial_no', 'is', null)
+      .order('bagged_at', { ascending: false }).limit(300)
+      .then(({ data }: { data: any[] | null }) => {
+        setBagSerialOptions((data ?? []).map((r:any) => ({ serial: r.bag_serial_no, lot: r.lot_number, baggedAt: r.bagged_at })))
+      })
+  }, [db, activeProduct])
   const [tableCollapsed, setTableCollapsed] = useState(false)
   const [showOutlierChart, setShowOutlierChart] = useState(true)
   const [chartHighlightId, setChartHighlightId] = useState<any>(null)
@@ -1877,6 +1901,7 @@ export default function SievingPage() {
                         run={row}
                         specDef={specDef}
                         activeSpecs={activeSpecs}
+                        bagSerials={bagSerialOptions}
                         onSave={async (updated: any) => {
                           const vios: string[] = []
                           const sr = activeSpecs[`${updated.grade}|${updated.variant}`]||{}
