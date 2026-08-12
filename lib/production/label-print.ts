@@ -67,12 +67,12 @@ function buildLabelHtml(bag: OutputBag): string {
     margin-bottom: 1mm;
   }
   .header-left { display: flex; flex-direction: column; }
-  .product-name { font-size: 21pt; font-weight: 900; line-height: 1.05; }
-  .section-name { font-size: 11pt; font-weight: 600; color: #333; margin-top: 0.6mm; }
+  .product-name { font-size: 21pt; font-weight: 900; line-height: 1.05; text-transform: uppercase; }
+  .section-name { font-size: 11pt; font-weight: 600; color: #333; margin-top: 0.6mm; text-transform: uppercase; }
   .type-grade-badge {
     background: #000; color: #fff; padding: 1.5mm 2.8mm; text-align: center;
     min-width: 20mm; flex-shrink: 0;
-    font-size: 7pt; font-weight: 700; white-space: nowrap;
+    font-size: 7pt; font-weight: 700; white-space: nowrap; text-transform: uppercase;
   }
   .barcode-area {
     flex: 1; display: flex; flex-direction: column;
@@ -93,7 +93,7 @@ function buildLabelHtml(bag: OutputBag): string {
   .footer-cell:first-child { text-align: left; }
   .footer-cell:last-child { text-align: right; }
   .footer-label { font-size: 5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #666; font-weight: 700; }
-  .footer-value { font-size: 8pt; font-weight: 800; line-height: 1.2; }
+  .footer-value { font-size: 8pt; font-weight: 800; line-height: 1.2; text-transform: uppercase; }
   .print-btn {
     position: fixed; bottom: 12px; right: 12px;
     background: #1A3A0E; color: #fff; border: none; border-radius: 10px;
