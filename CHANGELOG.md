@@ -7,13 +7,18 @@ Format: date · developer · files changed · description of code changes.
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`
 
-Reworked Refining debagging around scanning as the main path (prototype for review before rolling out to Granule/Blender/Pasteuriser). Instead of inline fields that quietly failed when a scanner didn't send Enter, the operator now:
+Reworked Refining debagging around scanning as the main path (prototype for review before rolling out to Granule/Blender/Pasteuriser). A single **"Scan a bag to debag"** field auto-looks-up (`validateBagScan`) once the serial settles and opens a **confirmation popup** with the bag's `bag_tags` record — product type, weight, variant, lot/batch, where it was made, when — plus a validity line (✓ valid · ⚠ already consumed / wrong variant · not registered). **"Consume into Refining 1"** registers it as debagged-in here; already-consumed is blocked, mismatches warn+allow, not-found offers **"Enter manually"**. Pick-from-system and manual kept as side options. Refining 1 & 2 only, for review.
 
-1. Scans a bag into a single **"Scan a bag to debag"** field at the top (auto-fires ~350 ms after the serial settles — no Enter/tap needed).
-2. A **confirmation popup** opens showing that bag's record from `bag_tags` — product type, weight, variant, lot/batch, **where it was made**, when — plus a validity line for this section (✓ valid · ⚠ already consumed / wrong variant · not registered). Powered by the shared `validateBagScan`.
-3. **"Consume into Refining 1"** registers it as debagged-in here (so Bag Tracking shows exactly where it was scanned in) and clears the field for the next scan. Already-consumed bags are blocked; variant/finished-product mismatches warn but allow "Consume anyway"; not-found offers **"Enter manually"**.
+## 2026-08-12 — Gustav (Refining/Sieving Tower: carry each bag's real add-time into bagging_time)
 
-**Pick from system** and **Enter manually** are kept as smaller side options ("No barcode, or no scanner?") beneath — scanning is the primary source. Only Refining 1 & 2 for now (they share the capture component); other sections unchanged pending review.
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Root-caused why the Sieving Final QC picker showed the same timestamp for many different bags: `production.prod_bagging` rows for Refining (the sieving tower) never carried a `bagging_time` at all, and `persist()` fully deletes-and-reinserts every bag row for a session on every save (explicit save, 30s autosave, and submit) — so their `created_at` was really "when this session was last saved," identical across every bag in it and drifting forward the whole time the operator kept the screen open. Not a Quality-side bug; the per-bag time simply didn't exist yet on the production side.
+
+- `RefiningOutputBag.logged_at` already captures the exact moment the operator adds each output bag (set in `addOutputBag()`) — it just wasn't being carried through to the database. Granule/Blender/Pasteuriser already pass their own equivalent (`b.time`) into `bagging_time`; Refining was the one section that didn't.
+- `buildBag()`'s Refining branch now sets `bagging_time` from `b.logged_at` via a new `bagLoggedAtToTime()` helper, formatted the same way Granule's `clockNow()` already is (`Africa/Johannesburg`, `HH:MM`) so it matches the sibling sections' convention exactly.
+- No migration needed — `bagging_time` already exists on `prod_bagging`. Only affects **new** bags recorded after this deploys; existing rows keep falling back to the session's `created_at` as before (unchanged, no regression).
+- Once this is live, `qms.v_bag_events.bagged_at` (already shipped) picks up the real per-bag time automatically with no further Quality-side change, since it already prefers `bagging_time` over `created_at`.
 
 ## 2026-08-12 — Gustav (Sieving: live "bag ready for QC" pop-up)
 
