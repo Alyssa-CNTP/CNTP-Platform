@@ -62,9 +62,9 @@ function buildLabelHtml(bag: OutputBag): string {
     display: flex; align-items: flex-start; justify-content: space-between;
     margin-bottom: 1mm;
   }
-  .header-left { display: flex; align-items: baseline; gap: 1.8mm; }
-  .product-name { font-size: 13.5pt; font-weight: 800; line-height: 1.1; }
-  .section-name { font-size: 8pt; font-weight: 300; color: #555; }
+  .header-left { display: flex; flex-direction: column; }
+  .product-name { font-size: 21pt; font-weight: 900; line-height: 1.05; }
+  .section-name { font-size: 11pt; font-weight: 600; color: #333; margin-top: 0.6mm; }
   .type-grade-badge {
     background: #000; color: #fff; padding: 1.5mm 2.8mm; text-align: center;
     min-width: 20mm; flex-shrink: 0;
