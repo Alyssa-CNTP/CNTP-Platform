@@ -29,7 +29,13 @@ const W = 800
 const H = 394
 
 // PPLB bitmap font cell sizes in dots at multiplier 1 — used to centre text.
-const FONT_W: Record<number, number> = { 1: 8, 2: 10, 3: 12, 4: 14, 5: 32 }
+// 900 = downloaded Arial TrueType font (Printer Tool → Font → Convert), cell
+// size read from its "Converted Font Information" panel (19×26 @ 24pt). Only
+// this one size is loaded, so it's used for the label's prominent text (product
+// name, serial); everything else stays on the built-in bitmap fonts, which can
+// still be scaled small via their own multiplier.
+const FONT_W: Record<number, number> = { 1: 8, 2: 10, 3: 12, 4: 14, 5: 32, 900: 19 }
+const ARIAL_FONT = 900
 
 function centreX(text: string, font: number, mult = 1): number {
   const w = text.length * FONT_W[font] * mult
@@ -51,7 +57,7 @@ function code128WidthDots(data: string, narrowDots: number): number {
  *   Code 128 barcode                centred, ~18.5mm tall (spec: 25-35mm was
  *                                   over half the label height and forced the
  *                                   header/footer against the edges)
- *   serial in human-readable text   centred beneath the barcode
+ *   serial in human-readable text   centred beneath the barcode, no rule above it
  *   LOT/BATCH · WEIGHT · DATE       footer row, three columns
  *
  * PPLB command reference:
@@ -105,8 +111,8 @@ export function buildLabelPplb(bag: OutputBag): string {
     'S4',                // speed
 
     // ── Header ──
-    `A20,12,0,4,1,1,N,"${productName}"`,
-    `A20,42,0,1,1,1,N,"${sectionName}"`,
+    `A20,10,0,${ARIAL_FONT},1,1,N,"${productName}"`,
+    `A20,44,0,1,1,1,N,"${sectionName}"`,
 
     // ── Type / grade badge, top-right: filled black box, reversed white text ──
     `LO${BADGE_X0},${BADGE_Y0},${BADGE_W},${BADGE_H}`,
@@ -116,10 +122,9 @@ export function buildLabelPplb(bag: OutputBag): string {
     `B${barcodeX},${BARCODE_Y},0,1,${NARROW},${NARROW},${BARCODE_H},N,"${serial}"`,
 
     // ── Serial, centred under the barcode ──
-    `A${centreX(serial, 4)},250,0,4,1,1,N,"${serial}"`,
+    `A${centreX(serial, ARIAL_FONT)},248,0,${ARIAL_FONT},1,1,N,"${serial}"`,
 
-    // ── Footer ──
-    `LO20,292,760,2`,
+    // ── Footer (no rule — matches the browser preview) ──
     `A20,304,0,1,1,1,N,"LOT/BATCH"`,
     `A20,322,0,3,1,1,N,"${clean(lotValue)}"`,
     `A290,304,0,1,1,1,N,"WEIGHT"`,
