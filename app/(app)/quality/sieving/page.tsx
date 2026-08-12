@@ -629,9 +629,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   )
 }
 
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
+  bagSerials?: {serial:string;lot:string;baggedAt:string}[]
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -704,6 +705,16 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames }
               <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
               {key==='qcName' ? (
                 <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
+              ) : key==='serialNumber' ? (
+                <>
+                  <input list="edit-serial-dl" value={fields.serialNumber} onChange={e=>setF('serialNumber',e.target.value)}
+                    placeholder="Pick or type a serial" style={inputSt}/>
+                  <datalist id="edit-serial-dl">
+                    {(bagSerials||[]).map(b=>(
+                      <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
+                    ))}
+                  </datalist>
+                </>
               ) : (
                 <input type={type} min={type==='number'?0:undefined} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
               )}
@@ -841,6 +852,19 @@ export default function SievingPage() {
   const [pendingLoading,setPendingLoading]= useState(false)
   const [selectedBagId, setSelectedBagId] = useState<string>('')
   const [printBag,      setPrintBag]      = useState<any>(null)
+  // Serial numbers actually assigned to bags of the product currently open, so
+  // the inline row editor can offer a dropdown instead of free-typing one —
+  // sourced from every bagging (not just pending ones), since an edit may need
+  // to correct a serial on an already-sampled or historical run.
+  const [bagSerialOptions, setBagSerialOptions] = useState<{serial:string;lot:string;baggedAt:string}[]>([])
+  useEffect(() => {
+    db.schema('qms').from('v_bag_events').select('bag_serial_no,lot_number,bagged_at')
+      .eq('product', activeProduct).not('bag_serial_no', 'is', null)
+      .order('bagged_at', { ascending: false }).limit(300)
+      .then(({ data }: { data: any[] | null }) => {
+        setBagSerialOptions((data ?? []).map((r:any) => ({ serial: r.bag_serial_no, lot: r.lot_number, baggedAt: r.bagged_at })))
+      })
+  }, [db, activeProduct])
   const [tableCollapsed, setTableCollapsed] = useState(false)
   const [showOutlierChart, setShowOutlierChart] = useState(true)
   const [chartHighlightId, setChartHighlightId] = useState<any>(null)
@@ -1312,6 +1336,11 @@ export default function SievingPage() {
 
   const selectedBag = pendingBags.find((b:any) => String(b.bagging_id) === String(selectedBagId)) || null
 
+  // The bag picker must only offer bags of the sieve currently open (Fine Leaf
+  // tab → Fine Leaf bags, Coarse Leaf tab → Coarse Leaf bags, etc.) — otherwise
+  // a QC on the Fine Leaf tab could pick and sample a Coarse Leaf bag by mistake.
+  const tabPendingBags = pendingBags.filter((b:any) => b.product === activeProduct)
+
   // Re-print a bag label from the history table — after edits to that row, or
   // any time later. Looks the bag up fresh (not just the pending list, since a
   // sampled bag has already dropped off it) so the in-process spec banner is
@@ -1510,7 +1539,7 @@ export default function SievingPage() {
                     background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
                     fontSize:14,fontWeight:700,cursor:'pointer',transition:'all 0.15s',
                     boxShadow:form.runType===val?`0 2px 8px ${col}44`:'none'}}>
-                  {label}{val==='final'&&pendingBags.length>0?` · ${pendingBags.length}`:''}
+                  {label}{val==='final'&&tabPendingBags.length>0?` · ${tabPendingBags.length}`:''}
                 </button>
               ))}
             </div>
@@ -1522,13 +1551,13 @@ export default function SievingPage() {
           {form.runType==='final' && (
             <div style={{marginBottom:16,padding:'12px 14px',background:'#f0fdf4',border:'2px solid #86efac',borderRadius:8}}>
               <label style={{fontSize:10,fontWeight:700,color:errors._bag?'#dc2626':'#166534',display:'block',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}}>
-                Bag awaiting QC * {pendingLoading?'· loading…':`· ${pendingBags.length} pending`}
+                Bag awaiting QC — {activeProduct} * {pendingLoading?'· loading…':`· ${tabPendingBags.length} pending`}
               </label>
               <div style={{display:'flex',gap:8,alignItems:'center'}}>
                 <select value={selectedBagId} onChange={e=>selectPendingBag(e.target.value)}
                   style={{...inputSt,padding:'10px 10px',fontSize:13,background:'#fff',borderColor:errors._bag?'#fca5a5':'#86efac',flex:1}}>
-                  <option value="">— select the bag being sampled —</option>
-                  {pendingBags.map((b:any)=>(
+                  <option value="">— select the {activeProduct} bag being sampled —</option>
+                  {tabPendingBags.map((b:any)=>(
                     <option key={b.bagging_id} value={b.bagging_id}>
                       {b.bag_serial_no || '(no serial)'} · {b.product} · lot {b.lot_number || '—'}
                       {b.bagged_at ? ` · ${String(b.bagged_at).slice(0,10)} ${String(b.bagged_at).slice(11,16)}` : ''}
@@ -1539,8 +1568,12 @@ export default function SievingPage() {
                 <button type="button" onClick={loadPendingBags}
                   style={{padding:'10px 14px',borderRadius:7,border:'1px solid #86efac',background:'#fff',fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>↻</button>
               </div>
-              {pendingBags.length===0&&!pendingLoading&&(
-                <div style={{fontSize:11,color:'#6b7280',marginTop:6}}>No bags awaiting QC — a pending entry appears here each time production bags Fine Leaf or Coarse Leaf.</div>
+              {tabPendingBags.length===0&&!pendingLoading&&(
+                <div style={{fontSize:11,color:'#6b7280',marginTop:6}}>
+                  {['Fine Leaf','Coarse Leaf'].includes(activeProduct)
+                    ? `No ${activeProduct} bags awaiting QC — a pending entry appears here each time production bags a ${activeProduct} output.`
+                    : `${activeProduct} bags do not require a QC stamp.`}
+                </div>
               )}
               {errors._bag&&<div style={{fontSize:10,color:'#dc2626',marginTop:4}}>⚠ {errors._bag}</div>}
 
@@ -1868,6 +1901,7 @@ export default function SievingPage() {
                         run={row}
                         specDef={specDef}
                         activeSpecs={activeSpecs}
+                        bagSerials={bagSerialOptions}
                         onSave={async (updated: any) => {
                           const vios: string[] = []
                           const sr = activeSpecs[`${updated.grade}|${updated.variant}`]||{}

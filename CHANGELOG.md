@@ -3,6 +3,37 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Sieving: Serial No. dropdown in the row editor)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- The inline row editor's **Serial No.** field is no longer free-type-only — it now offers a dropdown (via `<datalist>`) of real serials bagged for the product currently open, each showing its lot and bagging time, sourced from `qms.v_bag_events` (all bagged serials, not just pending ones, since an edit may need to correct a serial on an already-sampled or historical run). Still a plain editable text field underneath, so existing hand-typed legacy serials (e.g. `12.08.06`) that predate the bag-link feature keep working untouched.
+- New `bagSerialOptions` load (per active product tab) alongside the existing PA/R-grade/leaf-shade lookups; passed into `InlineEditForm` as `bagSerials`.
+## 2026-08-12 — Alyssa (Refining/Granule debagging: scan now auto-fills, no Enter/Look-up tap)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+The Refining and Granule debagging serial inputs only ran the bag lookup on **Enter** or a **"Look up"** tap. A hardware scanner fills the serial in one fast burst but usually doesn't send Enter, so the operator was left with the serial in the box and every other field blank — "scan it in, nothing populates." (This is why "Pick from system" worked but scanning didn't — the pick path queries `bag_tags` immediately, the scan path waited for an Enter that never came.)
+
+Now the lookup fires **automatically** once the scanned/typed serial settles (400 ms debounce), so the operator just scans a bag and Product type / Weight / Variant / Lot populate on their own — the behaviour they expected. Enter and the "Look up" button still work; auto-lookup is skipped once the row is locked or switched to manual entry, and manual typing still resolves after a short pause. Placeholders updated to "fills in automatically".
+
+## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Sieving output bag serials were `ST-DDMMYY-NNN` — one shared daily counter across all output types, so you couldn't tell types apart or count them from the serial. Now each Sieving output serial encodes its **output type** with a per-type daily sequence: **`ST{TYPE}-DDMMYY-NNN`**, e.g. Fine Leaf → `STFL-120826-003`. Because the barcode encodes the serial verbatim, the type and the running count are readable straight off the bag/scan.
+
+Type codes (matched on the product name, so they work whether the operator picks a suggested output or a full Master-Inventory item): **FL** Fine Leaf · **CL** Coarse Leaf · **RS** Rolsiev Sticks · **IS** Indent Sticks · **RB** RB Blocks · **BD** Brown Dust · **PD** Powder Dust · **WD** White Dust · **BE** Bucket Elevator / Spillage. Anything unmatched falls back to the first two letters of its name. The sequence is per type per day (so `STFL-…-005` = the 5th Fine Leaf bag that day). Existing `ST-…` bags stay findable; only new bags use the new format. No DB change.
+
+## 2026-08-12 — Gustav (Sieving: Final QC bag picker filtered to the active sieve tab)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- The "Bag awaiting QC" dropdown on Final QC now only lists bags matching the **currently open sieve tab** (`tabPendingBags = pendingBags.filter(b => b.product === activeProduct)`) — previously it showed every pending Fine Leaf **and** Coarse Leaf bag together regardless of which tab was open, so a QC on the Fine Leaf tab could pick and sample a Coarse Leaf bag by mistake.
+- The pending count on the "Final QC (bag) · N" toggle and the dropdown label now reflect the active tab's count, not the total across both sieves.
+- Empty state now says which product has no bags awaiting QC, and correctly notes that Rooibos Blocks / Indent Sticks never require a QC stamp instead of showing a generic "no bags" message.
+- Serial number continues to be pulled straight from the bag's own record (`production.prod_bagging.bag_serial_no`) rather than typed — so once the new bag serial format is in place, this form picks it up automatically with no further change needed here.
+
 ## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
