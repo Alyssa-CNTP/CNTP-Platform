@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-12 — Alyssa (Fix capture save 400: stop writing phantom columns to prod_debagging/prod_bagging)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Saving a capture session was returning `400 (Bad Request)` on the `prod_debagging` (and `prod_bagging`) insert, so sessions weren't persisting — which then made scan-testing meaningless (a bag that never saved correctly reads as "not found"). Root cause: the save wrote two columns the tables don't have:
+
+- **`grade`** — the Sieving farm-bag debagging row inserted `grade`, but `prod_debagging` has no `grade` column (it uses `org_or_conv`); no migration ever added it. Pure phantom write.
+- **`production_ref`** — the Blender/Pasteuriser debagging and bagging rows inserted `production_ref`, which is absent from the staging tables.
+
+Confirmed via the live staging `information_schema` column list, and confirmed both columns are **never read back anywhere** in the app (the blend/production reference is already carried by `lot_number`/`acumatica_id`). So the fix is simply to stop inserting them — no database migration, and it corrects the save on both staging and production. Removed all five write sites (Sieving `grade`; Blender + Pasteuriser `production_ref` in both `buildDebag` and `buildBag`).
+
+
 ## 2026-07-30 — Alyssa (Fix: roster rotation now keeps pins (and per-person days))
 
 **Files changed:** `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`
