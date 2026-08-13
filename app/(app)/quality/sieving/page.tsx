@@ -979,6 +979,21 @@ export default function SievingPage() {
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
 
+  // In-Process runs sample the machine while a specific bag is being filled, so
+  // the serial comes from production rather than being typed: pre-fill the most
+  // recent bag for the sieve currently open. Only fills a blank field, so a QC
+  // who picks a different bag from the list isn't overwritten. Final QC is
+  // untouched here — its serial comes from the bag picked in the queue above.
+  useEffect(() => {
+    if (!showForm || form.runType !== 'in-process') return
+    if (form.serialNumber) return
+    const latest = bagSerialOptions[0]
+    if (!latest) return
+    setForm((f:any) => f.serialNumber || f.runType !== 'in-process' ? f : ({
+      ...f, serialNumber: latest.serial, ...(f.lotNumber ? {} : { lotNumber: latest.lot || '' }),
+    }))
+  }, [showForm, form.runType, form.serialNumber, bagSerialOptions])
+
   // Load all runs
   const load = useCallback(async () => {
     setLoading(true); setSdError('')
@@ -1740,22 +1755,32 @@ export default function SievingPage() {
               <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
-            {/* Serial numbers only exist once a bag is made, so In-Process runs
-                no longer carry one. On Final QC it is pre-filled from the bag
-                and stays editable so the QC can verify it. */}
-            {form.runType==='final'&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. <span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span></label>
-              <input value={form.serialNumber}
+            {/* Serial No. — never typed from scratch. On Final QC it comes from
+                the bag the QC picked above. On In-Process it is pre-filled with
+                the most recent bag production has made for this sieve, and can
+                be changed to any other bag of the same product via the list. */}
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ {form.runType==='final'?'from bag':'latest bag'}</span>}
+              </label>
+              <input value={form.serialNumber} list={form.runType==='in-process'?'new-run-serial-dl':undefined}
                 onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
                 onBlur={e=>lookupBagTag(e.target.value)}
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
-                placeholder="Type or scan barcode"
+                placeholder={form.runType==='in-process'?(bagSerialOptions.length?'Pick a bag':`No ${activeProduct} bags yet`):'Type or scan barcode'}
                 style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              {form.runType==='in-process'&&(
+                <datalist id="new-run-serial-dl">
+                  {bagSerialOptions.map(b=>(
+                    <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
+                  ))}
+                </datalist>
+              )}
               {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
               {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
               {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
-            </div>}
+            </div>
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 QC Controller * {myName&&form.qcName===myName&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ logged in</span>}
