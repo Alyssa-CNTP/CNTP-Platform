@@ -146,13 +146,14 @@ export function buildLabelPplb(bag: OutputBag): string {
     // ── Serial, centred under the barcode ──
     `A${centreX(serial, 4)},272,0,4,1,1,N,"${serial}"`,
 
-    // ── Footer (no rule — matches the browser preview) ──
-    `A20,304,0,1,1,1,N,"LOT/BATCH"`,
-    `A20,322,0,3,1,1,N,"${clean(lotValue)}"`,
-    `A290,304,0,1,1,1,N,"WEIGHT"`,
-    `A290,322,0,3,1,1,N,"${clean(weightValue)}"`,
-    `A560,304,0,1,1,1,N,"DATE"`,
-    `A560,322,0,3,1,1,N,"${clean(dateFormatted)}"`,
+    // ── Footer (no rule — matches the browser preview) — pushed down from
+    // y304/322 since it was crowding the serial text right above it. ──
+    `A20,326,0,1,1,1,N,"LOT/BATCH"`,
+    `A20,344,0,3,1,1,N,"${clean(lotValue)}"`,
+    `A290,326,0,1,1,1,N,"WEIGHT"`,
+    `A290,344,0,3,1,1,N,"${clean(weightValue)}"`,
+    `A560,326,0,1,1,1,N,"DATE"`,
+    `A560,344,0,3,1,1,N,"${clean(dateFormatted)}"`,
 
     'P1',                // print 1 copy
   ]
