@@ -74,19 +74,21 @@ export function buildLabelPplb(bag: OutputBag): string {
     day: '2-digit', month: '2-digit', year: 'numeric',
   })
 
-  const lotValue     = bag.lot_number || 'N/A'
-  const weightValue  = `${bag.weight_kg} kg`
-  const productName  = clean(bag.product_type).slice(0, 26)
-  const sectionName  = clean(bag.section_name).slice(0, 30)
-  const serial       = clean(bag.serial_number)
-  const variantShort = clean(VARIANT_SHORT[bag.variant] ?? bag.variant)
+  const lotValue     = (bag.lot_number || 'N/A').toUpperCase()
+  const weightValue  = `${bag.weight_kg} KG`
+  // Shorter cap than before — the header font is now much larger (see below),
+  // so it can't fit as many characters across the available width.
+  const productName  = clean(bag.product_type).slice(0, 18).toUpperCase()
+  const sectionName  = clean(bag.section_name).slice(0, 30).toUpperCase()
+  const serial       = clean(bag.serial_number).toUpperCase()
+  const variantShort = clean(VARIANT_SHORT[bag.variant] ?? bag.variant).toUpperCase()
 
   // TYPE/GRADE badge: filled black box, single reversed (white) line, e.g.
   // "CON - Export" — the two facts an operator needs at a glance, no separate
   // labels. Always font 2 — the larger font 3 clipped against the box edge on
   // the physical printer even for "CON - Domestic" (14 chars), so the FONT_W
   // table's assumed glyph width for font 3 can't be trusted for this badge.
-  const badgeText  = `${variantShort} - ${clean(gradeShort)}`
+  const badgeText  = `${variantShort} - ${clean(gradeShort).toUpperCase()}`
   const BADGE_X0 = 528, BADGE_Y0 = 6, BADGE_W = 264, BADGE_H = 44
   const badgeFont  = 2
   const badgeTextW = badgeText.length * FONT_W[badgeFont]
@@ -102,6 +104,12 @@ export function buildLabelPplb(bag: OutputBag): string {
   const BARCODE_Y = 90
   const BARCODE_H = 150   // ~18.5mm
 
+  // Fine Leaf is the "more important" product — since the paper roll can no
+  // longer colour-code it, it gets a double border around the whole label
+  // instead. Coarse Leaf and everything else stays plain. Compare against the
+  // untruncated product type, not the header's shortened display string.
+  const isFineLeaf = bag.product_type === 'Fine Leaf'
+
   const lines: string[] = [
     'N',                 // clear buffer
     `q${W}`,             // width 100mm
@@ -109,9 +117,21 @@ export function buildLabelPplb(bag: OutputBag): string {
     'D8',                // darkness
     'S4',                // speed
 
-    // ── Header ──
-    `A20,12,0,4,1,1,N,"${productName}"`,
-    `A20,42,0,1,1,1,N,"${sectionName}"`,
+    // ── Fine Leaf double border ──
+    ...(isFineLeaf ? [`X4,4,2,${W - 4},${H - 4}`, `X12,12,2,${W - 12},${H - 12}`] : []),
+
+    // ── Header — no colour-coded paper anymore (one printer/roll per station),
+    // so the product name has to carry the Fine/Coarse Leaf distinction on its
+    // own: doubled size (hm2,vm2) instead of the old single-size inline line,
+    // stacked over a correspondingly bigger section name. Section name's y is
+    // pushed well below the product name's y — vm2 roughly doubles the glyph
+    // height, and the first physical print showed the two lines overlapping
+    // at the old 44-dot gap. All header/badge/footer text is uppercase now.
+    // For Fine Leaf, the text also starts at x24/y20 instead of x20/y6 — the
+    // inner border's top edge sits at y12, and the tall vm2 text was starting
+    // above it and printing straight through the line. ──
+    `A${isFineLeaf ? 24 : 20},${isFineLeaf ? 20 : 6},0,4,2,2,N,"${productName}"`,
+    `A${isFineLeaf ? 24 : 20},78,0,3,1,1,N,"${sectionName}"`,
 
     // ── Type / grade badge, top-right: filled black box, reversed white text ──
     `LO${BADGE_X0},${BADGE_Y0},${BADGE_W},${BADGE_H}`,

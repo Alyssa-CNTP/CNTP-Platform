@@ -30,6 +30,9 @@ function buildLabelHtml(bag: OutputBag): string {
   const gradeShort   = GRADE_FULL[bag.grade] ?? GRADE_LABELS[bag.grade] ?? bag.grade
   const variantShort = VARIANT_SHORT[bag.variant] ?? bag.variant
   const badgeText     = `${variantShort} - ${gradeShort}`
+  // Fine Leaf is the "more important" product — since the paper roll can no
+  // longer colour-code it, it gets a double border around the label instead.
+  const isFineLeaf = bag.product_type === 'Fine Leaf'
 
   const dateFormatted = new Date(bag.created_at).toLocaleDateString('en-ZA', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -57,18 +60,19 @@ function buildLabelHtml(bag: OutputBag): string {
     padding: 1.5mm 2.5mm;
     display: flex; flex-direction: column;
     background: #fff; color: #000;
+    ${isFineLeaf ? 'border: 1.5px solid #000; outline: 1.5px solid #000; outline-offset: 2px;' : ''}
   }
   .header {
     display: flex; align-items: flex-start; justify-content: space-between;
     margin-bottom: 1mm;
   }
-  .header-left { display: flex; align-items: baseline; gap: 1.8mm; }
-  .product-name { font-size: 13.5pt; font-weight: 800; line-height: 1.1; }
-  .section-name { font-size: 8pt; font-weight: 300; color: #555; }
+  .header-left { display: flex; flex-direction: column; }
+  .product-name { font-size: 21pt; font-weight: 900; line-height: 1.05; text-transform: uppercase; }
+  .section-name { font-size: 11pt; font-weight: 600; color: #333; margin-top: 0.6mm; text-transform: uppercase; }
   .type-grade-badge {
     background: #000; color: #fff; padding: 1.5mm 2.8mm; text-align: center;
     min-width: 20mm; flex-shrink: 0;
-    font-size: 7pt; font-weight: 700; white-space: nowrap;
+    font-size: 7pt; font-weight: 700; white-space: nowrap; text-transform: uppercase;
   }
   .barcode-area {
     flex: 1; display: flex; flex-direction: column;
@@ -89,7 +93,7 @@ function buildLabelHtml(bag: OutputBag): string {
   .footer-cell:first-child { text-align: left; }
   .footer-cell:last-child { text-align: right; }
   .footer-label { font-size: 5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #666; font-weight: 700; }
-  .footer-value { font-size: 8pt; font-weight: 800; line-height: 1.2; }
+  .footer-value { font-size: 8pt; font-weight: 800; line-height: 1.2; text-transform: uppercase; }
   .print-btn {
     position: fixed; bottom: 12px; right: 12px;
     background: #1A3A0E; color: #fff; border: none; border-radius: 10px;
