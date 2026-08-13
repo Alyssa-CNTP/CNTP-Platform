@@ -496,6 +496,829 @@ No schema change — this reuses `prodTotals()` and the `productions` array alre
 
 Pinning a person to a shift wasn't surviving rotation. The Sunday auto-rotate cron selected roster entries WITHOUT the `pinned` (or `days`) columns, so `rotateEntries()` saw everyone as unpinned and rotated pinned people anyway, dropping the pin on the new week. Fixed the cron's `ENTRY_COLS` to include `pinned,days`, and `rotateEntries()` now carries `days` forward too (it already carried `pinned`). Both the automatic and manual "Generate next week" paths now keep a pinned person on their shift and preserve their working days. No migration.
 
+## 2026-08-13 — Alyssa (Sieving Tower bagging_time carries the real per-bag time; notification bell renders above page content everywhere)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/layout/NotificationBell.tsx`
+
+**1 · Sieving Tower `prod_bagging.bagging_time` now holds each bag's real creation time.** #612 fixed this for Refining (`buildBag`'s refining branch → `bagging_time: bagLoggedAtToTime(b.logged_at)`), but the Sieving (`else`) branch still wrote no `bagging_time`, so Sieving Tower output rows had none — and any consumer falling back to `created_at` saw the same drifting timestamp for every bag (persist() deletes+reinserts every row on each save/autosave/submit, so `created_at` = "when the session was last saved", identical across the whole order). `OutBag.logged_at` already records the exact moment each output bag is secured and lives in `draft_data`, so it's immutable across the delete+reinsert. The Sieving branch now carries it into `bagging_time` via the existing `bagLoggedAtToTime()` helper (SAST `HH:MM`, same as Granule/Blender/Pasteuriser/Refining). Save stays delete+reinsert; no schema change. Bags with no `logged_at` (older drafts) fall back as before.
+
+**2 · Notification bell dropdown/toast were being occluded on certain pages.** The topbar `<header>` uses `backdrop-filter`, which creates its own stacking context — trapping the dropdown panel (`position: absolute`, `zIndex: 9999`) and toast beneath page content that has its own positioned/stacking-context elements. Both are now rendered through a `createPortal` to `document.body` with `position: fixed`, escaping the header's stacking context entirely. The panel is anchored to the live bell-button rect and kept in sync on resize/scroll; the outside-click handler also checks the portalled panel (via `panelRef`) so clicks inside it don't dismiss it. Panel z-index raised to 10000 so it clears the capture modals (9997/9998).
+
+## 2026-08-12 — Gustav (Bag label: remove the "Cape Natural Tea Products" header)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Removed the "CAPE NATURAL TEA PRODUCTS" header line and its border from the printed QC bag label. Purely visual, no data change.
+
+## 2026-08-12 — Gustav (Bag label: PA Level and Residue join the Bulk Density/Leaf Shade box)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- PA Level and Residue were shown as plain text rows next to Serial/Product/Lot; moved them into the same bordered, large-value box style as Bulk Density and Leaf Shade, as a 2×2 grid (Bulk Density / Leaf Shade on top, PA Level / Residue below), each divided by the same border lines. Purely visual — no data change.
+
+## 2026-08-12 — Gustav (Sieving: fresh pending-QC start date + redesigned bag label)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, DB: `qms.v_pending_bag_qc` view (staging + production)
+
+- **Pending Final QC queue now only surfaces bags from 2026-08-13 onward** (`qms.v_pending_bag_qc` filtered to `bag_date >= '2026-08-13'`). The existing backlog (bags from before the per-bag `bagging_time` fix landed) is deliberately left as historical — not retro-QC'd. Nothing destructive: no data changed, the old bags are simply excluded from the pending list/pop-up/dropdown; they remain fully visible in the Runs table and reprintable as before.
+- **Bag label redesigned**: removed Grade, Variant, Date and QC; added **PA Level** (as recorded on the run) and **Residue** (the lot's R-grade from raw-material residue analysis, same source as the existing auto-fill lookup). Serial, Product, Lot, Bulk Density and Leaf Shade unchanged.
+- New `lotKeyOf()` helper factors out the lot-normalisation used to key into `paLookup`/`rLookup`/`leafShadeLookup`, now shared by the label's residue lookup too.
+
+## 2026-08-12 — Alyssa (Refining 1/2 debagging: scan-first flow with a bag-record confirmation popup — PROTOTYPE)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`
+
+Reworked Refining debagging around scanning as the main path (prototype for review before rolling out to Granule/Blender/Pasteuriser). A single **"Scan a bag to debag"** field auto-looks-up (`validateBagScan`) once the serial settles and opens a **confirmation popup** with the bag's `bag_tags` record — product type, weight, variant, lot/batch, where it was made, when — plus a validity line (✓ valid · ⚠ already consumed / wrong variant · not registered). **"Consume into Refining 1"** registers it as debagged-in here; already-consumed is blocked, mismatches warn+allow, not-found offers **"Enter manually"**. Pick-from-system and manual kept as side options. Refining 1 & 2 only, for review.
+
+## 2026-08-12 — Gustav (Refining/Sieving Tower: carry each bag's real add-time into bagging_time)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Root-caused why the Sieving Final QC picker showed the same timestamp for many different bags: `production.prod_bagging` rows for Refining (the sieving tower) never carried a `bagging_time` at all, and `persist()` fully deletes-and-reinserts every bag row for a session on every save (explicit save, 30s autosave, and submit) — so their `created_at` was really "when this session was last saved," identical across every bag in it and drifting forward the whole time the operator kept the screen open. Not a Quality-side bug; the per-bag time simply didn't exist yet on the production side.
+
+- `RefiningOutputBag.logged_at` already captures the exact moment the operator adds each output bag (set in `addOutputBag()`) — it just wasn't being carried through to the database. Granule/Blender/Pasteuriser already pass their own equivalent (`b.time`) into `bagging_time`; Refining was the one section that didn't.
+- `buildBag()`'s Refining branch now sets `bagging_time` from `b.logged_at` via a new `bagLoggedAtToTime()` helper, formatted the same way Granule's `clockNow()` already is (`Africa/Johannesburg`, `HH:MM`) so it matches the sibling sections' convention exactly.
+- No migration needed — `bagging_time` already exists on `prod_bagging`. Only affects **new** bags recorded after this deploys; existing rows keep falling back to the session's `created_at` as before (unchanged, no regression).
+- Once this is live, `qms.v_bag_events.bagged_at` (already shipped) picks up the real per-bag time automatically with no further Quality-side change, since it already prefers `bagging_time` over `created_at`.
+
+## 2026-08-12 — Gustav (Sieving: live "bag ready for QC" pop-up)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260812_001_prod_bagging_realtime.sql` (new, applied to staging + production)
+
+- The Sieving page now pops up the moment production bags a new **Fine Leaf** or **Coarse Leaf** output — via a live Supabase Realtime subscription on `production.prod_bagging` (`INSERT`), not polling. Rooibos Blocks / Indent Sticks are ignored (no QC stamp, as before).
+- Each pop-up shows the bag's serial, lot, and the **time production actually bagged it** (not the QC's own capture time — that stays locked to the moment the QC saves, per the existing rule). Clicking **"Sample now"** switches to that bag's product tab, re-fetches the pending queue so the fully-enriched bag record is used (PA level, leaf shade, in-process out-of-spec status all pre-filled, exactly like the manual picker), opens Final QC pre-selected on that exact bag, and scrolls the form into view. Dismissing a pop-up only clears the nudge — the bag stays in the persistent "N pending" queue, so nothing is ever silently lost even if a pop-up is missed or the page isn't open when it fires.
+- `loadPendingBags()` now returns the fetched rows (not just setting state) so the pop-up's click handler can use the fresh list immediately rather than racing a state update; `selectPendingBag()` was split into a reusable `applyBagToForm(bag)` so the manual dropdown and the pop-up pre-fill identically.
+- New migration enables Realtime on `production.prod_bagging` (`ALTER PUBLICATION supabase_realtime ADD TABLE ...`) — metadata-only, no data/RLS/behaviour change, applied to both staging and production immediately since it's harmless in either order.
+
+## 2026-08-12 — Gustav (Sieving: Serial No. dropdown in the row editor)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- The inline row editor's **Serial No.** field is no longer free-type-only — it now offers a dropdown (via `<datalist>`) of real serials bagged for the product currently open, each showing its lot and bagging time, sourced from `qms.v_bag_events` (all bagged serials, not just pending ones, since an edit may need to correct a serial on an already-sampled or historical run). Still a plain editable text field underneath, so existing hand-typed legacy serials (e.g. `12.08.06`) that predate the bag-link feature keep working untouched.
+- New `bagSerialOptions` load (per active product tab) alongside the existing PA/R-grade/leaf-shade lookups; passed into `InlineEditForm` as `bagSerials`.
+## 2026-08-12 — Alyssa (Refining/Granule debagging: scan now auto-fills, no Enter/Look-up tap)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+The Refining and Granule debagging serial inputs only ran the bag lookup on **Enter** or a **"Look up"** tap. A hardware scanner fills the serial in one fast burst but usually doesn't send Enter, so the operator was left with the serial in the box and every other field blank — "scan it in, nothing populates." (This is why "Pick from system" worked but scanning didn't — the pick path queries `bag_tags` immediately, the scan path waited for an Enter that never came.)
+
+Now the lookup fires **automatically** once the scanned/typed serial settles (400 ms debounce), so the operator just scans a bag and Product type / Weight / Variant / Lot populate on their own — the behaviour they expected. Enter and the "Look up" button still work; auto-lookup is skipped once the row is locked or switched to manual entry, and manual typing still resolves after a short pause. Placeholders updated to "fills in automatically".
+
+## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Sieving output bag serials were `ST-DDMMYY-NNN` — one shared daily counter across all output types, so you couldn't tell types apart or count them from the serial. Now each Sieving output serial encodes its **output type** with a per-type daily sequence: **`ST{TYPE}-DDMMYY-NNN`**, e.g. Fine Leaf → `STFL-120826-003`. Because the barcode encodes the serial verbatim, the type and the running count are readable straight off the bag/scan.
+
+Type codes (matched on the product name, so they work whether the operator picks a suggested output or a full Master-Inventory item): **FL** Fine Leaf · **CL** Coarse Leaf · **RS** Rolsiev Sticks · **IS** Indent Sticks · **RB** RB Blocks · **BD** Brown Dust · **PD** Powder Dust · **WD** White Dust · **BE** Bucket Elevator / Spillage. Anything unmatched falls back to the first two letters of its name. The sequence is per type per day (so `STFL-…-005` = the 5th Fine Leaf bag that day). Existing `ST-…` bags stay findable; only new bags use the new format. No DB change.
+
+## 2026-08-12 — Gustav (Sieving: Final QC bag picker filtered to the active sieve tab)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- The "Bag awaiting QC" dropdown on Final QC now only lists bags matching the **currently open sieve tab** (`tabPendingBags = pendingBags.filter(b => b.product === activeProduct)`) — previously it showed every pending Fine Leaf **and** Coarse Leaf bag together regardless of which tab was open, so a QC on the Fine Leaf tab could pick and sample a Coarse Leaf bag by mistake.
+- The pending count on the "Final QC (bag) · N" toggle and the dropdown label now reflect the active tab's count, not the total across both sieves.
+- Empty state now says which product has no bags awaiting QC, and correctly notes that Rooibos Blocks / Indent Sticks never require a QC stamp instead of showing a generic "no bags" message.
+- Serial number continues to be pulled straight from the bag's own record (`production.prod_bagging.bag_serial_no`) rather than typed — so once the new bag serial format is in place, this form picks it up automatically with no further change needed here.
+
+## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Sieving output serials went from `ST-DDMMYY-NNN` (one shared daily counter) to **`ST{TYPE}-DDMMYY-NNN`** with a per-type daily sequence, e.g. Fine Leaf → `STFL-120826-003`, so bag counts per output type are readable off the serial/barcode. Type codes (name-matched): FL, CL, RS, IS, RB, BD, PD, WD, BE; two-letter fallback otherwise. Existing `ST-…` bags stay findable; no DB change.
+
+## 2026-08-12 — Alyssa (Fix capture save 400: stop writing phantom columns to prod_debagging/prod_bagging)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Saving a capture session returned `400 (Bad Request)` on the `prod_debagging`/`prod_bagging` insert, so sessions weren't persisting. Root cause: the save wrote two columns the tables don't have — `grade` (Sieving debag row; the table uses `org_or_conv`, no migration ever added `grade`) and `production_ref` (Blender/Pasteuriser debag + bag rows). Both are write-only — never read back anywhere (the blend/lot reference is already in `lot_number`/`acumatica_id`). Removed all five write sites; no DB migration.
+
+## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button visibility to full admins (`isFullAdmin` — the `senior_developer` role, which already bypasses all other permission checks in this app), so IT admins (e.g. Alyssa, Jan) see it too, in addition to the Lab Manager and Quality Manager. Same confirmation popup and delete behaviour, no schema change.
+## 2026-08-11 — Alyssa (Pasteuriser: register each finished bag in bag_tags so it's scannable)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Pasteuriser was the only section whose output never reached `bag_tags` — its finished product is captured as bag *ranges* (a count + optional start/end bag number), so its bags were invisible to scanning and Bag Tracking. Now, on every save, each Pasteuriser output range is expanded into **individual finished-bag rows** in `production.bag_tags`, one scannable bag per unit.
+
+- **Serial = `{LOT}-{NNN}`** (e.g. `26244-CON-SFC-001`) — carries the batch/lot number (per spec) plus the physical bag number. If the operator entered a start bag number, the serials map to it (`start … start+count-1`); otherwise they number `001…`.
+- **Rebuilt on every save**, mirroring how `prod_bagging` is handled: upsert the current set, then prune only still-`in_stock` rows that dropped out (e.g. the operator lowered the count). Anything already moved/dispatched downstream is left untouched, so this never clobbers later state. No new migration — `bag_tags` already exists; `batch_id` is linked like the other sections.
+- Each finished bag now shows up in Bag Tracking (`/tags`) and can be looked up/scanned, with its lot's quality history attached (see the per-bag history change).
+
+**Known follow-up:** the Pasteuriser output *line* still keeps its own range-level serial for the on-screen label button; per-bag label **printing** (one label per expanded bag) is a separate task and matters only once floor label printing is switched on (currently `LABEL_PRINTING_ENABLED = false`).
+
+**To verify on staging:** capture a Pasteuriser session with an output line (e.g. 5 bags), save, then open Bag Tracking — the 5 individual `{LOT}-NNN` bags should appear and be lookup-able.
+
+## 2026-08-11 — Alyssa (Bag Tracking: show a single bag's quality history)
+
+**Files changed:** `app/(app)/tags/page.tsx`
+
+Extended the per-bag detail modal (`/tags` → tap a bag) so a scanned/looked-up bag now shows its **quality** history, not just its scan events and genealogy. Quality is keyed by lot/batch (there's no per-serial quality), so a bag inherits the quality of the lot it belongs to — the modal now matches the bag's `lot_number` against the same three sources the batch-reconciliation panel uses (pasteuriser runs, lab results, raw-material entries) and lists them with a deep link to each quality page. This closes the last gap toward "the entire history of a single bag" in one place: details → genealogy → **quality** → scan events.
+
+- Also fixed the genealogy input-bag list to derive `section_name` (from the section registry) and `tag_date`/`captured_at` (from `created_at`) — they were loaded via `select('*')` without the mapping the main list already does, so the input bags' section pill label was blank.
+- Added the real `notes` field to the local `ScanEvent` type (the `scan_events` table has it; the type had dropped it).
+
+## 2026-08-11 — Alyssa (Fix bag_tags phantom-column drift in analytics; delete stale dead code)
+
+**Files changed:** `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/dashboard/CommandCentre.tsx`, `components/shared/BatchReconciliationPanel.tsx`; **deleted:** `components/production/BagScanner.tsx`, `SievingTowerForm.tsx`, `GranuleLineForm.tsx`, `RefiningForms.tsx`, `BlenderForms.tsx`, `PasteuriserForm.tsx`, `lib/qr/serial.ts`, `lib/qr/print.ts`
+
+Follow-up to the bag-scan lookup fix. Same root cause (`bag_tags` has no `section_name`/`tag_date` columns) was silently breaking several live analytics surfaces — the queries errored and the components showed empty data.
+
+- **OperationalTrends** (both the `layout` and `management` copies): the 6-month throughput query and the ageing/dwell query selected/filtered/ordered by `tag_date` and `section_name`. Switched to `created_at` (dropped the unused `section_name` select, and the `+ 'T12:00:00'` date hack that assumed a bare date). These charts were showing nothing before.
+- **CommandCentre**: "today's tagged weight" KPI filtered `bag_tags.tag_date = today` → now `created_at >= today`.
+- **BatchReconciliationPanel**: the per-batch bags query selected `section_name`/`tag_date` and ordered by `tag_date`. Now selects `created_at`, orders by it, and maps each row to the existing shape (deriving `section_name` from `SECTION_CONFIG`, `tag_date` from `created_at`) so the rest of the panel is untouched.
+- **Deleted dead code:** the old form-based capture components (`*Form.tsx` + `BagScanner.tsx`) and `lib/qr/serial.ts`/`print.ts`. None were imported by any live route (the live capture flow uses the `*Capture.tsx` components); `lib/qr/serial.ts` also carried a stale serial-format spec that contradicted the real generators, a trap for future edits. Verified no remaining importers before removal; build is green.
+
+## 2026-08-11 — Alyssa (Fix debagging bag-scan lookup + make Granule/Blender output serials consistent)
+
+**Files changed:** `lib/production/validate-scan.ts`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/capture/RefiningCapture.tsx`
+
+Fixed the core reason scanning/looking up a bag serial in the debagging inputs autofilled only the serial and left every other field blank (sometimes with "Database error looking up serial. Try again."), and made two sections' output serials consistent with their real business identifier.
+
+- **Root cause of the "Database error" (Blender + Pasteuriser debagging):** `validateBagScan` selected two columns that don't exist on `production.bag_tags` — `section_name` and `tag_date`. PostgREST rejected every lookup, the `catch` returned a generic `not_found`, and the capture dialogs then skipped all autofill. Fixed the SELECT to use the real columns (`section_id`, `created_at`) and now derive `section_name` from the section registry (`SECTION_CONFIG`) and `tag_date` from `created_at`, so callers reading those fields keep working. This was the actual bug behind the reported symptom — verified against the migration schema and `database.types.ts`.
+- **Granule output serial now carries its LOT NUMBER:** was a prefix-less `DD-MM-YY-NNN` (e.g. `11-08-26-001`), which was inconsistent with every other section and could collide across sections on the same date. Now `{lot}-{NNN}` (e.g. `26244-CON-GRAN-001`), with the lot as the stem and a per-lot sequence; falls back to `GL-DDMMYY-NNN` if no lot is set yet. `lot_number` is still stored separately. Only new bags are affected; existing bags stay findable by exact match.
+- **Blender output serial is now URL-safe:** was `{blend}/{run}-{bag}` (e.g. `SFC-KUN25-C/1-01`). The `/` breaks route-param lookups (`/api/.../bag/[serial]`) and Bag Tracking deep-links. Changed to `{blend}-{run}-{bag}` (e.g. `SFCKUN25-1-01`); both run-number resolvers (`genBlendSerial` and `resolveExistingBlendRunNo`) updated to parse the new separator. Blend code still leads the serial.
+- **Refining/Granule lookup diagnosability:** their `lookupSerial` helpers swallowed real DB/network errors as "not found" (indistinguishable from a genuinely-unregistered bag). Now they log the error so "serial only, fields blank" can be told apart from a truly-absent bag.
+
+**Known follow-ups (not in this change):** (1) Pasteuriser output lines are bag *ranges* and are never written to `bag_tags`, so pasteuriser finished bags aren't scannable yet — needs a per-bag vs per-line data-model decision. (2) Several live analytics/reconciliation components (`OperationalTrends`, `CommandCentre`, `BatchReconciliationPanel`) query the same non-existent `bag_tags` columns and silently show no data — flagged as a separate fix. (3) The legacy, unrouted `*Form.tsx`/`BagScanner.tsx` and `lib/qr/serial.ts` are dead code with a stale serial format — candidates for deletion.
+
+## 2026-08-11 — Alyssa (Master Inventory & BOMs are now read-only — Acumatica is the master, import going forward)
+
+**Files changed:** `app/(app)/production/inventory/page.tsx`, `app/(app)/production/blends/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+Removed the ability to add, edit or delete Master Inventory items and BOMs (including adding/removing components on an existing BOM) directly in the app. Acumatica remains the single master for both stock items and BOM structure — new/changed records arrive via import (Master Inventory already has one at `/admin/inventory-import`; BOMs don't yet, but no manual editing should happen here in the meantime either way).
+
+- **Master Inventory** (`/production/inventory`): dropped the "Add item" form, inline cell editing, and the Active/Inactive checkbox toggle. Now a plain read-only table (search + active-only filter still work).
+- **BOMs** (`/production/blends`): dropped "Add" (new BOM), "Add component" on an existing BOM, inline component editing (ingredient column, qty%), and both delete affordances (component and whole BOM). The Blender-only "editable work centre" distinction is gone too — every work centre is now browse-only, consistently. Search, work-centre filter, the unresolved-item-link flag, the parent-blend panel, and "Generate job card" from a Pasteuriser BOM are all unchanged.
+- **Removed the now-dead permissions** `can_edit_inventory`, `can_delete_inventory`, `can_edit_blends`, `can_delete_blends` from `PermissionKey`, `ALL_PERMISSION_KEYS`, `PERMISSION_GROUPS`, role defaults, and the `PERMISSION_MATRIX` (which now shows both modules as read-only) — nothing in the app checked them anymore once the UI came out, so leaving them would just be confusing dead toggles on the Users & Roles page. `can_view_inventory`/`can_view_blends` are untouched; viewing still works exactly as before.
+- Promoted to production from staging PR #581.
+
+## 2026-08-11 — Alyssa (Bag label design: confirmed final layout, PPLB + browser preview)
+
+**Files changed:** `lib/production/label-pplb.ts`, `lib/production/label-print.ts`
+
+Confirmed final bag-tag design (100×50mm landscape, Argox CP-2140EX/PPLB), applied identically to the physical printer template and the browser-print HTML fallback so the two never drift apart again:
+
+- TYPE/GRADE: solid filled black badge, single reversed-white line (e.g. `CON - Export`) top-right — replaces an earlier bordered 4-line box that was never actually approved.
+- Header: product name (bold, larger) + section name (thin, smaller) sit inline on one line, not stacked.
+- No separator rule between the barcode and the footer.
+- Footer's three columns (LOT/BATCH, WEIGHT, DATE) spread left/center/right instead of all left-aligned.
+- This is the locked-in design — don't redesign it again without an explicit request.
+
+## 2026-08-11 — Alyssa (HR training: Supervisor Hub — Managing Shifts & Reports course + assessment)
+
+**Files changed:** `supabase/migrations/20260811_001_supervisor_hub_course.sql` (new)
+
+Second real course in the LMS (after Sieving Tower), for production supervisors — built from a live read of the current Supervisor Hub (`components/supervisor/HubTabs.tsx` + each tab's page), not a generic guess.
+
+- Seed course **Supervisor Hub — Managing Shifts & Reports** (`hr.training_courses` slug `supervisor-hub-operations`, active, pass 0.75), embedding a Scribe walkthrough (`Managing_Supervisor_Hub_Tasks_and_Shift_Reports`) via the general `embed_url` lesson field shipped for the Sieving course's Scribe switch.
+- **17-question / 18-mark assessment** covering all six hub tabs: Dashboard (summary-only, no controls of its own), Roster (Today's sections = live section assignment with no submit step; Staffing = fortnightly grid, and the non-obvious rule that editing an already-submitted roster moves it to `changes_pending` rather than resetting to draft), Sign-off (what actually lands in the queue), Shift Report (generated from capture/mass-balance/timesheets/checks/maintenance data — Supervisor notes is the only typed field — draft → submitted → approved, reopenable after approval), Team (Ratings kept as two independent Performance/Accuracy scores on purpose, vs Timesheets), and Messages (per-line channels, no approval workflow).
+- **Standalone course — no SOP/competency mapping.** Unlike Sieving Tower, there's no floor-machine SOP this maps to (it's hub/software competency, not a physical skill), so a pass goes straight to `competent` on the course itself with no practical sign-off gate. Can be wired to a Supervisor SOP/competency record later if that tracking is wanted.
+
+**Before this shows on staging:** run `supabase/migrations/20260811_001_supervisor_hub_course.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
+## 2026-08-11 — Alyssa (Production dashboard follow-up: chart tooltips, PO product descriptions, quality who/when)
+
+**Files changed:** `components/production/PivotDashboard.tsx`, `app/api/production/dashboard-rows/route.ts`, `app/api/production/dashboard-supply/route.ts`
+
+- **Charts weren't interactable.** `PivotChart` (Floor/Quality/Machine) and `SolarChart` now put a native `<title>` tooltip on every point/bar — the date-mode line charts previously only marked the single last point per line, so hovering anywhere else on the line showed nothing.
+- **PO reference codes were unreadable without memorizing them.** There's no real Acumatica production-order sync in this codebase (`prod_sessions.production_orders` is an operator-typed label, not a synced order), so `dashboard-supply` now derives a **Product** column from what was actually bagged under that PO reference (`prod_bagging.product_type`) — the honest signal actually available. Added a matching `SupplyChart` trend chart (daily output for the top 8 PO references by volume), since the Supply & demand tab previously had no chart at all.
+- **Quality → production connection now surfaces who/when.** `dashboard-rows` adds `checkOperator`/`checkSupervisor`/`lastCheckedAt`/`lastCheckActor` (machine checks, from `check_records`/`check_events`) and `qcName`/`qcCheckedAt` (quality runs, from `qms.sd_runs`/`granule_runs`/`granule_samples`/`quality_records`). New **"Quality checks — who & when"** detail table on the Quality tab lists every QC-tracked line-shift with its reading, pass/fail result, and who recorded it, out-of-spec rows highlighted. The Needs Action panel's flag text for QC fails and machine check failures now includes the same who/when detail instead of just the metric.
+
+---
+
+## 2026-08-09 — Gustav (Maintenance: mobile layout fixes for the checklists and shift summary)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Weekly / monthly checklist cards were unreadable on a phone.** The card header put the text and the controls (allocate dropdown + print + status badge) in one row with the controls fixed at `w-44` and `shrink-0`, which starved the text column down to a few characters — so `QM-FM-033/0 · 8 tasks` wrapped to one token per line and the "Last completed…" line ran underneath the dropdown. The header now **stacks on mobile** (text full-width on top, controls on their own row below) and sits side-by-side from `sm:` up. The allocate dropdown flexes to the available width on mobile instead of forcing 176px, the doc-ref line truncates with an ellipsis instead of wrapping, and the status badge no longer splits across two lines.
+- **Shift summary buttons were clipped** — "Evening 16:00–01:00" ran off the right edge. The controls now wrap, and on mobile the two buttons show just **Day** / **Evening** (splitting the row evenly) with the time ranges appearing from `sm:` up.
+- Checklist task rows now wrap, so the notes field drops to its own line instead of being crushed when the "→ Job card" fault button appears.
+- Annual / calibration search box is full-width on mobile instead of a fixed 220px.
+
+---
+
+## 2026-08-07 — Gustav (Maintenance: removed the IT "view as" switcher; oversight roles see every screen)
+
+**Files changed:** `lib/maintenance/roles.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`
+
+- **Removed the "IT — VIEW AS" tab strip.** IT / full admin no longer have to switch between Maintenance Manager / Technician / QC / Raiser to preview each profile — they now see **every panel at once**: the manager board, the QC queue, and their own raised job cards.
+- **Added a `seesAll` oversight flag** to `deriveMaintRole()` covering IT, full admin, Management, the maintenance manager and (new) the **production manager**. This is a **view-only** concern — what a user may *do* inside a job card is still governed by `canManage` / `isTech` / `isQc`, so the allocate → QC → originator → **maintenance manager sign-off** chain is unchanged and no one else can sign off a card.
+- **Production manager can now view all the maintenance screens.** Previously they could open the maintenance module but only ever saw the limited "Raiser" dashboard, and on the Scheduled tab saw **no checklists at all** (the list was filtered to `manager or assigned-to-me`). They now see the full job-card board, the QC queue and every weekly/monthly checklist — read-only, with no allocate/verify/sign-off buttons.
+- Scoped deliberately to the **production_manager role**, not the whole Production department, so operators don't inherit manager-level visibility.
+
+---
+
+## 2026-08-07 — Gustav (Sieving: re-print a bag label after edits)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Added a **🖨 Re-print** button next to ✏️/🗑 on every Final QC row in the sieving history table, so a label can be printed again any time — including after correcting a value via the inline editor.
+- Looks the bag up fresh from `qms.v_bag_qc_status` (by `bagging_id`, falling back to serial number for older rows saved before the bag link existed) rather than reusing the pending-QC list, since a sampled bag has already dropped off that list — so the reprinted label's in-process out-of-spec banner stays accurate.
+- `mapDbRow()` now also exposes `bagging_id` (as `baggingId`) so the button can find the right bag; this is additive and doesn't change any existing field.
+
+---
+
+## 2026-08-07 — Gustav (Maintenance: data reset, technician QC visibility, recurring-problem history, checklist/completion notifications)
+
+**Files changed:** `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `lib/maintenance/useMaintenanceData.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/checklists/notify-assignment/route.ts` (new), `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Cleared all existing maintenance job cards** (and their work logs / spares-used / chat / notifications) from **both the production and staging databases**, at Gustav's request — a full reset before real day-to-day use. Every other maintenance table (checklists, calibration, roster, readings, etc.) is untouched.
+- **Fixed a bug where every signed-in user — including technicians — could see the "Satisfactory / Not satisfactory" verification screen on ANY job card**, not just the one they raised (the underlying permission was a blanket "any user can raise a card," not scoped to the actual card). It's now scoped to the real originator of that specific card. On top of that, **technicians never see the satisfactory/clarify screens at all** (that's the originator's and manager's checkpoint) — they instead get an **in-app + email notification when their job card is completed and signed off** by the maintenance manager (also a live toast while the app is open), since that notification was previously missing entirely.
+- **Technicians can now see the QC sign-off results on their own job cards** — a new read-only panel shows the QC officer, when it was done, and the pass/fail breakdown per check, without exposing the editable QC screen (that stays QC-only).
+- **Added a job-card history view for technicians** (previously manager-only) — searchable and filterable by breakdown vs planned, area, and now also by **machine** (new filter), so a technician can look up a specific machine and see what was done last time before starting a new repair — useful for spotting recurring problems.
+- **Checklist allocation now sends a notification** (in-app + email) to the technician when a weekly or monthly checklist is assigned to them — manual allocation and auto-allocate both covered. Phone push notifications are a later step once a phone integration is connected.
+
+---
+
+## 2026-08-07 — Gustav (Link production bagging to Quality sieving Final QC)
+
+**Files changed:** `supabase/migrations/20260807_001_sieving_bag_qc_link.sql` (new, applied to staging), `app/(app)/quality/sieving/page.tsx`
+
+Ties the sieving tower's bagged outputs to the Quality sieving runs so a Final QC is driven by the bag production actually made, instead of being typed from scratch.
+
+**Database (additive only — one nullable column plus views; no existing row or column changed):**
+- `qms.sd_runs.bagging_id` (nullable) — hard link to `production.prod_bagging`.
+- `qms.norm_sd_product()` / `qms.norm_lot()` / `qms.sd_product_needs_qc()` — production and quality do not share a vocabulary (`RB Blocks`, `Indent Sticks - Conventional`, `Sieved Fine Leaf: Export Blend - Conventional` vs `Fine Leaf` / `Blocks`), so both sides are normalised rather than string-matched.
+- `qms.v_bag_events`, `qms.v_sd_inprocess`, `qms.v_bag_inprocess_link`, `qms.v_bag_qc_status`, `qms.v_pending_bag_qc`.
+- **Pending QC is derived, not stored** — every Fine Leaf / Coarse Leaf bagging is pending until a `final` run links to it, so the queue cannot drift out of sync. **Indent Sticks and Rooibos Blocks still get bags/serials/labels but never require a QC stamp.**
+- **In-process → bag link:** the in-process lot is the *input material* lot, so a bag is matched to the last in-process run on the **same production day, at or before the bagging time**, via the session's de-bagging input lot (or a direct lot match). A bag inherits that run's spec result, so an out-of-spec sieve **flags every bag made after it** and shows exactly which fractions were out.
+
+**Quality → Sieving screen:**
+- **Final QC is now a pending-bag picker**, not a free-form run type: the dropdown lists bags awaiting QC with serial, product, lot, bagging time and an ⚠ OUT OF SPEC marker, and shows the governing in-process violations once a bag is picked. Serial / lot / variant / date / PA level / leaf shade pre-fill from production + raw material and stay editable so the QC verifies rather than re-types; the QC enters bulk density.
+- **In-Process no longer has a serial number** (bags are only serialised at bagging).
+- **Time is stamped at capture for both run types** and is no longer editable.
+- QC Controller defaults to the logged-in user (still editable).
+- **Bag label** printable after a Final QC, showing bulk density and leaf shade, plus an out-of-spec warning banner where applicable.
+## 2026-08-07 — Alyssa (Production dashboard v2: filterable pivot/grid)
+
+**Files changed:** `components/production/PivotDashboard.tsx` (new), `components/production/ProductionDashboard.tsx` (deleted), `app/(app)/production/dashboard/page.tsx`, `app/api/production/dashboard-rows/route.ts` (new), `app/api/production/dashboard-supply/route.ts` (new)
+
+Full redesign of the production dashboard, from a stacked report (one section per metric type) into a filterable pivot/grid tool grouped by domain — the concept iterated and approved as an interactive mockup earlier this session.
+
+- **Domains, not metric sections**: Floor, Quality, Machine, Supply & demand, Solar — each its own pivot view, not a scroll of unrelated widgets.
+- **Your own filters**: date range, shift, line, variant — combine freely, entirely client-side against `/api/production/dashboard-rows` (new — row-level, unaggregated, so the client can slice any way without another round trip).
+- **Pivot table + chart**: rows = line, columns switch between date/variant, metric switches per domain, with row/column totals computed the same way as the cells (not summed from what's displayed). Every heading has an ⓘ explaining exactly how the number was calculated.
+- **Floor plan strip**: material-flow order (Sieving → Refining 1 → Refining 2 → Granule → Blender → Pasteuriser), doubles as a line filter, links to the full `/production/floor-plan`.
+- **Output mix + Batches**: same real data as before (`/api/production/yield-analytics`), restyled.
+- **Needs action**: yield-below-85%, QC fails, and machine check failures — one shared panel instead of buried per-section warnings.
+- **AI Analyst**: reused the existing `AiAnalystPanel` (`/api/production/dashboard-insights` + `/api/production/ask`) fed the current filtered view, instead of building a new mock chat UI.
+
+**Two deliberate scope decisions, not oversights:**
+- **Grade dropped as a pivot dimension.** It's an output-bag-level choice (Export/Export Blend/Domestic via `getAcumaticaCode`), not a session-level field — input isn't graded, so "yield by grade" has no clean meaning without an allocation rule this app doesn't have. Kept Date and Variant, both real session-level fields.
+- **Supply & demand ships incomplete, honestly.** Confirmed there is no real Acumatica production-order sync anywhere in this codebase — `prod_sessions.production_orders` is an operator-typed reference label, never validated against a real order or quantity (the existing Acumatica sync only covers sales/CRM Generic Inquiries; a production-order GI has never been run — matches this changelog's own earlier note that Phase 3 automatic PO ingest is still pending the GI name). "Supply" here means actual output delivered against a PO reference. "Demand" is shown explicitly as unavailable — needs material planning/forecasting, which doesn't exist yet — rather than fabricated.
+
+Verified with a full `next build` (Turbopack), not just `tsc --noEmit`.
+
+## 2026-08-07 — Alyssa (Bag Tracking permission toggle + search moved to a command palette in the Topbar)
+
+**Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/layout/Topbar.tsx`, `components/search/CommandSearch.tsx`
+
+Asked why Bag Tracking (`/tags`) wasn't on the Users & Roles permissions page: it never had a `can_access_*` permission key — access was pure department membership (Production/Quality), so there was nothing to toggle for anyone outside those departments. Also found the route guard only listed `Production`, not `Quality` — a latent bug where the Quality sidebar link led to an immediate bounce back to `/home`.
+
+- **New `can_access_bag_tracking` permission** — added to `PermissionKey`/`ALL_PERMISSION_KEYS`, a new "Bag Tracking" group in `PERMISSION_GROUPS`, and a matching module in the master `PERMISSION_MATRIX`, following the same cross-department-grant pattern as Logistics/Maintenance. Production/Quality keep access by department as before (`orPermission: true`) — this only adds a way to grant it to other departments (e.g. Management, Sales).
+- **Fixed the `/tags` route guard** to include `Quality` (previously `Production` only), matching what the Sidebar already showed.
+- **Search moved from the Sidebar to the Topbar**, centered between the page title and the right-side status indicators — a more prominent, "always there" spot regardless of sidebar collapse state, matching where modern apps (Linear, Notion, GitHub) put global search.
+- **Search now finds pages, not just batch/lot records.** Added a client-side, instant "Pages" section to the command palette (Cmd/Ctrl+K) that fuzzy-matches the same nav items the Sidebar shows — filtered through the exact same permission/department predicate (extracted into an exported `getVisibleNavItems()` in `Sidebar.tsx`) so search never surfaces a page a user would then get bounced from. The existing batch/lot/bag/signal record search (server-side, `/api/search/batch`) is unchanged and still runs alongside it.
+- Promoted to production from staging PR #558.
+
+## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `components/dashboard/CommandCentre.tsx`
+
+- Commented out the four **Logistics** nav entries (Overview, Dispatch, Receiving, Warehouse) in the sidebar — the module isn't in active use yet.
+- Blocked direct URL access to `/logistics/*` too: added a `disabled` flag to `ROUTE_GUARDS` so anyone but the full admin gets redirected to `/home` if they try to reach it directly, instead of relying on the nav link alone.
+- Removed the **Open GRNs** KPI tile from the Command Centre dashboard (and its `logistics.grns` count fetch), since it linked into the now-hidden module.
+- Nothing was deleted — the Logistics pages, `lib/logistics/*`, and the `can_access_logistics` permission are untouched. To bring it back: drop `disabled: true` from the `/logistics` route guard and uncomment the Sidebar entries.
+- Promoted to production from staging PR #555.
+
+## 2026-08-06 — Gustav (COA screen: removed the example template)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Removed the read-only **"📄 Example template — how a completed COA looks (sample data)"** block from the bottom of the COA Generator screen, along with its now-unused `SampleCoa` and `SampleTable` components. The screen now shows only the live batch lookup / generated COA.
+
+## 2026-08-06 — Gustav (COA history: Quality Manager can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button (added earlier today) to the **Quality Manager** as well as the Lab Manager — now shown when `sigInfo.me.isLab || sigInfo.me.isQa`. Same confirmation popup and delete behaviour.
+
+## 2026-08-06 — Gustav (COA history: lab manager can delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added a **🗑 Delete** button to each row of the COA Generator's history ("Generated COAs"), shown **only to the Lab Manager** (per the Staff Directory, `sigInfo.me.isLab`) alongside the existing ✏️ Edit button.
+- Clicking Delete opens a **confirmation popup** naming the batch/customer and generation timestamp; only on confirm is the `qms.coa_generated` row deleted and the history refreshed. Cancel or clicking outside dismisses it. No schema change.
+
+## 2026-08-06 — Gustav (Rosehips >40 mesh + volumetric ml/5g bulk density)
+
+**Files changed:** `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`
+
+Rosehips (e.g. IPSSOU006 Tea Bag Cut) uses an extra **>40 mesh** fraction and reports bulk density **volumetrically** (`ml/5g`, e.g. "<10 ml/5g") rather than `cc/100g`. Both are now handled **for Rosehips only** — every other family is unchanged.
+
+- **Customer Specifications tab**: added family-aware sieve columns (`sieveColsFor`) so a Rosehips spec row shows an editable **>40** column (inserted between >20 and >60), and a family-aware BD unit label (`bdUnit`) that reads **ml/5g** for Rosehips vs **cc/100g** otherwise. Applies to the grouped table headers/rows and the "+ Add Specification" modal. `gt40_min`/`gt40_max` (which already exist on `qms.customer_specs`) added to the TS type, the add-form, and the numeric-cast save list.
+- **Pasteuriser tab**: added `pastSieveCols(family)` and `pastBdUnit(family)` helpers. For Rosehips runs, the New Run modal's batch-spec table and every sample-capture/display table now include a fillable **>40** mesh row/column, the spec resolver (`getPastSpec`) and OOS/fail detection cover `gt40`, sieve-order validation places >40 between >20 and >60, and Bulk Density / Untapped BD / Customer BD fields are labelled **ml/5g**. Sieve and sample data live in `qms.quality_records.data_json` (JSONB), so `gt40` persists with no schema change.
+
+## 2026-07-31 — Gustav (Granule flowability test + Quality sidebar re-ordered)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `components/layout/Sidebar.tsx`, `supabase/migrations/20260731_001_granule_flow_time.sql` (new, applied to staging)
+
+- Added the **Flowability Test** block to the Granule Line capture forms (add-sample and edit-sample), mirroring the Pasteuriser line: fixed **400 g** sample, **Bulk Density** carried over from the sample's BD, a **Time (s)** field the QC fills in, and an auto-calculated **Mass Flow Rate (g/s) = 400 ÷ time**. Stored as a new `flow_time` column on `qms.granule_samples`.
+- **Re-ordered the Quality sidebar** top-to-bottom to follow the flow: Raw Material → Sieving → Pasteuriser → Granule Line → Final Product Lab Results → COA Generator → Customer Specs → Lab Manager → Maintenance QC.
+
+## 2026-08-05 — Alyssa (Batch quality: Granule, Pasteuriser and Lab Results joined)
+
+**Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` (new), `app/api/production/yield-analytics/route.ts`, `app/api/production/batch/[key]/route.ts`, `components/production/ProductionDashboard.tsx`
+
+**⚠ Requires running `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql` in the Supabase SQL Editor (staging first, then production) before the new columns return data.**
+
+Closes the last open item from the production dashboard redesign plan: `production.v_batch_quality`/`v_batch_360` (added 2026-07-21) deliberately left out Granule, Pasteuriser and Lab Results quality, pending "confirmation against the live qms schema, rather than guessing." That confirmation is now done — by reading the actual, working queries inside the quality capture pages themselves, not guessed:
+
+- **Granule Line**: `qms.granule_runs(batch_number)` joined to `qms.granule_samples(run_id, moisture, bulk_density)`.
+- **Pasteuriser**: `qms.quality_records(batch_number, workflow='pasteuriser_run')` — moisture and bulk density live inside `data_json->'samples'`, unnested per run rather than being flat columns.
+- **Lab Results (final-product COA)**: `qms.lab_results(batch_no, overall_status, date_issued)` — pass/fail per batch.
+- **Deliberately NOT joined**: raw-material `quality_records` (`workcenter='rawMaterial'`) — that's pesticide/EU-MRL residue compliance for incoming raw leaf, not moisture/bulk-density/waste, and its batch numbering predates any processed batch_key. A separate decision if that data is ever wanted on the batch view.
+- No `qms.*` table or quality-module page was touched — this only adds read-only `SELECT`s from the existing view layer, same pattern as the sieving/`sd_runs` join already there.
+- Wired into `yield-analytics` and the batch-360 detail route, and surfaced on the dashboard's Batches table: a coalesced Bulk density column (a batch only ever has one of sieving/granule/pasteuriser quality, so coalescing never mixes two lines' numbers), a new Moisture % column, and the QC pass/fail flag now considers all four quality sources instead of only sieving's.
+
+## 2026-08-05 — Alyssa (Production dashboard redesign, Phases 1–4)
+
+**Files changed:** `components/production/ProductionTabs.tsx`, `components/production/ProductionDashboard.tsx`, `components/layout/WarehouseMap.tsx` (deleted), `app/(app)/production/energy/page.tsx` (new), `app/(app)/production/shift-reports/page.tsx` (new), `app/api/production/shift-report/route.ts`, `lib/production/shift-report-builder.ts` (new), `app/api/production/shift-report/cron/route.ts` (new), `app/api/production/shift-report/recent/route.ts` (new), `.github/workflows/shift-report-generate.yml` (new), `app/api/production/manager-kpis/route.ts`
+
+Planned redesign of the production dashboard, shipped as 4 small independently-reviewable PRs rather than one large one (#536–#539).
+
+- **Phase 1 — dashboard shell**: added Energy and Shift Reports tabs to the Production hub's tab bar. Removed the Factory Floor Plan and Energy widgets that were duplicated inside the main dashboard body (Floor Plan already had, and still has, its own tab; Energy moved to its own new tab). Deleted `components/layout/WarehouseMap.tsx`, a confirmed byte-identical stale duplicate of the one the home page actually uses. Labeling pass: added the active date window to section subtitles that were missing it, and added a "Line" column (section codes) to the Batches table so it's clear which line each batch came from.
+- **Phase 2 — per-line throughput**: added a kg/hr column to the existing "Section status · today" table (which already showed kg in/out — debagging in / bagging out for Sieving Tower & Pasteuriser — per earlier floor feedback about unclear labels), reusing the same run-time/crew-time throughput basis already computed for Production Orders' Analytics view rather than building a second, competing number.
+- **Phase 3 — auto-generated shift reports**: extracted the shift-report assembly and save/audit logic out of the route handler into `lib/production/shift-report-builder.ts` so it can be called from outside an HTTP request. Added a cron endpoint (dual-auth: `Bearer CRON_SECRET` or a signed-in user, mirroring the existing roster cron) and a GitHub Action that fires at 16:00 and 01:00 SAST (shift end) to auto-generate a **draft** report — submit/approve and their e-signatures remain entirely manual, unchanged. Added a real "Recent reports" list to the Shift Reports tab, linking into the existing, unmodified `/supervisor/report` page.
+- **Phase 4 — quality data surfaced**: leaf shade and PA level were already columns on `qms.sd_runs` (and partly already fetched) but not shown anywhere on the dashboard — added them to the PSD/machine-settings correlation table and the Batches table. Granule moisture/bulk-density, lab-results/COA quality, and pasteuriser/raw-material quality remain a deliberate follow-up, gated on confirming the live `qms` schema's join columns against `production.batches` before writing a migration.
+
+Also shipped earlier the same day (#534/#535): fixed the sieving mesh-config label mismatch ("12H/18H/40H" → "12#/18#/40#"), realigned Organic's sieving mesh config to match Conventional's (12#→18#→40#, was 10#→18#→40#), fixed a bag-scan bug where a stray space or lowercase entry silently broke the `bag_tags` lookup, and swapped the Production Dashboard nav icon.
+
+## 2026-08-05 — Alyssa (Sieving mesh-config label, scan sanitization, production dashboard icon)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `components/production/AcumaticaSummary.tsx`, `components/production/ProductionDashboard.tsx`, `components/production/SievingTowerForm.tsx`, `components/production/live/ScanInput.tsx`, `lib/production/capture-config.ts`, `app/api/production/live/bag/[serial]/route.ts`
+
+Reported while scoping a production dashboard redesign: the sieving tower's mesh configuration wasn't reading correctly on the dashboard, and bag scans on the floor weren't auto-populating (looked like a Supabase storage issue but wasn't).
+
+- **Mesh label fix**: the sieve-config checkboxes/summary were labelled `12H/18H/40H` instead of the `#` mesh-size notation used everywhere else (`12#/18#/40#`). Same underlying `sieve12/18/40` fields, just relabelled.
+- **Organic sieving config realigned to Conventional**: per floor request, Organic's mesh stack was `10#→18#→40#` (set up years ago to boost leaf output), which shifted more material into the coarse-leaf fraction and caused visual inconsistency between Organic and Conventional grades. Added `SIEVING_MESH_CONFIG`/`SIEVING_MESH_CONFIG_PREVIOUS` in `capture-config.ts` recording both are now `12#→18#→40#`. Quality's QC pass/fail spec matrix (`qms.sd_runs` acceptance ranges in `app/(app)/quality/sieving/page.tsx`) was explicitly left untouched — that's a separate, documented QA decision (IPS-SIEV spec ranges), not covered by this change.
+- **Production dashboard**: added a "Sieving Tower — mesh configuration" comparison card (Conventional vs Organic, current + previous stack) under Machine KPIs & throughput.
+- **Bag scan fix**: `ScanInput` only did `.trim()` before calling `onScan`, so a stray space (scanner double-fire) or a lowercase manual entry broke the exact-match `bag_tags.serial_number` lookup silently — looked like "not found"/"traceability is lacking" on the floor. Wired in the existing (but previously unused-here) `sanitizeSerial()` helper in both `ScanInput` and the `/api/production/live/bag/[serial]` lookup route.
+- **Production Dashboard nav icon**: swapped `Factory` → `ChartNoAxesCombined` per request.
+
+## 2026-08-05 — Alyssa (Training lessons: switched embedded video from YouTube to Scribe)
+
+**Files changed:** `supabase/migrations/20260722_004_lesson_embed_url.sql` (new), `app/(app)/training/course/[slug]/page.tsx`, `app/(app)/training/manage/[id]/page.tsx`, `app/api/training/courses/[id]/route.ts`
+
+The org is now recording training walkthroughs with Scribe (scribehow.com) instead of YouTube. Scribe's embed is a full iframe URL (not a bare video ID like YouTube's), so the lesson model generalizes to hold any embeddable URL rather than being YouTube-specific.
+
+- **New `hr.training_lessons.embed_url` column** (nullable text) holds the full embed URL for any provider. `youtube_id` is kept for backward compatibility — the player and editor both prefer `embed_url` when present and fall back to building a YouTube embed from `youtube_id` for any pre-existing rows.
+- **Course editor** (`/training/manage/[id]`): the "YouTube video ID" field is now "Embed URL (Scribe, YouTube, etc.)" — takes any provider's full embed URL. Existing YouTube lessons load pre-filled with the equivalent full URL so re-saving carries them over to the new column automatically.
+- **Course player** (`/training/course/[slug]`): renders Scribe embeds with Scribe's own recommended sizing (16/12 aspect ratio, 480px min-height — its step-by-step player needs more vertical room than a plain video) and a minimal `allow="fullscreen"`, versus the existing 16:9 + YouTube's fuller `allow` list for legacy YouTube lessons.
+- **Migration also repoints the already-seeded Sieving Tower lesson** at the new Scribe walkthrough (`How_To_Capture_And_Submit_Production_Data_At_CNTP`), replacing its YouTube placeholder.
+
+**Before this shows on staging:** run `supabase/migrations/20260722_004_lesson_embed_url.sql` in the Supabase SQL editor (staging first, then production).
+
+---
+
+## 2026-08-05 — Alyssa (Job cards: fixed scroll cutoff, missing signature after approval, and a misleading numbering error)
+
+**Files changed:** `app/(app)/layout.tsx`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`
+
+Reported: couldn't scroll all the way to the bottom of a job card (cuts off mid Sign-offs); clicking Verify & Sign to approve doesn't show the signature anywhere; and an auto-numbering error ("is migration 20260729_003 applied?") on both staging and production.
+
+- **Scroll cutoff**: the app shell (`app/(app)/layout.tsx`) sized itself with `h-screen` (100vh) while `html`/`body` were already deliberately set to `100dvh` for mobile browser chrome. On a device where the address bar is visible, 100vh is taller than what's actually on screen — the shell (and the job card page's fixed action bar inside it) ended up partly below the real fold, not just scrolled short. Switched to `h-dvh` to match, and wired the codebase's own already-written-but-unused `.page-content` safety class (`min-height:0` + iOS momentum scrolling) onto the main scroll container.
+- **Signature not shown after approval**: `JobCardApprovalsPanel`'s "Verify & Sign to Approve" button called the decide API successfully but then just removed the card from the pending list — it never read back the response, so the freshly-stamped supervisor signature was never shown anywhere, and there was no way back into that specific card afterward (the drafts panel only lists `status='draft'` cards). Added an `onApproved` callback, wired on both job card pages to their existing `resumeDraft()`, so approving a card now loads it right back up — signature and all.
+- **Numbering error**: the message was the same generic guess regardless of what actually failed (missing migration vs. a permission grant vs. something else), which made it undiagnosable without direct database access. Now shows the real Postgres error message/code alongside the migration hint.
+
+## 2026-08-05 — Alyssa (Job cards now visible to Sales — customer, blend, batch, tonnage, date — and wired into the batch spine)
+
+**Files changed:** `supabase/migrations/20260805_001_job_cards_batch_spine_link.sql` (new), `lib/production/batch-spine.ts` (new), `app/api/production/job-cards/[id]/decide/route.ts`, `app/api/production/job-cards/granule/[id]/decide/route.ts`, `components/sales/ProductionBatchesTab.tsx` (new), `app/(app)/sales/page.tsx`
+
+Asked: does the customer/blend/tonnage info on a job card get saved anywhere sales can see it? Confirmed by investigation: no — the Sales page is fed entirely by invoiced Acumatica AR data with zero awareness of production batches, and job cards weren't wired into the existing canonical batch spine (`production.batches`/`normalize_batch()`) the way every other capture table already is. Scoped with the user to visibility only (no actuals-vs-demand comparison yet — Acumatica has no open-order/demand data to compare against), and to close the batch-spine gap rather than build a Sales-only one-off.
+
+- **Job cards now join the batch spine** at the moment they're approved (not on every draft save, since a draft's batch number can still change) — new `resolveBatchId()` helper normalizes the batch number and upserts it into `production.batches`, same pattern the original spine migration already uses for `prod_sessions`/`bag_tags`/etc.
+- **New "Production" tab on the Sales page** — every approved job card (Pasteuriser + Granule), customer/blend/batch/planned mass/date, searchable by customer/product/batch. Each row links straight into the existing `/traceability?batch=` view for full yield/QC history — no new detail view needed.
+- Deliberately labelled the mass figure "planned mass" (the job card's own stated target, not a verified actual yield) — the next natural step, once real demand data exists to compare against, is joining through the now-present `batch_id` to the real captured output.
+
+## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
+
+**Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested: "when the supervisor signs off, I need it to call their signature in the staff directory but the user interface just needs to have a verify and sign button as the job cards work." Previously the capture page's supervisor sign-off asked for a hand-typed name plus a hand-drawn signature on every session — unverified against who was actually logged in, unlike job cards which already resolve the approver's own Staff Directory signature server-side.
+
+- **New `PATCH /api/production/sessions/[id]/approve`** — mirrors the job-cards `decide` route exactly: resolves the caller's Staff Directory `employee_id`, looks up their `production.employee_signatures` row, rejects with "No signature on file" if none exists, then stamps that signature onto `session_signatures` and marks the session approved (plus closes the production run if "end of run" was ticked). The signature is never accepted from the client.
+- **Sign-off UI**: the supervisor's name field + `SignaturePad` are gone. In their place, a single **"Verify & Sign as {name} to Approve"** button (disabled until they have a signature on file), same wording/pattern as the job-card approval panel — or, if they don't have one yet, a link straight to their Staff Directory profile to set one up. Operator sign-off (name + drawn signature) is untouched — this only changes the supervisor step.
+
+## 2026-08-04 — Alyssa (Fixed job card ratio-table layout: .input's width:100% was silently beating w-24)
+
+**Files changed:** `app/globals.css`
+
+Reported: the Pasteuriser job card's Final Product Ratio inputs (and the same pattern on the new Granule job card) rendered as full-width boxes with badly wrapped labels stacked above them, instead of a narrow value box beside its label.
+
+Root cause: `.input` (added earlier this session to fix invisible form fields) sets `width: 100%` as a plain, unlayered CSS class defined after `@import "tailwindcss"`. Combined with a Tailwind utility like `w-24` on the same element (`className="input w-24 text-right"`), both rules have equal specificity — the tiebreak goes to whichever rule sits later in the compiled stylesheet's raw source order, which was `.input`, not `w-24`, regardless of the className order in the JSX. Confirmed only two live call sites hit this (`job-cards/pasteuriser` and the newly-built `job-cards/granule`), but it's the exact same root cause as an earlier bug this session where a `.card` background beat a `bg-brand` utility.
+
+- Wrapped `.card`, `.card-glass` and `.input` (plus their dark-mode variants) in Tailwind v4's `@layer base`. Cascade layers resolve by declared layer order, not source position — `base` is declared before `utilities` in Tailwind's own order (`@layer theme, base, components, utilities`), so any Tailwind utility now always wins over these classes when both are applied to the same element, regardless of where either rule physically sits in the file.
+- Verified by compiling `globals.css` through the actual `@tailwindcss/postcss` pipeline used at build time and confirming `.input`/`.card` land inside the `base` layer while `w-24` (and other utilities) land inside `utilities` — a deterministic, spec-guaranteed fix, not something that needs re-litigating per page.
+- `.bg-surface-card` was left untouched — it already uses `!important`, which isn't subject to this layer-ordering issue.
+
+## 2026-08-04 — Alyssa (Mass balance: one consistent display everywhere it appears, not four different ones)
+
+**Files changed:** `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported (live, follow-up): the previous fix's plain-language badge wording missed the actual complaint — "it was not a matter of understanding what the + or - is, its the inconsistency of it, show it in a logical way not 3 versions of it." Investigation found four separate hand-rolled representations of the same underlying balance figure on the capture page: the Production tab's table badge, the "Batches this run" per-batch row (bare ± number), the changeover-confirm modal ("Current mass balance: +46.0 kg (±15 kg tolerance)"), and Sign-off's own 3-stat card with a separately-worded tolerance warning — each phrased and styled differently even when showing the same number.
+
+- **New `balanceStatus()` / `<BalanceBadge>`** exported from `MassBalanceTable.tsx` — the one place the "within tolerance / still to bag out / more bagged than recorded in" wording and pill styling is defined.
+- **All four spots now render the same badge**: the per-batch breakdown chip, the changeover-confirm modal, and Sign-off (which now renders the exact same `<MassBalanceTable>` used on the Production tab instead of its own duplicate summary card) all use `<BalanceBadge>`/`MassBalanceTable` — so the same figure looks the same wherever it's shown, instead of needing to be re-interpreted each time.
+
+## 2026-08-04 — Alyssa (Fix: sibling productions were combining mass balances across different blends/grades; clearer balance wording)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/MassBalanceTable.tsx`
+
+Reported (live): "Blender production orders are combining all mass balances and totals and that is not correct, this should only happen if the blend, variant and grade is the same." Confirmed by investigation: when loading a session, `siblingProductions` pulled in every other session's productions for the same section/date/shift with zero filtering by variant/grade/blend — so two unrelated blends (or grades) captured in the same shift got summed into one mass balance together. This is also what made today's Sieving changeover confusing: unrelated batches were being folded into a single number instead of only truly-related ones.
+
+- **New `productionMatchKey()`** (variant+grade; variant+bomId for Blender/smallblender, which is gradeless) gates which sibling sessions' productions are allowed to combine into the active session's mass balance — only sessions sharing a key with one of the active session's own productions now combine. The separate cross-shift `run_id` mechanism (`otherShiftProductions`, gated by `findOpenRun` matching variant+PO+grade) was already correctly scoped and is untouched. `CaptureOverview`'s full activity-log combination (used for Acumatica data entry, a different purpose) is also untouched.
+- **Mass balance badge wording** now spells out what the sign means in plain terms ("X kg still to bag out" / "X kg more bagged than recorded in") instead of just a bare ±kg figure — the raw signed number stays in the table itself, only the badge text changed, so operators don't have to interpret +/- signs to know what to do next.
+
+Not yet addressed (flagged, not fixed, this pass): there is still no running stock/inventory ledger — only per-record in/out balance checks exist per session. Tracking actual on-hand material quantities over time is a separate, larger piece of work.
+
+## 2026-08-04 — Alyssa (Granule Line job card brought to parity with Pasteuriser — BOM-driven generation, approval workflow, batch-number hygiene)
+
+**Files changed:** `supabase/migrations/20260804_003_job_cards_granule_workflow.sql` (new), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/production/bom.ts`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/granule/page.tsx`, `app/api/production/job-cards/granule/[id]/{send-for-approval,decide,quality-sign}/route.ts` (new), `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+Reported: comparing the real Pasteuriser and Granule paper job cards side by side, Granule's digital version was "barely built" next to Pasteuriser's — plus a concrete complaint that operators hand-typing batch numbers was producing real errors ("spaces between batch numbers") that put traceability/audit records at risk. Confirmed by investigation: `job_cards_granule` was an ad-hoc, non-migration-tracked table backing a flat manual-entry form with none of Pasteuriser's BOM auto-fill, auto-numbering, approval workflow, or identity-verified signatures — and Granule's Lot/Batch input at Assign was never normalized before being stamped onto every output bag tag.
+
+- **Migration-tracked `job_cards_granule`** with the same workflow shape as Pasteuriser's job cards: `status` (draft/sent_for_approval/approved/rejected), `bom_output_item_id`, `blend_ratio_lines` jsonb (Granule's dust blend is a single stage, unlike Pasteuriser's blend→final two-stage ratio, so no `final_ratio_lines`), `quality_signed_by/at`. Backfills any pre-existing submitted card to `approved`.
+- **New permission pair** `can_generate_job_cards_granule` / `can_approve_job_cards_granule`, independent of Pasteuriser's — granted by default to `production_manager` / `production_supervisor` alongside their existing Pasteuriser equivalents.
+- **`/job-cards/granule` rebuilt** to match Pasteuriser's: BOM picker over the real `04-GRANULATION` catalogue (105 seed rows) auto-fills the dust blend ratio and item code, auto-numbering via the same shared `next_job_card_no()` sequence, full draft → send-for-approval → approve/reject workflow, identity-verified "Verify & Sign" (replacing hand-drawn `SignaturePad`), a resumable Saved Drafts panel, and PDF export. The legacy 11-field manual dust entry stays as the fallback when no BOM is picked.
+- **Assign screen**: new `GranuleJobCardPanel` (read-only summary of today's approved card); once one exists, the Lot/Batch field locks to its (already-normalized) batch number instead of requiring free-text entry, with a two-way "not this batch / use the job card's number" toggle.
+- **Capture**: the mandatory "choose what this session is producing" gate now highlights the job-card-suggested item — a suggestion, never a pre-filled or auto-picked value, preserving this file's own explicit "no default, so a shift can never get silently recorded under the wrong item" design. Dust-quantity capture itself is untouched — that's real physical measurement, never sourced from a job card.
+- **Standalone hygiene fix, shipped first**: Granule's Lot/Batch input is now trimmed + upper-cased (`upperCode()`, the same chokepoint Pasteuriser already used everywhere) the moment it's saved — directly closes the reported "spaces between batch numbers" bug.
+
+## 2026-08-04 — Alyssa (Sieving: a changeover wasn't visible on screen; bagging order + batch number for Leaf)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`
+
+Reported (live, mid-shift): after a grade/variant changeover, the combined mass balance shown was correct but there was nothing on screen indicating a changeover had happened — the earlier batch's own figures were invisible, folded silently into one combined number.
+
+- **New "Batches this run" breakdown** on the active batch card, shown whenever there's more than one production this session: each batch (P1, P2, …) with its own variant/grade, kg in → kg out, variance and a "current"/"done" badge — so a changeover reads immediately from the screen instead of only being inferable from a combined total.
+- **Bagging groups now sort in a fixed order** (Fine Leaf, Coarse Leaf, Indent Sticks, Rolsiev Sticks, RB Blocks) instead of the order bags happened to be added in.
+- **Fine/Coarse Leaf bags now show their batch number** in the bag list — the field was already captured (leaf output is batch-tracked) but never displayed, and that identity is what downstream lines (Refining) trace back to.
+
+No schema change — this reuses `prodTotals()` and the `productions` array already in memory; existing sessions with a changeover already in them show the breakdown as soon as this loads, no re-capture needed.
+
+---
+
+## 2026-07-30 — Alyssa (PRODUCTION: Fix: roster rotation now keeps pins (and per-person days))
+
+**Files changed:** `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`
+
+Pinning a person to a shift wasn't surviving rotation. The Sunday auto-rotate cron selected roster entries WITHOUT the `pinned` (or `days`) columns, so `rotateEntries()` saw everyone as unpinned and rotated pinned people anyway, dropping the pin on the new week. Fixed the cron's `ENTRY_COLS` to include `pinned,days`, and `rotateEntries()` now carries `days` forward too (it already carried `pinned`). Both the automatic and manual "Generate next week" paths now keep a pinned person on their shift and preserve their working days. No migration.
+
+## 2026-08-04 — Alyssa (Production Orders redesign: shared UI kit, decluttered records + analytics)
+
+**Files changed:** `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx` (new)
+
+Reported: the Records/Analytics list felt like too much to take in at a glance, hard to tell which line a row belonged to, the balance-flag warning icon showed on nearly every row regardless of whether it meant anything, and the header felt cramped.
+
+Rebuilt on a new shared kit (`components/production/ui/kit.tsx`) — `Panel`/`PanelHead` (no drop-shadows, hairline borders, no tinted header bars), `Stat`/`StatRow` with sparklines, `ShareBar`/`BarRow` for part-to-whole and magnitude instead of table walls, `Collapse` to hide exact numbers behind a disclosure (still available, printable), and `SectionChip` as one consistent section-identity marker used everywhere. Colour discipline follows a validated, colourblind-safe luminance ramp — magnitude is one hue, part-to-whole uses the ordered ramp with labels, identity comes from the chip/axis label, never colour alone.
+
+- **Balance flag now only reads as a warning when it actually is one** — the pill always shows the kg figure, but the warning triangle and amber tone only appear when a record is genuinely outside tolerance.
+- **Section identity is a consistent coloured chip** on every row and in the per-line analytics table, not just a small colour-coded initial.
+- **Analytics' "Per line" table is genuinely per-line** (aggregated per section), kept separate from the Records view's per-record list — the two were reading as one confusing mix before.
+- **Mobile/tablet**: a compact kg-in → kg-out → yield line replaces the desktop mini-bar chart below `sm`, so the figures that matter are still visible on a phone without the chart needing to shrink into unreadability.
+- Same filters, same API routes, same edit/reopen/archive actions as before — this is a visual/structural rebuild on the same data, not a behaviour change.
+
+This was a substantially complete, uncommitted redesign found sitting in the working tree from a prior session — reviewed in full (compiles clean, no TODOs, no unrelated dependencies) before shipping rather than rebuilt from scratch.
+
+---
+
+## 2026-08-04 — Alyssa (Sieving: mid-shift grade/variant changeover keeps the mass balance visible)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/capture-config.ts` (new `isOrganicVariant()`)
+
+Reported: switching grade/variant mid-shift meant starting a new batch record, which reset the mass balance to zero — losing sight of the closing batch's leftover raw material, even though it's still part of the same production run and can go out as Blocks/Rolsiev Sticks/Indent Sticks under the new grade.
+
+- New **"Changeover — switch grade/variant"** action on Sieving's active batch card (any time during capture, not gated on submitting first). Confirming it shows the current combined mass balance before switching.
+- Reuses `addProduction()` — an existing function that appends a new production to the *same* session and auto-snapshots the closing batch's mass balance to the checks audit trail, but had never been wired to any button. Non-organic changeovers now use it, so the run's mass balance stays combined and the leftover can still be settled by bagging more output under the new grade.
+- **Organic material is the one exception** (`Organic` / `RA-Organic` / `FT-ORG` — segregation is a certification requirement): a changeover on an organic batch forces the existing hard-reset behaviour (`startNewProduction()`) instead, closing it into its own separate session so its balance can never combine with anything else.
+
+---
+
+## 2026-08-04 — Alyssa (Granule Line: blend numbers go stale after deleting a blend)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`
+
+Reported: add 3 blends, delete Blend 2, and the debagging/blend list then shows "Blend 1, Blend 3" instead of renumbering sequentially. `blendNo` was a stored field assigned once at creation (`max(existing) + 1`) and never revisited — deleting a blend just filtered the array without touching the survivors' own `blendNo`, and adding a new one after a deletion could even skip numbers further (e.g. jumping straight to 4). `blendNo` isn't cosmetic — it's also written into the persisted debagging notes (`blend {blendNo}`) for traceability — so `removeBlend()` now renumbers every remaining blend sequentially by position, and `addBlend()` just appends at `length + 1` (always correct once the list has no gaps). No schema change; existing sessions are unaffected until their blends are next added to or removed.
+
+---
+
+## 2026-08-04 — Alyssa (Checks: hourly VSD nudge ignores readings logged via the Checks tab)
+
+**Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`
+
+Reported: the hourly VSD reading prompt at Sieving Tower kept coming up — not on a clean hourly cadence — even right after the operator had just submitted a reading under Checks. Root cause: `ChecksPanel` has its own separate "Live: hourly VSD reading" widget that writes to the same `check_events` trail, but the page-level `HourlyVsdPrompt` modal only fetched its own last-known reading once on mount (or after logging a reading through itself) — a reading logged via the Checks tab never touched its state, so it kept treating the check as still-due. Now polls the DB every 30s (piggybacking on its existing tick) so a reading logged via either path is picked up.
+
+---
+
+## 2026-08-04 — Alyssa (Sieving: match output grouping/colour style to Blender exactly)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+The output/bagging tab was already grouped and colour-coded by product type (added earlier this week), but wrapped each group in its own bordered card with a divide-y list inside — visually different from Blender's flatter pattern (a coloured dot+label header line, then each bag as its own individually-coloured/bordered row, no card wrapper). Rewrote to match Blender's pattern exactly. Presentation only — no data/schema change.
+
+---
+
+## 2026-08-04 — Alyssa (Roster: fix stale "now" shift badge)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+The on-duty "now" badge (`sastNow()`) is a pure function of the real clock, but nothing forced a re-render as time passed — a tab left open since before a 07h00/16h00 shift boundary kept showing whichever shift was current at its last render, not the actual current one. Added a once-a-minute re-render tick so it stays live; doesn't touch the operator's own manually-selected tab.
+
+---
+
+## 2026-08-03 — Gustav (Maintenance: neat job-card history filter · calibration certificate upload · job-card photo now visible)
+
+**Files changed:** `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `components/maintenance/JobCardItem.tsx`, `lib/maintenance/helpers.ts`, `lib/maintenance/types.ts`, `app/api/maintenance/annual/cert/route.ts` (new), `supabase/migrations/20260803_010_annual_cert_columns.sql` (new)
+
+- **Job-card history filter tidied up.** The History panel's filter bar (search · status · closed-from · closed-to · clear) is now a single neat labelled row that wraps cleanly, instead of controls scattered with `justify-between`. Each control has a small uppercase label so it's clear what each field does.
+- **Removed Gustav Meyer from the annual "By" (calibrated-by) list.** The picker now lists only the maintenance technicians from the Staff Directory (plus the "External / supplier" option) — the logged-in manager is no longer injected into the list.
+- **Calibration certificate upload (proof of external calibration).** Each asset in the Annual / Calibration register now has a **Certificate** row: upload an image or PDF as proof an external party did the calibration, then **View certificate** re-opens it via a short-lived signed URL. Files are stored in the private `maintenance-card-photos` storage bucket under a `cert/annual/<id>/` prefix — **not** in the database — and the row records who uploaded it and when (`cert_path` / `cert_name` / `cert_uploaded_at` / `cert_uploaded_by`, added by migration `20260803_010`). New server route `app/api/maintenance/annual/cert` handles upload (image/PDF, ≤15 MB) and signed-URL viewing.
+- **Job-card creation photo is now visible.** A photo attached when raising a job card was being saved but only shown behind the "More detail" toggle, so it looked missing. The photo now renders as an always-visible, click-to-enlarge thumbnail on the expanded card for both the manager and the technician. To avoid bloating the database (photos are stored inline as base64 in `photo_url`), new photos are downscaled more aggressively (640 px, JPEG q0.55 — typically well under ~40 KB). *Note: moving existing/new photos fully into storage is a recommended larger follow-up.*
+
+---
+
+## 2026-08-04 — Alyssa (Cleaning split + cleaner sign-in, bag numbering, granule carry-over, checks cleanup, analytics, job cards nav)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CleaningPanel.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/cleaning-config.ts`, `lib/production/carryover.ts` (new), `lib/production/cleaner-roster.ts` (new), `components/layout/Sidebar.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `supabase/migrations/20260804_001_cleaning_split_signoff.sql` (new), `supabase/migrations/20260804_002_dust_carryover.sql` (new)
+
+Requires migrations `20260804_001` and `20260804_002` (see manual steps at the end).
+
+- **Checks step deactivated for Refining 1/2 and Blender.** These sections have no machine checks configured (nothing on the paper form to check), but the Checks step still showed in the stepper and still demanded a PIN sign-off for nothing. The step is now hidden entirely for sections with zero configured checks (`machineChecksFor().length === 0`); Pasteuriser and Granule are unaffected.
+
+- **Cleaning tab now splits operator tasks from cleaner-only tasks**, for every section, not just Sieving. `cleaning-config.ts`'s existing `responsible` field already marked which tasks are the operator's job vs a dedicated cleaner's — a new `isCleanerOnlyTask()` helper (`responsible === 'General cleaner'`) drives the split. Operators only ever see and sign their own tasks; cleaner-only tasks are invisible to them entirely, closing the audit gap where an operator could tick off a cleaner's task.
+
+- **Cleaner sign-in/out on the capture tablet.** A new "Sign in as Cleaner" gate (header, next to Messages) authenticates against whoever the whole-site Shift Roster has on cleaning duty for that date/shift (`lib/production/cleaner-roster.ts`, reusing `roster_entries.operator_id` → `operators.pin`, not the per-section operator roster). Once signed in, the screen restricts to the Cleaning tab only; on sign-off it clears itself and hands back to the operator, who re-enters their own PIN — nothing is lost since draft data already autosaves. `cleaning_records` gained an independent `cleaner_*` signature so operator and cleaner can sign at different times without overwriting each other.
+
+- **Bag lists numbered and grouped, matching the Blender form's layout**, so a shift never loses count: Sieving's bagging tab (grouped by product type — Leaf/Dust/Sticks), Refining's debagging tab (grouped by product type) and bagging tab (existing A/B/C/D groups, now numbered + individually coloured), and Pasteuriser's bagging tab (grouped by kind: Final Product/High Moisture/Refill) and its two debagging streams (now visually distinct colours). Granule's dust by-product log gained plain numbering. Presentation only — no schema changes.
+
+- **Granule Line "Carry-over".** The afternoon shift's mass-balance leftover is now suggested (never silently written) as a **Carry-over** figure for the exact dust type in use (SG Dust / SF Dust — never merged), which the operator confirms before it's logged to a new append-only ledger (`production.dust_carryover_log`). On a later shift's Blend tab, an outstanding carry-over for that same dust type is offered as an "Add to Blend" banner; adding it tags the row `fromCarryover` and marks the ledger consumed. Distinct from the existing `dustNotRefed`/`coarseNotFed` paper-form fields, which are untouched. The "must mix ≥2 dust types per blend" rule was explicitly out of scope for this round.
+
+- **Supervisor Hub → Analytics brought to parity with Production Orders.** It previously had only a date-range picker and aggregate charts, no section/shift/variant filters and no per-record figures. Added the same filter set (reusing `SECTION_ORDER`/`sectionMeta`/`VARIANT_OPTIONS`) and a per-line records table (date, line, shift, variant, kg in/out, yield%, balance flag) so yield is visible against the actual record, not just aggregated. Timesheets carry `section_id`/`shift` (now selected) so hours figures filter too; variant only narrows the kg/yield figures since timesheets don't carry variant.
+
+- **Pasteuriser Job Card hub surfaced in the sidebar.** `/job-cards` (Pasteuriser + Granule job cards) had no nav entry anywhere — only reachable via a deep link from BOMs — so nobody could find it to test the pre-fill flow. Added one entry under Production, reusing the existing `can_view_blends` permission (no permission-registry change needed). The job-card ↔ capture pre-fill itself was already working (`PasteuriserCapture.tsx` already pulls approved cards); this was purely a missing link.
+
+**Not completed — flagged, not silently dropped:** Production Orders' filters/spacing were reported as broken. Static review of the filter state, option values and the server-side KPI route found no defect, and this web session has no login credentials for the app (Microsoft SSO / PIN gates) to reproduce the bug live in a browser, so the actual defect could not be found or fixed this session. Needs a session with real credentials (or the developer reproducing it with screenshots/steps) to pin down.
+
+**⚠️ Manual steps required before this is live:**
+1. Run `supabase/migrations/20260804_001_cleaning_split_signoff.sql` on **staging** (adds `cleaning_records.cleaner_*` columns and widens `cleaning_logs`' action check to allow `'cleaner_sign'`). Until applied, cleaner sign-off will fail to save.
+2. Run `supabase/migrations/20260804_002_dust_carryover.sql` on **staging** (creates `production.dust_carryover_log`). Until applied, the Carry-over confirm/add-to-blend actions will fail to save.
+3. Both migrations need applying to **production** separately when this is promoted.
+4. `npm run build` passes cleanly with these changes (verified this session); live browser verification of the new UI (cleaner sign-in flow, carry-over flow) should still be done against staging once migrations are applied.
+
+---
+
+## 2026-07-31 — Gustav (COA History: edit a previously generated COA to fix mistakes)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Added an **"✏️ Edit"** action to each row in the COA Generator's **History** tab. It re-opens that generated COA (from its saved snapshot) back into the editable generator so the lab manager / quality manager can correct a mistake and re-print / re-export. Re-printing logs a fresh history entry.
+- The saved snapshot (header + all analysis tables + which sections were included) is restored exactly as it was generated, so nothing has to be re-typed.
+
+---
+
+## 2026-07-31 — Gustav (COA sign-off: QA "Awaiting sign-off" queue + auto-notify the Quality manager)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+
+- Added an **"🖊️ Awaiting QA sign-off"** list to the COA Generator (with a live count) — every COA the lab manager has signed but the Quality manager hasn't. Each row shows batch, customer, grade, who signed, and when; **"Open & sign"** loads that COA (with the lab manager's signature already on it) ready for the QA sign-off. This is how the Quality manager finds the COAs waiting for her — no more typing the exact batch number.
+- **When the lab manager signs, the Quality manager is now notified automatically** (in-app) and the COA is marked sent — signing is the hand-off. (The separate "Send to Quality Manager" step is no longer needed.)
+- **Nothing is lost:** the sign-off (batch, signer, signature, timestamp) persists in `qms.coa_signoffs`; the COA document is regenerated from the batch on lookup.
+
+---
+
+## 2026-07-31 — Gustav (COA sign-off: managers read from Staff Directory; removed Signatories panel)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signatories/route.ts` (new), `app/api/quality/coa-signoff/route.ts`, `lib/quality/coa-managers.ts` (new)
+
+- The **Signatories configuration panel was removed** from the COA Generator. The **Lab Manager and Quality Manager are now read from the Staff Directory** (`production.employees`, by job title / position) — nothing is typed on the COA page.
+- Sign-off buttons now read simply **"Lab Manager sign-off"** and **"Quality Manager sign-off"** (no names). The signer's name is taken from the Staff Directory and shown under the signature on the COA.
+- Authorization is by the caller's Staff Directory role (server-side): only the person whose position is Lab Manager can sign the lab slot, only the Quality Manager the QA slot — each with their own signature. The persisted lab → QA hand-off is unchanged.
+- **Note:** identification is by position/job title. On production, **Monique Gordon** already has position "Lab Manager"; **Michelle Brown** has no position/title set yet, so she won't be recognised as the Quality Manager until her Staff Directory record is given a Quality Manager position/title.
+
+---
+
+## 2026-07-29 — Gustav (COA sign-off: persisted lab → QA hand-off)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts` (new), `app/api/me/signature/route.ts`, `supabase/migrations/20260729_021_coa_signoffs.sql` (new, applied to staging)
+
+- COA sign-offs are now **saved to the batch** (`qms.coa_signoffs`), so the lab manager and quality manager can sign the **same COA from their own logins at different times**.
+- Flow: the **lab manager signs** (server stamps her own Staff Directory signature) → **"📤 Send to Quality Manager"** notifies the QA manager → the **QA manager opens the same batch and signs**. Both signatures then appear on the COA / print / PDF.
+- All enforcement is server-side (`/api/quality/coa-signoff`): a slot can only be signed by the person whose designated login matches, and the applied signature is always the caller's **own** Staff Directory signature — never supplied by the client.
+- **No signature on file?** The sign-off panel shows a prompt linking to the person's Staff Directory profile to create one, and signing is blocked until they do.
+
+---
+
+## 2026-07-29 — Gustav (COA sign-off: signatures pulled from Staff Directory, self-only)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/me/signature/route.ts`, `supabase/migrations/20260729_020_coa_signatories_drop_stored_signature.sql` (new, applied to staging); removed `public/signatures/monique-gordon.png`, `public/signatures/michelle-brown.png`
+
+- COA sign-off now stamps the **logged-in person's own signature**, fetched from their **Staff Directory** record (`production.employee_signatures`) via `/api/me/signature` — which only ever returns the caller's own signature (resolved server-side from their session). **A signature can never be applied by anyone but the person logged in.**
+- Each slot is signable **only by its designated person** (matched on login email set under ✍ Signatories): the Lab Manager slot only by the lab manager from their own login, the QA slot only by the QA manager from theirs. Removed the previous "QA can apply the lab manager's signature" override — it's incompatible with self-only signing.
+- **Removed the old stored lab/QA signatures:** dropped `qms.coa_signatories.signature` and deleted the `public/signatures/*.png` files. Signatures live only in the Staff Directory now; the Signatories panel keeps just slot title/name/login-email (no more drawing here).
+
+---
+
+## 2026-07-29 — Gustav (Micro extraction: reliably capture E. coli O157 + every organism)
+
+**Files changed:** `app/api/upload/route.ts`
+
+- Rewrote the microbiology extraction prompt so it reliably captures **every organism** on the report, including **E. coli O157**, which was intermittently missed. The prompt now tells the model the report can span **multiple pages** with **one column per organism** (method codes like MIC-201/MIC-218) and to read every page and every column.
+- Explicit column-heading → field mapping for TPC, E. coli, **E. coli O157**, coliforms, Enterobacteriaceae, Staph. aureus, yeast, mould, Listeria, Salmonella (25/125/375 g), Bacillus cereus, Clostridium perfringens.
+- Values must be copied **exactly as printed** — counts keep their operator ("<10", "6300"), detection tests keep "Not Detected"/"Detected"/"Absent"/"Present"; null only when an organism has no column. Verified against the Assurecloud 986249 report (26244-CON-SFC): TPC 6300, E. coli <10, E. coli O157 Not Detected, Listeria Not Detected, Salmonella Not Detected, Staph <10, Yeast 40, Mould <10.
+- Display already supports O157 (lab-results, COA, spec tab) — the column shows automatically once a value is extracted.
+
+---
+
+## 2026-07-30 — Alyssa (Supervisor Hub redesign + generated Shift Report + Production Orders KPIs)
+
+**Files changed:** `supabase/migrations/20260730_001_shift_report_and_capture_ratings.sql` (new), `supabase/migrations/20260730_002_roster_daily_changes.sql` (new), `lib/production/shift-report.ts` (new), `app/api/production/shift-report/route.ts` (new), `app/api/production/capture-ratings/route.ts` (new), `app/api/production/orders-kpis/route.ts` (new), `app/(app)/supervisor/page.tsx`, `app/(app)/supervisor/roster/page.tsx` (new), `app/(app)/supervisor/signoff/page.tsx`, `app/(app)/supervisor/report/page.tsx` (new), `app/(app)/supervisor/team/page.tsx` (new), `app/(app)/supervisor/timesheets/page.tsx` (now a redirect), `app/(app)/supervisor/productions/page.tsx` (now a redirect), `app/(app)/supervisor/messages/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/(app)/supervisor/calendar/page.tsx`, `components/supervisor/HubTabs.tsx`, `components/supervisor/CaptureRatings.tsx` (new), `components/supervisor/TimesheetsPanel.tsx` (new), `components/supervisor/ReopenRequestsPanel.tsx` (new), `components/supervisor/PendingSignOffs.tsx` (deleted), `app/(app)/production/orders/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/api/production/roster/audit/route.ts`, `app/api/production/orders/[id]/reopen-request/route.ts`, `app/api/production/notify-line-message/route.ts`, `app/(app)/layout.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `app/globals.css`
+
+Requires migrations `20260730_001` and `20260730_002` (see manual steps at the end).
+
+**Supervisor Hub — one job per tab.** The hub had tabs that told you where you were while the page did three unrelated jobs at once: the Roster tab opened with job-card approvals and a pending-sign-off queue stacked above the staffing grid, and Sign-off showed lines that were already signed (which by definition need nothing). Restructured to **Dashboard · Roster · Sign-off · Shift Report · Team · Messages**, with a hard rule: if it needs a signature it is on Sign-off, if it is about who works where it is on Roster, and nothing appears on two tabs.
+
+- **Dashboard** (new) is the only summary page — six tiles, today's lines, a "needs attention" list and links out. It holds no controls of its own, which is what stops it drifting back into a page that does everything. It reads the same shift-report assembly the Shift Report tab renders, so the dashboard and the signed report can't disagree.
+- **Roster** moved to `/supervisor/roster` with the sign-off panels removed. **A published roster is now editable** — previously submitting it LOCKED the grid, so the daily reality of people swapping lines or calling in sick was handled verbally and the published roster went stale. Editing a submitted roster no longer resets it to draft (that erased the fact it was signed off); it moves to a new `changes_pending` status, and every add/remove/move is written to `production.roster_change_log` with who did it. The supervisor sees an itemised list of unsaved changes before saving, the Production Manager re-confirms a short list instead of re-reading the whole grid, and a collapsible change history sits at the bottom of the tab.
+- **Sign-off** is now a queue that empties: submitted records awaiting a signature (**every date, oldest first, with an age badge** — a session left unsigned last Thursday was previously invisible because the queue only looked at today), records still open on a finished shift, shift reports awaiting send/sign, reopen-request decisions and job-card approvals. Nothing else.
+- **Team** (new) holds the people facts: capture ratings + timesheets. `/supervisor/timesheets` redirects here.
+- **`/supervisor/productions` retired** → redirects to `/production/orders`. It was a second copy of the same session list with a different layout, which is most of why production history felt inconsistent depending on where you opened it. Its one unique action ("request reopen") moved onto each record on Production Orders; the manager's reopen *decision* queue moved to Sign-off.
+
+**Shift Report (new)** — `/supervisor/report`, the document the floor never had: one auditable record of everything that happened on a shift, **generated rather than typed**. Every figure derives from records already captured, so nothing here is a second place to key a number: attendance (rostered vs actually present vs absent, with leave as the reason and "on the floor but not rostered" called out as a swap nobody wrote down), lines run with yield and mass balance, what was produced per product and off which line, machine throughput in kg/hour, machine + sieving configuration and hourly VSD readings from the checks engine, change-overs (from timesheet events and checks production indexes), breakdowns with downtime, flagged/failed checks, waste and spillage, handover notes and line messages, and what is still outstanding. Lifecycle is draft → sent to the Production Manager → signed off; submitting or signing **freezes the payload the reader actually looked at** into `production.shift_reports` and writes an audit row, so a later recapture can't rewrite a report someone already signed. Printable as a multi-page handover document (new print rules keep a section from splitting mid-table). Anything the report could not read is stated explicitly rather than rendering as an empty section, so "no breakdowns" is never confused with "we couldn't read breakdowns". An open breakdown's downtime is capped at the end of the shift — otherwise a card left open for a week reports a week of downtime against one shift.
+
+**Capture ratings (new)** — supervisors score every rostered person on **performance** and **data accuracy**, kept as two separate 1–5 scores rather than one blended number because they fail independently (a fast operator who mis-keys weights and a careful operator on a slow line are different problems). A weekly leaderboard ranks the crew. Alongside each human score sits the **system's own accuracy read**, computed from what actually landed in the database (mass-balance variances outside tolerance, records never submitted, failed checks on their line) with the reasons spelled out — it never overrides the supervisor, it just makes "you gave them 5, the data says 70%" visible so the score can't drift into a popularity vote. Every score written is appended to `production.capture_rating_audit`, so a revision is visible rather than replacing the original.
+
+**Production Orders — KPIs, analytics and yields that stop hiding.** The page carried a record list and nothing else; "how many tons this week, at what throughput, of which product, off which line" had no answer on it, and the yield analytics existed but were reachable only via `/traceability`.
+
+- A **KPI strip on both views**: tons out, tons/day, tons/week, kg/hour, yield, records, balance flags. Averages are per *producing* day, not per calendar day — dividing a week's output by 7 when the factory ran 5 days understates the line by 30%.
+- A new **Analytics view** over the same filters: tons per day, tons per week, throughput per line, a full per-line table (yield, run time, crew hours, kg/hour and which basis was used), output per product with the lines it came off, and yield per variant. Throughput is measured from first-to-last bag where that window is meaningful and from confirmed crew hours otherwise — the basis is always reported, because the two answer slightly different questions.
+- Computed from the base capture tables rather than the `production.v_*` reporting views, since those views (`20260721_002/003`) are still pending on staging and a KPI strip that silently renders zeros is worse than one that reads the tables it knows exist.
+- **Yield is on each record row now** (previously only visible by opening it), and the capture Overview tab gained a yield/throughput strip — kg in/out, yield, tons, bags, balance, the output split per product, and deep links to the analytics view for that line and to full traceability for the lot.
+
+**Back navigation out of capture is fixed.** Every filter on Production Orders now lives in the URL, and every link into capture carries a `return` pointing at that exact URL. Back from a record returns to the list you were reading, with its filters, instead of dumping you on the operator's capture landing page. Only app-internal paths are honoured, so the parameter can't bounce someone off-site. The Dashboard, Sign-off and Shift Report links pass their own return targets too.
+
+**New permissions** (Users & Roles → Production): `can_view_shift_report`, `can_edit_shift_report`, `can_submit_shift_report`, `can_approve_shift_report`, `can_view_capture_ratings`, `can_rate_capture`, `can_delete_capture_rating`. Defaults follow the existing tiering — the supervisor writes and sends the report and rates their own crew; the Production Manager signs the report off and reads the board; Management is read-only on both.
+
+**⚠️ Manual steps required before this is live** (a web session can't reach the Supabase SQL editor — see CLAUDE.md's DB workflow):
+1. Run `supabase/migrations/20260730_001_shift_report_and_capture_ratings.sql` in the **staging** Supabase SQL editor (creates `production.shift_reports`, `shift_report_audit`, `capture_ratings`, `capture_rating_audit` and the `v_capture_scoreboard` view). Until it is applied, the Shift Report renders but can't be saved/signed, and the ratings tab says so explicitly rather than showing an empty board.
+2. Run `supabase/migrations/20260730_002_roster_daily_changes.sql` on staging (adds the `changes_pending` status and `production.roster_change_log`). Until it is applied, the roster still saves and submits — it just won't record the itemised change history.
+3. Both migrations need applying to the **production** project separately when this is promoted.
+
+---
+
+## 2026-07-30 — Alyssa (Staff Directory: edit a person from their profile; one action per list row)
+
+**Files changed:** `components/production/EmployeeModal.tsx` (new, shared), `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
+
+The list row had two controls (a quick-edit pencil AND an arrow to the profile). Consolidated to one: the row now just opens the profile, and **all fields are editable on the profile** via an "Edit details" button. Extracted the Add/Edit person form (fields + skills + leave + login block) into a shared `EmployeeModal` component so the list ("Add person") and the profile ("Edit details") use the exact same editor. Removed the list pencil; offboard/reactivate stay as their own icons.
+
+## 2026-07-30 — Alyssa (Manually link an existing login account to a Staff Directory profile)
+
+**Files changed:** `app/api/staff/[id]/link-login/route.ts` (new), `app/(app)/production/staff/[id]/page.tsx`
+
+41 of 53 logins weren't linked to a profile (so no connections showed, incl. IT's own account). IT can now link an existing login to a person from the profile's Login panel: "Link an existing login" opens a picker of unlinked, active accounts with the likely name match highlighted as "suggested" — one click links it by ID (sets `app_roles.employee_id`). Nothing auto-links. An "Unlink" action is provided when one is linked. New account creation stays available too.
+
+## 2026-07-30 — Alyssa (Staff profile: show digital training only — removed the full SOP competency flood)
+
+**Files changed:** `app/(app)/production/staff/[id]/page.tsx`
+
+The profile listed every SOP under "Competency by SOP" (plus an X/Y SOPs-competent header stat), which flooded the page. Removed that section (and its history + inline edit modal + the header stat) from the profile so it shows only the **digital Training portfolio** (assigned courses). The full competency matrix still lives on the Skills Matrix page. Also pruned the now-unused state, fetches, memos and imports.
+
+## 2026-07-28 — Alyssa (PIN sign-ins linked to Staff Directory by ID; shown as PIN on the profile)
+
+**Files changed:** migration `20260729_006_lab_auth_employee_link.sql` (new), `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`, `app/api/quality/lab-assistants/manage/route.ts`, `app/api/quality/lab-assistants/route.ts`, `app/(app)/quality/lab-manager/page.tsx`
+
+Requires migration `20260729_006` on both projects (adds `qms.lab_auth.employee_id` + a one-time unambiguous name-match back-fill — verified 12/12 clean on prod).
+
+- Lab/QC PIN accounts were keyed by NAME with no link to the person's Staff Directory profile. Now linked by `employee_id`: the lab-manager list carries each person's ID and assigning a PIN stores it on `lab_auth` (and `app_roles`), so a PIN is one identity tied to the profile by ID, not matched by name.
+- The linked PIN now surfaces as the person's **PIN** sign-in on their Staff Directory profile + list (via the identities routes), so the profile is the single source of truth for how someone signs in. Graceful if the column/qms schema isn't reachable.
+
+## 2026-07-28 — Alyssa (Staff sign-in badges: Microsoft SSO only, not supabase/PIN accounts)
+
+**Files changed:** `app/api/staff/identities/route.ts`, `app/api/staff/[id]/identities/route.ts`, `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
+
+The staff directory showed an "EMAIL" badge for any linked login account — including the supabase password/PIN accounts (lab/floor) that use a synthetic email, so they wrongly read as email sign-ins. The identities routes now classify each login's auth provider; the badge shows as **"Microsoft" (orange)** ONLY for genuine Azure-AD SSO accounts (`isMicrosoftSSO`). Supabase/PIN accounts no longer get it. No migration.
+
+## 2026-07-28 — Alyssa (Lab-manager PINs: include QC Staff Directory people, not just rostered)
+
+**Files changed:** `app/api/quality/lab-assistants/manage/route.ts`
+
+The lab-manager PIN list was built only from people already placed on the shift roster in a QC role, so a newly-added QC person didn't appear until they were rostered. The list now also includes everyone in the Staff Directory (`production.employees`) under the QC department (active, Microsoft-SSO staff still excluded), so the lab manager can assign them a sign-in PIN as soon as they're added. Roster entries still take precedence for role; staff-directory-only people show as generic QC. No migration.
+
+## 2026-07-29 — Alyssa (Internal e-signature platform + dispatch/delivery document signing)
+
+**Files changed:** `supabase/migrations/20260729_008_esign_schema.sql` (new), `lib/esign/subjects.ts` (new), `lib/esign/request.ts` (new), `lib/esign/capture.ts` (new), `app/api/esign/requests/route.ts` (new), `app/api/esign/requests/[id]/void/route.ts` (new), `app/api/esign/sign/[token]/route.ts` (new), `app/api/esign/staff-sign/route.ts` (new), `app/api/esign/subjects/[type]/[id]/route.ts` (new), `components/esign/SignatureCapture.tsx` (new), `app/sign/[token]/page.tsx` (new), `app/sign/[token]/SignClient.tsx` (new), `app/middleware.ts`, `app/(app)/logistics/dispatch/[id]/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`
+
+New polymorphic `esign` schema (`signature_requests` + append-only `signatures`) so any feature can request a signature against any record (`subject_type`/`subject_id`) with a real audit trail — signer, timestamp, IP, user-agent, and a tamper-evidence hash — instead of the three incompatible ad hoc patterns that existed before (`user_signatures`/`employee_signatures`, `production.session_signatures`, `qms.coa_signatories`). A captured signature is immutable: a DB trigger blocks every `UPDATE`/`DELETE` except the one legal `active → voided` transition, so a correction is always a new signature, never an edit.
+
+- **Two signer kinds.** Internal staff sign in-app with no drawing — same "Verify & Sign" trust model shipped last session for job cards, stamping the signature already on file in `production.employee_signatures`. External signers (a driver/customer with no CNTP account) get a one-time link (`/sign/[token]`, SHA-256-hashed token, 72h expiry, single-use) to draw their signature on their own device — added to `PUBLIC_ROUTES` in `app/middleware.ts`, fully outside the authenticated app.
+- **First consumer: dispatch/delivery documents.** `logistics.dispatch_documents.signed_by`/`signed_at` existed in the schema but nothing ever wrote them — the Checklist tab's status dropdown was purely manual. It now has real "Sign now" (in-app) and "Send for external signature" actions per document, shows live audit info once signed, and blocks marking a document "Verified" until it's actually been signed.
+- **New permissions:** `can_sign_dispatch_doc`, `can_request_external_signature`, `can_verify_dispatch_doc` (Users & Roles → Logistics → Dispatch document signing).
+- Deliberately **not** touched this session: job card / COA / cleaning signature UIs — they work today and were just reworked last session; migrating them onto `esign` is a separate future pass.
+
+**⚠️ Manual steps required before this is live (not run from this session — see CLAUDE.md's DB workflow):**
+1. Run `supabase/migrations/20260729_007_employee_signatures.sql` (still pending from last session — this migration's `production.employee_signatures` is a hard dependency for internal signing) then `supabase/migrations/20260729_008_esign_schema.sql`, in that order, in the **staging** Supabase SQL editor.
+2. Add `esign` to **Exposed schemas** (Supabase dashboard → Project Settings → API) on staging — PostgREST can't reach a schema that isn't exposed, same requirement as `hr`/`maintenance`/`shared` before it.
+3. Promote both migrations + the schema exposure to production separately, once verified on staging.
+
+---
+
+## 2026-07-29 — Alyssa (BOM page redesign: master-detail layout + rich Master Inventory search)
+
+**Files changed:** `app/(app)/production/blends/page.tsx`, `components/production/InventoryPickerModal.tsx` (new)
+
+- **Feedback:** the BOM UI was hard to navigate, and creating a new BOM couldn't show everything or search Master Inventory properly.
+- **Master-detail layout** replaces the single-page accordion (only one BOM could be expanded at a time, squeezed in among every other BOM). The list is now a sticky sidebar; the selected BOM gets a full-width detail pane. Mobile collapses to list-then-detail with a back affordance. Selection syncs to `?bomId=`, deep-linkable like the existing `?workCentre=` filter.
+- **New `InventoryPickerModal`** — a full search + filter modal (item class, group, grade, variant, plus free text) showing every match in a scrollable table with a "showing X of Y" count, instead of the old 30-result-capped, empty-until-you-type 224px dropdown. The lightweight `ItemPicker` used during live production capture is untouched — its quick single-lookup UX is fine there.
+- **"Add blend"** now supports adding every initial component in one sitting (repeatable rows) instead of only a first component.
+- **New "Unresolved item links" quick filter** — click the existing stat tile to filter the list to BOMs with an item that doesn't resolve in Master Inventory.
+
+---
+
+## 2026-08-05 — Alyssa (Capture pages: supervisor sign-off is now Verify & Sign against Staff Directory, matching job cards)
+
+**Files changed:** `app/api/production/sessions/[id]/approve/route.ts` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested: "when the supervisor signs off, I need it to call their signature in the staff directory but the user interface just needs to have a verify and sign button as the job cards work." Previously the capture page's supervisor sign-off asked for a hand-typed name plus a hand-drawn signature on every session — unverified against who was actually logged in, unlike job cards which already resolve the approver's own Staff Directory signature server-side.
+
+- **New `PATCH /api/production/sessions/[id]/approve`** — mirrors the job-cards `decide` route exactly: resolves the caller's Staff Directory `employee_id`, looks up their `production.employee_signatures` row, rejects with "No signature on file" if none exists, then stamps that signature onto `session_signatures` and marks the session approved (plus closes the production run if "end of run" was ticked). The signature is never accepted from the client.
+- **Sign-off UI**: the supervisor's name field + `SignaturePad` are gone. In their place, a single **"Verify & Sign as {name} to Approve"** button (disabled until they have a signature on file), same wording/pattern as the job-card approval panel — or, if they don't have one yet, a link straight to their Staff Directory profile to set one up. Operator sign-off (name + drawn signature) is untouched — this only changes the supervisor step.
+
+## 2026-08-04 — Alyssa (Fixed job card ratio-table layout: .input's width:100% was silently beating w-24)
+
+**Files changed:** `app/globals.css`
+
+Reported: the Pasteuriser job card's Final Product Ratio inputs (and the same pattern on the new Granule job card) rendered as full-width boxes with badly wrapped labels stacked above them, instead of a narrow value box beside its label.
+
+Root cause: `.input` (added earlier this session to fix invisible form fields) sets `width: 100%` as a plain, unlayered CSS class defined after `@import "tailwindcss"`. Combined with a Tailwind utility like `w-24` on the same element (`className="input w-24 text-right"`), both rules have equal specificity — the tiebreak goes to whichever rule sits later in the compiled stylesheet's raw source order, which was `.input`, not `w-24`, regardless of the className order in the JSX. Confirmed only two live call sites hit this (`job-cards/pasteuriser` and the newly-built `job-cards/granule`), but it's the exact same root cause as an earlier bug this session where a `.card` background beat a `bg-brand` utility.
+
+- Wrapped `.card`, `.card-glass` and `.input` (plus their dark-mode variants) in Tailwind v4's `@layer base`. Cascade layers resolve by declared layer order, not source position — `base` is declared before `utilities` in Tailwind's own order (`@layer theme, base, components, utilities`), so any Tailwind utility now always wins over these classes when both are applied to the same element, regardless of where either rule physically sits in the file.
+- Verified by compiling `globals.css` through the actual `@tailwindcss/postcss` pipeline used at build time and confirming `.input`/`.card` land inside the `base` layer while `w-24` (and other utilities) land inside `utilities` — a deterministic, spec-guaranteed fix, not something that needs re-litigating per page.
+- `.bg-surface-card` was left untouched — it already uses `!important`, which isn't subject to this layer-ordering issue.
+
+## 2026-08-04 — Alyssa (Mass balance: one consistent display everywhere it appears, not four different ones)
+
+**Files changed:** `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported (live, follow-up): the previous fix's plain-language badge wording missed the actual complaint — "it was not a matter of understanding what the + or - is, its the inconsistency of it, show it in a logical way not 3 versions of it." Investigation found four separate hand-rolled representations of the same underlying balance figure on the capture page: the Production tab's table badge, the "Batches this run" per-batch row (bare ± number), the changeover-confirm modal ("Current mass balance: +46.0 kg (±15 kg tolerance)"), and Sign-off's own 3-stat card with a separately-worded tolerance warning — each phrased and styled differently even when showing the same number.
+
+- **New `balanceStatus()` / `<BalanceBadge>`** exported from `MassBalanceTable.tsx` — the one place the "within tolerance / still to bag out / more bagged than recorded in" wording and pill styling is defined.
+- **All four spots now render the same badge**: the per-batch breakdown chip, the changeover-confirm modal, and Sign-off (which now renders the exact same `<MassBalanceTable>` used on the Production tab instead of its own duplicate summary card) all use `<BalanceBadge>`/`MassBalanceTable` — so the same figure looks the same wherever it's shown, instead of needing to be re-interpreted each time.
+
+## 2026-08-04 — Alyssa (Fix: sibling productions were combining mass balances across different blends/grades; clearer balance wording)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/MassBalanceTable.tsx`
+
+Reported (live): "Blender production orders are combining all mass balances and totals and that is not correct, this should only happen if the blend, variant and grade is the same." Confirmed by investigation: when loading a session, `siblingProductions` pulled in every other session's productions for the same section/date/shift with zero filtering by variant/grade/blend — so two unrelated blends (or grades) captured in the same shift got summed into one mass balance together. This is also what made today's Sieving changeover confusing: unrelated batches were being folded into a single number instead of only truly-related ones.
+
+- **New `productionMatchKey()`** (variant+grade; variant+bomId for Blender/smallblender, which is gradeless) gates which sibling sessions' productions are allowed to combine into the active session's mass balance — only sessions sharing a key with one of the active session's own productions now combine. The separate cross-shift `run_id` mechanism (`otherShiftProductions`, gated by `findOpenRun` matching variant+PO+grade) was already correctly scoped and is untouched. `CaptureOverview`'s full activity-log combination (used for Acumatica data entry, a different purpose) is also untouched.
+- **Mass balance badge wording** now spells out what the sign means in plain terms ("X kg still to bag out" / "X kg more bagged than recorded in") instead of just a bare ±kg figure — the raw signed number stays in the table itself, only the badge text changed, so operators don't have to interpret +/- signs to know what to do next.
+
+Not yet addressed (flagged, not fixed, this pass): there is still no running stock/inventory ledger — only per-record in/out balance checks exist per session. Tracking actual on-hand material quantities over time is a separate, larger piece of work.
+
+## 2026-08-04 — Alyssa (Granule Line job card brought to parity with Pasteuriser — BOM-driven generation, approval workflow, batch-number hygiene)
+
+**Files changed:** `supabase/migrations/20260804_003_job_cards_granule_workflow.sql` (new), `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/production/bom.ts`, `components/production/JobCardApprovalsPanel.tsx`, `app/(app)/job-cards/granule/page.tsx`, `app/api/production/job-cards/granule/[id]/{send-for-approval,decide,quality-sign}/route.ts` (new), `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+Reported: comparing the real Pasteuriser and Granule paper job cards side by side, Granule's digital version was "barely built" next to Pasteuriser's — plus a concrete complaint that operators hand-typing batch numbers was producing real errors ("spaces between batch numbers") that put traceability/audit records at risk. Confirmed by investigation: `job_cards_granule` was an ad-hoc, non-migration-tracked table backing a flat manual-entry form with none of Pasteuriser's BOM auto-fill, auto-numbering, approval workflow, or identity-verified signatures — and Granule's Lot/Batch input at Assign was never normalized before being stamped onto every output bag tag.
+
+- **Migration-tracked `job_cards_granule`** with the same workflow shape as Pasteuriser's job cards: `status` (draft/sent_for_approval/approved/rejected), `bom_output_item_id`, `blend_ratio_lines` jsonb (Granule's dust blend is a single stage, unlike Pasteuriser's blend→final two-stage ratio, so no `final_ratio_lines`), `quality_signed_by/at`. Backfills any pre-existing submitted card to `approved`.
+- **New permission pair** `can_generate_job_cards_granule` / `can_approve_job_cards_granule`, independent of Pasteuriser's — granted by default to `production_manager` / `production_supervisor` alongside their existing Pasteuriser equivalents.
+- **`/job-cards/granule` rebuilt** to match Pasteuriser's: BOM picker over the real `04-GRANULATION` catalogue (105 seed rows) auto-fills the dust blend ratio and item code, auto-numbering via the same shared `next_job_card_no()` sequence, full draft → send-for-approval → approve/reject workflow, identity-verified "Verify & Sign" (replacing hand-drawn `SignaturePad`), a resumable Saved Drafts panel, and PDF export. The legacy 11-field manual dust entry stays as the fallback when no BOM is picked.
+- **Assign screen**: new `GranuleJobCardPanel` (read-only summary of today's approved card); once one exists, the Lot/Batch field locks to its (already-normalized) batch number instead of requiring free-text entry, with a two-way "not this batch / use the job card's number" toggle.
+- **Capture**: the mandatory "choose what this session is producing" gate now highlights the job-card-suggested item — a suggestion, never a pre-filled or auto-picked value, preserving this file's own explicit "no default, so a shift can never get silently recorded under the wrong item" design. Dust-quantity capture itself is untouched — that's real physical measurement, never sourced from a job card.
+- **Standalone hygiene fix, shipped first**: Granule's Lot/Batch input is now trimmed + upper-cased (`upperCode()`, the same chokepoint Pasteuriser already used everywhere) the moment it's saved — directly closes the reported "spaces between batch numbers" bug.
+
+## 2026-08-04 — Alyssa (Sieving: a changeover wasn't visible on screen; bagging order + batch number for Leaf)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`
+
+Reported (live, mid-shift): after a grade/variant changeover, the combined mass balance shown was correct but there was nothing on screen indicating a changeover had happened — the earlier batch's own figures were invisible, folded silently into one combined number.
+
+- **New "Batches this run" breakdown** on the active batch card, shown whenever there's more than one production this session: each batch (P1, P2, …) with its own variant/grade, kg in → kg out, variance and a "current"/"done" badge — so a changeover reads immediately from the screen instead of only being inferable from a combined total.
+- **Bagging groups now sort in a fixed order** (Fine Leaf, Coarse Leaf, Indent Sticks, Rolsiev Sticks, RB Blocks) instead of the order bags happened to be added in.
+- **Fine/Coarse Leaf bags now show their batch number** in the bag list — the field was already captured (leaf output is batch-tracked) but never displayed, and that identity is what downstream lines (Refining) trace back to.
+
+No schema change — this reuses `prodTotals()` and the `productions` array already in memory; existing sessions with a changeover already in them show the breakdown as soon as this loads, no re-capture needed.
+
+---
+
 ## 2026-08-04 — Alyssa (Production Orders redesign: shared UI kit, decluttered records + analytics)
 
 **Files changed:** `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx` (new)
