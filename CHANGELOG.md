@@ -3,6 +3,16 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Guard the bag-QC views against being reverted by a later hand-run of 20260813_001)
+
+**Files changed:** `supabase/migrations/20260813_004_reapply_bag_events_from_bag_tags.sql` (new, applied to production), `supabase/migrations/20260813_001_bagging_time_timestamptz.sql` (warning header only)
+
+**Production had silently reverted.** `20260813_001` was hand-run *after* `20260813_003` (001's header instructs hand-running it, and the `db-migrate` workflow is disabled). Section 3 of 001 recreates the QC views from `production.prod_bagging`, so it undid both of 003's fixes — the `bag_tags` source and the 2026-08-13 cutover filter. Symptom: the Final QC bag dropdown went back to missing ~44% of bags, and the pending queue jumped from **8 → 847** (bags as far back as 2026-07-27 reappearing as "pending"). Caught by verifying both databases rather than assuming the earlier apply had held.
+
+- **`20260813_004`** re-applies 003 verbatim and is idempotent — safe to re-run any time the views look wrong. Applied to production; staging was already correct and untouched.
+- **`20260813_001` now carries a warning header**: its view section is superseded by 003, correct order is 001 → 003, and if 001 must be re-run then 003 (or 004) has to run straight after.
+- Verification query for future reference: `SELECT pg_get_viewdef('qms.v_bag_events'::regclass, true);` must read `FROM production.bag_tags`, and `v_pending_bag_qc` must still carry the `bag_date >= DATE '2026-08-13'` filter.
+
 ## 2026-08-13 — Alyssa (New work_centre column on prod_bagging)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`

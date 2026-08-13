@@ -1,5 +1,16 @@
 -- 20260813_001_bagging_time_timestamptz.sql
 --
+-- ⚠ THE VIEW SECTION OF THIS FILE IS SUPERSEDED BY 20260813_003. DO NOT HAND-RUN
+--   THIS FILE ON ITS OWN AFTER 003 HAS BEEN APPLIED.
+--   003 re-points qms.v_bag_events at production.bag_tags and restores the
+--   2026-08-13 pending-QC cutover filter. Section 3 below still recreates those
+--   views from production.prod_bagging, so running this file last silently
+--   reverts both — that already happened once on production (the Final QC bag
+--   dropdown went back to missing ~44% of bags and the pending queue jumped from
+--   8 to 847). Correct order is 001 → 003; if you must re-run 001, run 003
+--   straight after it.
+--   The column ALTER in section 2 is still valid and idempotent.
+--
 -- Make production.prod_bagging.bagging_time a real timestamp of WHEN the bag was
 -- created, instead of a bare time-of-day.
 --
