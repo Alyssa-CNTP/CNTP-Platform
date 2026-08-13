@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: awaiting-QC panel persists until a bag is linked; run-type switch clears the serial)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_005_bag_tags_realtime.sql` (new, applied to staging + production)
+
+- **Serial showed a bag while the picker read "0 pending".** Switching run type only cleared the serial when going *to* In-Process, so the serial auto-filled for In-Process carried over into Final QC — a populated "✓ from bag" serial next to an empty bag picker, which read as a broken dropdown. Switching either way now clears the serial and bag link.
+- **The awaiting-QC cards now persist until the bag is actually linked.** They're derived directly from the pending queue instead of being accumulated from Realtime events, so a bag can't be dismissed away and forgotten, and can't linger after it's sampled. The per-card **×** is gone; the whole panel collapses to a one-line "N bags awaiting QC" header instead, and every pending bag is listed (previously capped at 4). Out-of-spec bags are flagged red in the list.
+- Realtime now also listens on `production.bag_tags` (the source since `20260813_003`), so a card appears the moment a bag is printed rather than waiting for the next capture save; `prod_bagging` stays subscribed as a cheap second trigger. New migration enables Realtime on `bag_tags` — metadata-only and guarded, applied to both databases.
+- **Note on the earlier "0 pending" report:** the production *database* was correct throughout (9 pending, readable as `authenticated` — RLS was not involved). The views had been dropped and recreated without a PostgREST schema-cache reload, so the API was serving a stale definition. Reloaded on both databases; `NOTIFY pgrst, 'reload schema'` is now part of these migrations.
+
 ## 2026-08-13 — Gustav (Sieving: a bag's serial can only be captured on its own sieve tab)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
