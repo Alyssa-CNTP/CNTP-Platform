@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Alyssa (prod_bagging.bagging_time becomes a real timestamp of when each bag was created)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
+
+**Schema change — `bagging_time` is now `timestamptz`, not `time`.** It was a bare time-of-day, so the true bagging *date* was unrecoverable — Quality's `v_bag_events.bagged_at` had to glue the time onto `created_at`'s date, and `created_at` is restamped on every save (persist() deletes+reinserts every row), so a session re-saved on a later day carried the wrong date and a drifting timestamp. Every output bag already captures `logged_at` — the exact instant it was secured, held in `draft_data` and therefore immutable — so `bagging_time` now stores that full instant verbatim.
+
+- **Migration `20260813_001`** (must be applied by hand in the Supabase SQL editor — the `db-migrate` workflow is disabled because repo migrations are stale vs the live DB): drops the QC-link views, `ALTER COLUMN bagging_time TYPE timestamptz` converting existing bare-time rows to their SAST-equivalent instant, then recreates `v_bag_events` / `v_bag_inprocess_link` / `v_bag_qc_status` / `v_pending_bag_qc` with `bagged_at` sourced straight from `bagging_time` (SAST wall-clock, so display/ordering is unchanged) falling back to `created_at`. Apply to **staging** first, then **production** when promoting.
+- **`buildBag()`** — all five output sections (Sieving, Refining, Granule, Blender, Pasteuriser) now write `bagging_time: b.logged_at` (the full ISO instant) instead of an `HH:MM` string; the `bagLoggedAtToTime()` helper is removed.
+- **Orders detail** — the "Time" column formats the timestamp to SAST `HH:MM` via a new `fmtBagTime()` (was a raw string).
+- **Rollout:** the ALTER and this deploy must land close together — old code writes `HH:MM`, new code writes a full instant, and neither is valid against the other column type, so there's a brief capture-save window. Apply the SQL, then deploy immediately.
+
 ## 2026-08-13 — Alyssa (Sieving Tower bagging_time carries the real per-bag time; notification bell renders above page content everywhere)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/layout/NotificationBell.tsx`
