@@ -174,7 +174,7 @@ export interface Database {
           acumatica_id:   string | null
           variant:        Variant | null
           kg:             number
-          bagging_time:   string | null
+          bagging_time:   string | null   // timestamptz — the bag's creation instant (logged_at)
           work_centre:    string | null   // producing line, e.g. 'Sieving Tower'
           created_at:     string
         }
