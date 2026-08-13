@@ -1140,8 +1140,22 @@ function CaptureScreen() {
     await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
     if (debag.length) await db.schema('production').from('prod_debagging').insert(debag as any)
 
-    await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
-    if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
+    // Serialed bags are physical, already-tagged bags (bag_tags has the same
+    // serial) — never blanket-delete those, or a save that races the bag being
+    // dropped from this instant's draft_data permanently loses a real bag from
+    // Quality's QC queue (this is exactly how 44% of Fine/Coarse Leaf bags went
+    // missing from prod_bagging). Upsert them instead, keyed on the
+    // (session_id, bag_serial_no) uniqueness added in 20260813_006. Bags with no
+    // serial (a few by-product lines) have no stable identity, so those still
+    // go through delete+reinsert for this session only.
+    const bagNoSerial = bag.filter((r: any) => !r.bag_serial_no)
+    const bagWithSerial = bag.filter((r: any) => r.bag_serial_no)
+    await db.schema('production').from('prod_bagging').delete().eq('session_id', sid).is('bag_serial_no', null)
+    if (bagNoSerial.length) await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
+    if (bagWithSerial.length) {
+      await db.schema('production').from('prod_bagging')
+        .upsert(bagWithSerial as any, { onConflict: 'session_id,bag_serial_no' })
+    }
 
     // ── Pasteuriser finished-product bags ──────────────────────────────────────
     // Every other section registers each output bag in bag_tags at bagging time,
