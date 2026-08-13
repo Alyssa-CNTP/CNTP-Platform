@@ -101,7 +101,10 @@ export function buildLabelPplb(bag: OutputBag): string {
   const NARROW = 3
   const barcodeW = code128WidthDots(serial, NARROW)
   const barcodeX = Math.max(40, Math.round((W - barcodeW) / 2))
-  const BARCODE_Y = 90
+  // Pushed down from 90 — the section name at y78 was printing straight into
+  // the barcode on every label (all products, not just Fine Leaf); font 3's
+  // real glyph height is taller than the old 12-dot gap allowed for.
+  const BARCODE_Y = 112
   const BARCODE_H = 150   // ~18.5mm
 
   // Fine Leaf is the "more important" product — since the paper roll can no
@@ -141,7 +144,7 @@ export function buildLabelPplb(bag: OutputBag): string {
     `B${barcodeX},${BARCODE_Y},0,1,${NARROW},${NARROW},${BARCODE_H},N,"${serial}"`,
 
     // ── Serial, centred under the barcode ──
-    `A${centreX(serial, 4)},250,0,4,1,1,N,"${serial}"`,
+    `A${centreX(serial, 4)},272,0,4,1,1,N,"${serial}"`,
 
     // ── Footer (no rule — matches the browser preview) ──
     `A20,304,0,1,1,1,N,"LOT/BATCH"`,
