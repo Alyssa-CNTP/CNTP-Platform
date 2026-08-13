@@ -982,14 +982,8 @@ export default function SievingPage() {
     const rows = data ?? []
     setPendingBags(rows)
     setPendingLoading(false)
-    // A "bag ready for QC" pop-up must disappear once its bag is no longer
-    // actually pending — sampled (via the dropdown, not just the pop-up
-    // itself), or its underlying production.prod_bagging row gone entirely
-    // (persist() deletes + reinserts every bag row on every save, so a bag
-    // that triggered a pop-up can vanish from the table on a later autosave
-    // without ever being sampled). Re-validate every alert against this fresh
-    // fetch rather than only clearing it on explicit dismiss/"Sample now".
-    setBagAlerts(prev => prev.filter(a => rows.some((r:any) => String(r.bagging_id) === String(a.bagging_id))))
+    // No pruning needed: the awaiting-QC cards are derived from this list, so
+    // refreshing it is what adds and removes them.
     return rows
   }, [db])
   useEffect(() => { loadPendingBags() }, [loadPendingBags])
@@ -1420,50 +1414,31 @@ export default function SievingPage() {
     applyBagToForm(bag)
   }
 
-  // ── "Bag ready for QC" pop-up ──────────────────────────────────────────────
-  // Fires the moment production bags a new Fine Leaf / Coarse Leaf output, via
-  // a live Supabase Realtime subscription on production.prod_bagging. This is
-  // a nudge only: the "N pending" queue above is the real backstop, so a
-  // missed or dismissed pop-up never loses a bag.
-  const [bagAlerts, setBagAlerts] = useState<any[]>([])
-  // Safety-net re-validation: loadPendingBags() already prunes any alert
-  // whose bag is no longer pending, but that only runs on an event (a new
-  // Realtime insert, a run save, or "↻"). Without this, a stale alert — e.g.
-  // one whose underlying prod_bagging row got deleted by a later autosave
-  // before anyone sampled it — could sit on screen indefinitely through a
-  // quiet period. Poll every 60s purely to self-heal; it is not how new
-  // alerts are discovered.
+  // ── "Bag awaiting QC" panel ────────────────────────────────────────────────
+  // Derived straight from the pending queue rather than accumulated from
+  // Realtime events, so every un-sampled Fine Leaf / Coarse Leaf bag keeps a
+  // card on screen until it is actually linked to a Final QC — it can't be
+  // dismissed away and forgotten, and it can't linger after the bag is done.
+  // Realtime and the 60s poll only refresh that queue; they never own the list.
+  const bagAlerts = pendingBags
+  const [alertsCollapsed, setAlertsCollapsed] = useState(false)
   useEffect(() => {
-    if (bagAlerts.length === 0) return
     const id = setInterval(loadPendingBags, 60000)
     return () => clearInterval(id)
-  }, [bagAlerts.length, loadPendingBags])
+  }, [loadPendingBags])
   useEffect(() => {
     const channel = db.channel('sieving-bag-ready')
-      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, (payload: any) => {
-        const row = payload.new
-        const product = normSdProductJs(row.product_type)
-        if (product !== 'Fine Leaf' && product !== 'Coarse Leaf') return
-        setBagAlerts(prev => prev.some(a => a.bagging_id === row.id) ? prev : [{
-          bagging_id: row.id, bag_serial_no: row.bag_serial_no, lot_number: row.lot_number,
-          product, bagged_at: row.created_at,
-        }, ...prev])
-        loadPendingBags()
-      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, () => loadPendingBags())
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'bag_tags' },     () => loadPendingBags())
       .subscribe()
     return () => { db.removeChannel(channel) }
   }, [db, loadPendingBags])
 
-  function dismissBagAlert(baggingId: string) {
-    setBagAlerts(prev => prev.filter(a => a.bagging_id !== baggingId))
-  }
-
-  // Clicking a pop-up: jump to that sieve's tab, re-fetch the pending queue
-  // (so we get the fully-enriched row — PA/leaf-shade lookups, in-process spec
-  // status — rather than the bare insert payload), open Final QC pre-filled
-  // on that exact bag, and scroll it into view.
+  // Clicking a card: jump to that sieve's tab, re-fetch the pending queue (so
+  // we work from the fully-enriched row — PA/leaf-shade lookups, in-process
+  // spec status), open Final QC pre-filled on that exact bag, and scroll it
+  // into view. The card itself stays until the bag is actually linked.
   async function openBagAlert(bagAlert: any) {
-    dismissBagAlert(bagAlert.bagging_id)
     setActiveProduct(bagAlert.product)
     const fresh = await loadPendingBags()
     const bag = fresh.find((b:any) => String(b.bagging_id) === String(bagAlert.bagging_id))
@@ -1507,27 +1482,34 @@ export default function SievingPage() {
       {/* "Bag ready for QC" pop-ups — fire live the moment production bags a
           new Fine Leaf / Coarse Leaf output. Non-blocking: dismissing one just
           removes the nudge, the bag itself stays in the pending queue above. */}
+      {/* Bags awaiting QC — stays on screen until each bag is actually linked to
+          a Final QC. Deliberately has no per-card dismiss: the whole panel can
+          be collapsed out of the way, but a bag only leaves the list by being
+          sampled, so nothing gets closed and forgotten. */}
       {bagAlerts.length > 0 && (
-        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340}}>
-          {bagAlerts.slice(0,4).map(a=>(
-            <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:'4px solid #166534',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-                <div style={{fontWeight:700,fontSize:12,color:'#166534'}}>📦 {a.product} bag ready for QC</div>
-                <button onClick={()=>dismissBagAlert(a.bagging_id)} style={{background:'none',border:'none',color:'#9ca3af',fontSize:15,cursor:'pointer',lineHeight:1,padding:0}}>×</button>
-              </div>
-              <div style={{fontSize:11,color:'#374151',marginTop:4}}>
-                {a.bag_serial_no || '(no serial)'} · lot {a.lot_number || '—'}
-                {a.bagged_at ? <><br/><span style={{color:'#6b7280'}}>Bagged {String(a.bagged_at).slice(0,10)} {String(a.bagged_at).slice(11,16)}</span></> : null}
-              </div>
-              <button onClick={()=>openBagAlert(a)}
-                style={{marginTop:8,width:'100%',padding:'7px 10px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>
-                Sample now →
-              </button>
-            </div>
-          ))}
-          {bagAlerts.length > 4 && (
-            <div style={{textAlign:'center',fontSize:10,color:'#6b7280',background:'#fff',border:'1px solid #e5e7eb',borderRadius:8,padding:'4px 8px'}}>
-              +{bagAlerts.length - 4} more bag{bagAlerts.length-4>1?'s':''} ready
+        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'calc(100vh - 90px)'}}>
+          <button onClick={()=>setAlertsCollapsed(c=>!c)}
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)'}}>
+            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC</span>
+            <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
+          </button>
+          {!alertsCollapsed && (
+            <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto'}}>
+              {bagAlerts.map(a=>(
+                <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:`4px solid ${a.inprocess_out_of_spec?'#991b1b':'#166534'}`,borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+                  <div style={{fontWeight:700,fontSize:12,color:a.inprocess_out_of_spec?'#991b1b':'#166534'}}>
+                    {a.inprocess_out_of_spec?'⚠':'📦'} {a.product} bag awaiting QC
+                  </div>
+                  <div style={{fontSize:11,color:'#374151',marginTop:4}}>
+                    {a.bag_serial_no || '(no serial)'} · lot {a.lot_number || '—'}
+                    {a.bagged_at ? <><br/><span style={{color:'#6b7280'}}>Bagged {String(a.bagged_at).slice(0,10)} {String(a.bagged_at).slice(11,16)}</span></> : null}
+                  </div>
+                  <button onClick={()=>openBagAlert(a)}
+                    style={{marginTop:8,width:'100%',padding:'7px 10px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>
+                    Sample now →
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -1696,8 +1678,15 @@ export default function SievingPage() {
             <div style={{display:'flex',gap:8}}>
               {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC (bag)','#166534']] as const).map(([val,label,col])=>(
                 <button key={val} type="button" onClick={()=>{
+                  // Switching run type always clears the serial/bag link. Without
+                  // this, the serial auto-filled for In-Process carried over into
+                  // Final QC — showing a populated "✓ from bag" serial while the
+                  // bag picker still read "0 pending / none selected", which is
+                  // exactly the contradiction that looked like a broken dropdown.
                   setF('runType',val)
-                  if (val==='in-process') { setSelectedBagId(''); setForm((f:any)=>({...f,baggingId:'',serialNumber:''})); setLotMsg(''); setTagLookupState('idle') }
+                  setSelectedBagId('')
+                  setForm((f:any)=>({...f, runType: val, baggingId:'', serialNumber:''}))
+                  setLotMsg(''); setTagLookupState('idle')
                 }}
                   style={{flex:1,padding:'13px 16px',borderRadius:8,border:`2px solid ${form.runType===val?col:'#d1d5db'}`,
                     background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
