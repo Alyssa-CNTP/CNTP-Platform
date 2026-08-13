@@ -131,11 +131,16 @@ LEFT JOIN qms.sd_runs fr
      )
 LEFT JOIN qms.v_bag_inprocess_link ln ON ln.bagging_id = be.bagging_id;
 
+-- Only bags from 2026-08-13 onward ever surface as pending (20260812_002) --
+-- the backlog before per-bag bagging_time existed is deliberately left as
+-- historical, not retro-QC'd. Preserved here since this migration recreates
+-- the view from scratch.
 CREATE OR REPLACE VIEW qms.v_pending_bag_qc AS
 SELECT *
 FROM qms.v_bag_qc_status
 WHERE qc_required
   AND NOT qc_done
+  AND bag_date >= DATE '2026-08-13'
 ORDER BY bagged_at DESC;
 
 GRANT SELECT ON qms.v_bag_events, qms.v_bag_inprocess_link,

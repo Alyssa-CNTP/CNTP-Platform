@@ -3,6 +3,18 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: fix stale "bag ready for QC" pop-ups)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
+
+Root cause of `STFL-130826-001` (and others) showing a "ready for QC" pop-up after already being sampled: `bagAlerts` only ever got cleared by an explicit dismiss or by clicking "Sample now" on that exact card — a bag sampled via the manual dropdown, or whose `production.prod_bagging` row was deleted by a later autosave (`persist()` deletes + reinserts every bag row on every save, including the 30s autosave) before it was ever pulled off the pending list, left its pop-up on screen indefinitely.
+
+- `loadPendingBags()` now re-validates every existing `bagAlerts` entry against the fresh fetch on every call, dropping any whose bag is no longer actually pending — for any reason, not just the two paths that used to clear it.
+- Added a 60s safety-net poll (only while at least one alert is showing) purely to self-heal a stale card through a quiet period with no other trigger event — new alerts still arrive live via Realtime, this is not how they're discovered.
+- Also folded in the 2026-08-13 pending-QC cutover-date filter into `20260813_001_bagging_time_timestamptz.sql`'s `v_pending_bag_qc` recreation (it was missing there, staging's file didn't have it) so re-running this migration can't silently drop that filter again.
+
+**Separately flagged, not fixed here:** production's capture screens delete-and-reinsert every output bag row on every save (explicit save, 30s autosave, submit), so a bag's `bagging_id` is not stable across a session's lifetime — a bag already linked to a Final QC run, or one that triggered a live pop-up, can have its underlying row deleted and never reinserted if a later save no longer includes it. The serial-number fallback join covers most of the practical impact, but this is a structural fragility in the capture persistence model worth a closer look on its own.
+
 ## 2026-08-13 — Alyssa (prod_bagging.bagging_time becomes a real timestamp of when each bag was created)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
