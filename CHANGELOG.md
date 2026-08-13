@@ -3,6 +3,19 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Live site showed 0 bags awaiting QC: bag_tags fallback in the QC views + a save path that can't silently drop bags)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_007_bag_events_prod_bagging_with_tag_fallback.sql` (new, applied to production + staging)
+
+Reported: the live site showed no "bags awaiting QC" pop-up and no bags in the Final QC picker, while staging — same code — showed 10. The code was not the problem: PRs #636 and #638 were both approved, merged and deployed to production successfully. It was data.
+
+- **What was wrong.** On production the Sieving Tower had bagged and printed 21 bags today (`STFL-130826-001..010`, `STCL-130826-001..006`, plus sticks/dust/blocks). All 21 were in `production.bag_tags`. **None** were in `production.prod_bagging` — that table's last Sieving Tower row was 2026-08-12, while Blender / Granule / Refining all wrote normally the same day. Since `20260813_006` re-pointed the QC views at `prod_bagging` (as requested), the pending queue was genuinely, correctly empty — it was reading a table that had lost the day's bags.
+- **Why the write failed.** `prod_bagging` isn't an append-only record of bags; it's a mirror of the capture screen's `draft_data`, rewritten by `persist()` on every save. The session's `draft_data` saved all day (`prod_sessions.updated_at` kept advancing) while the bagging write that follows it did not land. The `upsert(..., { onConflict: 'session_id,bag_serial_no' })` added in `20260813_006` resolves its target index through **PostgREST's cached constraint metadata**, so a stale cache fails the whole write — and nothing in the capture UI looks wrong when it does.
+- **Fix 1 — the save can no longer silently drop bags.** `persist()` now clears only the rows it is about to rewrite (the no-serial ones, plus the specific serials in this payload) and plain-inserts them. Same "never delete a bag that isn't in this payload" guarantee as before, with no dependency on `ON CONFLICT` or on any cached constraint metadata.
+- **Fix 2 — a printed bag can never be invisible to Quality.** `qms.v_bag_events` now reads `prod_bagging` **first** and falls back to `bag_tags` only for serials `prod_bagging` does not have (new `bag_source` column marks which). `prod_bagging` stays the source and `bagging_time` stays the timestamp for every bag it holds — the requested behaviour is unchanged — but a genuinely printed bag still reaches the QC queue if its mirror row is missing. Verified the fallback adds **no** duplicate serials.
+- Production went from **0 → 3** pending (`STFL-130826-008/009/010`; the rest of today's bags already have Final QC). Staging unchanged at 10, as expected.
+- Two pre-existing data issues spotted while verifying, both **unrelated to this change** and left alone: 21 serials appear twice within `prod_bagging` itself under two different sessions (old blends and pre-`ST` serials, not sieving), and `STFL-130826-007` / `STCL-130826-005` each have two Final QC runs — the duplicates Gustav is cleaning up manually, now blocked going forward by the previous change.
+
 ## 2026-08-13 — Gustav (Sieving: block a second Final QC result on the same bag serial)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
