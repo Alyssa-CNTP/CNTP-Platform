@@ -1144,18 +1144,28 @@ function CaptureScreen() {
     // serial) — never blanket-delete those, or a save that races the bag being
     // dropped from this instant's draft_data permanently loses a real bag from
     // Quality's QC queue (this is exactly how 44% of Fine/Coarse Leaf bags went
-    // missing from prod_bagging). Upsert them instead, keyed on the
-    // (session_id, bag_serial_no) uniqueness added in 20260813_006. Bags with no
-    // serial (a few by-product lines) have no stable identity, so those still
-    // go through delete+reinsert for this session only.
-    const bagNoSerial = bag.filter((r: any) => !r.bag_serial_no)
-    const bagWithSerial = bag.filter((r: any) => r.bag_serial_no)
-    await db.schema('production').from('prod_bagging').delete().eq('session_id', sid).is('bag_serial_no', null)
-    if (bagNoSerial.length) await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
+    // missing from prod_bagging). So only the rows this payload is about to
+    // rewrite are cleared: the no-serial ones (which have no stable identity)
+    // and the specific serials being written. Anything saved earlier under this
+    // session but absent from draft_data right now is left alone.
+    //
+    // Deliberately NOT an upsert-on-conflict: that resolves the target index
+    // through PostgREST's cached constraint metadata, so a stale cache makes
+    // the whole write fail with nothing in the UI to show for it — which is
+    // what emptied Sieving Tower's bagging rows on production for a full day
+    // (draft_data kept saving, the bagging write behind it did not). Plain
+    // delete-then-insert depends on no such metadata.
+    const bagNoSerial   = bag.filter((r: any) => !r.bag_serial_no)
+    const bagWithSerial = bag.filter((r: any) =>  r.bag_serial_no)
+    await db.schema('production').from('prod_bagging')
+      .delete().eq('session_id', sid).is('bag_serial_no', null)
     if (bagWithSerial.length) {
       await db.schema('production').from('prod_bagging')
-        .upsert(bagWithSerial as any, { onConflict: 'session_id,bag_serial_no' })
+        .delete().eq('session_id', sid)
+        .in('bag_serial_no', bagWithSerial.map((r: any) => r.bag_serial_no))
     }
+    if (bagNoSerial.length)   await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
+    if (bagWithSerial.length) await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
 
     // ── Pasteuriser finished-product bags ──────────────────────────────────────
     // Every other section registers each output bag in bag_tags at bagging time,
