@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: a bag's serial can only be captured on its own sieve tab)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+A Coarse Leaf serial (`STCL-…`) could be typed into a run on the Fine Leaf tab and vice versa, filing the run against the wrong product's specs entirely — the sieve tabs have different mesh fractions and spec ranges, so the pass/fail verdict would be meaningless.
+
+- New `productOfSerial()` / `serialTabMismatch()` helpers read the output type straight out of the serial (`ST{TYPE}-DDMMYY-NNN`), mirroring `SIEVING_TYPE_ABBR` in `components/production/capture/SievingCapture.tsx` which generates them — `FL`→Fine Leaf, `CL`→Coarse Leaf, `IS`→Indent Sticks, `RB`→Rooibos Blocks.
+- Blocked on save in **both** the new-run form (`validate()`, shown against the Serial No. field) and the inline row editor (`handleSaveClick`), with a live red-bordered warning in the editor before you even try to save.
+- **Legacy serials still work**: only a serial that provably belongs to another sieve is rejected. Hand-typed ones that predate the ST format (e.g. `13.08.05`) don't match the pattern, so they're left alone rather than being retroactively invalidated. Codes that aren't a QC product (dust, spillage) are likewise unrecognised and unaffected.
+- The two automatic paths were already safe — the Final QC picker and the in-process auto-fill both draw from the active tab's bags — so this closes the remaining manual-entry gap.
+
 ## 2026-08-13 — Gustav (Guard the bag-QC views against being reverted by a later hand-run of 20260813_001)
 
 **Files changed:** `supabase/migrations/20260813_004_reapply_bag_events_from_bag_tags.sql` (new, applied to production), `supabase/migrations/20260813_001_bagging_time_timestamptz.sql` (warning header only)
