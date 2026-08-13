@@ -3,6 +3,52 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-12 — Gustav (Bag label: remove the "Cape Natural Tea Products" header)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Removed the "CAPE NATURAL TEA PRODUCTS" header line and its border from the printed QC bag label. Purely visual, no data change.
+
+## 2026-08-12 — Gustav (Bag label: PA Level and Residue join the Bulk Density/Leaf Shade box)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- PA Level and Residue were shown as plain text rows next to Serial/Product/Lot; moved them into the same bordered, large-value box style as Bulk Density and Leaf Shade, as a 2×2 grid (Bulk Density / Leaf Shade on top, PA Level / Residue below), each divided by the same border lines. Purely visual — no data change.
+
+## 2026-08-12 — Gustav (Sieving: fresh pending-QC start date + redesigned bag label)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, DB: `qms.v_pending_bag_qc` view (staging + production)
+
+- **Pending Final QC queue now only surfaces bags from 2026-08-13 onward** (`qms.v_pending_bag_qc` filtered to `bag_date >= '2026-08-13'`). The existing backlog (bags from before the per-bag `bagging_time` fix landed) is deliberately left as historical — not retro-QC'd. Nothing destructive: no data changed, the old bags are simply excluded from the pending list/pop-up/dropdown; they remain fully visible in the Runs table and reprintable as before.
+- **Bag label redesigned**: removed Grade, Variant, Date and QC; added **PA Level** (as recorded on the run) and **Residue** (the lot's R-grade from raw-material residue analysis, same source as the existing auto-fill lookup). Serial, Product, Lot, Bulk Density and Leaf Shade unchanged.
+- New `lotKeyOf()` helper factors out the lot-normalisation used to key into `paLookup`/`rLookup`/`leafShadeLookup`, now shared by the label's residue lookup too.
+
+## 2026-08-12 — Alyssa (Refining 1/2 debagging: scan-first flow with a bag-record confirmation popup — PROTOTYPE)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`
+
+Reworked Refining debagging around scanning as the main path (prototype for review before rolling out to Granule/Blender/Pasteuriser). A single **"Scan a bag to debag"** field auto-looks-up (`validateBagScan`) once the serial settles and opens a **confirmation popup** with the bag's `bag_tags` record — product type, weight, variant, lot/batch, where it was made, when — plus a validity line (✓ valid · ⚠ already consumed / wrong variant · not registered). **"Consume into Refining 1"** registers it as debagged-in here; already-consumed is blocked, mismatches warn+allow, not-found offers **"Enter manually"**. Pick-from-system and manual kept as side options. Refining 1 & 2 only, for review.
+
+## 2026-08-12 — Gustav (Refining/Sieving Tower: carry each bag's real add-time into bagging_time)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Root-caused why the Sieving Final QC picker showed the same timestamp for many different bags: `production.prod_bagging` rows for Refining (the sieving tower) never carried a `bagging_time` at all, and `persist()` fully deletes-and-reinserts every bag row for a session on every save (explicit save, 30s autosave, and submit) — so their `created_at` was really "when this session was last saved," identical across every bag in it and drifting forward the whole time the operator kept the screen open. Not a Quality-side bug; the per-bag time simply didn't exist yet on the production side.
+
+- `RefiningOutputBag.logged_at` already captures the exact moment the operator adds each output bag (set in `addOutputBag()`) — it just wasn't being carried through to the database. Granule/Blender/Pasteuriser already pass their own equivalent (`b.time`) into `bagging_time`; Refining was the one section that didn't.
+- `buildBag()`'s Refining branch now sets `bagging_time` from `b.logged_at` via a new `bagLoggedAtToTime()` helper, formatted the same way Granule's `clockNow()` already is (`Africa/Johannesburg`, `HH:MM`) so it matches the sibling sections' convention exactly.
+- No migration needed — `bagging_time` already exists on `prod_bagging`. Only affects **new** bags recorded after this deploys; existing rows keep falling back to the session's `created_at` as before (unchanged, no regression).
+- Once this is live, `qms.v_bag_events.bagged_at` (already shipped) picks up the real per-bag time automatically with no further Quality-side change, since it already prefers `bagging_time` over `created_at`.
+
+## 2026-08-12 — Gustav (Sieving: live "bag ready for QC" pop-up)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260812_001_prod_bagging_realtime.sql` (new, applied to staging + production)
+
+- The Sieving page now pops up the moment production bags a new **Fine Leaf** or **Coarse Leaf** output — via a live Supabase Realtime subscription on `production.prod_bagging` (`INSERT`), not polling. Rooibos Blocks / Indent Sticks are ignored (no QC stamp, as before).
+- Each pop-up shows the bag's serial, lot, and the **time production actually bagged it** (not the QC's own capture time — that stays locked to the moment the QC saves, per the existing rule). Clicking **"Sample now"** switches to that bag's product tab, re-fetches the pending queue so the fully-enriched bag record is used (PA level, leaf shade, in-process out-of-spec status all pre-filled, exactly like the manual picker), opens Final QC pre-selected on that exact bag, and scrolls the form into view. Dismissing a pop-up only clears the nudge — the bag stays in the persistent "N pending" queue, so nothing is ever silently lost even if a pop-up is missed or the page isn't open when it fires.
+- `loadPendingBags()` now returns the fetched rows (not just setting state) so the pop-up's click handler can use the fresh list immediately rather than racing a state update; `selectPendingBag()` was split into a reusable `applyBagToForm(bag)` so the manual dropdown and the pop-up pre-fill identically.
+- New migration enables Realtime on `production.prod_bagging` (`ALTER PUBLICATION supabase_realtime ADD TABLE ...`) — metadata-only, no data/RLS/behaviour change, applied to both staging and production immediately since it's harmless in either order.
+
 ## 2026-08-12 — Gustav (Sieving: Serial No. dropdown in the row editor)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

@@ -161,6 +161,22 @@ const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sdIsOrg(v: string) { return v==='ORG' || v==='RA-ORG' || v==='FT-ORG' || v.toLowerCase().includes('organic') }
+// Same normalisation used everywhere a lot number keys into paLookup/
+// rLookup/leafShadeLookup, so a bag's lot always matches its raw-material
+// record regardless of dash spacing ("GS-0098" / "GS 0098" / "gs-0098").
+function lotKeyOf(lot: string | null | undefined) { return (lot || '').trim().toUpperCase().replace(/\s*-\s*/g, '-') }
+// Mirrors qms.norm_sd_product() (supabase/migrations/20260807_001_sieving_bag_qc_link.sql)
+// — used client-side to classify a raw production.prod_bagging Realtime insert
+// payload, since a SQL function can't be called from the browser.
+function normSdProductJs(p: string | null | undefined): string | null {
+  if (!p) return null
+  const s = p.toLowerCase()
+  if (s.includes('coarse leaf')) return 'Coarse Leaf'
+  if (s.includes('fine leaf')) return 'Fine Leaf'
+  if (s.includes('indent stick')) return 'Indent Sticks'
+  if (s.includes('rb block') || s.includes('rooibos block') || s.trim() === 'blocks') return 'Rooibos Blocks'
+  return null
+}
 function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []
   return sdIsOrg(variant) ? s.meshForORG : s.meshForCON
@@ -930,8 +946,10 @@ export default function SievingPage() {
     setPendingLoading(true)
     const { data } = await db.schema('qms').from('v_pending_bag_qc')
       .select('*').order('bagged_at', { ascending: false }).limit(300)
-    setPendingBags(data ?? [])
+    const rows = data ?? []
+    setPendingBags(rows)
     setPendingLoading(false)
+    return rows
   }, [db])
   useEffect(() => { loadPendingBags() }, [loadPendingBags])
 
@@ -1244,7 +1262,7 @@ export default function SievingPage() {
     // A Final QC clears that bag from the pending queue; an out-of-spec
     // in-process run changes which bags are flagged, so refresh either way.
     loadPendingBags()
-    if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag })
+    if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag, residue: rLookup[lotKeyOf(mapped.lotNumber)] || null })
     setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle'); setSelectedBagId('')
     setLastSaved(new Date()); setSaving(false)
   }
@@ -1300,14 +1318,13 @@ export default function SievingPage() {
     } catch { setTagLookupState('idle') }
   }
 
-  // Picking a pending bag pre-fills the Final QC form from production data.
-  // Everything filled here stays editable so the QC can verify/correct it —
-  // except the time, which is always the capture moment.
-  function selectPendingBag(bagId: string) {
-    setSelectedBagId(bagId)
-    if (!bagId) { setLotMsg(''); return }
-    const bag = pendingBags.find((b:any) => String(b.bagging_id) === String(bagId))
-    if (!bag) return
+  // Pre-fills the Final QC form from a bag record (a row of qms.v_bag_qc_status
+  // / v_pending_bag_qc). Shared by the manual dropdown and the "ready for QC"
+  // pop-up, so picking a bag behaves identically either way. Everything filled
+  // here stays editable so the QC can verify/correct it — except the time,
+  // which is always the capture moment.
+  function applyBagToForm(bag: any) {
+    setSelectedBagId(bag.bagging_id)
     const lotKey  = (bag.lot_number || '').trim().toUpperCase().replace(/\s*-\s*/g,'-')
     const shade   = leafShadeLookup[lotKey]
     const pa      = paLookup[lotKey]
@@ -1334,6 +1351,57 @@ export default function SievingPage() {
     setTagLookupState('found')
   }
 
+  function selectPendingBag(bagId: string) {
+    setSelectedBagId(bagId)
+    if (!bagId) { setLotMsg(''); return }
+    const bag = pendingBags.find((b:any) => String(b.bagging_id) === String(bagId))
+    if (!bag) return
+    applyBagToForm(bag)
+  }
+
+  // ── "Bag ready for QC" pop-up ──────────────────────────────────────────────
+  // Fires the moment production bags a new Fine Leaf / Coarse Leaf output, via
+  // a live Supabase Realtime subscription on production.prod_bagging — no
+  // polling. This is a nudge only: the "N pending" queue above is the real
+  // backstop, so a missed or dismissed pop-up never loses a bag.
+  const [bagAlerts, setBagAlerts] = useState<any[]>([])
+  useEffect(() => {
+    const channel = db.channel('sieving-bag-ready')
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, (payload: any) => {
+        const row = payload.new
+        const product = normSdProductJs(row.product_type)
+        if (product !== 'Fine Leaf' && product !== 'Coarse Leaf') return
+        setBagAlerts(prev => prev.some(a => a.bagging_id === row.id) ? prev : [{
+          bagging_id: row.id, bag_serial_no: row.bag_serial_no, lot_number: row.lot_number,
+          product, bagged_at: row.created_at,
+        }, ...prev])
+        loadPendingBags()
+      })
+      .subscribe()
+    return () => { db.removeChannel(channel) }
+  }, [db, loadPendingBags])
+
+  function dismissBagAlert(baggingId: string) {
+    setBagAlerts(prev => prev.filter(a => a.bagging_id !== baggingId))
+  }
+
+  // Clicking a pop-up: jump to that sieve's tab, re-fetch the pending queue
+  // (so we get the fully-enriched row — PA/leaf-shade lookups, in-process spec
+  // status — rather than the bare insert payload), open Final QC pre-filled
+  // on that exact bag, and scroll it into view.
+  async function openBagAlert(bagAlert: any) {
+    dismissBagAlert(bagAlert.bagging_id)
+    setActiveProduct(bagAlert.product)
+    const fresh = await loadPendingBags()
+    const bag = fresh.find((b:any) => String(b.bagging_id) === String(bagAlert.bagging_id))
+    if (!bag) { alert(`${bagAlert.bag_serial_no || 'That bag'} was already sampled — nothing to do.`); return }
+    setShowForm(true)
+    setEditRunId(null)
+    setShowSpecEditor(false)
+    applyBagToForm(bag)
+    setTimeout(() => document.getElementById('sieving-new-run-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
   const selectedBag = pendingBags.find((b:any) => String(b.bagging_id) === String(selectedBagId)) || null
 
   // The bag picker must only offer bags of the sieve currently open (Fine Leaf
@@ -1354,7 +1422,7 @@ export default function SievingPage() {
       const { data } = await db.schema('qms').from('v_bag_qc_status').select('*').eq('bag_serial_no', row.serialNumber).order('bagged_at', { ascending: false }).limit(1)
       bag = data?.[0] ?? null
     }
-    setPrintBag({ ...row, bag })
+    setPrintBag({ ...row, bag, residue: rLookup[lotKeyOf(row.lotNumber)] || null })
   }
 
   const inputSt: React.CSSProperties = { padding:'5px 8px', border:'1px solid #d1d5db', borderRadius:6, fontSize:11, width:'100%', boxSizing:'border-box' }
@@ -1363,6 +1431,35 @@ export default function SievingPage() {
 
   return (
     <div className="p-5 max-w-[1400px]">
+      {/* "Bag ready for QC" pop-ups — fire live the moment production bags a
+          new Fine Leaf / Coarse Leaf output. Non-blocking: dismissing one just
+          removes the nudge, the bag itself stays in the pending queue above. */}
+      {bagAlerts.length > 0 && (
+        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340}}>
+          {bagAlerts.slice(0,4).map(a=>(
+            <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:'4px solid #166534',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                <div style={{fontWeight:700,fontSize:12,color:'#166534'}}>📦 {a.product} bag ready for QC</div>
+                <button onClick={()=>dismissBagAlert(a.bagging_id)} style={{background:'none',border:'none',color:'#9ca3af',fontSize:15,cursor:'pointer',lineHeight:1,padding:0}}>×</button>
+              </div>
+              <div style={{fontSize:11,color:'#374151',marginTop:4}}>
+                {a.bag_serial_no || '(no serial)'} · lot {a.lot_number || '—'}
+                {a.bagged_at ? <><br/><span style={{color:'#6b7280'}}>Bagged {String(a.bagged_at).slice(0,10)} {String(a.bagged_at).slice(11,16)}</span></> : null}
+              </div>
+              <button onClick={()=>openBagAlert(a)}
+                style={{marginTop:8,width:'100%',padding:'7px 10px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>
+                Sample now →
+              </button>
+            </div>
+          ))}
+          {bagAlerts.length > 4 && (
+            <div style={{textAlign:'center',fontSize:10,color:'#6b7280',background:'#fff',border:'1px solid #e5e7eb',borderRadius:8,padding:'4px 8px'}}>
+              +{bagAlerts.length - 4} more bag{bagAlerts.length-4>1?'s':''} ready
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Status bar */}
       {loading && <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',background:'#eff6ff',borderRadius:7,marginBottom:10,fontSize:12,color:'#1e40af'}}>Loading sieving runs…</div>}
       {sdError && <div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:7,marginBottom:10,fontSize:12,color:'#991b1b',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -1479,30 +1576,24 @@ export default function SievingPage() {
               <button onClick={()=>setPrintBag(null)} style={{background:'rgba(255,255,255,.2)',border:'none',borderRadius:6,color:'#fff',fontSize:18,cursor:'pointer',padding:'0 8px'}}>×</button>
             </div>
             <div id="bag-qc-label" style={{padding:18,fontFamily:'monospace',color:'#111'}}>
-              <div style={{textAlign:'center',fontWeight:800,fontSize:15,borderBottom:'2px solid #111',paddingBottom:6,marginBottom:10}}>
-                CAPE NATURAL TEA PRODUCTS
-              </div>
               <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 10px',fontSize:13}}>
                 <b>SERIAL</b><span>{printBag.serialNumber||'—'}</span>
                 <b>PRODUCT</b><span>{printBag.product||activeProduct}</span>
                 <b>LOT</b><span>{printBag.lotNumber||'—'}</span>
-                <b>GRADE</b><span>{printBag.grade||'—'}</span>
-                <b>VARIANT</b><span>{printBag.variant||'—'}</span>
-                <b>DATE</b><span>{printBag.date||''} {printBag.time||''}</span>
-                <b>QC</b><span>{printBag.qcName||'—'}</span>
               </div>
-              <div style={{marginTop:12,padding:'10px 12px',border:'2px solid #111',borderRadius:6,display:'flex',justifyContent:'space-around',textAlign:'center'}}>
-                <div>
-                  <div style={{fontSize:10,letterSpacing:'.08em'}}>BULK DENSITY</div>
-                  <div style={{fontSize:22,fontWeight:800}}>{printBag.bulkDensity||'—'}</div>
-                  <div style={{fontSize:9}}>cc/100g</div>
-                </div>
-                <div style={{borderLeft:'1px solid #111'}} />
-                <div>
-                  <div style={{fontSize:10,letterSpacing:'.08em'}}>LEAF SHADE</div>
-                  <div style={{fontSize:22,fontWeight:800}}>{printBag.leafShade||'—'}</div>
-                  <div style={{fontSize:9}}>1–11</div>
-                </div>
+              <div style={{marginTop:12,border:'2px solid #111',borderRadius:6,display:'grid',gridTemplateColumns:'1fr 1fr'}}>
+                {([
+                  ['BULK DENSITY', printBag.bulkDensity, 'cc/100g'],
+                  ['LEAF SHADE',   printBag.leafShade,   '1–11'],
+                  ['PA LEVEL',     printBag.paLevel,      ''],
+                  ['RESIDUE',      printBag.residue,      ''],
+                ] as [string, any, string][]).map(([label, value, unit], i) => (
+                  <div key={label} style={{textAlign:'center',padding:'10px 8px',borderTop:i>=2?'1px solid #111':undefined,borderLeft:i%2===1?'1px solid #111':undefined}}>
+                    <div style={{fontSize:10,letterSpacing:'.08em'}}>{label}</div>
+                    <div style={{fontSize:22,fontWeight:800}}>{value||'—'}</div>
+                    {unit && <div style={{fontSize:9}}>{unit}</div>}
+                  </div>
+                ))}
               </div>
               {printBag.bag?.inprocess_out_of_spec && (
                 <div style={{marginTop:10,padding:'6px 10px',border:'2px solid #991b1b',color:'#991b1b',borderRadius:6,fontSize:11,fontWeight:700,textAlign:'center'}}>
@@ -1519,7 +1610,7 @@ export default function SievingPage() {
       )}
 
       {showForm && canWrite && (
-        <div style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
+        <div id="sieving-new-run-form" style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
             <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
