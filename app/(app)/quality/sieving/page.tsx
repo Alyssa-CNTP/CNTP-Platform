@@ -60,7 +60,7 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     // CON/RA-CON/FT-CON use >12 mesh; ORG/RA-ORG/FT-ORG use >10 mesh
     meshForORG: ['>6 (%)','>10 (%)','>18 (%)','>40 (%)','Dust (%)'],
     meshForCON: ['>6 (%)','>12 (%)','>18 (%)','>40 (%)','Dust (%)'],
-    hasLeafShade: true, hasNeedleCount: true, needle_max: 12,
+    hasLeafShade: true, hasNeedleCount: true, needle_max: 12, qcFieldsFinalOnly: true,
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-002.1 Export CON/RA-CON: >12:5-25, >18:60-85, >40:5-20, Dust:0-1, Shade:4-11
@@ -93,7 +93,7 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     // CON/RA-CON/FT-CON use >12 mesh; ORG/RA-ORG/FT-ORG use >10 mesh (IPS-SIEV-001.2)
     meshForORG: ['>6 (%)','>10 (%)','>18 (%)','>40 (%)','Dust (%)'],
     meshForCON: ['>6 (%)','>12 (%)','>18 (%)','>40 (%)','Dust (%)'],
-    hasLeafShade: true, hasNeedleCount: true, needle_max: 12,
+    hasLeafShade: true, hasNeedleCount: true, needle_max: 12, qcFieldsFinalOnly: true,
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-001.1 Export CON/RA-CON: >12:0-1, >18:15-35, >40:50-85, Dust:0-2, Shade:4-11
@@ -183,6 +183,15 @@ function normSdProductJs(p: string | null | undefined): string | null {
 // generates them. Only the codes that map to a sieve tab are listed — anything
 // else (dust, spillage, an unknown two-letter stem) is not a QC product and is
 // deliberately left unrecognised.
+// Formats a UTC timestamp as its Africa/Johannesburg (SAST) calendar date,
+// YYYY-MM-DD — matching the <input type="date"> value format. A plain
+// `.slice(0,10)` on the raw UTC string is off by one for anything tagged
+// between 00:00-01:59 SAST (still "yesterday" in UTC).
+function sastDateStr(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(iso))
+}
 const SERIAL_CODE_TO_PRODUCT: Record<string, string> = {
   FL: 'Fine Leaf', CL: 'Coarse Leaf', IS: 'Indent Sticks', RB: 'Rooibos Blocks',
 }
@@ -742,7 +751,8 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))', gap:8, marginBottom:12 }}>
         {[['Date','date','date'],['Lot Number','lotNumber','text'],['Serial No.','serialNumber','text'],
-          ['QC Name','qcName','text'],['Time','time','text'],['Bulk Density','bulkDensity','number']]
+          ['QC Name','qcName','text'],['Time','time','text'],
+          ...(!specDef.noBulkDensity&&(!specDef.qcFieldsFinalOnly||fields.runType==='final')?[['Bulk Density','bulkDensity','number']]:[])]
           .map(([label,key,type]) => (
             <div key={key}>
               <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
@@ -787,7 +797,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
             <input type="number" min="0" value={fields.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={inputSt}/>
           </div>
         )}
-        {specDef.hasLeafShade && (
+        {specDef.hasLeafShade && (!specDef.qcFieldsFinalOnly||fields.runType==='final') && (
           <div>
             <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Leaf Shade</label>
             <input type="number" min="1" max="11" value={fields.leafShade} onChange={e=>setF('leafShade',e.target.value)} style={inputSt}/>
@@ -1361,7 +1371,10 @@ export default function SievingPage() {
         .select('lot_number,variant,destination,created_at').eq('serial_number', s).maybeSingle()
       if (!data) { setTagLookupState('notfound'); return }
       const grade = DEST_TO_GRADE[data.destination ?? ''] ?? 'Export'
-      const date  = data.created_at ? data.created_at.slice(0, 10) : ''
+      // created_at is a UTC timestamptz — slicing it directly would show the
+      // wrong calendar day for any bag tagged between 00:00-01:59 SAST (still
+      // "yesterday" in UTC). Format in Africa/Johannesburg instead.
+      const date  = data.created_at ? sastDateStr(data.created_at) : ''
       setForm((f: any) => ({
         ...f,
         ...(data.lot_number ? { lotNumber: data.lot_number } : {}),
@@ -1850,7 +1863,7 @@ export default function SievingPage() {
               </select>
               <ErrMsg field="variant"/>
             </div>
-            {!specDef.noBulkDensity&&<div>
+            {!specDef.noBulkDensity&&(!specDef.qcFieldsFinalOnly||form.runType==='final')&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.bulkDensity?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g){form.runType==='final'?' *':''}</label>
               <input type="number" min="0" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,borderColor:errors.bulkDensity?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="bulkDensity"/>
@@ -1865,7 +1878,7 @@ export default function SievingPage() {
                 {['P0','P1','P2','P3','P4','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
               </select>
             </div>
-            {specDef.hasLeafShade&&<div>
+            {specDef.hasLeafShade&&(!specDef.qcFieldsFinalOnly||form.runType==='final')&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.leafShade?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 Leaf Shade (1–11) {form.leafShade&&<span style={{fontSize:9,color:'#166534',fontWeight:400,marginLeft:4}}>✓ auto</span>}
               </label>

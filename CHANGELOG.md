@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: Bulk Density/Leaf Shade are Final-QC-only for Fine/Coarse Leaf; fix a latent SAST date bug in the bag-tag lookup)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **Bulk Density and Leaf Shade no longer show on In-Process runs for Fine Leaf / Coarse Leaf** — both the new-run form and the inline row editor. They're properties of the finished bag (sampled once at Final QC), not something an In-Process sieve reading captures; showing them there implied they should be filled in twice. New `qcFieldsFinalOnly` spec flag scopes this to Fine/Coarse Leaf only — Rooibos Blocks' In-Process Bulk Density is untouched, since that wasn't reported as wrong. `validate()` already only required them on Final QC; this fixes the display side to match.
+- **Fixed a real (if rare) date bug while investigating a "wrong-looking" bag serial/date report**: `lookupBagTag()` read `bag_tags.created_at` (UTC) with a plain `.slice(0,10)`, so a bag tagged between 00:00–01:59 SAST would show *yesterday's* date on the QC form — off by one because the UTC calendar day still lags SAST at that hour. Added `sastDateStr()` (formats via `Intl.DateTimeFormat` in `Africa/Johannesburg`) and used it there instead.
+- **The specific bag/date the report was about turned out to be correct, not a bug**: `ST-120826-023` / 12/08/2026 was genuinely the latest Fine Leaf bag at the time (no Fine Leaf bag had been sieved yet that day) — its serial predates the "serial encodes output type" change (`STFL-…`), which is why it looks like a different format from newer bags. Nothing to fix there; it was accurately reporting production hadn't bagged Fine Leaf yet.
+
 ## 2026-08-13 — Gustav (prod_bagging made the reliable source again for bag-QC views, backfilled from bag_tags, timestamps in SAST)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_006_prod_bagging_reliable_source.sql` (new, applied to staging + production)
