@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -35,7 +36,34 @@ export default function NotificationBell() {
   const [open, setOpen]   = useState(false)
   const [toast, setToast] = useState<Note | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // The panel and toast are portalled to <body> so they escape the topbar's
+  // stacking context (the header's backdrop-filter creates one, which otherwise
+  // traps them beneath page content on some pages). Because they're fixed to the
+  // viewport, anchor the panel to the live bell-button rect and keep it in sync
+  // while open.
+  const [mounted, setMounted]   = useState(false)
+  const [anchor, setAnchor]     = useState<{ top: number; right: number }>({ top: 52, right: 16 })
+  useEffect(() => { setMounted(true) }, [])
+
+  const positionPanel = useCallback(() => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (r) setAnchor({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    positionPanel()
+    window.addEventListener('resize', positionPanel)
+    window.addEventListener('scroll', positionPanel, true)
+    return () => {
+      window.removeEventListener('resize', positionPanel)
+      window.removeEventListener('scroll', positionPanel, true)
+    }
+  }, [open, positionPanel])
 
   const load = useCallback(async () => {
     if (!userId) return
@@ -76,7 +104,11 @@ export default function NotificationBell() {
 
   useEffect(() => {
     function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      // The panel lives in a body portal, so it's outside `ref` — check it too,
+      // otherwise clicking inside the panel would count as an outside click.
+      if (ref.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handle)
     return () => document.removeEventListener('mousedown', handle)
@@ -113,6 +145,7 @@ export default function NotificationBell() {
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button
+        ref={btnRef}
         onClick={() => setOpen(o => !o)}
         style={{
           width: 32, height: 32, borderRadius: 8,
@@ -138,8 +171,10 @@ export default function NotificationBell() {
         )}
       </button>
 
-      {/* Toast — pops the moment a notification arrives */}
-      {toast && !open && (
+      {/* Toast — pops the moment a notification arrives. Portalled to <body> so
+          it renders above page content regardless of the topbar's stacking
+          context. */}
+      {mounted && toast && !open && createPortal(
         <button
           onClick={() => openNote(toast)}
           style={{
@@ -151,15 +186,16 @@ export default function NotificationBell() {
         >
           <p style={{ fontWeight: 600, fontSize: 12, color: toast.urgent ? '#B81C1C' : '#1A2415', margin: 0 }}>{toast.title}</p>
           {toast.body && <p style={{ fontSize: 11, color: '#637056', margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toast.body}</p>}
-        </button>
+        </button>,
+        document.body,
       )}
 
-      {open && (
-        <div style={{
-          position: 'absolute', top: 40, right: 0, width: 340, maxHeight: 460,
+      {mounted && open && createPortal(
+        <div ref={panelRef} style={{
+          position: 'fixed', top: anchor.top, right: anchor.right, width: 340, maxHeight: 460,
           background: '#fff', border: '1px solid #E4E7EC', borderRadius: 14,
           boxShadow: '0 12px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)',
-          overflow: 'hidden', zIndex: 9999, display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', zIndex: 10000, display: 'flex', flexDirection: 'column',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px 10px', borderBottom: '1px solid #E4E7EC', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -220,7 +256,8 @@ export default function NotificationBell() {
               )
             })}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
