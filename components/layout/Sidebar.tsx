@@ -51,6 +51,7 @@ export const NAV: NavItem[] = [
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'], permission: 'can_access_bag_tracking', orPermission: true },
   { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'] },
+  { href: '/notebooks',                 label: 'Note Books (GRN / DN)',      icon: BookOpen,        group: 'Operations', permission: 'can_access_notebooks' },
 
   // ── HR — just two doors in. Staff Directory is people + how they sign in
   // (gated — it's OTHER people's data); Training is the whole qualification

@@ -20,6 +20,16 @@ export const SUBJECTS: Record<string, SubjectDef> = {
     externalPermission: 'can_request_external_signature',
     voidPermission: 'can_request_external_signature',
   },
+  // A page in a GRN / Delivery Note book. Both acknowledgement blocks on the
+  // page ("Received by" and "Transporter") are separate subjects — the
+  // subject_id is `<document id>:received` / `<document id>:transporter`, so
+  // esign's one-pending-request-per-subject rule holds for each block on its
+  // own. See lib/notebooks/types.ts (esignSubjectId).
+  notebook_document: {
+    internalPermission: 'can_sign_notebook_doc',
+    externalPermission: 'can_request_external_signature',
+    voidPermission: 'can_request_external_signature',
+  },
 }
 
 export function getSubject(subjectType: string): SubjectDef | null {

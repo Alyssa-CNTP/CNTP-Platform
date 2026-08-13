@@ -116,6 +116,11 @@ export type PermissionKey =
   | 'can_sign_dispatch_doc'            // sign a dispatch document in-app (own on-file signature)
   | 'can_request_external_signature'   // send a driver/customer an external signing link; void/resend
   | 'can_verify_dispatch_doc'          // mark a signed dispatch document verified
+  // Note Books — the GRN / Delivery Note books, one pair per site
+  | 'can_access_notebooks'             // open the module and read any site's book
+  | 'can_create_notebook_doc'          // open a new page (takes the next number) + fill it in
+  | 'can_sign_notebook_doc'            // sign a note in-app with your own on-file signature
+  | 'can_void_notebook_doc'            // void an issued note (the number is kept, never reused)
   // Maintenance
   | 'can_access_maintenance'
   | 'can_raise_breakdown'
@@ -174,6 +179,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_assign_tickets', 'can_access_workspace',
   'can_access_bag_tracking',
   'can_access_logistics','can_sign_dispatch_doc','can_request_external_signature','can_verify_dispatch_doc',
+  'can_access_notebooks','can_create_notebook_doc','can_sign_notebook_doc','can_void_notebook_doc',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_access_hr',
@@ -362,6 +368,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_roster: true,
     can_edit_roster_production: true, can_delete_roster_production: true,
     can_edit_roster_maintenance: true, can_submit_roster_maintenance: true,
+    // Note Books — supervises what the gate writes, so can also correct (void) it
+    can_access_notebooks: true, can_create_notebook_doc: true,
+    can_sign_notebook_doc: true, can_void_notebook_doc: true,
   },
 
   // ── Production Manager — Supervisor Hub sign-off tier. Sees everything the
@@ -388,6 +397,10 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   store_supervisor: {
     can_view_roster: true,
     can_edit_roster_store: true, can_submit_roster_store: true, can_delete_roster_store: true,
+    // Note Books — the store is where goods are physically received and handed
+    // over, so this is the role that actually writes the books.
+    can_access_notebooks: true, can_create_notebook_doc: true,
+    can_sign_notebook_doc: true, can_void_notebook_doc: true,
   },
 
   // ── Health & Safety — owns H&S + Cleaning roster sections ──────────────────
@@ -411,12 +424,15 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // One of the two stock counters (the "Warehouse Supervisor" count side).
     can_submit_count: true, can_view_ops_dashboard: true,
     can_view_live_history: true,
+    // Note Books — writes and signs GRNs/DNs; voiding stays a supervisor call.
+    can_access_notebooks: true, can_create_notebook_doc: true, can_sign_notebook_doc: true,
   },
 
   stock_controller: {
     // The second stock counter (the "Stock" count side).
     can_submit_count: true, can_view_ops_dashboard: true,
     can_view_live_history: true,
+    can_access_notebooks: true, can_create_notebook_doc: true, can_sign_notebook_doc: true,
   },
 
   // ── Maintenance roles ──────────────────────────────────────────────────────
@@ -509,6 +525,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_shift_report: true, can_view_capture_ratings: true,
     // Maintenance (view module — no job-card actions)
     can_access_maintenance: true,
+    // Note Books (read-only — writing a note is a floor/store action)
+    can_access_notebooks: true,
     // Management & Reporting
     can_view_management: true,
     can_view_reports:    true,
@@ -735,6 +753,17 @@ export const PERMISSION_GROUPS: {
     // this permission grants it to anyone else.
     permissions: [
       { key: 'can_access_logistics', label: 'Access the Logistics module (grant to other departments)' },
+    ],
+  },
+  {
+    group: 'Note Books (GRN / Delivery Notes)',
+    // No single department — the books are written at the gate and the store,
+    // and read by Quality, Production and Management alike.
+    permissions: [
+      { key: 'can_access_notebooks',    label: 'Open the GRN / Delivery Note books (read any site)' },
+      { key: 'can_create_notebook_doc', label: 'Write a new note (takes the next number in that book)' },
+      { key: 'can_sign_notebook_doc',   label: 'Sign a note in-app with your own signature' },
+      { key: 'can_void_notebook_doc',   label: 'Void an issued note' },
     ],
   },
   {

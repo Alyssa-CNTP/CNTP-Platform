@@ -53,6 +53,12 @@ const ROUTE_GUARDS: Array<{
   // Stock Control (Operations) — printer assignment + future stock modules
   { prefix: '/stock-control',        departments: ['Production','Management'] },
 
+  // Note Books (GRN / Delivery Notes) — cross-department by design: the books
+  // are written at the gate and the store, and read by Quality, Production and
+  // Management. Gated purely on the permission so access follows the people who
+  // actually work a book, not their department label.
+  { prefix: '/notebooks',            permission: 'can_access_notebooks' },
+
   // Production
   { prefix: '/count',                departments: ['Production'], permission: 'can_submit_count'       },
   { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
