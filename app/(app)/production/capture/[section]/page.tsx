@@ -71,12 +71,12 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 // WORK_CENTRE_FOR_SECTION keys off this same pair).
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
 const isPasteuriser = (id: string) => id === 'pasteuriser'
-// RefiningOutputBag.logged_at is a UTC ISO instant; prod_bagging.bagging_time
-// is a bare "time" column with no timezone, so this renders the wall-clock
-// time in Africa/Johannesburg — the same convention Granule/Blender/
-// Pasteuriser already use for their own per-bag b.time.
-const bagLoggedAtToTime = (iso?: string | null) =>
-  iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : null
+// prod_bagging.bagging_time is a timestamptz holding the exact moment each
+// output bag was created — every section captures this client-side as the bag's
+// logged_at (a UTC ISO instant) when it's secured. We store that instant
+// verbatim so the timestamp reflects when the bag was actually bagged, immune to
+// persist()'s delete+reinsert (which restamps created_at on every save). The
+// SAST wall-clock conversion happens at read/display time, not here.
 
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
@@ -963,7 +963,7 @@ function CaptureScreen() {
               // consumers (Quality's Final QC picker) show the true bagging
               // time instead of when the whole session was last saved — every
               // other output section already does this via its own b.time.
-              bagging_time: bagLoggedAtToTime(b.logged_at),
+              bagging_time: b.logged_at || null,
             })
           })
         })
@@ -975,7 +975,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
             product_type: b.item, acumatica_id: b.code || null, variant: prod.variant,
-            kg: n(b.weight), bagging_time: b.time || null,
+            kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
         ;(gd.dustOutputs ?? []).forEach(r => {
@@ -996,7 +996,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: prod.lot || null,
             product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
-            kg: n(b.weight), bagging_time: b.time || null,
+            kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
       } else if (isPasteuriser(sectionId)) {
@@ -1010,7 +1010,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
             product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: prod.variant,
-            kg, bagging_time: l.time || null,
+            kg, bagging_time: l.logged_at || null,
           })
         })
         // By-products (B) — recorded as bagging rows so they count in the output total.
@@ -1038,11 +1038,15 @@ function CaptureScreen() {
             // logged_at is immutable, so the time stays fixed instead of drifting
             // to "when the session was last saved". Quality's Final QC picker
             // then shows the true per-bag time.
-            bagging_time: bagLoggedAtToTime(b.logged_at),
+            bagging_time: b.logged_at || null,
           })
         })
       }
     })
+    // Stamp the work centre (Sieving Tower / Refining 1 / … / Pasteuriser) on
+    // every output bag so prod_bagging carries the producing line directly,
+    // without having to join back through prod_sessions.section_id.
+    rows.forEach(r => { r.work_centre = meta.name })
     return rows
   }
   // Per-production totals — dispatches by section type. `sh` is the shift the

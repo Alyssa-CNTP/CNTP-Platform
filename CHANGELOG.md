@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Alyssa (prod_bagging: bagging_time → timestamptz + new work_centre column — promoted to production)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`
+
+Promotes to production the two `prod_bagging` changes already on staging:
+
+- **`bagging_time` → `timestamptz`.** `buildBag()`'s five output sections now write each bag's immutable `logged_at` instant (the moment it was secured) instead of an `HH:MM` string; the `bagLoggedAtToTime()` helper is removed. The column type was converted on the production DB (migration `20260813_001`). NB: on prod the QC views are Gustav's `bag_tags`-based ones (#627) — the view section of `20260813_001` is superseded by `20260813_003` and must not overwrite it.
+- **New `work_centre` column.** Each bag records its producing line (`Sieving Tower` / `Refining 1` / `Refining 2` / `Granule Line` / `Blender` / `Small Blender` / `Pasteuriser`); `buildBag()` stamps `meta.name`. Migration `20260813_002` adds the column and backfills from `prod_sessions.section_id`.
+
 ## 2026-08-13 — Gustav (Sieving: fix stale "bag ready for QC" pop-ups)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
