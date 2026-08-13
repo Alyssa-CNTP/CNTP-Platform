@@ -3,6 +3,19 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (The real cause of "0 bags awaiting QC" on live: the view took 20s and hit the 8s statement timeout)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_008_fix_bag_inprocess_link_performance.sql`, `supabase/migrations/20260813_009_bag_qc_status_lateral_inprocess.sql` (both new, applied to production + staging)
+
+The live site still showed no pop-up after the earlier fix. Checking the Supabase API logs settled it: **1800 requests to `GET /rest/v1/v_pending_bag_qc` returning HTTP 500**, every one with `proxy_status: PostgREST; error=57014` — `query_canceled`, i.e. the 8-second statement timeout, at ~8.2s per request. Not permissions, not RLS, not a stale schema cache, and not a missing deploy — the code and data were correct throughout.
+
+- **Why it looked like an empty queue.** The screen fetched with `const { data } = await …`, discarding the `error`. A 500 therefore rendered identically to "no bags pending" — the failure was completely invisible for a full shift. `loadPendingBags()` now keeps the `error`, shows a red "could not load … tap ↻ to retry" line, and keeps the last good list instead of blanking it.
+- **Why it was slow.** `v_bag_inprocess_link` matched each bag to its preceding in-process run with a **correlated subquery** over `production.prod_debagging`, which the planner ran once per (bag × in-process run) pair: **822,617 sequential scans, 3.29 million buffer hits.** `EXPLAIN ANALYZE` measured the whole query at **19,928 ms**.
+- **`20260813_008`** hoists that subquery into a `MATERIALIZED` CTE computed once (`prod_debagging` is ~123 rows) probed via `EXISTS`, and indexes `prod_debagging(session_id)`. 19,928ms → 7,926ms — still only a whisker under the timeout, so not enough on its own.
+- **`20260813_009`** replaces the join to the fully-materialised `v_bag_inprocess_link` with a `LATERAL … ORDER BY run_at DESC LIMIT 1`, so the in-process lookup runs only for rows that survive the pending filter (4 on production, not 1,678) instead of doing ~966,000 lot-normalisation comparisons first. `v_bag_inprocess_link` is left in place for other consumers.
+- **Result: 19,928ms → 150ms on production** (buffers 3.29M → 981), 77ms on staging. The 500s stopped and 200s resumed the moment it landed; production shows 4 bags pending. Same fixes applied to staging for parity.
+- Bonus confirmation: with the earlier `NOTIFY pgrst, 'reload schema'`, the capture screen's bagging write recovered — all 4 pending bags now report `bag_source = prod_bagging`, so `prod_bagging` is once again carrying the day's bags and the `bag_tags` fallback is sitting behind it unused, as intended.
+
 ## 2026-08-13 — Gustav (Live site showed 0 bags awaiting QC: bag_tags fallback in the QC views + a save path that can't silently drop bags)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_007_bag_events_prod_bagging_with_tag_fallback.sql` (new, applied to production + staging)
