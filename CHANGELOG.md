@@ -3,6 +3,14 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Alyssa (Sieving Tower bagging_time carries the real per-bag time; notification bell renders above page content everywhere)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/layout/NotificationBell.tsx`
+
+**1 · Sieving Tower `prod_bagging.bagging_time` now holds each bag's real creation time.** #612 fixed this for Refining (`buildBag`'s refining branch → `bagging_time: bagLoggedAtToTime(b.logged_at)`), but the Sieving (`else`) branch still wrote no `bagging_time`, so Sieving Tower output rows had none — and any consumer falling back to `created_at` saw the same drifting timestamp for every bag (persist() deletes+reinserts every row on each save/autosave/submit, so `created_at` = "when the session was last saved", identical across the whole order). `OutBag.logged_at` already records the exact moment each output bag is secured and lives in `draft_data`, so it's immutable across the delete+reinsert. The Sieving branch now carries it into `bagging_time` via the existing `bagLoggedAtToTime()` helper (SAST `HH:MM`, same as Granule/Blender/Pasteuriser/Refining). Save stays delete+reinsert; no schema change. Bags with no `logged_at` (older drafts) fall back as before.
+
+**2 · Notification bell dropdown/toast were being occluded on certain pages.** The topbar `<header>` uses `backdrop-filter`, which creates its own stacking context — trapping the dropdown panel (`position: absolute`, `zIndex: 9999`) and toast beneath page content that has its own positioned/stacking-context elements. Both are now rendered through a `createPortal` to `document.body` with `position: fixed`, escaping the header's stacking context entirely. The panel is anchored to the live bell-button rect and kept in sync on resize/scroll; the outside-click handler also checks the portalled panel (via `panelRef`) so clicks inside it don't dismiss it. Panel z-index raised to 10000 so it clears the capture modals (9997/9998).
+
 ## 2026-08-12 — Gustav (Bag label: remove the "Cape Natural Tea Products" header)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
