@@ -177,6 +177,30 @@ function normSdProductJs(p: string | null | undefined): string | null {
   if (s.includes('rb block') || s.includes('rooibos block') || s.trim() === 'blocks') return 'Rooibos Blocks'
   return null
 }
+// Sieving output serials encode their output type: ST{TYPE}-DDMMYY-NNN, e.g.
+// STFL-130826-001 is Fine Leaf and STCL-130826-001 is Coarse Leaf. Mirrors
+// SIEVING_TYPE_ABBR in components/production/capture/SievingCapture.tsx, which
+// generates them. Only the codes that map to a sieve tab are listed — anything
+// else (dust, spillage, an unknown two-letter stem) is not a QC product and is
+// deliberately left unrecognised.
+const SERIAL_CODE_TO_PRODUCT: Record<string, string> = {
+  FL: 'Fine Leaf', CL: 'Coarse Leaf', IS: 'Indent Sticks', RB: 'Rooibos Blocks',
+}
+// Returns the product a serial belongs to when it's a recognisable ST-serial,
+// else null. Legacy hand-typed serials ("13.08.05") return null so they keep
+// working — this only ever blocks a serial that provably belongs elsewhere.
+function productOfSerial(serial: string | null | undefined): string | null {
+  const m = String(serial || '').trim().toUpperCase().match(/^ST([A-Z]{2})-/)
+  return m ? (SERIAL_CODE_TO_PRODUCT[m[1]] ?? null) : null
+}
+// The error message to show when a serial belongs to a different sieve than the
+// tab being captured on, or null when it's fine.
+function serialTabMismatch(serial: string | null | undefined, activeProduct: string): string | null {
+  const p = productOfSerial(serial)
+  return p && p !== activeProduct
+    ? `${String(serial).trim()} is a ${p} bag — it can't be used on the ${activeProduct} tab. Switch to the ${p} tab, or pick a ${activeProduct} serial.`
+    : null
+}
 function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []
   return sdIsOrg(variant) ? s.meshForORG : s.meshForCON
@@ -645,10 +669,11 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   )
 }
 
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials, activeProduct }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
   bagSerials?: {serial:string;lot:string;baggedAt:string}[]
+  activeProduct: string
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -691,6 +716,8 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
   const inputSt: React.CSSProperties = { width:'100%', padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:11, boxSizing:'border-box' }
 
   function handleSaveClick() {
+    const serialMismatch = serialTabMismatch(fields.serialNumber, activeProduct)
+    if (serialMismatch) { alert(serialMismatch); return }
     if (isNegative(fields.bulkDensity)) { alert('Bulk density cannot be negative.'); return }
     if (isNegative(fields.needleCount)) { alert('Needle count cannot be negative.'); return }
     if (Object.keys(gramVals).some(k => isNegative(gramVals[k]))) { alert('Sieve grams cannot be negative.'); return }
@@ -724,12 +751,18 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
               ) : key==='serialNumber' ? (
                 <>
                   <input list="edit-serial-dl" value={fields.serialNumber} onChange={e=>setF('serialNumber',e.target.value)}
-                    placeholder="Pick or type a serial" style={inputSt}/>
+                    placeholder="Pick or type a serial"
+                    style={{...inputSt, borderColor: serialTabMismatch(fields.serialNumber, activeProduct) ? '#fca5a5' : '#d1d5db'}}/>
                   <datalist id="edit-serial-dl">
                     {(bagSerials||[]).map(b=>(
                       <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
                     ))}
                   </datalist>
+                  {serialTabMismatch(fields.serialNumber, activeProduct) && (
+                    <div style={{ fontSize:9, color:'#dc2626', marginTop:2 }}>
+                      ⚠ {productOfSerial(fields.serialNumber)} serial — not valid on the {activeProduct} tab
+                    </div>
+                  )}
                 </>
               ) : (
                 <input type={type} min={type==='number'?0:undefined} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
@@ -979,6 +1012,21 @@ export default function SievingPage() {
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
 
+  // In-Process runs sample the machine while a specific bag is being filled, so
+  // the serial comes from production rather than being typed: pre-fill the most
+  // recent bag for the sieve currently open. Only fills a blank field, so a QC
+  // who picks a different bag from the list isn't overwritten. Final QC is
+  // untouched here — its serial comes from the bag picked in the queue above.
+  useEffect(() => {
+    if (!showForm || form.runType !== 'in-process') return
+    if (form.serialNumber) return
+    const latest = bagSerialOptions[0]
+    if (!latest) return
+    setForm((f:any) => f.serialNumber || f.runType !== 'in-process' ? f : ({
+      ...f, serialNumber: latest.serial, ...(f.lotNumber ? {} : { lotNumber: latest.lot || '' }),
+    }))
+  }, [showForm, form.runType, form.serialNumber, bagSerialOptions])
+
   // Load all runs
   const load = useCallback(async () => {
     setLoading(true); setSdError('')
@@ -1177,6 +1225,11 @@ export default function SievingPage() {
     if (f.runType==='final' && !f.baggingId && !f.serialNumber.trim()) {
       errs._bag='Pick the bag being sampled from the pending list.'
     }
+    // A serial encodes its own output type, so a Coarse Leaf bag can never be
+    // captured on the Fine Leaf tab (or vice versa) — that would file the run
+    // against the wrong product's specs entirely.
+    const mismatch = serialTabMismatch(f.serialNumber, activeProduct)
+    if (mismatch) errs.serialNumber = mismatch
     if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
       if (dup) errs._dupTime=`A ${f.runType} run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
@@ -1740,22 +1793,32 @@ export default function SievingPage() {
               <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
-            {/* Serial numbers only exist once a bag is made, so In-Process runs
-                no longer carry one. On Final QC it is pre-filled from the bag
-                and stays editable so the QC can verify it. */}
-            {form.runType==='final'&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. <span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span></label>
-              <input value={form.serialNumber}
+            {/* Serial No. — never typed from scratch. On Final QC it comes from
+                the bag the QC picked above. On In-Process it is pre-filled with
+                the most recent bag production has made for this sieve, and can
+                be changed to any other bag of the same product via the list. */}
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ {form.runType==='final'?'from bag':'latest bag'}</span>}
+              </label>
+              <input value={form.serialNumber} list={form.runType==='in-process'?'new-run-serial-dl':undefined}
                 onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
                 onBlur={e=>lookupBagTag(e.target.value)}
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
-                placeholder="Type or scan barcode"
+                placeholder={form.runType==='in-process'?(bagSerialOptions.length?'Pick a bag':`No ${activeProduct} bags yet`):'Type or scan barcode'}
                 style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              {form.runType==='in-process'&&(
+                <datalist id="new-run-serial-dl">
+                  {bagSerialOptions.map(b=>(
+                    <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
+                  ))}
+                </datalist>
+              )}
               {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
               {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
               {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
-            </div>}
+            </div>
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 QC Controller * {myName&&form.qcName===myName&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ logged in</span>}
@@ -2013,6 +2076,7 @@ export default function SievingPage() {
                         specDef={specDef}
                         activeSpecs={activeSpecs}
                         bagSerials={bagSerialOptions}
+                        activeProduct={activeProduct}
                         onSave={async (updated: any) => {
                           const vios: string[] = []
                           const sr = activeSpecs[`${updated.grade}|${updated.variant}`]||{}

@@ -3,6 +3,43 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: a bag's serial can only be captured on its own sieve tab)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+A Coarse Leaf serial (`STCL-…`) could be typed into a run on the Fine Leaf tab and vice versa, filing the run against the wrong product's specs entirely — the sieve tabs have different mesh fractions and spec ranges, so the pass/fail verdict would be meaningless.
+
+- New `productOfSerial()` / `serialTabMismatch()` helpers read the output type straight out of the serial (`ST{TYPE}-DDMMYY-NNN`), mirroring `SIEVING_TYPE_ABBR` in `components/production/capture/SievingCapture.tsx` which generates them — `FL`→Fine Leaf, `CL`→Coarse Leaf, `IS`→Indent Sticks, `RB`→Rooibos Blocks.
+- Blocked on save in **both** the new-run form (`validate()`, shown against the Serial No. field) and the inline row editor (`handleSaveClick`), with a live red-bordered warning in the editor before you even try to save.
+- **Legacy serials still work**: only a serial that provably belongs to another sieve is rejected. Hand-typed ones that predate the ST format (e.g. `13.08.05`) don't match the pattern, so they're left alone rather than being retroactively invalidated. Codes that aren't a QC product (dust, spillage) are likewise unrecognised and unaffected.
+- The two automatic paths were already safe — the Final QC picker and the in-process auto-fill both draw from the active tab's bags — so this closes the remaining manual-entry gap.
+
+## 2026-08-13 — Gustav (Guard the bag-QC views against being reverted by a later hand-run of 20260813_001)
+
+**Files changed:** `supabase/migrations/20260813_004_reapply_bag_events_from_bag_tags.sql` (new, applied to production), `supabase/migrations/20260813_001_bagging_time_timestamptz.sql` (warning header only)
+
+**Production had silently reverted.** `20260813_001` was hand-run *after* `20260813_003` (001's header instructs hand-running it, and the `db-migrate` workflow is disabled). Section 3 of 001 recreates the QC views from `production.prod_bagging`, so it undid both of 003's fixes — the `bag_tags` source and the 2026-08-13 cutover filter. Symptom: the Final QC bag dropdown went back to missing ~44% of bags, and the pending queue jumped from **8 → 847** (bags as far back as 2026-07-27 reappearing as "pending"). Caught by verifying both databases rather than assuming the earlier apply had held.
+
+- **`20260813_004`** re-applies 003 verbatim and is idempotent — safe to re-run any time the views look wrong. Applied to production; staging was already correct and untouched.
+- **`20260813_001` now carries a warning header**: its view section is superseded by 003, correct order is 001 → 003, and if 001 must be re-run then 003 (or 004) has to run straight after.
+- Verification query for future reference: `SELECT pg_get_viewdef('qms.v_bag_events'::regclass, true);` must read `FROM production.bag_tags`, and `v_pending_bag_qc` must still carry the `bag_date >= DATE '2026-08-13'` filter.
+
+## 2026-08-13 — Alyssa (New work_centre column on prod_bagging)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`
+
+Each output bag now records its producing line directly on `prod_bagging` — `Sieving Tower`, `Refining 1`, `Refining 2`, `Granule Line`, `Blender`, `Small Blender`, `Pasteuriser` — instead of only being reachable via `prod_sessions.section_id`. `buildBag()` stamps every row with `meta.name` (the same section name the capture screens show). Migration `20260813_002` adds the nullable column and backfills existing rows from their session's `section_id`. Additive/non-breaking, so the column is applied to the DB before this deploys; old rows/old code just leave it NULL.
+
+## 2026-08-13 — Gustav (Sieving QC now reads bags from bag_tags, not prod_bagging — fixes missing/empty bag dropdowns)
+
+**Files changed:** `supabase/migrations/20260813_003_bag_events_from_bag_tags.sql` (new, applied to staging + production), `app/(app)/quality/sieving/page.tsx`
+
+**Root cause of the Coarse Leaf "0 pending" dropdown** (and of Final QC/pop-ups pointing at bags that no longer existed): the QC views were built on `production.prod_bagging`, which `persist()` rebuilds from scratch on every capture save — `DELETE ... WHERE session_id = ?` then reinsert from the current `draft_data`, on explicit save, on the 30s autosave, and on submit. Any bag not in `draft_data` at that instant vanishes, and a surviving bag's uuid PK changes on every save. On staging that left **66 of 149 (44%) Fine/Coarse Leaf bags with no `prod_bagging` row at all** — including every `STCL-130826-*` Coarse Leaf bag production had already bagged, printed and locked, which is why that dropdown showed 0.
+
+- **`qms.v_bag_events` now sources from `production.bag_tags`** — one row per physical bag, written once when the operator secures/prints it, keyed on `serial_number`, never deleted by a save cycle. `bagged_at` comes from `printed_at`/`created_at`, the true immutable bagging instant, so it no longer drifts (this supersedes the reason `20260813_001` moved `bagging_time` to `timestamptz`; that column stays, it's simply not what the QC views read).
+- **`bagging_id` is now `md5(serial_number)::uuid`** — deterministic, unique and permanent, since `bag_tags`' PK is the serial (text) while `sd_runs.bagging_id` is `uuid` and the UI keys the dropdown on it. Final QC runs linked under the old `prod_bagging` uuid still resolve through the serial-number fallback in `v_bag_qc_status`, so **no existing sign-off was lost** — verified on production: `STCL-130826-001` and `STFL-130826-001` still correctly show `qc_done` against Portia's runs.
+- **In-Process serial is now pre-filled from production** instead of typed: it auto-fills with the most recent bag for the sieve currently open (and its lot, if blank), and offers the same product-filtered bag list to pick a different one. Only fills a blank field, so a deliberate choice is never overwritten. *(This reverses the earlier "in-process carries no serial" decision, per the latest request.)*
+- The row-editor Serial No. dropdown was already filtered to the active product, so it now lists the correct Coarse Leaf serials automatically once the view is fixed.
 ## 2026-08-13 — Alyssa (prod_bagging: bagging_time → timestamptz + new work_centre column — promoted to production)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`
