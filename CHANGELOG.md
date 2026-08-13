@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (prod_bagging made the reliable source again for bag-QC views, backfilled from bag_tags, timestamps in SAST)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_006_prod_bagging_reliable_source.sql` (new, applied to staging + production)
+
+Requested: use `production.prod_bagging` as the source table for the bag-QC views again (not `bag_tags`), display `bagging_time` in South African time, and make sure every bag serial from production is linked forward and backward in bag tracking. Doing that safely required fixing the actual reason `prod_bagging` was unreliable in the first place, rather than just swapping the view source back:
+
+- **Root cause of the missing bags**: `persist()` in the capture page did `DELETE … WHERE session_id = ?` then reinserted `prod_bagging` from whatever was in `draft_data` at that instant, on *every* save (explicit save, 30s autosave, submit). Any bag not present in that instant's payload was gone for good, even though it had been physically bagged and printed (`bag_tags` still had it). Confirmed on production: 237 `bag_tags` rows had no matching `prod_bagging` row, while zero `prod_bagging` rows lacked a `bag_tags` row — the loss was one-directional.
+- **Fix**: `persist()` now upserts serialed bags (`onConflict: 'session_id,bag_serial_no'`) instead of blanket-deleting the session's rows, so a bag already saved is never dropped by a later save that doesn't include it. Bags with no serial (a few by-product lines) still use delete+reinsert for just those rows, since they have no stable identity.
+- **Migration `20260813_006`**: backfills every `bag_tags` row still missing from `prod_bagging` (assigns each a session-safe sequential `bag_no`, work centre mapped from `bag_tags.section_id`), adds a `(session_id, bag_serial_no)` uniqueness constraint the upsert relies on, and re-points `qms.v_bag_events` / `v_bag_inprocess_link` / `v_bag_qc_status` / `v_pending_bag_qc` at `prod_bagging` — `bagging_time` (timestamptz since `20260813_001`) is converted to `Africa/Johannesburg` at read time for `bag_date`/`bagged_at`, same as before. Applied + backfilled on both databases; `NOTIFY pgrst, 'reload schema'` included.
+- No hard FK from `prod_bagging.bag_serial_no` to `bag_tags.serial_number`: a few legacy pre-`ST`-format serials exist twice in `prod_bagging` globally (different sessions), which a global FK+unique wouldn't tolerate. The per-session unique constraint plus the upsert fix is the guarantee that actually matters going forward.
+
 ## 2026-08-13 — Gustav (Sieving: awaiting-QC panel persists until a bag is linked; run-type switch clears the serial)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_005_bag_tags_realtime.sql` (new, applied to staging + production)
