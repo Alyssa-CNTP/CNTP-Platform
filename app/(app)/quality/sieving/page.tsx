@@ -918,6 +918,12 @@ export default function SievingPage() {
   // Fine Leaf / Coarse Leaf bagging becomes a pending QC (qms.v_pending_bag_qc).
   const [pendingBags,   setPendingBags]   = useState<any[]>([])
   const [pendingLoading,setPendingLoading]= useState(false)
+  // Set when the pending-bag fetch itself fails, so a broken queue reads as
+  // broken rather than as "nothing to sample".
+  const [pendingError,  setPendingError]  = useState('')
+  // Lets a failed refresh keep the last good list instead of blanking it.
+  const pendingBagsRef = React.useRef<any[]>([])
+  React.useEffect(() => { pendingBagsRef.current = pendingBags }, [pendingBags])
   const [selectedBagId, setSelectedBagId] = useState<string>('')
   const [printBag,      setPrintBag]      = useState<any>(null)
   // Serial numbers actually assigned to bags of the product currently open, so
@@ -996,8 +1002,14 @@ export default function SievingPage() {
   // view (they get bags and labels but never a QC stamp).
   const loadPendingBags = useCallback(async () => {
     setPendingLoading(true)
-    const { data } = await db.schema('qms').from('v_pending_bag_qc')
+    const { data, error } = await db.schema('qms').from('v_pending_bag_qc')
       .select('*').order('bagged_at', { ascending: false }).limit(300)
+    // Surface a failed fetch instead of rendering it as "no bags pending".
+    // Discarding this error is what hid a 20s view + 8s statement timeout
+    // (PostgREST 500 / 57014) for a full shift: the queue looked empty on the
+    // live site while production had bags waiting, and nothing said otherwise.
+    setPendingError(error ? (error.message || 'Could not load the pending bag list.') : '')
+    if (error) { setPendingLoading(false); return pendingBagsRef.current }
     const rows = data ?? []
     setPendingBags(rows)
     setPendingLoading(false)
@@ -1755,7 +1767,12 @@ export default function SievingPage() {
                 <button type="button" onClick={loadPendingBags}
                   style={{padding:'10px 14px',borderRadius:7,border:'1px solid #86efac',background:'#fff',fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>↻</button>
               </div>
-              {tabPendingBags.length===0&&!pendingLoading&&(
+              {pendingError&&(
+                <div style={{fontSize:11,color:'#991b1b',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,padding:'6px 8px',marginTop:6}}>
+                  ⚠ Could not load the bags awaiting QC — this list may be incomplete. Tap ↻ to retry. ({pendingError})
+                </div>
+              )}
+              {tabPendingBags.length===0&&!pendingLoading&&!pendingError&&(
                 <div style={{fontSize:11,color:'#6b7280',marginTop:6}}>
                   {['Fine Leaf','Coarse Leaf'].includes(activeProduct)
                     ? `No ${activeProduct} bags awaiting QC — a pending entry appears here each time production bags a ${activeProduct} output.`
