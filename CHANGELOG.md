@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: block a second Final QC result on the same bag serial)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Found via the sieving runs table: the same serial (`STFL-130826-007`) had **two separate Final QC rows** — different times (14:06 and 13:44), different bulk density (330 vs 340). A physical bag is sampled once at Final QC, so a second "final" row against the same serial is always a mistake (duplicate save, or the wrong bag picked twice from the dropdown), never a legitimate re-test — unlike In-Process, where the same serial can legitimately recur across several readings while that bag is still filling on the sieve.
+
+- New-run form: `validate()` now rejects saving a Final QC run whose serial already has another Final QC row, naming the date/time/QC of the existing one so the QC knows to edit that record instead.
+- Inline row editor: the same check runs on save, excluding the row being edited (so correcting an existing Final QC row's own values still works).
+- In-Process is untouched — no such restriction there.
+- Existing duplicates already in the table (like the one above) are not touched by this change; flagged to Gustav to clean up manually.
+
 ## 2026-08-13 — Gustav (Sieving: Bulk Density/Leaf Shade are Final-QC-only for Fine/Coarse Leaf; fix a latent SAST date bug in the bag-tag lookup)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
