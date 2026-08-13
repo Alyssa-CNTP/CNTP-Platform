@@ -678,11 +678,12 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   )
 }
 
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials, activeProduct }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials, activeProduct, allRuns }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
   bagSerials?: {serial:string;lot:string;baggedAt:string}[]
   activeProduct: string
+  allRuns?: any[]
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -734,6 +735,14 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
     if (fields.runType === 'in-process') {
       const missing = editMesh.filter((m: string) => pcts[m] === '' || pcts[m] == null)
       if (missing.length > 0) { alert(`All sieve mesh results are required for an In-Process run — missing: ${missing.map((m: string) => m.replace(' (%)', '')).join(', ')}`); return }
+    }
+    // A bag can only have one Final QC result — block editing this run's
+    // serial into one that another Final QC row already owns.
+    if (fields.runType === 'final' && fields.serialNumber && fields.serialNumber.trim()) {
+      const dupSerial = (allRuns||[]).find((r: any) =>
+        r.id !== run.id && r.runType === 'final' && r.serialNumber &&
+        r.serialNumber.trim().toUpperCase() === fields.serialNumber.trim().toUpperCase())
+      if (dupSerial) { alert(`Bag ${fields.serialNumber} already has a Final QC result (${dupSerial.date} ${dupSerial.time}, by ${dupSerial.qcName||'—'}). Edit that record instead.`); return }
     }
     onSave({ ...fields, ...pcts, gramValues: gramVals })
   }
@@ -1237,6 +1246,18 @@ export default function SievingPage() {
     if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
       if (dup) errs._dupTime=`A ${f.runType} run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
+    }
+    // A bag can only be sampled once at Final QC — a second "final" run against
+    // the same serial is always a mistake (duplicate save, wrong bag picked
+    // twice), never a legitimate re-test, since the bag itself is consumed by
+    // the first sample. In-Process may legitimately share a serial across
+    // several readings while that bag is still filling, so this only applies
+    // to Final QC.
+    if (f.runType==='final' && f.serialNumber && f.serialNumber.trim()) {
+      const dupSerial = productRuns.find((r:any)=>
+        r.runType==='final' && r.serialNumber &&
+        r.serialNumber.trim().toUpperCase()===f.serialNumber.trim().toUpperCase())
+      if (dupSerial) errs._dupSerial=`Bag ${f.serialNumber} already has a Final QC result (${dupSerial.date} ${dupSerial.time}, by ${dupSerial.qcName||'—'}). Edit that record instead of creating a new one.`
     }
     if (f.runType==='in-process') {
       // In-Process requires every mesh fraction filled in — no partial sieve results.
@@ -1765,6 +1786,7 @@ export default function SievingPage() {
           )}
 
           {errors._dupTime&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupTime}</div>}
+          {errors._dupSerial&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupSerial}</div>}
           {errors._mesh&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10}}>⚠ {errors._mesh}</div>}
           {anomalyWarn&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10,fontWeight:600}}>{anomalyWarn}</div>}
 
@@ -2079,6 +2101,7 @@ export default function SievingPage() {
                         activeSpecs={activeSpecs}
                         bagSerials={bagSerialOptions}
                         activeProduct={activeProduct}
+                        allRuns={productRuns}
                         onSave={async (updated: any) => {
                           const vios: string[] = []
                           const sr = activeSpecs[`${updated.grade}|${updated.variant}`]||{}
