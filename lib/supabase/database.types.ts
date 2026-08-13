@@ -175,6 +175,7 @@ export interface Database {
           variant:        Variant | null
           kg:             number
           bagging_time:   string | null
+          work_centre:    string | null   // producing line, e.g. 'Sieving Tower'
           created_at:     string
         }
         Insert: Omit<Database['production']['Tables']['prod_bagging']['Row'], 'id' | 'created_at'>

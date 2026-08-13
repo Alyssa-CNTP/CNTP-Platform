@@ -1043,6 +1043,10 @@ function CaptureScreen() {
         })
       }
     })
+    // Stamp the work centre (Sieving Tower / Refining 1 / … / Pasteuriser) on
+    // every output bag so prod_bagging carries the producing line directly,
+    // without having to join back through prod_sessions.section_id.
+    rows.forEach(r => { r.work_centre = meta.name })
     return rows
   }
   // Per-production totals — dispatches by section type. `sh` is the shift the
