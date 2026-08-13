@@ -1031,6 +1031,14 @@ function CaptureScreen() {
             bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
             acumatica_id: b.code || null, variant: prod.variant,
             kg: n(b.weight),
+            // Sieving Tower: OutBag.logged_at records the exact moment the bag
+            // was added (set client-side when it's first secured), so carry it
+            // into bagging_time — same as Refining (#612) and the other output
+            // sections. persist() deletes+reinserts every row on each save, but
+            // logged_at is immutable, so the time stays fixed instead of drifting
+            // to "when the session was last saved". Quality's Final QC picker
+            // then shows the true per-bag time.
+            bagging_time: bagLoggedAtToTime(b.logged_at),
           })
         })
       }
