@@ -3,6 +3,12 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Alyssa (New work_centre column on prod_bagging)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`
+
+Each output bag now records its producing line directly on `prod_bagging` — `Sieving Tower`, `Refining 1`, `Refining 2`, `Granule Line`, `Blender`, `Small Blender`, `Pasteuriser` — instead of only being reachable via `prod_sessions.section_id`. `buildBag()` stamps every row with `meta.name` (the same section name the capture screens show). Migration `20260813_002` adds the nullable column and backfills existing rows from their session's `section_id`. Additive/non-breaking, so the column is applied to the DB before this deploys; old rows/old code just leave it NULL.
+
 ## 2026-08-13 — Gustav (Sieving QC now reads bags from bag_tags, not prod_bagging — fixes missing/empty bag dropdowns)
 
 **Files changed:** `supabase/migrations/20260813_003_bag_events_from_bag_tags.sql` (new, applied to staging + production), `app/(app)/quality/sieving/page.tsx`
