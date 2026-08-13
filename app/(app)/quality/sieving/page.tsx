@@ -949,6 +949,14 @@ export default function SievingPage() {
     const rows = data ?? []
     setPendingBags(rows)
     setPendingLoading(false)
+    // A "bag ready for QC" pop-up must disappear once its bag is no longer
+    // actually pending — sampled (via the dropdown, not just the pop-up
+    // itself), or its underlying production.prod_bagging row gone entirely
+    // (persist() deletes + reinserts every bag row on every save, so a bag
+    // that triggered a pop-up can vanish from the table on a later autosave
+    // without ever being sampled). Re-validate every alert against this fresh
+    // fetch rather than only clearing it on explicit dismiss/"Sample now".
+    setBagAlerts(prev => prev.filter(a => rows.some((r:any) => String(r.bagging_id) === String(a.bagging_id))))
     return rows
   }, [db])
   useEffect(() => { loadPendingBags() }, [loadPendingBags])
@@ -1361,10 +1369,22 @@ export default function SievingPage() {
 
   // ── "Bag ready for QC" pop-up ──────────────────────────────────────────────
   // Fires the moment production bags a new Fine Leaf / Coarse Leaf output, via
-  // a live Supabase Realtime subscription on production.prod_bagging — no
-  // polling. This is a nudge only: the "N pending" queue above is the real
-  // backstop, so a missed or dismissed pop-up never loses a bag.
+  // a live Supabase Realtime subscription on production.prod_bagging. This is
+  // a nudge only: the "N pending" queue above is the real backstop, so a
+  // missed or dismissed pop-up never loses a bag.
   const [bagAlerts, setBagAlerts] = useState<any[]>([])
+  // Safety-net re-validation: loadPendingBags() already prunes any alert
+  // whose bag is no longer pending, but that only runs on an event (a new
+  // Realtime insert, a run save, or "↻"). Without this, a stale alert — e.g.
+  // one whose underlying prod_bagging row got deleted by a later autosave
+  // before anyone sampled it — could sit on screen indefinitely through a
+  // quiet period. Poll every 60s purely to self-heal; it is not how new
+  // alerts are discovered.
+  useEffect(() => {
+    if (bagAlerts.length === 0) return
+    const id = setInterval(loadPendingBags, 60000)
+    return () => clearInterval(id)
+  }, [bagAlerts.length, loadPendingBags])
   useEffect(() => {
     const channel = db.channel('sieving-bag-ready')
       .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, (payload: any) => {

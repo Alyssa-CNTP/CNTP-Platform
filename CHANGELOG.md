@@ -3,6 +3,29 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (Sieving: fix stale "bag ready for QC" pop-ups)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
+
+Root cause of `STFL-130826-001` (and others) showing a "ready for QC" pop-up after already being sampled: `bagAlerts` only ever got cleared by an explicit dismiss or by clicking "Sample now" on that exact card — a bag sampled via the manual dropdown, or whose `production.prod_bagging` row was deleted by a later autosave (`persist()` deletes + reinserts every bag row on every save, including the 30s autosave) before it was ever pulled off the pending list, left its pop-up on screen indefinitely.
+
+- `loadPendingBags()` now re-validates every existing `bagAlerts` entry against the fresh fetch on every call, dropping any whose bag is no longer actually pending — for any reason, not just the two paths that used to clear it.
+- Added a 60s safety-net poll (only while at least one alert is showing) purely to self-heal a stale card through a quiet period with no other trigger event — new alerts still arrive live via Realtime, this is not how they're discovered.
+- Also folded in the 2026-08-13 pending-QC cutover-date filter into `20260813_001_bagging_time_timestamptz.sql`'s `v_pending_bag_qc` recreation (it was missing there, staging's file didn't have it) so re-running this migration can't silently drop that filter again.
+
+**Separately flagged, not fixed here:** production's capture screens delete-and-reinsert every output bag row on every save (explicit save, 30s autosave, submit), so a bag's `bagging_id` is not stable across a session's lifetime — a bag already linked to a Final QC run, or one that triggered a live pop-up, can have its underlying row deleted and never reinserted if a later save no longer includes it. The serial-number fallback join covers most of the practical impact, but this is a structural fragility in the capture persistence model worth a closer look on its own.
+
+## 2026-08-13 — Alyssa (prod_bagging.bagging_time becomes a real timestamp of when each bag was created)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
+
+**Schema change — `bagging_time` is now `timestamptz`, not `time`.** It was a bare time-of-day, so the true bagging *date* was unrecoverable — Quality's `v_bag_events.bagged_at` had to glue the time onto `created_at`'s date, and `created_at` is restamped on every save (persist() deletes+reinserts every row), so a session re-saved on a later day carried the wrong date and a drifting timestamp. Every output bag already captures `logged_at` — the exact instant it was secured, held in `draft_data` and therefore immutable — so `bagging_time` now stores that full instant verbatim.
+
+- **Migration `20260813_001`** (must be applied by hand in the Supabase SQL editor — the `db-migrate` workflow is disabled because repo migrations are stale vs the live DB): drops the QC-link views, `ALTER COLUMN bagging_time TYPE timestamptz` converting existing bare-time rows to their SAST-equivalent instant, then recreates `v_bag_events` / `v_bag_inprocess_link` / `v_bag_qc_status` / `v_pending_bag_qc` with `bagged_at` sourced straight from `bagging_time` (SAST wall-clock, so display/ordering is unchanged) falling back to `created_at`. Apply to **staging** first, then **production** when promoting.
+- **`buildBag()`** — all five output sections (Sieving, Refining, Granule, Blender, Pasteuriser) now write `bagging_time: b.logged_at` (the full ISO instant) instead of an `HH:MM` string; the `bagLoggedAtToTime()` helper is removed.
+- **Orders detail** — the "Time" column formats the timestamp to SAST `HH:MM` via a new `fmtBagTime()` (was a raw string).
+- **Rollout:** the ALTER and this deploy must land close together — old code writes `HH:MM`, new code writes a full instant, and neither is valid against the other column type, so there's a brief capture-save window. Apply the SQL, then deploy immediately.
+
 ## 2026-08-13 — Alyssa (Sieving Tower bagging_time carries the real per-bag time; notification bell renders above page content everywhere)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/layout/NotificationBell.tsx`
