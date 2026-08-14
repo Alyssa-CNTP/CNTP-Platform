@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: Bulk Density/Leaf Shade get their own per-day, by-hour view)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Plotting every Bulk Density/Leaf Shade sample across a multi-week From/To range squeezed them into unreadable clusters at one end of the chart.
+
+- Each of the two panels now has its own small date picker in its header, independent of the shared From/To range above (which keeps driving the sieve-mesh trend charts and the records table — unaffected by this). Leaving it blank keeps the existing behaviour: every sample in the shared range, one point per bag.
+- Picking a day switches that one panel to every sample captured on that day, plotted by hour (0–23h) instead of by date+time — the "hourly samples of a day" view. A ✕ button clears it back to the shared-range view.
+
+
 ## 2026-08-14 — Alyssa (Production outage + fix: add `scripts/production-deploy.sh`, matching the existing staging one)
 
 **Files changed:** `scripts/production-deploy.sh` (new), `docs/environments-architecture.md`
