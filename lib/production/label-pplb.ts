@@ -120,8 +120,11 @@ export function buildLabelPplb(bag: OutputBag): string {
     'D8',                // darkness
     'S4',                // speed
 
-    // ── Fine Leaf double border ──
-    ...(isFineLeaf ? [`X4,4,2,${W - 4},${H - 4}`, `X12,12,2,${W - 12},${H - 12}`] : []),
+    // ── Fine Leaf double border — inset further from the physical edge (16/24
+    // dots instead of 4/12) after the physical print showed the outer line
+    // getting cut off. The Argox has an unprintable margin near the edge that
+    // 4 dots falls inside of. ──
+    ...(isFineLeaf ? [`X16,16,2,${W - 16},${H - 16}`, `X24,24,2,${W - 24},${H - 24}`] : []),
 
     // ── Header — no colour-coded paper anymore (one printer/roll per station),
     // so the product name has to carry the Fine/Coarse Leaf distinction on its
@@ -130,11 +133,10 @@ export function buildLabelPplb(bag: OutputBag): string {
     // pushed well below the product name's y — vm2 roughly doubles the glyph
     // height, and the first physical print showed the two lines overlapping
     // at the old 44-dot gap. All header/badge/footer text is uppercase now.
-    // For Fine Leaf, the text also starts at x24/y20 instead of x20/y6 — the
-    // inner border's top edge sits at y12, and the tall vm2 text was starting
-    // above it and printing straight through the line. ──
-    `A${isFineLeaf ? 24 : 20},${isFineLeaf ? 20 : 6},0,4,2,2,N,"${productName}"`,
-    `A${isFineLeaf ? 24 : 20},78,0,3,1,1,N,"${sectionName}"`,
+    // For Fine Leaf, the text starts at x32/y32 instead of x20/y6 — clear of
+    // the (now further-inset) double border on both axes. ──
+    `A${isFineLeaf ? 32 : 20},${isFineLeaf ? 32 : 6},0,4,2,2,N,"${productName}"`,
+    `A${isFineLeaf ? 32 : 20},${isFineLeaf ? 90 : 78},0,3,1,1,N,"${sectionName}"`,
 
     // ── Type / grade badge, top-right: filled black box, reversed white text ──
     `LO${BADGE_X0},${BADGE_Y0},${BADGE_W},${BADGE_H}`,
