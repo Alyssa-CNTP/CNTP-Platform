@@ -192,6 +192,28 @@ function sastDateStr(iso: string): string {
     timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(iso))
 }
+// production.prod_bagging / production.bag_tags spell variant out in full
+// ('Conventional', 'Organic', 'RA-Conventional', 'RA-Organic', 'FT-ORG') —
+// that's the production schema's own CHECK constraint. qms.sd_runs uses the
+// short codes in SD_VARIANTS ('CON', 'ORG', 'RA-CON', 'RA-ORG', 'FT-CON',
+// 'FT-ORG'). Any bag-driven auto-fill that copies a production `variant`
+// straight into the form without going through this first stores the full
+// word verbatim — sd_runs then holds two different spellings of the same
+// variant (visible as both "CON" and "Conventional" badges in the runs table
+// for the same lot), and spec lookups keyed on `${grade}|${variant}` silently
+// miss because "Conventional" isn't a key in SIEVING_SPECS_DB.
+function normProdVariant(v: string | null | undefined): string {
+  const s = (v || '').trim()
+  if (!s) return ''
+  const upper = s.toUpperCase()
+  if ((SD_VARIANTS as string[]).includes(upper)) return upper
+  const map: Record<string,string> = {
+    'CONVENTIONAL': 'CON', 'ORGANIC': 'ORG',
+    'RA-CONVENTIONAL': 'RA-CON', 'RA-ORGANIC': 'RA-ORG',
+    'FT-CONVENTIONAL': 'FT-CON', 'FT-ORGANIC': 'FT-ORG',
+  }
+  return map[upper] || upper
+}
 const SERIAL_CODE_TO_PRODUCT: Record<string, string> = {
   FL: 'Fine Leaf', CL: 'Coarse Leaf', IS: 'Indent Sticks', RB: 'Rooibos Blocks',
 }
@@ -1038,20 +1060,14 @@ export default function SievingPage() {
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
 
-  // In-Process runs sample the machine while a specific bag is being filled, so
-  // the serial comes from production rather than being typed: pre-fill the most
-  // recent bag for the sieve currently open. Only fills a blank field, so a QC
-  // who picks a different bag from the list isn't overwritten. Final QC is
-  // untouched here — its serial comes from the bag picked in the queue above.
-  useEffect(() => {
-    if (!showForm || form.runType !== 'in-process') return
-    if (form.serialNumber) return
-    const latest = bagSerialOptions[0]
-    if (!latest) return
-    setForm((f:any) => f.serialNumber || f.runType !== 'in-process' ? f : ({
-      ...f, serialNumber: latest.serial, ...(f.lotNumber ? {} : { lotNumber: latest.lot || '' }),
-    }))
-  }, [showForm, form.runType, form.serialNumber, bagSerialOptions])
+  // In-Process no longer carries a serial at all — it's a reading off the
+  // machine while a bag is still filling, not a sample of one finished bag, so
+  // there's nothing for a serial to identify. (Previously this auto-filled the
+  // most recent bag's serial, which just meant every In-Process reading for a
+  // sieve pointed at whatever bag happened to be latest, with no way to enter
+  // one manually either — it looked like a required field nobody could
+  // usefully fill in.) Only Final QC — sampling one specific finished bag —
+  // has a serial, picked from the pending-bag list above.
 
   // Load all runs
   const load = useCallback(async () => {
@@ -1168,7 +1184,10 @@ export default function SievingPage() {
     if (matches.length) {
       const latest: any = matches[0]
       if (latest.grade)        fields.grade = latest.grade
-      if (latest.variant)      fields.variant = latest.variant
+      // Normalized defensively — a handful of historical rows saved the
+      // production-schema spelling ("Conventional") before this was fixed at
+      // the source, and copying one forward here would keep it circulating.
+      if (latest.variant)      fields.variant = normProdVariant(latest.variant) || latest.variant
       if (latest.serialNumber) fields.serialNumber = latest.serialNumber
       if (latest.leafShade)    fields.leafShade = latest.leafShade
     }
@@ -1310,7 +1329,10 @@ export default function SievingPage() {
       product:       activeProduct,
       date:          form.date,
       lot_number:    form.lotNumber||null,
-      serial_number: form.serialNumber||null,
+      // In-Process never carries a serial — enforced here too (not just by
+      // hiding the field) so the lot-number auto-fill below can't silently
+      // attach a stale serial from a previous run against the same lot.
+      serial_number: form.runType==='final' ? (form.serialNumber||null) : null,
       grade:         form.grade||null,
       variant:       form.variant||null,
       run_type:      form.runType||null,
@@ -1412,7 +1434,7 @@ export default function SievingPage() {
       setForm((f: any) => ({
         ...f,
         ...(data.lot_number ? { lotNumber: data.lot_number } : {}),
-        ...(data.variant    ? { variant: data.variant }       : {}),
+        ...(data.variant    ? { variant: normProdVariant(data.variant) } : {}),
         grade,
         ...(date            ? { date }                        : {}),
       }))
@@ -1436,7 +1458,7 @@ export default function SievingPage() {
       baggingId:    bag.bagging_id,
       serialNumber: bag.bag_serial_no || '',
       lotNumber:    bag.lot_number || '',
-      variant:      bag.variant || f.variant,
+      variant:      normProdVariant(bag.variant) || f.variant,
       // The run's date is WHEN THE QC WAS DONE, to match the time beside it,
       // which is always stamped at capture. Previously this took the bag's
       // bagging date instead, so a bag made yesterday and sampled this morning
@@ -1847,32 +1869,26 @@ export default function SievingPage() {
               <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
-            {/* Serial No. — never typed from scratch. On Final QC it comes from
-                the bag the QC picked above. On In-Process it is pre-filled with
-                the most recent bag production has made for this sieve, and can
-                be changed to any other bag of the same product via the list. */}
-            <div>
+            {/* Serial No. — Final QC only. It's a sample of one specific,
+                finished bag, so it comes from the bag picked in the queue
+                above. In-Process is a reading off the machine while a bag is
+                still filling, not a sample of one bag — there's no serial to
+                attach it to. */}
+            {form.runType==='final' && <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
-                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ {form.runType==='final'?'from bag':'latest bag'}</span>}
+                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span>}
               </label>
-              <input value={form.serialNumber} list={form.runType==='in-process'?'new-run-serial-dl':undefined}
+              <input value={form.serialNumber}
                 onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
                 onBlur={e=>lookupBagTag(e.target.value)}
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
-                placeholder={form.runType==='in-process'?(bagSerialOptions.length?'Pick a bag':`No ${activeProduct} bags yet`):'Type or scan barcode'}
+                placeholder="Type or scan barcode"
                 style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
-              {form.runType==='in-process'&&(
-                <datalist id="new-run-serial-dl">
-                  {bagSerialOptions.map(b=>(
-                    <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
-                  ))}
-                </datalist>
-              )}
               {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
               {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
               {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
-            </div>
+            </div>}
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 QC Controller * {myName&&form.qcName===myName&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ logged in</span>}
