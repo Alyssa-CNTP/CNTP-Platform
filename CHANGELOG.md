@@ -1,7 +1,14 @@
 # Changelog
 
 All changes deployed to staging are logged here automatically.  
-Format: date · developer · files changed · description of code changes.
+
+## 2026-08-14 — Alyssa (Production outage + fix: add `scripts/production-deploy.sh`, matching the existing staging one)
+
+**Files changed:** `scripts/production-deploy.sh` (new), `docs/environments-architecture.md`
+
+While manually promoting the Sieving Tower checks/VSD/AI-summary fix (PR #662) to production, the deploy command from `docs/environments-architecture.md` (`git pull; npm run build; pm2 restart`, plain `;`/newline-chained) got interrupted mid-build by VPS resource contention (the live server + a heavy build + concurrent SSH diagnostic sessions competing for a small box). Because the commands aren't `&&`-chained, `pm2 restart` ran anyway straight after the killed build, restarting `cntp-production` into a half-written `.next` directory — it crash-looped (513 restarts) on a missing `.next/prerender-manifest.json`, taking production down (504 → 502) for several minutes until a clean rebuild completed.
+
+`scripts/staging-deploy.sh` already exists specifically to prevent this exact failure mode (builds into a side `.next-build` dir, atomically swaps only once complete, HTTP-verifies, rolls back on failure) — it just never got a production counterpart. Added `scripts/production-deploy.sh`, an exact mirror pointed at `main`/`cntp-production`/the production URL, and updated the production deploy instructions to use it instead of the raw manual commands.
 
 ## 2026-08-14 — Alyssa (Sieving Tower capture: checks now autosave, VSD logging gated to running/pre-submit, AI summary write verified — promoted to production)
 
