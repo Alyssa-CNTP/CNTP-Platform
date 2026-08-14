@@ -39,6 +39,7 @@ import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
 import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
 import { itemFromCode } from '@/lib/production/bom'
@@ -379,6 +380,13 @@ function DustInputRow({
               className="px-3 rounded-xl border border-stone-200 text-stone-500 hover:border-brand hover:text-brand text-[12px] font-medium disabled:opacity-40 shrink-0">
               {looking ? '…' : 'Look up'}
             </button>
+          )}
+          {!locked && (
+            <ScanCameraButton
+              title="Scan bag barcode"
+              hint="Point the camera at the bag's barcode…"
+              onScan={code => onUpdate('serial', sanitizeSerial(code))}
+            />
           )}
         </div>
         {(row.notInSystem === true || row.notInSystem === 'true') && row.inputMode !== 'manual' && (

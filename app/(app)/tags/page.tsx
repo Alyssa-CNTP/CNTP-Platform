@@ -19,6 +19,7 @@ import {
   Loader2, Eye, Scan, TrendingUp, MapPin, History, Database, Calendar,
   FlaskConical, ExternalLink,
 } from 'lucide-react'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface BagTag {
@@ -611,6 +612,7 @@ function SerialLookup({ allTags, onSelect }: { allTags: BagTag[]; onSelect: (tag
             </button>
           )}
         </div>
+        <ScanCameraButton title="Scan bag barcode" onScan={handleChange} />
         {result && result !== 'not_found' && (
           <button
             onClick={handleOpen}
