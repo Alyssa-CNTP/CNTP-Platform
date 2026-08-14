@@ -1026,9 +1026,10 @@ export default function SievingPage() {
   }
 
   const blankForm = () => {
-    const now = new Date()
     return {
-      date: now.toISOString().slice(0,10),
+      // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
+      // is still yesterday, which would file the run against the wrong day.
+      date: sastDateStr(new Date().toISOString()),
       lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
       bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
@@ -1436,7 +1437,16 @@ export default function SievingPage() {
       serialNumber: bag.bag_serial_no || '',
       lotNumber:    bag.lot_number || '',
       variant:      bag.variant || f.variant,
-      date:         bag.bag_date || f.date,
+      // The run's date is WHEN THE QC WAS DONE, to match the time beside it,
+      // which is always stamped at capture. Previously this took the bag's
+      // bagging date instead, so a bag made yesterday and sampled this morning
+      // was stored as date=yesterday + time=this-morning — an instant that
+      // never happened. The table sorts on date+time, so those rows buried
+      // themselves near the bottom of the previous day and read as missing
+      // (STFL-130826-012, sampled 07:33 on the 14th, filed under 13 Aug 07:33).
+      // The bag's own bagging date is not lost: it stays on the bag via the
+      // serial/bagging_id link and is shown in the confirmation line below.
+      date:         sastDateStr(new Date().toISOString()),
       qcName:       f.qcName || myName,
       time:         nowHHMM(),
       ...(pa    ? { paLevel: pa } : {}),
@@ -1444,6 +1454,9 @@ export default function SievingPage() {
     }))
     const bits = [
       `📦 Bag ${bag.bag_serial_no || '—'} · ${bag.product} · lot ${bag.lot_number || '—'}`,
+      // Keep the bag's own bagging moment visible — the run's Date field is now
+      // the QC date, so this is where "when was this bag actually made" lives.
+      bag.bagged_at ? `Bagged ${String(bag.bagged_at).slice(0,10)} ${String(bag.bagged_at).slice(11,16)}` : '',
       pa ? `PA: ${pa}` : '',
       shade != null ? `Shade: ${shade} (from raw material)` : '',
       bag.inprocess_out_of_spec ? `⚠ In-process sieve OUT OF SPEC at ${String(bag.inprocess_at||'').slice(11,16)}` : '',
