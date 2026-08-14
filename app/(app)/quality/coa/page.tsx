@@ -31,6 +31,8 @@ import { getDb } from '@/lib/supabase/db'
 import { isoDateTime } from '@/lib/utils/formatDate'
 import { jsPDF } from 'jspdf'
 import { loadImage } from '@/lib/pdf/load-image'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
 
@@ -198,6 +200,17 @@ export default function CoaGeneratorPage() {
   const [model, setModel]           = useState<CoaModel | null>(null)
   const [sources, setSources]       = useState<any>(null)   // raw inputs, for re-applying a different spec
   const [allSpecs, setAllSpecs]     = useState<any[]>([])
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Once a batch
+  // is looked up, the header fields, per-line spec/result overrides and order
+  // details are all hand-typed corrections a lab manager can spend real time
+  // on — autosave them every 15s so a dropped connection or closed tab before
+  // Print/Export doesn't lose that work. Only one COA is edited at a time in
+  // this UI, so a single fixed key is enough. Cleared once logGeneration()
+  // confirms the coa_generated insert, or when the recovered draft is
+  // explicitly discarded.
+  const draftKey = 'coa_draft_active'
+  const [recoveredDraft, setRecoveredDraft] = useState<{ data: any; savedAt: string } | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory]       = useState<any[]>([])
   // Delete-a-generated-COA confirmation popup: holds the history row awaiting
@@ -257,6 +270,12 @@ export default function CoaGeneratorPage() {
 
   // Reload sign-off + reset drag adjustments whenever a new batch/COA is looked up.
   useEffect(() => { setSigAdjust({}); loadSignoff(model?.batch) }, [model?.batch, loadSignoff])
+
+  useDraftAutosave(draftKey, model, { enabled: !!model })
+  useEffect(() => {
+    if (model) return
+    setRecoveredDraft(readDraft(draftKey))
+  }, [draftKey, model])
 
   // Persist a sign-off (or the hand-off). The server verifies identity and
   // stamps the caller's own signature — the client never supplies one.
@@ -437,6 +456,7 @@ export default function CoaGeneratorPage() {
         doc_no: m.matchedDoc || null, generated_by: whoAmI,
         snapshot: { header: m.header, micro: m.micro, cutLength: m.cutLength, other: m.other, sections: m.sections, isOrganic: m.isOrganic },
       })
+      clearDraft(draftKey)
     } catch { /* non-blocking */ }
   }
 
@@ -488,6 +508,19 @@ export default function CoaGeneratorPage() {
         <h1 className="font-bold text-[22px]">📋 COA Generator</h1>
         <p className="text-[12px] text-gray-500">Type a batch number — data is pulled from Pasteuriser, its sieve samples, and Final Product Lab Results.</p>
       </div>
+
+      {/* Recovered draft — see lib/hooks/useDraftAutosave.ts. Only surfaces when
+          no COA is currently loaded, so it never interrupts an in-progress one. */}
+      {recoveredDraft && !model && (
+        <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+          onRestore={() => {
+            setSources(null)
+            setBatchInput(recoveredDraft.data?.batch || '')
+            setModel(recoveredDraft.data)
+            setRecoveredDraft(null)
+          }}
+          onDiscard={() => { clearDraft(draftKey); setRecoveredDraft(null) }} />
+      )}
 
       {/* Batch search */}
       <div className="flex gap-2 mb-4 no-print">

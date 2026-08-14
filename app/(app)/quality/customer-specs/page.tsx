@@ -7,6 +7,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import CoaSpecsTab from '@/components/quality/CoaSpecsTab'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -107,6 +109,17 @@ export default function CustomerSpecsPage() {
   const [addForm,setAddForm]=useState<any>(EMPTY())
   const [addSaving,setAddSaving]=useState(false)
   const [addErr,setAddErr]=useState('')
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Autosaves
+  // the "+ New Specification" form every 15s while open; cleared once
+  // saveNew() confirms the insert.
+  const draftKey='customerspecs_draft_new'
+  const [recoveredDraft,setRecoveredDraft]=useState<{data:any;savedAt:string}|null>(null)
+  useDraftAutosave(draftKey, addForm, { enabled: showAdd })
+  useEffect(() => {
+    if (showAdd) return
+    setRecoveredDraft(readDraft(draftKey))
+  }, [showAdd])
   const [showHistory,setShowHistory]=useState(false)
   const [histSpecs,setHistSpecs]=useState<any[]>([])
   const [histLoading,setHistLoading]=useState(false)
@@ -148,6 +161,7 @@ export default function CustomerSpecsPage() {
     body.customer=addForm.customer||'';body.notes=addForm.notes||null
     const {data:saved,error}=await db.schema('qms').from('customer_specs').insert(body).select().single()
     if(error){setAddErr(error.message);setAddSaving(false);return}
+    clearDraft(draftKey)
     setSpecs(p=>[...p,saved as Spec]);setShowAdd(false);setAddForm(EMPTY());setAddSaving(false)
   }
 
@@ -193,11 +207,17 @@ export default function CustomerSpecsPage() {
           style={{padding:'4px 12px',borderRadius:6,border:'1px solid #d97706',fontSize:11,cursor:'pointer',background:showHistory?'#fef3c7':'#fff',color:showHistory?'#92400e':'#374151',fontWeight:600}}>
           📜 {showHistory?'Hide Historical':'Historical'}
         </button>
-        {canWrite&&<button onClick={()=>setShowAdd(true)}
+        {canWrite&&<button onClick={()=>{setShowAdd(true);setRecoveredDraft(null)}}
           style={{marginLeft:'auto',padding:'5px 16px',borderRadius:7,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>
           + Add Specification
         </button>}
       </div>
+
+      {recoveredDraft&&!showAdd&&(
+        <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+          onRestore={()=>{setAddForm(recoveredDraft.data);setShowAdd(true);setRecoveredDraft(null)}}
+          onDiscard={()=>{clearDraft(draftKey);setRecoveredDraft(null)}} />
+      )}
 
       <div style={{marginBottom:10,padding:'7px 11px',background:'#eff6ff',borderRadius:7,border:'1px solid #bfdbfe',fontSize:10,color:'#1e40af'}}>
         ✏️ Click any value to edit inline · Enter to save · Esc to cancel · Specs auto-load in the Pasteuriser run modal
@@ -211,7 +231,7 @@ export default function CustomerSpecsPage() {
           <div style={{background:'#fff',borderRadius:12,width:'100%',maxWidth:640,boxShadow:'0 24px 64px rgba(0,0,0,.3)',overflow:'hidden',margin:'auto'}}>
             <div style={{background:'#1f4e79',padding:'14px 20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div style={{color:'#fff',fontWeight:700,fontSize:14}}>+ New Specification</div>
-              <button onClick={()=>{setShowAdd(false);setAddErr('')}} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,padding:'3px 10px',color:'#fff',cursor:'pointer',fontSize:16}}>×</button>
+              <button onClick={()=>{setShowAdd(false);setAddErr('');clearDraft(draftKey)}} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,padding:'3px 10px',color:'#fff',cursor:'pointer',fontSize:16}}>×</button>
             </div>
             <div style={{padding:18,display:'flex',flexDirection:'column',gap:12}}>
               <div style={{background:'#eff6ff',borderRadius:7,padding:'8px 12px',fontSize:11,color:'#1e40af'}}>
@@ -281,7 +301,7 @@ export default function CustomerSpecsPage() {
               </div>
               {addErr&&<div style={{color:'#dc2626',fontSize:12,padding:'6px 10px',background:'#fef2f2',borderRadius:6}}>⚠ {addErr}</div>}
               <div style={{display:'flex',justifyContent:'flex-end',gap:8,paddingTop:4}}>
-                <button onClick={()=>{setShowAdd(false);setAddErr('')}} style={{padding:'8px 18px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Cancel</button>
+                <button onClick={()=>{setShowAdd(false);setAddErr('');clearDraft(draftKey)}} style={{padding:'8px 18px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Cancel</button>
                 <button onClick={saveNew} disabled={addSaving}
                   style={{padding:'8px 24px',borderRadius:7,border:'none',background:addSaving?'#9ca3af':'#1f4e79',color:'#fff',fontSize:12,fontWeight:700,cursor:addSaving?'default':'pointer'}}>
                   {addSaving?'Saving…':'💾 Save Specification'}

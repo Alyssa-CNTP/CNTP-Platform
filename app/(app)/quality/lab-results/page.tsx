@@ -9,6 +9,8 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDateTime } from '@/lib/utils/formatDate'
 import { exportTableXlsx } from '@/lib/utils/exportExcel'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import { RefreshCw, History, AlertTriangle, X } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -223,6 +225,11 @@ function PdfDropZone({ testType, onExtracted }: { testType:TestType; onExtracted
 function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType:TestType; onSave:(d:any,force:boolean)=>void; onDiscard:()=>void }) {
   const [pending, setPending] = useState({ ...data })
   const cols = COLS[testType] ?? []
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. This is
+  // where the person actually edits the PDF-extracted values, so it's what
+  // risks real lost work if the connection drops before "Confirm & Save".
+  useDraftAutosave(`lab_results_draft_${testType}`, pending, { enabled: true })
 
   const metaFields: [string,string][] = [
     ['batch_no','Batch No.'],['_lab','Lab'],['lab','Lab'],
@@ -734,6 +741,15 @@ export default function LabResultsPage() {
   const [error,       setError]       = useState('')
   const [pending,     setPending]     = useState<any|null>(null)
   const [dupWarn,     setDupWarn]     = useState<string|null>(null)
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Checks for
+  // a recovered draft whenever there's no review in progress, keyed per test
+  // type since each tab's extraction/review is independent.
+  const [recoveredDraft, setRecoveredDraft] = useState<{data:any;savedAt:string}|null>(null)
+  useEffect(() => {
+    if (pending) return
+    setRecoveredDraft(readDraft(`lab_results_draft_${activeTab}`))
+  }, [pending, activeTab])
   const [showHistory, setShowHistory] = useState(false)
   const [historyRecs, setHistoryRecs] = useState<any[]>([])
   const [searchText,  setSearchText]  = useState('')
@@ -780,6 +796,7 @@ export default function LabResultsPage() {
     }
     const { data:saved, error:err } = await db.schema('qms').from('lab_results').insert(body).select().single()
     if (err) { alert('Save failed: '+err.message); return }
+    clearDraft(`lab_results_draft_${activeTab}`)
     setRecords(p=>({...p,[activeTab]:[saved as LabResult,...p[activeTab]]}))
     setPending(null); setDupWarn(null)
   }
@@ -909,8 +926,16 @@ export default function LabResultsPage() {
 
       {error && <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, fontSize:11, color:'#991b1b', padding:'8px 14px', background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8 }}>⚠ {error}</div>}
 
+      {/* Recovered draft — see lib/hooks/useDraftAutosave.ts. Only surfaces
+          when no review is currently open, so it never fights an in-progress edit. */}
+      {recoveredDraft && !pending && (
+        <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+          onRestore={()=>{ setPending(recoveredDraft.data); setDupWarn(null); setRecoveredDraft(null) }}
+          onDiscard={()=>{ clearDraft(`lab_results_draft_${activeTab}`); setRecoveredDraft(null) }} />
+      )}
+
       {/* Upload zone */}
-      {canWrite && !pending && <PdfDropZone testType={activeTab} onExtracted={d=>{setPending(d);setDupWarn(null)}}/>}
+      {canWrite && !pending && <PdfDropZone testType={activeTab} onExtracted={d=>{setPending(d);setDupWarn(null);setRecoveredDraft(null)}}/>}
 
       {/* Duplicate warning */}
       {dupWarn && (
@@ -918,7 +943,7 @@ export default function LabResultsPage() {
           <div style={{ fontWeight:600, fontSize:13, color:'#92400e', marginBottom:10 }}>⚠ Batch {dupWarn} already has a {TEST_TYPES.find(t=>t.key===activeTab)?.label} record</div>
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={()=>saveRecord(pending,true)} style={{ padding:'6px 14px', borderRadius:7, border:'none', background:'#dc2626', color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' }}>Overwrite</button>
-            <button onClick={()=>{setPending(null);setDupWarn(null)}} style={{ padding:'6px 14px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:12, cursor:'pointer' }}>Discard</button>
+            <button onClick={()=>{setPending(null);setDupWarn(null);clearDraft(`lab_results_draft_${activeTab}`)}} style={{ padding:'6px 14px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:12, cursor:'pointer' }}>Discard</button>
           </div>
         </div>
       )}
@@ -927,7 +952,7 @@ export default function LabResultsPage() {
       {pending && !dupWarn && (
         <ReviewPanel data={pending} testType={activeTab}
           onSave={saveRecord}
-          onDiscard={()=>{setPending(null);setDupWarn(null)}}/>
+          onDiscard={()=>{setPending(null);setDupWarn(null);clearDraft(`lab_results_draft_${activeTab}`)}}/>
       )}
 
       {/* Loading */}
