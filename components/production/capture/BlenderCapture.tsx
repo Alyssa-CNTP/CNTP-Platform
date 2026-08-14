@@ -341,6 +341,16 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
     }
   }
 
+  // Auto-fire the lookup once the scanned serial settles — a hardware scanner
+  // fills the field in one burst without sending Enter, so the operator just
+  // picks the ingredient, scans, and the bag's details fill in on their own.
+  useEffect(() => {
+    if (!serial.trim() || !group || inputMode === 'manual') return
+    const t = setTimeout(() => { triggerLookup() }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial])
+
   function pickSystemBag(b: SystemBag) {
     setSerial(b.serial_number); setProductCode(b.acumatica_id || '')
     setWeight(b.weight_kg ? String(b.weight_kg) : ''); setVariant(b.variant || variantWord || '')

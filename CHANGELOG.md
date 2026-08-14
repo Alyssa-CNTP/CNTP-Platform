@@ -3,6 +3,19 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-14 — Alyssa (Scan-first debagging rolled out: shared component + Pasteuriser popup + Blender auto-fill)
+
+**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `components/production/capture/RefiningCapture.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
+
+Extending the Refining scan-first flow (scan a bag → popup shows its `bag_tags` record + validity → "Consume" registers it debagged-in) to the other lines.
+
+- **New shared `BagScanIn.tsx`** — the `ScanBox` (auto-fires ~350 ms after the serial settles, no Enter/tap) and `BagScanModal` (bag record + validity, powered by `validateBagScan`) extracted from Refining so every section uses one implementation. Refining now imports them (no behaviour change).
+- **Pasteuriser** — added the same scan-first popup. One scan field routes the bag automatically: granule output folds into the **post-sieve** stream (E), everything else into **main debagging** (D); the popup shows which stream before you consume. Pick-from-system / manual stay on each stream card.
+- **Blender** — its debagging modal now **auto-fires the lookup on scan** (was Enter/"Look up" only), so scanning fills product/weight/variant/lot on its own once the operator picks the ingredient slot. (Full popup + BOM-slot auto-routing to follow, once each blend's accepted ingredients are defined.)
+- **Granule** already auto-fills on scan (from the earlier auto-lookup change).
+
+Per-section input-acceptance rules (what each line/slot may consume) are the next refinement, per the request to define them per section.
+
 ## 2026-08-12 — Gustav (Bag label: remove the "Cape Natural Tea Products" header)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
