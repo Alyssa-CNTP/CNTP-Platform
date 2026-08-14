@@ -197,6 +197,14 @@ function sastDateStr(iso: string): string {
     timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(iso))
 }
+// The default (and only fetched) window for the runs table and chart — see
+// load()'s query filter below. 'YYYY-MM-DD' so it compares lexicographically
+// against sd_runs.date the same way the rest of the file does.
+function threeMonthsAgoISO(): string {
+  const d = new Date()
+  d.setMonth(d.getMonth() - 3)
+  return isoDate(d)
+}
 // qms.sd_runs (and SIEVING_SPECS_DB / SD_VARIANTS) now spell variant out in
 // full — 'Conventional', 'Organic', 'RA-Conventional', 'RA-Organic',
 // 'FT-Conventional', 'FT-Organic' — matching production.prod_bagging /
@@ -413,9 +421,15 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
 }
 
 // ─── SievingOutlierChart ────────────────────────────────────────────────────
-// Bounded to "This Week" (bucketed by day) or "This Month" (bucketed by
-// week-of-month) — never the full history — so it never becomes the
-// unreadable "all runs" chart it replaced. Two views share that same window:
+// Bucketed over whatever [rangeStart, rangeEnd] the page's date-range slicer
+// is set to — the same window the records table below it is filtered to, so
+// the two always show the same slice of history instead of the chart having
+// its own separate navigation. Granularity adapts to the span so it stays
+// readable at any zoom level:
+//   single day   → by hour (same-shift visibility for an out-of-spec reading)
+//   up to ~9 wks → by day
+//   longer       → by Monday-based week
+// Two chart types share that same window:
 //   Mesh Trend — every sieve fraction as its own line (like the old chart)
 //   Outliers   — one chosen metric plotted with a ±2.5σ band, flagging points
 //                 outside it (Bulk Density, Leaf Shade, or a sieve fraction)
@@ -428,79 +442,59 @@ function startOfWeek(d: Date): Date {
   s.setDate(s.getDate() - dow + 1)
   return s
 }
+function fmtShort(d: Date): string { return d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' }) }
 
-// weekOffset/monthOffset: 0 = current, 1 = one week/month back, 2 = two back, etc.
-// Negative values are allowed (future) so "Next" can step back toward today.
-function dayBucketsForWeek(weekOffset: number): { key: string; label: string }[] {
-  const anchor = new Date(); anchor.setDate(anchor.getDate() - weekOffset * 7)
-  const start = startOfWeek(anchor)
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(start); d.setDate(start.getDate() + i)
-    return { key: isoDate(d), label: d.toLocaleDateString('en-ZA', { weekday: 'short' }) + ' ' + d.getDate() }
-  })
-}
+type ChartBucket = { key: string; label: string; from?: Date; to?: Date }
+type ChartGranularity = 'hour' | 'day' | 'week'
 
-function weekRangeLabel(weekOffset: number): string {
-  const buckets = dayBucketsForWeek(weekOffset)
-  const from = new Date(buckets[0].key + 'T12:00:00'), to = new Date(buckets[6].key + 'T12:00:00')
-  const fmt = (d: Date) => d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
-  return `${fmt(from)} – ${fmt(to)}${from.getFullYear() !== new Date().getFullYear() ? ' ' + from.getFullYear() : ', ' + from.getFullYear()}`
-}
+// Picks a granularity and the buckets covering [startISO, endISO] (inclusive,
+// 'YYYY-MM-DD') at that granularity. A single-day range gets hour buckets so
+// a same-shift out-of-spec reading is still visible before the day rolls
+// over; anything wider than ~9 weeks steps up to weekly so the chart doesn't
+// try to plot 90+ individual day-points.
+function bucketsForRange(startISO: string, endISO: string): { granularity: ChartGranularity; buckets: ChartBucket[]; label: string } {
+  const start = new Date(startISO + 'T00:00:00'), end = new Date(endISO + 'T00:00:00')
+  const spanDays = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000))
+  const label = spanDays === 0
+    ? start.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    : `${fmtShort(start)} – ${fmtShort(end)}${start.getFullYear() !== end.getFullYear() ? ' ' + start.getFullYear() : ', ' + end.getFullYear()}`
 
-function weekBucketsForMonth(monthOffset: number): { key: string; label: string; from: Date; to: Date }[] {
-  const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
-  const monthEnd   = new Date(now.getFullYear(), now.getMonth() - monthOffset + 1, 0)
-  const buckets: { key: string; label: string; from: Date; to: Date }[] = []
-  let cursor = new Date(monthStart)
-  let i = 1
-  while (cursor <= monthEnd) {
-    const from = new Date(cursor)
-    const to   = new Date(Math.min(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 6).getTime(), monthEnd.getTime()))
-    buckets.push({ key: `W${i}`, label: `Week ${i}`, from, to })
-    cursor.setDate(cursor.getDate() + 7)
-    i++
+  if (spanDays === 0) {
+    const buckets = Array.from({ length: 24 }, (_, h) => ({
+      key: `${startISO}T${String(h).padStart(2, '0')}`, label: `${String(h).padStart(2, '0')}:00`,
+    }))
+    return { granularity: 'hour', buckets, label }
   }
-  return buckets
-}
-
-function monthRangeLabel(monthOffset: number): string {
-  const now = new Date()
-  const d = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
-  return d.toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' })
-}
-
-// dayOffset: 0 = today, 1 = yesterday, etc. — for the live, per-hour "By Hour"
-// view so an out-of-spec reading is visible the same shift it happened, not
-// just once the day rolls into a weekly bucket.
-function dateForDayOffset(dayOffset: number): Date {
-  const d = new Date(); d.setDate(d.getDate() - dayOffset); return d
-}
-function hourBucketsForDay(dayOffset: number): { key: string; label: string }[] {
-  const dateKey = isoDate(dateForDayOffset(dayOffset))
-  return Array.from({ length: 24 }, (_, h) => ({ key: `${dateKey}T${String(h).padStart(2, '0')}`, label: `${String(h).padStart(2, '0')}:00` }))
-}
-function dayRangeLabel(dayOffset: number): string {
-  return dateForDayOffset(dayOffset).toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+  if (spanDays <= 62) {
+    const buckets: ChartBucket[] = []
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      buckets.push({ key: isoDate(d), label: fmtShort(d) })
+    }
+    return { granularity: 'day', buckets, label }
+  }
+  const buckets: ChartBucket[] = []
+  let cursor = startOfWeek(start)
+  while (cursor <= end) {
+    const from = new Date(cursor)
+    const to = new Date(cursor); to.setDate(to.getDate() + 6)
+    buckets.push({ key: isoDate(from), label: `${fmtShort(from)} – ${fmtShort(to)}`, from, to })
+    cursor.setDate(cursor.getDate() + 7)
+  }
+  return { granularity: 'week', buckets, label }
 }
 
 // Representative spec key used for the mesh-trend reference band. The %
-// mesh bounds are identical across Export/Domestic for a given CON/ORG
-// mesh set in every product in SIEVING_SPECS_DB — only Leaf Shade differs
-// by grade — so "Export|CON" is a safe stand-in for the trend view, which
-// isn't scoped to one grade/variant.
-const TREND_SPEC_KEY = 'Export|CON'
+// mesh bounds are identical across Export/Domestic for a given Conventional/
+// Organic mesh set in every product in SIEVING_SPECS_DB — only Leaf Shade
+// differs by grade — so "Export|Conventional" is a safe stand-in for the
+// trend view, which isn't scoped to one grade/variant.
+const TREND_SPEC_KEY = 'Export|Conventional'
 
-function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPointClick }: {
-  runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>; onPointClick?: (runId: any) => void
+function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeStart, rangeEnd, onPointClick }: {
+  runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>
+  rangeStart: string; rangeEnd: string; onPointClick?: (runId: any) => void
 }) {
-  const [view, setView]           = useState<'day' | 'week' | 'month'>('day')
   const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
-  const [dayOffset, setDayOffset]     = useState(0)   // 0 = today, 1 = yesterday, ...
-  const [weekOffset, setWeekOffset]   = useState(0)   // 0 = this week, 1 = last week, ...
-  const [monthOffset, setMonthOffset] = useState(0)   // 0 = this month, 1 = last month, ...
-  const offset = view === 'day' ? dayOffset : view === 'week' ? weekOffset : monthOffset
-  const setOffset = view === 'day' ? setDayOffset : view === 'week' ? setWeekOffset : setMonthOffset
   const meshOptions = sdGetMesh(activeProduct, 'Conventional')
   const metricOptions = [
     { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
@@ -510,31 +504,23 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   const [metric, setMetric] = useState(metricOptions[0].key)
   const metricDef = metricOptions.find(m => m.key === metric) || metricOptions[0]
 
-  // Bucket definitions for the selected window — hour-of-day for "By Hour"
-  // (live, same-shift visibility), day-of-week for "By Week", week-of-month
-  // for "By Month". Runs outside the window are excluded. dayOffset/
-  // weekOffset/monthOffset step the window back in time — a timeline, not
-  // just the current day/week/month.
-  const hourBuckets = hourBucketsForDay(dayOffset)
-  const dayBuckets  = dayBucketsForWeek(weekOffset)
-  const weekBuckets = weekBucketsForMonth(monthOffset)
-  const rangeLabel  = view === 'day' ? dayRangeLabel(dayOffset) : view === 'week' ? weekRangeLabel(weekOffset) : monthRangeLabel(monthOffset)
+  // Granularity and buckets adapt to the slicer's span — see bucketsForRange().
+  // Runs outside [rangeStart, rangeEnd] are excluded (the parent already
+  // scopes `runs` to this same window, but the guard is cheap and keeps this
+  // component correct standalone too).
+  const { granularity, buckets: bucketLabels, label: rangeLabel } = bucketsForRange(rangeStart, rangeEnd)
   const bucketKeyFor = (r: any): string | null => {
-    if (!r.date) return null
-    if (view === 'day') {
-      if (r.date !== hourBuckets[0].key.slice(0, 10)) return null
+    if (!r.date || r.date < rangeStart || r.date > rangeEnd) return null
+    if (granularity === 'hour') {
       const hh = parseInt((r.time || '').split(':')[0], 10)
       if (isNaN(hh) || hh < 0 || hh > 23) return null
       return `${r.date}T${String(hh).padStart(2, '0')}`
     }
-    if (view === 'week') {
-      return dayBuckets.some(b => b.key === r.date) ? r.date : null
-    }
+    if (granularity === 'day') return r.date
     const d = new Date(r.date + 'T12:00:00')
-    const b = weekBuckets.find(wb => d >= wb.from && d <= wb.to)
+    const b = bucketLabels.find(wb => wb.from && wb.to && d >= wb.from && d <= wb.to)
     return b ? b.key : null
   }
-  const bucketLabels = view === 'day' ? hourBuckets : view === 'week' ? dayBuckets : weekBuckets
 
   const inWindow = runs.filter((r: any) => bucketKeyFor(r) != null)
 
@@ -586,26 +572,14 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
             </button>
           ))}
         </div>
-        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
-          {(['day','week','month'] as const).map(v => (
-            <button key={v} onClick={()=>setView(v)}
-              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
-                background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
-              {v==='day'?'By Hour':v==='week'?'By Week':'By Month'}
-            </button>
-          ))}
-        </div>
-        {/* Timeline navigator — step back through previous days/weeks/months */}
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <button onClick={()=>setOffset((o:number)=>o+1)} title={`Previous ${view}`}
-            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
-          <span style={{ fontSize:11, fontWeight:700, color:'#374151', minWidth:120, textAlign:'center' }}>{rangeLabel}</span>
-          <button onClick={()=>setOffset((o:number)=>Math.max(0,o-1))} disabled={offset===0} title={`Next ${view}`}
-            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:offset===0?'#f3f4f6':'#fff', color:offset===0?'#d1d5db':'#374151', cursor:offset===0?'default':'pointer' }}>▶</button>
-          {offset!==0 && (
-            <button onClick={()=>setOffset(0)} style={{ padding:'4px 10px', fontSize:11, fontWeight:600, border:'1px solid #1f4e79', borderRadius:6, background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>Today</button>
-          )}
-        </div>
+        {/* The window itself is set by the date-range slicer above this
+            chart (shared with the records table) — this just names it and
+            shows the granularity it landed on. */}
+        <span style={{ fontSize:11, fontWeight:700, color:'#374151' }}>
+          {rangeLabel} <span style={{ fontWeight:400, color:'#9ca3af' }}>
+            ({granularity==='hour'?'by hour':granularity==='day'?'by day':'by week'})
+          </span>
+        </span>
         {chartType==='outliers' && (
           <select value={metric} onChange={e=>setMetric(e.target.value)}
             style={{ padding:'4px 8px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6, background:'#fff' }}>
@@ -651,7 +625,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
                   <ResponsiveContainer width="100%" height={160}>
                     <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={view==='day'?2:0} />
+                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={granularity==='hour'?2:0} />
                       <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
                       <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
                       {/* Spec band — in-spec shaded green, out-of-spec zones shaded a dark red so it's unmistakable at a glance, plus solid dark boundary lines */}
@@ -693,7 +667,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
           <ResponsiveContainer width="100%" height={220}>
             <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={view==='day'?1:0} />
+              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={granularity==='hour'?1:0} />
               <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
               <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
                 labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
@@ -707,6 +681,71 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
           </ResponsiveContainer>
         )
       )}
+    </div>
+  )
+}
+
+// ─── SievingDateRangeSlider ─────────────────────────────────────────────────
+// Dual-handle date-range slider replacing the old Daily/Weekly/Monthly/60-Day/
+// All period buttons. Drives both the chart above and the records table below
+// it (the parent passes the same [rangeStart, rangeEnd] to both), so panning
+// or narrowing the window moves them together instead of each having its own
+// separate date control. Built from two overlaid native <input type="range">
+// — the standard dual-thumb-slider trick — since no slider component exists
+// elsewhere in this codebase to reuse.
+function SievingDateRangeSlider({ minDate, maxDate, start, end, onChange }: {
+  minDate: string; maxDate: string; start: string; end: string; onChange: (start: string, end: string) => void
+}) {
+  const dayMs = 86400000
+  const minTime = new Date(minDate + 'T00:00:00').getTime()
+  const toDays = (iso: string) => Math.round((new Date(iso + 'T00:00:00').getTime() - minTime) / dayMs)
+  const fromDays = (n: number) => { const d = new Date(minDate + 'T00:00:00'); d.setDate(d.getDate() + n); return isoDate(d) }
+  const totalDays = Math.max(1, toDays(maxDate))
+  const [startDays, setStartDays] = useState(() => toDays(start))
+  const [endDays, setEndDays]     = useState(() => toDays(end))
+  // Re-sync if the parent's range changes for a reason other than dragging
+  // this slider itself (e.g. switching product tabs resets nothing here, but
+  // keeps this in sync if a future caller ever sets the range programmatically).
+  useEffect(() => { setStartDays(toDays(start)); setEndDays(toDays(end)) }, [start, end, minDate])
+  const commit = (s: number, e: number) => onChange(fromDays(Math.min(s, e)), fromDays(Math.max(s, e)))
+  const fmt = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+
+  return (
+    <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:'12px 16px', marginBottom:12 }}>
+      <style>{`
+        .sd-range-slider input[type=range] { -webkit-appearance:none; appearance:none; background:transparent; }
+        .sd-range-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; pointer-events:auto; width:16px; height:16px; border-radius:50%; background:#1f4e79; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer; }
+        .sd-range-slider input[type=range]::-moz-range-thumb { pointer-events:auto; width:16px; height:16px; border-radius:50%; background:#1f4e79; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer; }
+        .sd-range-slider input[type=range]::-webkit-slider-runnable-track { background:transparent; }
+        .sd-range-slider input[type=range]::-moz-range-track { background:transparent; }
+      `}</style>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8, flexWrap:'wrap', gap:8 }}>
+        <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.03em' }}>Date range</span>
+        <span style={{ fontSize:12, fontWeight:700, color:'#1f4e79' }}>{fmt(fromDays(startDays))} – {fmt(fromDays(endDays))}</span>
+      </div>
+      <div className="sd-range-slider" style={{ position:'relative', height:22 }}>
+        <div style={{ position:'absolute', top:9, left:0, right:0, height:4, background:'#e5e7eb', borderRadius:2 }} />
+        <div style={{ position:'absolute', top:9, height:4, background:'#1f4e79', borderRadius:2,
+          left:`${startDays/totalDays*100}%`, width:`${(endDays-startDays)/totalDays*100}%` }} />
+        <input type="range" min={0} max={totalDays} value={startDays}
+          onChange={e=>setStartDays(Math.min(Number(e.target.value), endDays))}
+          onMouseUp={()=>commit(startDays,endDays)} onTouchEnd={()=>commit(startDays,endDays)}
+          onKeyUp={()=>commit(startDays,endDays)}
+          style={{ position:'absolute', width:'100%', top:0, margin:0, pointerEvents:'none', zIndex: startDays>=endDays-1 ? 3 : 1 }} />
+        <input type="range" min={0} max={totalDays} value={endDays}
+          onChange={e=>setEndDays(Math.max(Number(e.target.value), startDays))}
+          onMouseUp={()=>commit(startDays,endDays)} onTouchEnd={()=>commit(startDays,endDays)}
+          onKeyUp={()=>commit(startDays,endDays)}
+          style={{ position:'absolute', width:'100%', top:0, margin:0, pointerEvents:'none', zIndex:2 }} />
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', marginTop:2 }}>
+        <span style={{ fontSize:9, color:'#9ca3af' }}>{fmt(minDate)}</span>
+        <button onClick={()=>{ setStartDays(0); setEndDays(totalDays); onChange(minDate, maxDate) }}
+          style={{ fontSize:9, color:'#1f4e79', background:'none', border:'none', cursor:'pointer', fontWeight:600, textDecoration:'underline' }}>
+          Reset to full range
+        </button>
+        <span style={{ fontSize:9, color:'#9ca3af' }}>{fmt(maxDate)}</span>
+      </div>
     </div>
   )
 }
@@ -935,7 +974,13 @@ export default function SievingPage() {
   const [showSpecEditor, setShowSpecEditor] = useState(false)
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
-  const [period,         setPeriod]         = useState<'today'|'week'|'month'|'60d'|'all'>('all')
+  // Replaces the old Daily/Weekly/Monthly/60-Day/All period buttons with a
+  // single date-range slicer shared by the chart and the records table — the
+  // two now always show the same window instead of the chart having its own
+  // separate By Hour/Week/Month navigator. Bounded to the last 3 months by
+  // default, matching what load() actually fetches from the database.
+  const [rangeStart,     setRangeStart]     = useState(threeMonthsAgoISO())
+  const [rangeEnd,       setRangeEnd]       = useState(isoDate(new Date()))
   const [searchText,     setSearchText]     = useState('')
   const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
@@ -1084,10 +1129,15 @@ export default function SievingPage() {
   const load = useCallback(async () => {
     setLoading(true); setSdError('')
     // qms is the single source (legacy public.sd_runs consolidated in 2026-06-24).
-    // Paginate — qms.sd_runs exceeds the default 1000-row page.
+    // Only the last 3 months is fetched — this table is thousands of rows deep
+    // and nothing in the UI (chart or table) shows further back than the
+    // date-range slicer's window anyway. Paginate within that window since a
+    // busy quarter can still exceed the default 1000-row page.
+    const sinceDate = threeMonthsAgoISO()
     let allData: any[] = []
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db.schema('qms').from('sd_runs').select('*')
+        .gte('date', sinceDate)
         .order('created_at', { ascending: false }).range(from, from + 999)
       if (error) { setSdError(error.message); setLoading(false); return }
       allData = allData.concat(data || [])
@@ -1126,17 +1176,10 @@ export default function SievingPage() {
   const activeSpecs = customSpecs[activeProduct] || specDef.variants
   const productRuns = runs[activeProduct] || []
 
-  // Period cutoff — Daily / Weekly / Monthly / 60 Days / All. Dates are stored
-  // as 'YYYY-MM-DD' so lexicographic comparison against the cutoff works.
-  const periodCutoff = (() => {
-    if (period === 'all') return null
-    const d = new Date()
-    if (period === 'today') return isoDate(d)
-    if (period === 'week')  d.setDate(d.getDate() - 7)
-    if (period === 'month') d.setMonth(d.getMonth() - 1)
-    if (period === '60d')   d.setDate(d.getDate() - 60)
-    return isoDate(d)
-  })()
+  // The runs feeding both the chart and the table are scoped to the same
+  // slicer range — dates are stored as 'YYYY-MM-DD' so lexicographic
+  // comparison works.
+  const rangeRuns = productRuns.filter((r:any) => (r.date||'') >= rangeStart && (r.date||'') <= rangeEnd)
 
   // Global search — case-insensitive substring match across every displayed
   // field (date, lot, serial, grade, variant, type, QC, time, BD, needles,
@@ -1170,8 +1213,7 @@ export default function SievingPage() {
   const toggleSort = (key: string) =>
     setSdSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
 
-  const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
-    .filter((r:any) => !periodCutoff || (r.date||'') >= periodCutoff)
+  const filteredRuns = (filter==='all' ? rangeRuns : rangeRuns.filter((r:any) => r.runType===filter))
     .filter((r:any) => !searchText.trim() || rowSearchText(r).includes(searchText.trim().toLowerCase()))
     .slice().sort((a:any,b:any) => {
       const va = sortKeyVal(a, sdSort.key), vb = sortKeyVal(b, sdSort.key)
@@ -1409,12 +1451,16 @@ export default function SievingPage() {
     const updated = { ...customSpecs, [activeProduct]: newSpecs }
     setCustomSpecs(updated)
     setShowSpecEditor(false)
-    // Persist to Supabase directly
+    // Persist to Supabase so every PC shares the same specs. A schema
+    // mismatch or RLS denial comes back as {error}, not a thrown exception —
+    // that's exactly how this silently never persisted for a long stretch —
+    // so check it explicitly rather than only try/catching network failures.
     try {
-      await getDb().schema('qms').from('sieving_spec_overrides')
-        .upsert({ product: activeProduct, specs: newSpecs }, { onConflict: 'product' })
+      const { error } = await getDb().schema('qms').from('sieving_spec_overrides')
+        .upsert({ product: activeProduct, specs: newSpecs, updated_by: myName || null }, { onConflict: 'product' })
+      if (error) alert('Specs saved for this session, but could not save to the shared database (other PCs won\'t see this change): ' + error.message)
     } catch (_) {
-      // Non-fatal: specs saved in local state even if Supabase unreachable
+      alert('Specs saved for this session, but could not reach the database — other PCs won\'t see this change until it saves successfully.')
     }
   }
 
@@ -1628,6 +1674,18 @@ export default function SievingPage() {
         ))}
       </div>
 
+      {/* Toolbar A — New Run / Edit Specs sit above the Specifications table so
+          editing the spec a run will be checked against is right next to it. */}
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
+          setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
+          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Run</button>}
+        {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null)}}
+          style={{padding:'5px 12px',borderRadius:6,border:'1px solid #7c3aed',fontSize:11,cursor:'pointer',fontWeight:600,
+            background:showSpecEditor?'#7c3aed':'#faf5ff',color:showSpecEditor?'#fff':'#7c3aed'}}>
+          {showSpecEditor?'× Close Editor':'Edit Specs'}</button>}
+      </div>
+
       {/* Spec editor */}
       {showSpecEditor && <SievingSpecEditor product={activeProduct} specDef={specDef} customSpecs={activeSpecs} onSave={saveSpecs} onClose={()=>setShowSpecEditor(false)}/>}
 
@@ -1636,7 +1694,7 @@ export default function SievingPage() {
         <button onClick={()=>setShowSpecPanel(s=>!s)} style={{width:'100%',padding:'11px 16px',background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',fontFamily:'inherit'}}>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <span style={{fontSize:13,fontWeight:700,color:'#111827'}}>Specifications — {activeProduct}</span>
-            <span style={{fontSize:10,color:'#9ca3af'}}>ORG/RA-ORG/FT-ORG use &gt;10 mesh · CON/RA-CON/FT-CON use &gt;12 mesh · {Object.keys(activeSpecs).length} variants (Export / Export Blend / Domestic)</span>
+            <span style={{fontSize:10,color:'#9ca3af'}}>Organic/RA-Organic/FT-Organic use &gt;10 mesh · Conventional/RA-Conventional/FT-Conventional use &gt;12 mesh · {Object.keys(activeSpecs).length} variants (Export / Export Blend / Domestic)</span>
           </div>
           <span style={{fontSize:10,color:'#9ca3af',transform:showSpecPanel?'rotate(180deg)':'',transition:'.2s'}}>▼</span>
         </button>
@@ -1673,42 +1731,6 @@ export default function SievingPage() {
             </table>
           </div>
         )}
-      </div>
-
-      {/* Toolbar */}
-      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-        {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)}}
-          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Run</button>}
-        {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null)}}
-          style={{padding:'5px 12px',borderRadius:6,border:'1px solid #7c3aed',fontSize:11,cursor:'pointer',fontWeight:600,
-            background:showSpecEditor?'#7c3aed':'#faf5ff',color:showSpecEditor?'#fff':'#7c3aed'}}>
-          {showSpecEditor?'× Close Editor':'Edit Specs'}</button>}
-        {[['all','All'],['in-process','In-Process'],['final','Final QC']].map(([k,l])=>(
-          <button key={k} onClick={()=>setFilter(k)}
-            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
-              background:filter===k?'#1f4e79':'#fff',color:filter===k?'#fff':'#374151',borderColor:filter===k?'#1f4e79':'#e5e7eb'}}>{l}</button>
-        ))}
-        <span style={{marginLeft:'auto',fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
-        <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
-        <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
-      </div>
-
-      {/* Period filter — Daily / Weekly / Monthly / 60 Days / All */}
-      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-        <span style={{fontSize:10,fontWeight:700,color:'#6b7280',textTransform:'uppercase'}}>Period:</span>
-        {([['today','Daily'],['week','Weekly'],['month','Monthly'],['60d','60 Days'],['all','All']] as const).map(([k,l])=>(
-          <button key={k} onClick={()=>setPeriod(k)}
-            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
-              background:period===k?'#166534':'#fff',color:period===k?'#fff':'#374151',borderColor:period===k?'#166534':'#e5e7eb'}}>{l}</button>
-        ))}
-        <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
-          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
-            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
-          {searchText && (
-            <button onClick={()=>setSearchText('')} title="Clear search"
-              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
-          )}
-        </div>
       </div>
 
       {/* New Run Form */}
@@ -2039,15 +2061,22 @@ export default function SievingPage() {
         </div>
       )}
 
-      {/* This Week / This Month chart — mesh trend + outlier view. Bounded window, not full history. */}
+      {/* Date-range slicer — drives both the chart below and the records table
+          further down, so the two always show the same window instead of
+          each having its own separate date control. */}
+      <SievingDateRangeSlider minDate={threeMonthsAgoISO()} maxDate={isoDate(new Date())}
+        start={rangeStart} end={rangeEnd} onChange={(s,e)=>{setRangeStart(s);setRangeEnd(e)}} />
+
+      {/* Mesh trend + outlier view, bounded to the slicer's window above. */}
       <div style={{marginBottom:8}}>
         <button onClick={()=>setShowOutlierChart(s=>!s)}
           style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showOutlierChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showOutlierChart?'#eff6ff':'#fff',color:showOutlierChart?'#1f4e79':'#374151'}}>
           📈 {showOutlierChart?'Hide':'Show'} Chart
         </button>
       </div>
-      {showOutlierChart && productRuns.length>0 && (
-        <SievingOutlierChart runs={productRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
+      {showOutlierChart && rangeRuns.length>0 && (
+        <SievingOutlierChart runs={rangeRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
+          rangeStart={rangeStart} rangeEnd={rangeEnd}
           onPointClick={(runId)=>{
             setChartHighlightId(runId)
             const el = document.getElementById(`run-row-${runId}`)
@@ -2055,6 +2084,28 @@ export default function SievingPage() {
             setTimeout(()=>setChartHighlightId(null), 3000)
           }} />
       )}
+
+      {/* Toolbar B — filters for the records table, positioned right above it
+          so it reads as "these control the table below" rather than being
+          separated from it by the spec table and chart. */}
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        {[['all','All'],['in-process','In-Process'],['final','Final QC']].map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)}
+            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
+              background:filter===k?'#1f4e79':'#fff',color:filter===k?'#fff':'#374151',borderColor:filter===k?'#1f4e79':'#e5e7eb'}}>{l}</button>
+        ))}
+        <span style={{fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
+        <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
+          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
+            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
+          {searchText && (
+            <button onClick={()=>setSearchText('')} title="Clear search"
+              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
+          )}
+        </div>
+        <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
+        <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
+      </div>
 
       {/* Runs table */}
 
