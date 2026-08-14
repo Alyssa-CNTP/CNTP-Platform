@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: variant is now spelled out in full everywhere — Conventional, Organic, RA-Conventional, RA-Organic, FT-Conventional, FT-Organic)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Follow-up to the earlier fix that normalized the "CON"/"Conventional" split down to short codes — the request now is to go the other way: make the full words the canonical spelling everywhere in Quality, matching how production already writes them.
+
+- **`SD_VARIANTS`** (the dropdown options, used on the new-run form, the inline row editor, and the spec editor) is now `['Conventional','Organic','RA-Organic','RA-Conventional','FT-Conventional','FT-Organic']` instead of the short codes.
+- **Every variant key in `SIEVING_SPECS_DB`** — all four products (Rooibos Blocks, Coarse Leaf, Fine Leaf, Indent Sticks) × 3 grades × 6 variants, 72 keys total — renamed from `'Export|CON'` etc. to `'Export|Conventional'` etc., so the Specifications tab and the pass/fail spec lookup both key on the same spelling as the dropdown and the stored data.
+- **`sdIsOrg()`** (decides which mesh columns/spec apply) now matches on `.includes('organic')` plus the old short forms, so it keeps working for both the new full words and any not-yet-normalized historical value.
+- **`normProdVariant()`** — the guard added for the previous variant-split bug, which copies a bag's variant from `production.prod_bagging`/`bag_tags` into the QC form — now maps everything (both production's full-word spellings and any legacy short code) to the new canonical full words, including production's own `'FT-ORG'` abbreviation (production's CHECK constraint never actually writes `'FT-Conventional'`, only `'FT-ORG'`).
+- Five remaining hard-coded `'CON'` defaults (the new-run form's default variant, the inline editor's default, and the three places that fetch a representative Conventional-side mesh list for table headers) updated to `'Conventional'`.
+- **Data migration**: every existing `qms.sd_runs.variant` value was rewritten from the old short code to the matching full word on both databases — 3,470 rows on production (2,965 `Conventional`, 397 `Organic`, 78 `RA-Conventional`, 33 `RA-Organic`), 1,869 rows on staging. No `FT-CON`/`FT-ORG` rows existed in either database's history. This was necessary, not cosmetic: leaving old rows on short codes while the new spec keys and dropdown use full words would have repeated the exact "half the table can't find its spec" bug from the last fix, just in the opposite direction.
+- **Found but not fixed, flagged separately**: `qms.sieving_spec_overrides` (the table the Specifications tab's "Edit Specs" save is supposed to persist custom spec ranges to) has a completely different column shape in both databases (`product_type, variant, market, sieve_key, min_val, max_val` — a normalized long-format table) than what the app code reads/writes (`.select('product,specs')` / `.upsert({product, specs})` — a `product` + JSONB `specs` shape). That mismatch means custom spec edits have never actually round-tripped through the database in either direction — the table is empty on both databases, so no data was at risk from today's change, but "Edit Specs" only ever affected the current browser session. Unrelated to variant naming; a separate fix.
+
 ## 2026-08-14 — Gustav (Sieving: In-Process no longer carries a serial at all; fixed the "Conventional" vs "CON" variant split)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

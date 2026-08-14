@@ -32,26 +32,26 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     volumetrics: '280-300', bulk_bags: '500kg', temp_range: '85-105',
     variants: {
       // IPS-SIEV-003.1 Export CON/RA-CON: >6:Max1, >12:>80, >18:10-20, >40:<5, Dust:Max1
-      'Export|CON':          {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|RA-CON':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|Conventional':          {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|RA-Conventional':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
       // IPS-SIEV-003.2 Export ORG/RA-ORG: >6:Max1, >10:>70, >18:5-15, >40:<5, Dust:Max1
-      'Export|ORG':          {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|RA-ORG':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|FT-CON':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|FT-ORG':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|CON':    {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|RA-CON': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|ORG':    {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|RA-ORG': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|FT-CON': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|FT-ORG': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|Organic':          {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|RA-Organic':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|FT-Conventional':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|FT-Organic':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|Conventional':    {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|RA-Conventional': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|Organic':    {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|RA-Organic': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|FT-Conventional': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|FT-Organic': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
       // IPS-SIEV-003 Domestic CON/RA-CON: same mesh as Export CON
-      'Domestic|CON':        {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|RA-CON':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|ORG':        {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|RA-ORG':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|FT-CON':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|FT-ORG':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|Conventional':        {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|RA-Conventional':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|Organic':        {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|RA-Organic':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|FT-Conventional':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|FT-Organic':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
     },
   },
   'Coarse Leaf': {
@@ -64,27 +64,27 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-002.1 Export CON/RA-CON: >12:5-25, >18:60-85, >40:5-20, Dust:0-1, Shade:4-11
-      'Export|CON':          {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|RA-CON':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|Conventional':          {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|RA-Conventional':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
       // IPS-SIEV-002.2 Export ORG/RA-ORG: >10:25-100, >18:65-85, >40:10-20, Dust:0-1, Shade:4-11
-      'Export|ORG':          {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|RA-ORG':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|FT-CON':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|FT-ORG':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|Organic':          {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|RA-Organic':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|FT-Conventional':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|FT-Organic':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
       // Export Blend: same mesh values as Export
-      'Export Blend|CON':    {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|RA-CON': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|ORG':    {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|RA-ORG': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|FT-CON': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|FT-ORG': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|Conventional':    {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Conventional': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|Organic':    {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Organic': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Conventional': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Organic': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
       // IPS-SIEV-002 Domestic CON/RA-CON: same mesh, Shade:1-3
-      'Domestic|CON':        {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|RA-CON':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|ORG':        {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|RA-ORG':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|FT-CON':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|FT-ORG':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|Conventional':        {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|RA-Conventional':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|Organic':        {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|RA-Organic':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|FT-Conventional':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|FT-Organic':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
     },
   },
   'Fine Leaf': {
@@ -97,27 +97,27 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-001.1 Export CON/RA-CON: >12:0-1, >18:15-35, >40:50-85, Dust:0-2, Shade:4-11
-      'Export|CON':          {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export|RA-CON':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export|Conventional':          {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export|RA-Conventional':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
       // IPS-SIEV-001.2 Export ORG/RA-ORG: >10:0-1, >18:15-35, >40:50-85, Dust:0-5, Shade:4-11
-      'Export|ORG':          {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export|RA-ORG':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export|FT-CON':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export|FT-ORG':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export|Organic':          {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export|RA-Organic':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export|FT-Conventional':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export|FT-Organic':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
       // Export Blend: same mesh values as Export
-      'Export Blend|CON':    {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export Blend|RA-CON': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export Blend|ORG':    {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export Blend|RA-ORG': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export Blend|FT-CON': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export Blend|FT-ORG': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export Blend|Conventional':    {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Conventional': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export Blend|Organic':    {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Organic': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Conventional': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Organic': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
       // IPS-SIEV-001 Domestic CON/RA-CON: same mesh, Shade:1-3
-      'Domestic|CON':        {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
-      'Domestic|RA-CON':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
-      'Domestic|ORG':        {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
-      'Domestic|RA-ORG':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
-      'Domestic|FT-CON':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
-      'Domestic|FT-ORG':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
+      'Domestic|Conventional':        {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
+      'Domestic|RA-Conventional':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
+      'Domestic|Organic':        {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
+      'Domestic|RA-Organic':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
+      'Domestic|FT-Conventional':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
+      'Domestic|FT-Organic':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
     },
   },
   'Indent Sticks': {
@@ -130,37 +130,42 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     temp_range: '85-105',
     variants: {
       // IPS-SIEV-005.1 Export CON/RA-CON: >6:5-25, >12:40-65, >18:10-25, >40:<5, Dust:Max1, Fine Tea:<25
-      'Export|CON':          {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|RA-CON':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|Conventional':          {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|RA-Conventional':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
       // IPS-SIEV-005.2 Export ORG/RA-ORG: >6:5-25, >10:40-65, >18:15-35, >40:<5, Dust:Max1, Fine Tea:<25
-      'Export|ORG':          {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|RA-ORG':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|FT-CON':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|FT-ORG':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|CON':    {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|RA-CON': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|ORG':    {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|RA-ORG': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|FT-CON': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|FT-ORG': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|Organic':          {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|RA-Organic':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|FT-Conventional':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|FT-Organic':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|Conventional':    {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|RA-Conventional': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|Organic':    {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|RA-Organic': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|FT-Conventional': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|FT-Organic': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
       // IPS-SIEV-005 Domestic CON/RA-CON: >6:5-25, >12:40-65, >18:10-25, >40:<5, Dust:Max1, Fine Tea:<25
-      'Domestic|CON':        {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|RA-CON':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|ORG':        {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|RA-ORG':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|FT-CON':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|FT-ORG':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|Conventional':        {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|RA-Conventional':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|Organic':        {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|RA-Organic':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|FT-Conventional':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|FT-Organic':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
     },
   },
 }
 
 const SD_GRADES   = ['Export','Export Blend','Domestic']
-const SD_VARIANTS = ['CON','ORG','RA-ORG','RA-CON','FT-CON','FT-ORG']
+const SD_VARIANTS = ['Conventional','Organic','RA-Organic','RA-Conventional','FT-Conventional','FT-Organic']
 const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function sdIsOrg(v: string) { return v==='ORG' || v==='RA-ORG' || v==='FT-ORG' || v.toLowerCase().includes('organic') }
+// Kept case/spelling-tolerant (not a strict list match) so it still works for
+// any historical row not yet normalized by normProdVariant() below.
+function sdIsOrg(v: string) {
+  const s = (v || '').trim().toLowerCase()
+  return s.includes('organic') || s === 'org' || s === 'ra-org' || s === 'ft-org'
+}
 // Same normalisation used everywhere a lot number keys into paLookup/
 // rLookup/leafShadeLookup, so a bag's lot always matches its raw-material
 // record regardless of dash spacing ("GS-0098" / "GS 0098" / "gs-0098").
@@ -192,27 +197,33 @@ function sastDateStr(iso: string): string {
     timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(iso))
 }
-// production.prod_bagging / production.bag_tags spell variant out in full
-// ('Conventional', 'Organic', 'RA-Conventional', 'RA-Organic', 'FT-ORG') —
-// that's the production schema's own CHECK constraint. qms.sd_runs uses the
-// short codes in SD_VARIANTS ('CON', 'ORG', 'RA-CON', 'RA-ORG', 'FT-CON',
-// 'FT-ORG'). Any bag-driven auto-fill that copies a production `variant`
-// straight into the form without going through this first stores the full
-// word verbatim — sd_runs then holds two different spellings of the same
-// variant (visible as both "CON" and "Conventional" badges in the runs table
-// for the same lot), and spec lookups keyed on `${grade}|${variant}` silently
-// miss because "Conventional" isn't a key in SIEVING_SPECS_DB.
+// qms.sd_runs (and SIEVING_SPECS_DB / SD_VARIANTS) now spell variant out in
+// full — 'Conventional', 'Organic', 'RA-Conventional', 'RA-Organic',
+// 'FT-Conventional', 'FT-Organic' — matching production.prod_bagging /
+// production.bag_tags' own CHECK constraint, EXCEPT that constraint only
+// actually contains the abbreviated 'FT-ORG' (no 'FT-Conventional' has ever
+// been written there). Any bag-driven auto-fill that copies a production
+// `variant` straight into the form without going through this first risks
+// storing whatever production happens to spell it as — historically that was
+// short codes ('CON'), producing two different spellings of the same variant
+// in the runs table and silently missing spec lookups keyed on
+// `${grade}|${variant}`. Kept tolerant of both the current full words and the
+// old short codes so a historical row or an unmapped upstream value still
+// normalizes correctly instead of falling through unrecognized.
 function normProdVariant(v: string | null | undefined): string {
   const s = (v || '').trim()
   if (!s) return ''
-  const upper = s.toUpperCase()
-  if ((SD_VARIANTS as string[]).includes(upper)) return upper
+  if ((SD_VARIANTS as string[]).includes(s)) return s
+  const key = s.toUpperCase()
   const map: Record<string,string> = {
-    'CONVENTIONAL': 'CON', 'ORGANIC': 'ORG',
-    'RA-CONVENTIONAL': 'RA-CON', 'RA-ORGANIC': 'RA-ORG',
-    'FT-CONVENTIONAL': 'FT-CON', 'FT-ORGANIC': 'FT-ORG',
+    'CONVENTIONAL': 'Conventional', 'ORGANIC': 'Organic',
+    'RA-CONVENTIONAL': 'RA-Conventional', 'RA-ORGANIC': 'RA-Organic',
+    'FT-CONVENTIONAL': 'FT-Conventional', 'FT-ORGANIC': 'FT-Organic',
+    'CON': 'Conventional', 'ORG': 'Organic',
+    'RA-CON': 'RA-Conventional', 'RA-ORG': 'RA-Organic',
+    'FT-CON': 'FT-Conventional', 'FT-ORG': 'FT-Organic',
   }
-  return map[upper] || upper
+  return map[key] || s
 }
 const SERIAL_CODE_TO_PRODUCT: Record<string, string> = {
   FL: 'Fine Leaf', CL: 'Coarse Leaf', IS: 'Indent Sticks', RB: 'Rooibos Blocks',
@@ -490,7 +501,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   const [monthOffset, setMonthOffset] = useState(0)   // 0 = this month, 1 = last month, ...
   const offset = view === 'day' ? dayOffset : view === 'week' ? weekOffset : monthOffset
   const setOffset = view === 'day' ? setDayOffset : view === 'week' ? setWeekOffset : setMonthOffset
-  const meshOptions = sdGetMesh(activeProduct, 'CON')
+  const meshOptions = sdGetMesh(activeProduct, 'Conventional')
   const metricOptions = [
     { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
     ...(specDef.hasLeafShade ? [{ key: 'leafShade', label: 'Leaf Shade', suffix: '' }] : []),
@@ -710,7 +721,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
     qcName: run.qcName||'', time: run.time||'',
-    bulkDensity: run.bulkDensity||'', grade: run.grade||SD_GRADES[0], variant: run.variant||'CON',
+    bulkDensity: run.bulkDensity||'', grade: run.grade||SD_GRADES[0], variant: run.variant||'Conventional',
     runType: run.runType||'in-process', needleCount: run.needleCount||'',
     leafShade: run.leafShade||'', comment: run.comment||'', paLevel: run.paLevel||'',
   })
@@ -1052,7 +1063,7 @@ export default function SievingPage() {
       // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
       // is still yesterday, which would file the run against the wrong day.
       date: sastDateStr(new Date().toISOString()),
-      lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
+      lotNumber:'', serialNumber:'', grade:'Export', variant:'Conventional',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
       bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
     }
@@ -2079,7 +2090,7 @@ export default function SievingPage() {
                     {label}{sdSort.key===key?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                   </th>
                 ))}
-                {sdGetMesh(activeProduct,'CON').map(m=>(
+                {sdGetMesh(activeProduct,'Conventional').map(m=>(
                   <th key={m} onClick={()=>toggleSort(m)} style={{padding:'5px 6px',textAlign:'center',fontSize:9,cursor:'pointer',userSelect:'none'}} title="Click to sort">
                     {m.replace(' (%)','')}{sdSort.key===m?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                   </th>
@@ -2128,7 +2139,7 @@ export default function SievingPage() {
                     {!specDef.noBulkDensity&&<td style={{padding:'3px 8px',textAlign:'center'}}>{row.bulkDensity||'—'}</td>}
                     {specDef.hasNeedleCount&&<td style={{padding:'3px 8px',textAlign:'center',color:parseFloat(row.needleCount)>15?'#dc2626':'inherit'}}>{row.needleCount||'—'}</td>}
                     {specDef.hasLeafShade&&<td style={{padding:'3px 8px',textAlign:'center'}}>{row.leafShade||'—'}</td>}
-                    {sdGetMesh(activeProduct,'CON').map(m=>{
+                    {sdGetMesh(activeProduct,'Conventional').map(m=>{
                       const spec=activeSpec[m]
                       const chk=sdChk(row[m],spec)
                       return <td key={m} style={{padding:'3px 5px',textAlign:'center',fontFamily:'monospace',fontSize:10,background:chk==='fail'?'#fef2f2':'',color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'inherit',fontWeight:chk!=='neutral'?700:400}}>{row[m]!=null&&row[m]!==''?row[m]+'%':'—'}</td>
