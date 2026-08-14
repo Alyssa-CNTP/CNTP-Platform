@@ -3,6 +3,19 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-14 — Alyssa (Production: scan-first debagging on Refining/Pasteuriser/Blender/Granule — promoted to production)
+
+**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`, `GranuleCapture.tsx`
+
+Promotes the scan-first debagging work (staging #603/#613/#645) to production. Scanning a bag now looks it up automatically (no Enter/"Look up" tap) across all four debagging lines:
+
+- **Refining 1/2** — scan a bag → popup shows its `bag_tags` record (product, weight, variant, lot, where it was made) + a validity line → "Consume into Refining" registers it debagged-in. Pick-from-system / manual kept as side options. (Shared `BagScanIn` component: `ScanBox` + `BagScanModal`, powered by `validateBagScan`.)
+- **Pasteuriser** — same scan-first popup; one field auto-routes the bag (granule output → post-sieve stream, else main debagging) and shows the target before consuming.
+- **Blender** — its debagging modal now auto-fires the lookup on scan, so fields fill on their own once the ingredient is picked.
+- **Granule** — auto-fills on scan.
+
+Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
+
 ## 2026-08-13 — Gustav (The real cause of "0 bags awaiting QC" on live: the view took 20s and hit the 8s statement timeout)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_008_fix_bag_inprocess_link_performance.sql`, `supabase/migrations/20260813_009_bag_qc_status_lateral_inprocess.sql` (both new, applied to production + staging)

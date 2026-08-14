@@ -39,9 +39,10 @@ import { getDb } from '@/lib/supabase/db'
 import { printLabel } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
-import { validateBagScan } from '@/lib/production/validate-scan'
+import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { loadAllInventory } from '@/lib/production/inventory'
 import { ItemPicker } from '@/components/production/capture/ItemPicker'
+import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import { isValidLot } from '@/components/production/capture/SievingCapture'
 import { upperCode } from '@/lib/production/normalize-code'
@@ -568,6 +569,13 @@ export function PasteuriserCapture({
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   const [bagModal, setBagModal] = useState<{ stream: 'main' | 'postsieve'; editing: PastDebagRow | null } | null>(null)
+  // Scan-first debagging (see ScanBox / BagScanModal). One field; the scanned
+  // bag's product routes it — granule output folds in post-sieve (E), everything
+  // else is main debagging (D). The popup shows the target before you consume.
+  const [scanSerial, setScanSerial] = useState('')
+  const [scanBusy, setScanBusy] = useState(false)
+  const [scanModal, setScanModal] = useState<{ stream: 'main' | 'postsieve'; serial: string; result: ScanValidationResult } | null>(null)
+  const sectionLabel = SECTION_CONFIG[sectionId]?.name ?? 'Pasteuriser'
   const [editLine, setEditLine] = useState<PastOutputLine | null>(null)
   const [items, setItems] = useState<InventoryItem[]>([])
   const [jobCards, setJobCards] = useState<any[]>([])
@@ -660,6 +668,37 @@ export function PasteuriserCapture({
     setBagModal(null)
   }
   function removeBag(id: string) { patch({ debag: value.debag.filter(r => r.id !== id) }) }
+
+  // ── Scan-first debagging handlers ────────────────────────────────────────────
+  async function runScan(raw: string) {
+    const serial = sanitizeSerial(raw).trim()
+    if (!serial) return
+    setScanBusy(true)
+    // blockFinishedProducts stays off — both streams legitimately consume finished
+    // blend / granule product (same reason the AddBagModal does).
+    const result = await validateBagScan(serial, { sessionVariant: variantWord, blockFinishedProducts: false })
+    setScanBusy(false)
+    const pt = (result.tag?.product_type ?? '').toLowerCase()
+    const stream: 'main' | 'postsieve' = /granul/.test(pt) ? 'postsieve' : 'main'
+    setScanModal({ stream, serial, result })
+  }
+  function consumeScanned() {
+    const tag = scanModal?.result.tag
+    if (!tag) return
+    commitBag({
+      id: crypto.randomUUID(), stream: scanModal!.stream, serial: tag.serial_number,
+      productType: tag.product_type || '', variant: tag.variant || variantWord || '',
+      lot: (tag.lot_number && tag.lot_number !== 'NOT TRACKED') ? tag.lot_number : '',
+      weight: tag.weight_kg != null ? String(tag.weight_kg) : '',
+      time: fmtTime(nowISO()), inputMode: 'scan', secured: true, logged_at: nowISO(),
+    })
+    setScanModal(null); setScanSerial('')
+  }
+  function manualFromScan() {
+    const stream = scanModal?.stream ?? 'main'
+    setScanModal(null); setScanSerial('')
+    setBagModal({ stream, editing: null })
+  }
 
   // ── Output helpers ──────────────────────────────────────────────────────────
   function addOutputLine() {
@@ -816,8 +855,17 @@ export function PasteuriserCapture({
       {tab === 'debag' && (
         <>
           <p className="text-[12px] text-stone-500 px-1">
-            Consume every bag fed into the pasteuriser. Scan the barcode, pick it from the system, or register a bag written on a paper tag.
+            Scan each bag fed into the pasteuriser — its record opens to confirm, and it goes to the right stream automatically. Pick from the system or register a paper-tag bag using the buttons on each stream below.
           </p>
+          {!locked && (
+            <ScanBox serial={scanSerial} busy={scanBusy} color={DEBAG_COLOR}
+              onChange={setScanSerial} onScan={runScan} />
+          )}
+          {scanModal && (
+            <BagScanModal serial={scanModal.serial} result={scanModal.result}
+              sectionLabel={scanModal.stream === 'postsieve' ? `${sectionLabel} · Post-sieve` : sectionLabel}
+              onConsume={consumeScanned} onManual={manualFromScan} onClose={() => setScanModal(null)} />
+          )}
           <DebagStream stream="main" title="Debagging" hint="Blend bags fed to the steriliser, plus any High Moisture rework bag being fed back in" letter="D"
             rows={mainRows} total={t.D} locked={locked} color={DEBAG_COLOR}
             onAdd={() => setBagModal({ stream: 'main', editing: null })}
