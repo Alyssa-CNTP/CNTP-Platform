@@ -302,6 +302,7 @@ function mapDbRow(r: any) {
     gramValues:   typeof r.gram_values==='object'&&r.gram_values!=null?r.gram_values:{},
     editHistory:  Array.isArray(r.edit_history)?r.edit_history:[],
     timestamp:    r.created_at,
+    runTimestamp: r.run_timestamp,
     ...(typeof r.sieve_results==='object'&&r.sieve_results!=null?r.sieve_results:{}),
   }
 }
@@ -1377,6 +1378,12 @@ export default function SievingPage() {
       qc_name:       form.qcName||null,
       // Always the capture moment — the QC cannot type or edit this.
       time_of_run:   nowHHMM(),
+      // The tamper-resistant record of when this run was actually captured —
+      // a real UTC instant, set once here and never touched by the edit path
+      // below (see the onSave handler's dbRow, which omits it entirely). The
+      // human-facing date/time_of_run fields stay locked in the edit screen
+      // too, but this is the one nothing in the app can ever rewrite.
+      run_timestamp: new Date().toISOString(),
       bagging_id:    form.baggingId || null,
       needle_count:  form.needleCount||null,
       leaf_shade:    form.leafShade||null,
