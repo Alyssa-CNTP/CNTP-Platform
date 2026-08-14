@@ -14,6 +14,15 @@ Reported: Sieving Tower checks get filled out but aren't saved; the hourly VSD r
 - **AI summary not durable**: `generateAiSummary`'s write to `check_records.ai_summary` never checked its own error response — a failed save could still flip the UI to "generated" for that page load and then silently vanish (unsaved) the next time anyone opened the record. The summary is now only shown once its write is confirmed to have succeeded; a failed save keeps the "not generated yet" + Generate retry control visible instead.
 - Hardened `checks-db.ts`'s `ensureCheckRecord`/`appendCheckEvent` to throw on a DB error instead of silently swallowing it — that silent-failure shape (mirrors the `qms.sieving_spec_overrides` bug fixed earlier today) is what let all three symptoms look like nothing was wrong until checked against the live data.
 
+## 2026-08-14 — Gustav (Sieving: charts still overlapping on wide ranges + drop the now-redundant Run Type picker)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Two more fixes on top of the last sieving pass:
+
+- The tick-count cap from the previous fix wasn't enough on its own — week-bucket labels ("11 May – 17 May") are much wider than a day or hour label, so even ~10 of them still overlapped in a ~300px-wide mini chart. Tightened the target per granularity (hour 8 / day 6 / week 4) and angled the week/per-run labels at -35° so they no longer collide head-on; chart height and margin grow slightly to fit the rotated text.
+- Removed the "Run Type" picker inside the New Run form — now redundant since the two toolbar buttons ("+ New In-Process QC" / "+ New Output Bag QC") already fix the type before the form opens. The form's header names the type instead ("New Fine Leaf In-Process Run" / "…Output Bag QC Run").
+
 ## 2026-08-14 — Gustav (Sieving: dedicated QC buttons, decluttered chart axes, From/To date range, per-run Bulk Density/Leaf Shade)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
