@@ -3,6 +3,43 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-13 — Gustav (The real cause of "0 bags awaiting QC" on live: the view took 20s and hit the 8s statement timeout)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_008_fix_bag_inprocess_link_performance.sql`, `supabase/migrations/20260813_009_bag_qc_status_lateral_inprocess.sql` (both new, applied to production + staging)
+
+The live site still showed no pop-up after the earlier fix. Checking the Supabase API logs settled it: **1800 requests to `GET /rest/v1/v_pending_bag_qc` returning HTTP 500**, every one with `proxy_status: PostgREST; error=57014` — `query_canceled`, i.e. the 8-second statement timeout, at ~8.2s per request. Not permissions, not RLS, not a stale schema cache, and not a missing deploy — the code and data were correct throughout.
+
+- **Why it looked like an empty queue.** The screen fetched with `const { data } = await …`, discarding the `error`. A 500 therefore rendered identically to "no bags pending" — the failure was completely invisible for a full shift. `loadPendingBags()` now keeps the `error`, shows a red "could not load … tap ↻ to retry" line, and keeps the last good list instead of blanking it.
+- **Why it was slow.** `v_bag_inprocess_link` matched each bag to its preceding in-process run with a **correlated subquery** over `production.prod_debagging`, which the planner ran once per (bag × in-process run) pair: **822,617 sequential scans, 3.29 million buffer hits.** `EXPLAIN ANALYZE` measured the whole query at **19,928 ms**.
+- **`20260813_008`** hoists that subquery into a `MATERIALIZED` CTE computed once (`prod_debagging` is ~123 rows) probed via `EXISTS`, and indexes `prod_debagging(session_id)`. 19,928ms → 7,926ms — still only a whisker under the timeout, so not enough on its own.
+- **`20260813_009`** replaces the join to the fully-materialised `v_bag_inprocess_link` with a `LATERAL … ORDER BY run_at DESC LIMIT 1`, so the in-process lookup runs only for rows that survive the pending filter (4 on production, not 1,678) instead of doing ~966,000 lot-normalisation comparisons first. `v_bag_inprocess_link` is left in place for other consumers.
+- **Result: 19,928ms → 150ms on production** (buffers 3.29M → 981), 77ms on staging. The 500s stopped and 200s resumed the moment it landed; production shows 4 bags pending. Same fixes applied to staging for parity.
+- Bonus confirmation: with the earlier `NOTIFY pgrst, 'reload schema'`, the capture screen's bagging write recovered — all 4 pending bags now report `bag_source = prod_bagging`, so `prod_bagging` is once again carrying the day's bags and the `bag_tags` fallback is sitting behind it unused, as intended.
+
+## 2026-08-13 — Gustav (Live site showed 0 bags awaiting QC: bag_tags fallback in the QC views + a save path that can't silently drop bags)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_007_bag_events_prod_bagging_with_tag_fallback.sql` (new, applied to production + staging)
+
+Reported: the live site showed no "bags awaiting QC" pop-up and no bags in the Final QC picker, while staging — same code — showed 10. The code was not the problem: PRs #636 and #638 were both approved, merged and deployed to production successfully. It was data.
+
+- **What was wrong.** On production the Sieving Tower had bagged and printed 21 bags today (`STFL-130826-001..010`, `STCL-130826-001..006`, plus sticks/dust/blocks). All 21 were in `production.bag_tags`. **None** were in `production.prod_bagging` — that table's last Sieving Tower row was 2026-08-12, while Blender / Granule / Refining all wrote normally the same day. Since `20260813_006` re-pointed the QC views at `prod_bagging` (as requested), the pending queue was genuinely, correctly empty — it was reading a table that had lost the day's bags.
+- **Why the write failed.** `prod_bagging` isn't an append-only record of bags; it's a mirror of the capture screen's `draft_data`, rewritten by `persist()` on every save. The session's `draft_data` saved all day (`prod_sessions.updated_at` kept advancing) while the bagging write that follows it did not land. The `upsert(..., { onConflict: 'session_id,bag_serial_no' })` added in `20260813_006` resolves its target index through **PostgREST's cached constraint metadata**, so a stale cache fails the whole write — and nothing in the capture UI looks wrong when it does.
+- **Fix 1 — the save can no longer silently drop bags.** `persist()` now clears only the rows it is about to rewrite (the no-serial ones, plus the specific serials in this payload) and plain-inserts them. Same "never delete a bag that isn't in this payload" guarantee as before, with no dependency on `ON CONFLICT` or on any cached constraint metadata.
+- **Fix 2 — a printed bag can never be invisible to Quality.** `qms.v_bag_events` now reads `prod_bagging` **first** and falls back to `bag_tags` only for serials `prod_bagging` does not have (new `bag_source` column marks which). `prod_bagging` stays the source and `bagging_time` stays the timestamp for every bag it holds — the requested behaviour is unchanged — but a genuinely printed bag still reaches the QC queue if its mirror row is missing. Verified the fallback adds **no** duplicate serials.
+- Production went from **0 → 3** pending (`STFL-130826-008/009/010`; the rest of today's bags already have Final QC). Staging unchanged at 10, as expected.
+- Two pre-existing data issues spotted while verifying, both **unrelated to this change** and left alone: 21 serials appear twice within `prod_bagging` itself under two different sessions (old blends and pre-`ST` serials, not sieving), and `STFL-130826-007` / `STCL-130826-005` each have two Final QC runs — the duplicates Gustav is cleaning up manually, now blocked going forward by the previous change.
+
+## 2026-08-13 — Gustav (Sieving: block a second Final QC result on the same bag serial)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Found via the sieving runs table: the same serial (`STFL-130826-007`) had **two separate Final QC rows** — different times (14:06 and 13:44), different bulk density (330 vs 340). A physical bag is sampled once at Final QC, so a second "final" row against the same serial is always a mistake (duplicate save, or the wrong bag picked twice from the dropdown), never a legitimate re-test — unlike In-Process, where the same serial can legitimately recur across several readings while that bag is still filling on the sieve.
+
+- New-run form: `validate()` now rejects saving a Final QC run whose serial already has another Final QC row, naming the date/time/QC of the existing one so the QC knows to edit that record instead.
+- Inline row editor: the same check runs on save, excluding the row being edited (so correcting an existing Final QC row's own values still works).
+- In-Process is untouched — no such restriction there.
+- Existing duplicates already in the table (like the one above) are not touched by this change; flagged to Gustav to clean up manually.
+
 ## 2026-08-13 — Gustav (Sieving: Bulk Density/Leaf Shade are Final-QC-only for Fine/Coarse Leaf; fix a latent SAST date bug in the bag-tag lookup)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
