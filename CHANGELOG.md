@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+
+## 2026-08-14 — Gustav (Quality: local-storage draft autosave/recovery across every capture form, matching production capture's offline safety net)
+
+**Files added:** `lib/hooks/useDraftAutosave.ts`, `components/shared/DraftRecoveryBanner.tsx`
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `granule/page.tsx`, `pasteuriser/page.tsx`, `raw-material/page.tsx`, `lab-results/page.tsx`, `customer-specs/page.tsx`, `coa/page.tsx`
+
+Requested: every quality capture form should survive a dropped connection or closed tab the same way production capture already does — autosave to localStorage every 15s while a form is open, recover it on next load, and delete the local copy once the data is actually confirmed saved to the database.
+
+- New shared hook `useDraftAutosave(key, data, opts)` (default 15s interval, plus an immediate save on tab-hide/pagehide) + `readDraft`/`clearDraft`, and a shared `DraftRecoveryBanner` component — no such reusable draft-autosave utility existed before this; production capture's own version is embedded directly in that page.
+- Wired into every genuine in-progress "typed multi-field capture" form across quality/: Sieving's New Run form; Granule's New Run/Add Sample/Add Tasting modals; Pasteuriser's New Batch and Add Sample modals; Raw Material's manual-entry (PA/TA, Residue, Glyphosate) modal; Lab Results' PDF-extraction review panel; Customer Specs' New Specification modal; CoA's editable model (header/line overrides) before Print/Export.
+- Deliberately left untouched: pages/forms that are single-field instant-save edits or read-only (Lab Manager, Maintenance QC, inline cell editors) — nothing there is at risk of losing meaningful in-progress work.
+- Recovery is banner-based, not silent auto-restore: on next load, a small amber banner offers Restore/Discard rather than reopening a form unprompted. The draft is deleted on a confirmed DB insert and on explicit Cancel/Close (deliberate abandonment), not just left to go stale.
+
+
 ## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`

@@ -18,7 +18,9 @@ import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1097,6 +1099,19 @@ export default function SievingPage() {
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
 
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Autosaves
+  // every 15s while the New Run form is open so a dropped connection or
+  // closed tab doesn't lose an in-progress capture; cleared once addRun()
+  // confirms the insert. Keyed per-product since each product tab can have
+  // its own in-progress entry.
+  const draftKey = `sieving_draft_${activeProduct}`
+  const [recoveredDraft, setRecoveredDraft] = useState<{data:any;savedAt:string}|null>(null)
+  useDraftAutosave(draftKey, { form, gramValues }, { enabled: showForm })
+  useEffect(() => {
+    if (showForm) return
+    setRecoveredDraft(readDraft(draftKey))
+  }, [draftKey, showForm])
+
   // In-Process no longer carries a serial at all — it's a reading off the
   // machine while a bag is still filling, not a sample of one finished bag, so
   // there's nothing for a serial to identify. (Previously this auto-filled the
@@ -1388,6 +1403,9 @@ export default function SievingPage() {
     setSaving(true)
     const { data: saved, error } = await db.schema('qms').from('sd_runs').insert(newRun).select().single()
     if (error) { setSdError('Could not save run: '+error.message); setSaving(false); return }
+    // Now safely in the database — the local draft would only ever resurface
+    // stale, already-saved data from here on, so drop it.
+    clearDraft(draftKey)
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
 
@@ -1655,6 +1673,18 @@ export default function SievingPage() {
         ))}
       </div>
 
+      {/* Recovered draft — see lib/hooks/useDraftAutosave.ts. Only surfaces when
+          the form is closed, so it never fights with an entry in progress. */}
+      {recoveredDraft && !showForm && (
+        <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+          onRestore={()=>{
+            setForm(recoveredDraft.data.form); setGramValues(recoveredDraft.data.gramValues||{})
+            setShowForm(true); setShowSpecEditor(false); setEditRunId(null); setRecoveredDraft(null)
+            setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)
+          }}
+          onDiscard={()=>{ clearDraft(draftKey); setRecoveredDraft(null) }} />
+      )}
+
       {/* Toolbar A — New Run / Edit Specs sit above the Specifications table so
           editing the spec a run will be checked against is right next to it. */}
       <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
@@ -1662,12 +1692,12 @@ export default function SievingPage() {
             you pick In-Process vs Final QC inside the form — the run type is
             set the moment the form opens. */}
         {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
-          setSelectedBagId('');setLotMsg('');setTagLookupState('idle')
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setRecoveredDraft(null)
           setForm((f:any)=>({...blankForm(), runType:'in-process'}))
           setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
           style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New In-Process QC</button>}
         {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
-          setSelectedBagId('');setLotMsg('');setTagLookupState('idle')
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setRecoveredDraft(null)
           setForm((f:any)=>({...blankForm(), runType:'final'}))
           setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
           style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Output Bag QC</button>}
@@ -1775,7 +1805,7 @@ export default function SievingPage() {
             <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>
               ⊕ New {activeProduct} {form.runType==='final'?'Output Bag QC':'In-Process'} Run
             </div>
-            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
+            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle');clearDraft(draftKey)}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
           {/* Run type is fixed by which toolbar button opened this form — see
@@ -2020,7 +2050,7 @@ export default function SievingPage() {
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
+              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle');clearDraft(draftKey)}}
                 style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
               <button onClick={addRun} disabled={saving || (outlierWarnings.length>0 && !confirmAnomaly)}
                 style={{padding:'10px 26px',borderRadius:7,border:'none',background:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'default':'pointer'}}>
