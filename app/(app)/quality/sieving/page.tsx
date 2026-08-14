@@ -490,9 +490,12 @@ function bucketsForRange(startISO: string, endISO: string): { granularity: Chart
 // trend view, which isn't scoped to one grade/variant.
 const TREND_SPEC_KEY = 'Export|Conventional'
 
-function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeStart, rangeEnd, onPointClick }: {
+function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeStart, rangeEnd, view, offset, onViewChange, onOffsetChange, onPointClick }: {
   runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>
-  rangeStart: string; rangeEnd: string; onPointClick?: (runId: any) => void
+  rangeStart: string; rangeEnd: string
+  view: 'day' | 'week' | 'month'; offset: number
+  onViewChange: (v: 'day' | 'week' | 'month') => void; onOffsetChange: (updater: (o: number) => number) => void
+  onPointClick?: (runId: any) => void
 }) {
   const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
   const meshOptions = sdGetMesh(activeProduct, 'Conventional')
@@ -572,14 +575,28 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
             </button>
           ))}
         </div>
-        {/* The window itself is set by the date-range slicer above this
-            chart (shared with the records table) — this just names it and
-            shows the granularity it landed on. */}
-        <span style={{ fontSize:11, fontWeight:700, color:'#374151' }}>
-          {rangeLabel} <span style={{ fontWeight:400, color:'#9ca3af' }}>
-            ({granularity==='hour'?'by hour':granularity==='day'?'by day':'by week'})
-          </span>
-        </span>
+        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
+          {(['day','week','month'] as const).map(v => (
+            <button key={v} onClick={()=>onViewChange(v)}
+              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
+              {v==='day'?'By Hour':v==='week'?'By Week':'By Month'}
+            </button>
+          ))}
+        </div>
+        {/* Timeline navigator — step back through previous days/weeks/months.
+            The window it sets drives both this chart and the records table
+            below, so they always show the same slice of history. */}
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <button onClick={()=>onOffsetChange((o:number)=>o+1)} title={`Previous ${view}`}
+            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
+          <span style={{ fontSize:11, fontWeight:700, color:'#374151', minWidth:120, textAlign:'center' }}>{rangeLabel}</span>
+          <button onClick={()=>onOffsetChange((o:number)=>Math.max(0,o-1))} disabled={offset===0} title={`Next ${view}`}
+            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:offset===0?'#f3f4f6':'#fff', color:offset===0?'#d1d5db':'#374151', cursor:offset===0?'default':'pointer' }}>▶</button>
+          {offset!==0 && (
+            <button onClick={()=>onOffsetChange(()=>0)} style={{ padding:'4px 10px', fontSize:11, fontWeight:600, border:'1px solid #1f4e79', borderRadius:6, background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>Today</button>
+          )}
+        </div>
         {chartType==='outliers' && (
           <select value={metric} onChange={e=>setMetric(e.target.value)}
             style={{ padding:'4px 8px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6, background:'#fff' }}>
@@ -685,69 +702,22 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   )
 }
 
-// ─── SievingDateRangeSlider ─────────────────────────────────────────────────
-// Dual-handle date-range slider replacing the old Daily/Weekly/Monthly/60-Day/
-// All period buttons. Drives both the chart above and the records table below
-// it (the parent passes the same [rangeStart, rangeEnd] to both), so panning
-// or narrowing the window moves them together instead of each having its own
-// separate date control. Built from two overlaid native <input type="range">
-// — the standard dual-thumb-slider trick — since no slider component exists
-// elsewhere in this codebase to reuse.
-function SievingDateRangeSlider({ minDate, maxDate, start, end, onChange }: {
-  minDate: string; maxDate: string; start: string; end: string; onChange: (start: string, end: string) => void
-}) {
-  const dayMs = 86400000
-  const minTime = new Date(minDate + 'T00:00:00').getTime()
-  const toDays = (iso: string) => Math.round((new Date(iso + 'T00:00:00').getTime() - minTime) / dayMs)
-  const fromDays = (n: number) => { const d = new Date(minDate + 'T00:00:00'); d.setDate(d.getDate() + n); return isoDate(d) }
-  const totalDays = Math.max(1, toDays(maxDate))
-  const [startDays, setStartDays] = useState(() => toDays(start))
-  const [endDays, setEndDays]     = useState(() => toDays(end))
-  // Re-sync if the parent's range changes for a reason other than dragging
-  // this slider itself (e.g. switching product tabs resets nothing here, but
-  // keeps this in sync if a future caller ever sets the range programmatically).
-  useEffect(() => { setStartDays(toDays(start)); setEndDays(toDays(end)) }, [start, end, minDate])
-  const commit = (s: number, e: number) => onChange(fromDays(Math.min(s, e)), fromDays(Math.max(s, e)))
-  const fmt = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
-
-  return (
-    <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:'12px 16px', marginBottom:12 }}>
-      <style>{`
-        .sd-range-slider input[type=range] { -webkit-appearance:none; appearance:none; background:transparent; }
-        .sd-range-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; pointer-events:auto; width:16px; height:16px; border-radius:50%; background:#1f4e79; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer; }
-        .sd-range-slider input[type=range]::-moz-range-thumb { pointer-events:auto; width:16px; height:16px; border-radius:50%; background:#1f4e79; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer; }
-        .sd-range-slider input[type=range]::-webkit-slider-runnable-track { background:transparent; }
-        .sd-range-slider input[type=range]::-moz-range-track { background:transparent; }
-      `}</style>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8, flexWrap:'wrap', gap:8 }}>
-        <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.03em' }}>Date range</span>
-        <span style={{ fontSize:12, fontWeight:700, color:'#1f4e79' }}>{fmt(fromDays(startDays))} – {fmt(fromDays(endDays))}</span>
-      </div>
-      <div className="sd-range-slider" style={{ position:'relative', height:22 }}>
-        <div style={{ position:'absolute', top:9, left:0, right:0, height:4, background:'#e5e7eb', borderRadius:2 }} />
-        <div style={{ position:'absolute', top:9, height:4, background:'#1f4e79', borderRadius:2,
-          left:`${startDays/totalDays*100}%`, width:`${(endDays-startDays)/totalDays*100}%` }} />
-        <input type="range" min={0} max={totalDays} value={startDays}
-          onChange={e=>setStartDays(Math.min(Number(e.target.value), endDays))}
-          onMouseUp={()=>commit(startDays,endDays)} onTouchEnd={()=>commit(startDays,endDays)}
-          onKeyUp={()=>commit(startDays,endDays)}
-          style={{ position:'absolute', width:'100%', top:0, margin:0, pointerEvents:'none', zIndex: startDays>=endDays-1 ? 3 : 1 }} />
-        <input type="range" min={0} max={totalDays} value={endDays}
-          onChange={e=>setEndDays(Math.max(Number(e.target.value), startDays))}
-          onMouseUp={()=>commit(startDays,endDays)} onTouchEnd={()=>commit(startDays,endDays)}
-          onKeyUp={()=>commit(startDays,endDays)}
-          style={{ position:'absolute', width:'100%', top:0, margin:0, pointerEvents:'none', zIndex:2 }} />
-      </div>
-      <div style={{ display:'flex', justifyContent:'space-between', marginTop:2 }}>
-        <span style={{ fontSize:9, color:'#9ca3af' }}>{fmt(minDate)}</span>
-        <button onClick={()=>{ setStartDays(0); setEndDays(totalDays); onChange(minDate, maxDate) }}
-          style={{ fontSize:9, color:'#1f4e79', background:'none', border:'none', cursor:'pointer', fontWeight:600, textDecoration:'underline' }}>
-          Reset to full range
-        </button>
-        <span style={{ fontSize:9, color:'#9ca3af' }}>{fmt(maxDate)}</span>
-      </div>
-    </div>
-  )
+// ─── Sieving range-nav helpers ──────────────────────────────────────────────
+// Replaces the dual-handle slider with the original clickable By Hour/Week/
+// Month navigator. offset steps back in time (0 = current); the parent owns
+// one offset per view so switching tabs doesn't lose your place in the others.
+function dayForOffset(offset: number): Date { const d = new Date(); d.setDate(d.getDate() - offset); return d }
+function weekRangeForOffset(offset: number): { start: Date; end: Date } {
+  const anchor = new Date(); anchor.setDate(anchor.getDate() - offset * 7)
+  const start = startOfWeek(anchor)
+  const end = new Date(start); end.setDate(start.getDate() + 6)
+  return { start, end }
+}
+function monthRangeForOffset(offset: number): { start: Date; end: Date } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth() - offset, 1)
+  const end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 0)
+  return { start, end }
 }
 
 function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials, activeProduct, allRuns }: {
@@ -974,13 +944,20 @@ export default function SievingPage() {
   const [showSpecEditor, setShowSpecEditor] = useState(false)
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
-  // Replaces the old Daily/Weekly/Monthly/60-Day/All period buttons with a
-  // single date-range slicer shared by the chart and the records table — the
-  // two now always show the same window instead of the chart having its own
-  // separate By Hour/Week/Month navigator. Bounded to the last 3 months by
-  // default, matching what load() actually fetches from the database.
-  const [rangeStart,     setRangeStart]     = useState(threeMonthsAgoISO())
-  const [rangeEnd,       setRangeEnd]       = useState(isoDate(new Date()))
+  // Replaces the old Daily/Weekly/Monthly/60-Day/All period buttons with the
+  // By Hour/Week/Month navigator (moved here from the chart) so the records
+  // table shares the same window instead of having its own separate control.
+  // One offset per view so switching tabs doesn't lose your place in the others.
+  const [rangeView,      setRangeView]      = useState<'day'|'week'|'month'>('day')
+  const [dayOffset,      setDayOffset]      = useState(0)
+  const [weekOffset,     setWeekOffset]     = useState(0)
+  const [monthOffset,    setMonthOffset]    = useState(0)
+  const rangeOffset = rangeView==='day' ? dayOffset : rangeView==='week' ? weekOffset : monthOffset
+  const setRangeOffset = rangeView==='day' ? setDayOffset : rangeView==='week' ? setWeekOffset : setMonthOffset
+  const rangeWindow = rangeView==='day' ? (() => { const d = dayForOffset(dayOffset); return { start: d, end: d } })()
+    : rangeView==='week' ? weekRangeForOffset(weekOffset) : monthRangeForOffset(monthOffset)
+  const rangeStart = isoDate(rangeWindow.start)
+  const rangeEnd   = isoDate(rangeWindow.end)
   const [searchText,     setSearchText]     = useState('')
   const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
@@ -2061,13 +2038,9 @@ export default function SievingPage() {
         </div>
       )}
 
-      {/* Date-range slicer — drives both the chart below and the records table
-          further down, so the two always show the same window instead of
-          each having its own separate date control. */}
-      <SievingDateRangeSlider minDate={threeMonthsAgoISO()} maxDate={isoDate(new Date())}
-        start={rangeStart} end={rangeEnd} onChange={(s,e)=>{setRangeStart(s);setRangeEnd(e)}} />
-
-      {/* Mesh trend + outlier view, bounded to the slicer's window above. */}
+      {/* Mesh trend + outlier view — the By Hour/Week/Month navigator inside it
+          sets the window that also bounds the records table further down, so
+          the two always show the same slice of history. */}
       <div style={{marginBottom:8}}>
         <button onClick={()=>setShowOutlierChart(s=>!s)}
           style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showOutlierChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showOutlierChart?'#eff6ff':'#fff',color:showOutlierChart?'#1f4e79':'#374151'}}>
@@ -2077,6 +2050,7 @@ export default function SievingPage() {
       {showOutlierChart && rangeRuns.length>0 && (
         <SievingOutlierChart runs={rangeRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
           rangeStart={rangeStart} rangeEnd={rangeEnd}
+          view={rangeView} offset={rangeOffset} onViewChange={setRangeView} onOffsetChange={setRangeOffset}
           onPointClick={(runId)=>{
             setChartHighlightId(runId)
             const el = document.getElementById(`run-row-${runId}`)
