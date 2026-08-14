@@ -5,16 +5,158 @@ Format: date · developer · files changed · description of code changes.
 
 ## 2026-08-14 — Alyssa (Scan-first debagging rolled out: shared component + Pasteuriser popup + Blender auto-fill)
 
-**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `components/production/capture/RefiningCapture.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
+**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`
 
-Extending the Refining scan-first flow (scan a bag → popup shows its `bag_tags` record + validity → "Consume" registers it debagged-in) to the other lines.
+- New shared **`BagScanIn.tsx`** (`ScanBox` auto-fires ~350 ms after the serial settles; `BagScanModal` shows the bag's `bag_tags` record + validity via `validateBagScan`), extracted from Refining so every section shares one implementation. Refining imports it (no behaviour change).
+- **Pasteuriser** — full scan-first popup; one field routes the bag (granule output → post-sieve stream E, else main debagging D) and the popup shows the target before consuming. Pick-from-system / manual stay on each stream.
+- **Blender** — debagging modal now auto-fires the lookup on scan (was Enter/"Look up" only). Full popup + BOM-slot auto-routing to follow once each blend's accepted ingredients are defined.
+- **Granule** already auto-fills on scan. Per-section input-acceptance rules are the next refinement.
 
-- **New shared `BagScanIn.tsx`** — the `ScanBox` (auto-fires ~350 ms after the serial settles, no Enter/tap) and `BagScanModal` (bag record + validity, powered by `validateBagScan`) extracted from Refining so every section uses one implementation. Refining now imports them (no behaviour change).
-- **Pasteuriser** — added the same scan-first popup. One scan field routes the bag automatically: granule output folds into the **post-sieve** stream (E), everything else into **main debagging** (D); the popup shows which stream before you consume. Pick-from-system / manual stay on each stream card.
-- **Blender** — its debagging modal now **auto-fires the lookup on scan** (was Enter/"Look up" only), so scanning fills product/weight/variant/lot on its own once the operator picks the ingredient slot. (Full popup + BOM-slot auto-routing to follow, once each blend's accepted ingredients are defined.)
-- **Granule** already auto-fills on scan (from the earlier auto-lookup change).
+## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
 
-Per-section input-acceptance rules (what each line/slot may consume) are the next refinement, per the request to define them per section.
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: `STFL-130826-012` was captured as a Final QC and is in the database, but could not be found in the sieving runs table.
+
+- **What happened.** The run is in the table — it had sorted itself dozens of rows down. `applyBagToForm()` set the run's **Date** from `bag.bag_date` (when *production bagged* the bag) while the **Time** beside it is always stamped at the moment of capture. The bag was made on 13 Aug and sampled at 07:33 on the morning of the 14th, so the run was stored as `date = 2026-08-13, time = 07:33` — an instant that never happened. The table sorts on `date + time`, so instead of appearing at the top it filed itself near the *bottom* of the 13 August block, below every run from that day's shift.
+- **Fix.** A Final QC run's Date is now the date the QC was performed, matching the capture-stamped Time next to it. The bag's own bagging moment isn't lost — it stays attached to the bag through the serial / `bagging_id` link, and is now shown explicitly in the green confirmation line ("Bagged 2026-08-13 15:33") when a bag is picked. The Date field stays editable, so a night shift can still back-date a run deliberately.
+- **Also fixed a latent midnight bug in the same area:** `blankForm()` seeded the date with `new Date().toISOString().slice(0,10)` — raw UTC. Between 00:00 and 01:59 SAST that is still *yesterday*, so any run captured in that window was filed against the wrong day. Now uses the same `sastDateStr()` (Africa/Johannesburg) helper. One record on production (`16-07-18`, captured 00:37) shows exactly this signature.
+- **Note on the duplicate:** `STFL-130826-012` has **two** Final QC rows (07:33 and 07:35, both 340 / shade 5). The guard that blocks a second Final QC on one serial is merged to staging but is sitting in PR #641 awaiting approval for `main`, so it was not yet protecting the live site when these were captured.
+- Historical records were **not** bulk-rewritten: of 10 rows since 1 Aug where the stored date differs from the capture date, several are legitimate night-shift back-dating (time typed as 23:30, captured 00:12), which this change deliberately still allows.
+
+## 2026-08-13 — Gustav (The real cause of "0 bags awaiting QC" on live: the view took 20s and hit the 8s statement timeout)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_008_fix_bag_inprocess_link_performance.sql`, `supabase/migrations/20260813_009_bag_qc_status_lateral_inprocess.sql` (both new, applied to production + staging)
+
+The live site still showed no pop-up after the earlier fix. Checking the Supabase API logs settled it: **1800 requests to `GET /rest/v1/v_pending_bag_qc` returning HTTP 500**, every one with `proxy_status: PostgREST; error=57014` — `query_canceled`, i.e. the 8-second statement timeout, at ~8.2s per request. Not permissions, not RLS, not a stale schema cache, and not a missing deploy — the code and data were correct throughout.
+
+- **Why it looked like an empty queue.** The screen fetched with `const { data } = await …`, discarding the `error`. A 500 therefore rendered identically to "no bags pending" — the failure was completely invisible for a full shift. `loadPendingBags()` now keeps the `error`, shows a red "could not load … tap ↻ to retry" line, and keeps the last good list instead of blanking it.
+- **Why it was slow.** `v_bag_inprocess_link` matched each bag to its preceding in-process run with a **correlated subquery** over `production.prod_debagging`, which the planner ran once per (bag × in-process run) pair: **822,617 sequential scans, 3.29 million buffer hits.** `EXPLAIN ANALYZE` measured the whole query at **19,928 ms**.
+- **`20260813_008`** hoists that subquery into a `MATERIALIZED` CTE computed once (`prod_debagging` is ~123 rows) probed via `EXISTS`, and indexes `prod_debagging(session_id)`. 19,928ms → 7,926ms — still only a whisker under the timeout, so not enough on its own.
+- **`20260813_009`** replaces the join to the fully-materialised `v_bag_inprocess_link` with a `LATERAL … ORDER BY run_at DESC LIMIT 1`, so the in-process lookup runs only for rows that survive the pending filter (4 on production, not 1,678) instead of doing ~966,000 lot-normalisation comparisons first. `v_bag_inprocess_link` is left in place for other consumers.
+- **Result: 19,928ms → 150ms on production** (buffers 3.29M → 981), 77ms on staging. The 500s stopped and 200s resumed the moment it landed; production shows 4 bags pending. Same fixes applied to staging for parity.
+- Bonus confirmation: with the earlier `NOTIFY pgrst, 'reload schema'`, the capture screen's bagging write recovered — all 4 pending bags now report `bag_source = prod_bagging`, so `prod_bagging` is once again carrying the day's bags and the `bag_tags` fallback is sitting behind it unused, as intended.
+
+## 2026-08-13 — Gustav (Live site showed 0 bags awaiting QC: bag_tags fallback in the QC views + a save path that can't silently drop bags)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_007_bag_events_prod_bagging_with_tag_fallback.sql` (new, applied to production + staging)
+
+Reported: the live site showed no "bags awaiting QC" pop-up and no bags in the Final QC picker, while staging — same code — showed 10. The code was not the problem: PRs #636 and #638 were both approved, merged and deployed to production successfully. It was data.
+
+- **What was wrong.** On production the Sieving Tower had bagged and printed 21 bags today (`STFL-130826-001..010`, `STCL-130826-001..006`, plus sticks/dust/blocks). All 21 were in `production.bag_tags`. **None** were in `production.prod_bagging` — that table's last Sieving Tower row was 2026-08-12, while Blender / Granule / Refining all wrote normally the same day. Since `20260813_006` re-pointed the QC views at `prod_bagging` (as requested), the pending queue was genuinely, correctly empty — it was reading a table that had lost the day's bags.
+- **Why the write failed.** `prod_bagging` isn't an append-only record of bags; it's a mirror of the capture screen's `draft_data`, rewritten by `persist()` on every save. The session's `draft_data` saved all day (`prod_sessions.updated_at` kept advancing) while the bagging write that follows it did not land. The `upsert(..., { onConflict: 'session_id,bag_serial_no' })` added in `20260813_006` resolves its target index through **PostgREST's cached constraint metadata**, so a stale cache fails the whole write — and nothing in the capture UI looks wrong when it does.
+- **Fix 1 — the save can no longer silently drop bags.** `persist()` now clears only the rows it is about to rewrite (the no-serial ones, plus the specific serials in this payload) and plain-inserts them. Same "never delete a bag that isn't in this payload" guarantee as before, with no dependency on `ON CONFLICT` or on any cached constraint metadata.
+- **Fix 2 — a printed bag can never be invisible to Quality.** `qms.v_bag_events` now reads `prod_bagging` **first** and falls back to `bag_tags` only for serials `prod_bagging` does not have (new `bag_source` column marks which). `prod_bagging` stays the source and `bagging_time` stays the timestamp for every bag it holds — the requested behaviour is unchanged — but a genuinely printed bag still reaches the QC queue if its mirror row is missing. Verified the fallback adds **no** duplicate serials.
+- Production went from **0 → 3** pending (`STFL-130826-008/009/010`; the rest of today's bags already have Final QC). Staging unchanged at 10, as expected.
+- Two pre-existing data issues spotted while verifying, both **unrelated to this change** and left alone: 21 serials appear twice within `prod_bagging` itself under two different sessions (old blends and pre-`ST` serials, not sieving), and `STFL-130826-007` / `STCL-130826-005` each have two Final QC runs — the duplicates Gustav is cleaning up manually, now blocked going forward by the previous change.
+
+## 2026-08-13 — Gustav (Sieving: block a second Final QC result on the same bag serial)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Found via the sieving runs table: the same serial (`STFL-130826-007`) had **two separate Final QC rows** — different times (14:06 and 13:44), different bulk density (330 vs 340). A physical bag is sampled once at Final QC, so a second "final" row against the same serial is always a mistake (duplicate save, or the wrong bag picked twice from the dropdown), never a legitimate re-test — unlike In-Process, where the same serial can legitimately recur across several readings while that bag is still filling on the sieve.
+
+- New-run form: `validate()` now rejects saving a Final QC run whose serial already has another Final QC row, naming the date/time/QC of the existing one so the QC knows to edit that record instead.
+- Inline row editor: the same check runs on save, excluding the row being edited (so correcting an existing Final QC row's own values still works).
+- In-Process is untouched — no such restriction there.
+- Existing duplicates already in the table (like the one above) are not touched by this change; flagged to Gustav to clean up manually.
+
+## 2026-08-13 — Gustav (Sieving: Bulk Density/Leaf Shade are Final-QC-only for Fine/Coarse Leaf; fix a latent SAST date bug in the bag-tag lookup)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- **Bulk Density and Leaf Shade no longer show on In-Process runs for Fine Leaf / Coarse Leaf** — both the new-run form and the inline row editor. They're properties of the finished bag (sampled once at Final QC), not something an In-Process sieve reading captures; showing them there implied they should be filled in twice. New `qcFieldsFinalOnly` spec flag scopes this to Fine/Coarse Leaf only — Rooibos Blocks' In-Process Bulk Density is untouched, since that wasn't reported as wrong. `validate()` already only required them on Final QC; this fixes the display side to match.
+- **Fixed a real (if rare) date bug while investigating a "wrong-looking" bag serial/date report**: `lookupBagTag()` read `bag_tags.created_at` (UTC) with a plain `.slice(0,10)`, so a bag tagged between 00:00–01:59 SAST would show *yesterday's* date on the QC form — off by one because the UTC calendar day still lags SAST at that hour. Added `sastDateStr()` (formats via `Intl.DateTimeFormat` in `Africa/Johannesburg`) and used it there instead.
+- **The specific bag/date the report was about turned out to be correct, not a bug**: `ST-120826-023` / 12/08/2026 was genuinely the latest Fine Leaf bag at the time (no Fine Leaf bag had been sieved yet that day) — its serial predates the "serial encodes output type" change (`STFL-…`), which is why it looks like a different format from newer bags. Nothing to fix there; it was accurately reporting production hadn't bagged Fine Leaf yet.
+
+## 2026-08-13 — Gustav (prod_bagging made the reliable source again for bag-QC views, backfilled from bag_tags, timestamps in SAST)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260813_006_prod_bagging_reliable_source.sql` (new, applied to staging + production)
+
+Requested: use `production.prod_bagging` as the source table for the bag-QC views again (not `bag_tags`), display `bagging_time` in South African time, and make sure every bag serial from production is linked forward and backward in bag tracking. Doing that safely required fixing the actual reason `prod_bagging` was unreliable in the first place, rather than just swapping the view source back:
+
+- **Root cause of the missing bags**: `persist()` in the capture page did `DELETE … WHERE session_id = ?` then reinserted `prod_bagging` from whatever was in `draft_data` at that instant, on *every* save (explicit save, 30s autosave, submit). Any bag not present in that instant's payload was gone for good, even though it had been physically bagged and printed (`bag_tags` still had it). Confirmed on production: 237 `bag_tags` rows had no matching `prod_bagging` row, while zero `prod_bagging` rows lacked a `bag_tags` row — the loss was one-directional.
+- **Fix**: `persist()` now upserts serialed bags (`onConflict: 'session_id,bag_serial_no'`) instead of blanket-deleting the session's rows, so a bag already saved is never dropped by a later save that doesn't include it. Bags with no serial (a few by-product lines) still use delete+reinsert for just those rows, since they have no stable identity.
+- **Migration `20260813_006`**: backfills every `bag_tags` row still missing from `prod_bagging` (assigns each a session-safe sequential `bag_no`, work centre mapped from `bag_tags.section_id`), adds a `(session_id, bag_serial_no)` uniqueness constraint the upsert relies on, and re-points `qms.v_bag_events` / `v_bag_inprocess_link` / `v_bag_qc_status` / `v_pending_bag_qc` at `prod_bagging` — `bagging_time` (timestamptz since `20260813_001`) is converted to `Africa/Johannesburg` at read time for `bag_date`/`bagged_at`, same as before. Applied + backfilled on both databases; `NOTIFY pgrst, 'reload schema'` included.
+- No hard FK from `prod_bagging.bag_serial_no` to `bag_tags.serial_number`: a few legacy pre-`ST`-format serials exist twice in `prod_bagging` globally (different sessions), which a global FK+unique wouldn't tolerate. The per-session unique constraint plus the upsert fix is the guarantee that actually matters going forward.
+
+## 2026-08-13 — Gustav (Sieving: awaiting-QC panel persists until a bag is linked; run-type switch clears the serial)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_005_bag_tags_realtime.sql` (new, applied to staging + production)
+
+- **Serial showed a bag while the picker read "0 pending".** Switching run type only cleared the serial when going *to* In-Process, so the serial auto-filled for In-Process carried over into Final QC — a populated "✓ from bag" serial next to an empty bag picker, which read as a broken dropdown. Switching either way now clears the serial and bag link.
+- **The awaiting-QC cards now persist until the bag is actually linked.** They're derived directly from the pending queue instead of being accumulated from Realtime events, so a bag can't be dismissed away and forgotten, and can't linger after it's sampled. The per-card **×** is gone; the whole panel collapses to a one-line "N bags awaiting QC" header instead, and every pending bag is listed (previously capped at 4). Out-of-spec bags are flagged red in the list.
+- Realtime now also listens on `production.bag_tags` (the source since `20260813_003`), so a card appears the moment a bag is printed rather than waiting for the next capture save; `prod_bagging` stays subscribed as a cheap second trigger. New migration enables Realtime on `bag_tags` — metadata-only and guarded, applied to both databases.
+- **Note on the earlier "0 pending" report:** the production *database* was correct throughout (9 pending, readable as `authenticated` — RLS was not involved). The views had been dropped and recreated without a PostgREST schema-cache reload, so the API was serving a stale definition. Reloaded on both databases; `NOTIFY pgrst, 'reload schema'` is now part of these migrations.
+
+## 2026-08-13 — Gustav (Sieving: a bag's serial can only be captured on its own sieve tab)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+A Coarse Leaf serial (`STCL-…`) could be typed into a run on the Fine Leaf tab and vice versa, filing the run against the wrong product's specs entirely — the sieve tabs have different mesh fractions and spec ranges, so the pass/fail verdict would be meaningless.
+
+- New `productOfSerial()` / `serialTabMismatch()` helpers read the output type straight out of the serial (`ST{TYPE}-DDMMYY-NNN`), mirroring `SIEVING_TYPE_ABBR` in `components/production/capture/SievingCapture.tsx` which generates them — `FL`→Fine Leaf, `CL`→Coarse Leaf, `IS`→Indent Sticks, `RB`→Rooibos Blocks.
+- Blocked on save in **both** the new-run form (`validate()`, shown against the Serial No. field) and the inline row editor (`handleSaveClick`), with a live red-bordered warning in the editor before you even try to save.
+- **Legacy serials still work**: only a serial that provably belongs to another sieve is rejected. Hand-typed ones that predate the ST format (e.g. `13.08.05`) don't match the pattern, so they're left alone rather than being retroactively invalidated. Codes that aren't a QC product (dust, spillage) are likewise unrecognised and unaffected.
+- The two automatic paths were already safe — the Final QC picker and the in-process auto-fill both draw from the active tab's bags — so this closes the remaining manual-entry gap.
+
+## 2026-08-13 — Gustav (Guard the bag-QC views against being reverted by a later hand-run of 20260813_001)
+
+**Files changed:** `supabase/migrations/20260813_004_reapply_bag_events_from_bag_tags.sql` (new, applied to production), `supabase/migrations/20260813_001_bagging_time_timestamptz.sql` (warning header only)
+
+**Production had silently reverted.** `20260813_001` was hand-run *after* `20260813_003` (001's header instructs hand-running it, and the `db-migrate` workflow is disabled). Section 3 of 001 recreates the QC views from `production.prod_bagging`, so it undid both of 003's fixes — the `bag_tags` source and the 2026-08-13 cutover filter. Symptom: the Final QC bag dropdown went back to missing ~44% of bags, and the pending queue jumped from **8 → 847** (bags as far back as 2026-07-27 reappearing as "pending"). Caught by verifying both databases rather than assuming the earlier apply had held.
+
+- **`20260813_004`** re-applies 003 verbatim and is idempotent — safe to re-run any time the views look wrong. Applied to production; staging was already correct and untouched.
+- **`20260813_001` now carries a warning header**: its view section is superseded by 003, correct order is 001 → 003, and if 001 must be re-run then 003 (or 004) has to run straight after.
+- Verification query for future reference: `SELECT pg_get_viewdef('qms.v_bag_events'::regclass, true);` must read `FROM production.bag_tags`, and `v_pending_bag_qc` must still carry the `bag_date >= DATE '2026-08-13'` filter.
+
+## 2026-08-13 — Alyssa (New work_centre column on prod_bagging)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`
+
+Each output bag now records its producing line directly on `prod_bagging` — `Sieving Tower`, `Refining 1`, `Refining 2`, `Granule Line`, `Blender`, `Small Blender`, `Pasteuriser` — instead of only being reachable via `prod_sessions.section_id`. `buildBag()` stamps every row with `meta.name` (the same section name the capture screens show). Migration `20260813_002` adds the nullable column and backfills existing rows from their session's `section_id`. Additive/non-breaking, so the column is applied to the DB before this deploys; old rows/old code just leave it NULL.
+
+## 2026-08-13 — Gustav (Sieving QC now reads bags from bag_tags, not prod_bagging — fixes missing/empty bag dropdowns)
+
+**Files changed:** `supabase/migrations/20260813_003_bag_events_from_bag_tags.sql` (new, applied to staging + production), `app/(app)/quality/sieving/page.tsx`
+
+**Root cause of the Coarse Leaf "0 pending" dropdown** (and of Final QC/pop-ups pointing at bags that no longer existed): the QC views were built on `production.prod_bagging`, which `persist()` rebuilds from scratch on every capture save — `DELETE ... WHERE session_id = ?` then reinsert from the current `draft_data`, on explicit save, on the 30s autosave, and on submit. Any bag not in `draft_data` at that instant vanishes, and a surviving bag's uuid PK changes on every save. On staging that left **66 of 149 (44%) Fine/Coarse Leaf bags with no `prod_bagging` row at all** — including every `STCL-130826-*` Coarse Leaf bag production had already bagged, printed and locked, which is why that dropdown showed 0.
+
+- **`qms.v_bag_events` now sources from `production.bag_tags`** — one row per physical bag, written once when the operator secures/prints it, keyed on `serial_number`, never deleted by a save cycle. `bagged_at` comes from `printed_at`/`created_at`, the true immutable bagging instant, so it no longer drifts (this supersedes the reason `20260813_001` moved `bagging_time` to `timestamptz`; that column stays, it's simply not what the QC views read).
+- **`bagging_id` is now `md5(serial_number)::uuid`** — deterministic, unique and permanent, since `bag_tags`' PK is the serial (text) while `sd_runs.bagging_id` is `uuid` and the UI keys the dropdown on it. Final QC runs linked under the old `prod_bagging` uuid still resolve through the serial-number fallback in `v_bag_qc_status`, so **no existing sign-off was lost** — verified on production: `STCL-130826-001` and `STFL-130826-001` still correctly show `qc_done` against Portia's runs.
+- **In-Process serial is now pre-filled from production** instead of typed: it auto-fills with the most recent bag for the sieve currently open (and its lot, if blank), and offers the same product-filtered bag list to pick a different one. Only fills a blank field, so a deliberate choice is never overwritten. *(This reverses the earlier "in-process carries no serial" decision, per the latest request.)*
+- The row-editor Serial No. dropdown was already filtered to the active product, so it now lists the correct Coarse Leaf serials automatically once the view is fixed.
+
+## 2026-08-13 — Gustav (Sieving: fix stale "bag ready for QC" pop-ups)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
+
+Root cause of `STFL-130826-001` (and others) showing a "ready for QC" pop-up after already being sampled: `bagAlerts` only ever got cleared by an explicit dismiss or by clicking "Sample now" on that exact card — a bag sampled via the manual dropdown, or whose `production.prod_bagging` row was deleted by a later autosave (`persist()` deletes + reinserts every bag row on every save, including the 30s autosave) before it was ever pulled off the pending list, left its pop-up on screen indefinitely.
+
+- `loadPendingBags()` now re-validates every existing `bagAlerts` entry against the fresh fetch on every call, dropping any whose bag is no longer actually pending — for any reason, not just the two paths that used to clear it.
+- Added a 60s safety-net poll (only while at least one alert is showing) purely to self-heal a stale card through a quiet period with no other trigger event — new alerts still arrive live via Realtime, this is not how they're discovered.
+- Also folded in the 2026-08-13 pending-QC cutover-date filter into `20260813_001_bagging_time_timestamptz.sql`'s `v_pending_bag_qc` recreation (it was missing there, staging's file didn't have it) so re-running this migration can't silently drop that filter again.
+
+**Separately flagged, not fixed here:** production's capture screens delete-and-reinsert every output bag row on every save (explicit save, 30s autosave, submit), so a bag's `bagging_id` is not stable across a session's lifetime — a bag already linked to a Final QC run, or one that triggered a live pop-up, can have its underlying row deleted and never reinserted if a later save no longer includes it. The serial-number fallback join covers most of the practical impact, but this is a structural fragility in the capture persistence model worth a closer look on its own.
+
+## 2026-08-13 — Alyssa (prod_bagging.bagging_time becomes a real timestamp of when each bag was created)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`
+
+**Schema change — `bagging_time` is now `timestamptz`, not `time`.** It was a bare time-of-day, so the true bagging *date* was unrecoverable — Quality's `v_bag_events.bagged_at` had to glue the time onto `created_at`'s date, and `created_at` is restamped on every save (persist() deletes+reinserts every row), so a session re-saved on a later day carried the wrong date and a drifting timestamp. Every output bag already captures `logged_at` — the exact instant it was secured, held in `draft_data` and therefore immutable — so `bagging_time` now stores that full instant verbatim.
+
+- **Migration `20260813_001`** (must be applied by hand in the Supabase SQL editor — the `db-migrate` workflow is disabled because repo migrations are stale vs the live DB): drops the QC-link views, `ALTER COLUMN bagging_time TYPE timestamptz` converting existing bare-time rows to their SAST-equivalent instant, then recreates `v_bag_events` / `v_bag_inprocess_link` / `v_bag_qc_status` / `v_pending_bag_qc` with `bagged_at` sourced straight from `bagging_time` (SAST wall-clock, so display/ordering is unchanged) falling back to `created_at`. Apply to **staging** first, then **production** when promoting.
+- **`buildBag()`** — all five output sections (Sieving, Refining, Granule, Blender, Pasteuriser) now write `bagging_time: b.logged_at` (the full ISO instant) instead of an `HH:MM` string; the `bagLoggedAtToTime()` helper is removed.
+- **Orders detail** — the "Time" column formats the timestamp to SAST `HH:MM` via a new `fmtBagTime()` (was a raw string).
+- **Rollout:** the ALTER and this deploy must land close together — old code writes `HH:MM`, new code writes a full instant, and neither is valid against the other column type, so there's a brief capture-save window. Apply the SQL, then deploy immediately.
+
+## 2026-08-13 — Alyssa (Sieving Tower bagging_time carries the real per-bag time; notification bell renders above page content everywhere)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/layout/NotificationBell.tsx`
+
+**1 · Sieving Tower `prod_bagging.bagging_time` now holds each bag's real creation time.** #612 fixed this for Refining (`buildBag`'s refining branch → `bagging_time: bagLoggedAtToTime(b.logged_at)`), but the Sieving (`else`) branch still wrote no `bagging_time`, so Sieving Tower output rows had none — and any consumer falling back to `created_at` saw the same drifting timestamp for every bag (persist() deletes+reinserts every row on each save/autosave/submit, so `created_at` = "when the session was last saved", identical across the whole order). `OutBag.logged_at` already records the exact moment each output bag is secured and lives in `draft_data`, so it's immutable across the delete+reinsert. The Sieving branch now carries it into `bagging_time` via the existing `bagLoggedAtToTime()` helper (SAST `HH:MM`, same as Granule/Blender/Pasteuriser/Refining). Save stays delete+reinsert; no schema change. Bags with no `logged_at` (older drafts) fall back as before.
+
+**2 · Notification bell dropdown/toast were being occluded on certain pages.** The topbar `<header>` uses `backdrop-filter`, which creates its own stacking context — trapping the dropdown panel (`position: absolute`, `zIndex: 9999`) and toast beneath page content that has its own positioned/stacking-context elements. Both are now rendered through a `createPortal` to `document.body` with `position: fixed`, escaping the header's stacking context entirely. The panel is anchored to the live bell-button rect and kept in sync on resize/scroll; the outside-click handler also checks the portalled panel (via `panelRef`) so clicks inside it don't dismiss it. Panel z-index raised to 10000 so it clears the capture modals (9997/9998).
 
 ## 2026-08-12 — Gustav (Bag label: remove the "Cape Natural Tea Products" header)
 

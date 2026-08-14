@@ -71,12 +71,12 @@ const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
 // WORK_CENTRE_FOR_SECTION keys off this same pair).
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
 const isPasteuriser = (id: string) => id === 'pasteuriser'
-// RefiningOutputBag.logged_at is a UTC ISO instant; prod_bagging.bagging_time
-// is a bare "time" column with no timezone, so this renders the wall-clock
-// time in Africa/Johannesburg — the same convention Granule/Blender/
-// Pasteuriser already use for their own per-bag b.time.
-const bagLoggedAtToTime = (iso?: string | null) =>
-  iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : null
+// prod_bagging.bagging_time is a timestamptz holding the exact moment each
+// output bag was created — every section captures this client-side as the bag's
+// logged_at (a UTC ISO instant) when it's secured. We store that instant
+// verbatim so the timestamp reflects when the bag was actually bagged, immune to
+// persist()'s delete+reinsert (which restamps created_at on every save). The
+// SAST wall-clock conversion happens at read/display time, not here.
 
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
@@ -963,7 +963,7 @@ function CaptureScreen() {
               // consumers (Quality's Final QC picker) show the true bagging
               // time instead of when the whole session was last saved — every
               // other output section already does this via its own b.time.
-              bagging_time: bagLoggedAtToTime(b.logged_at),
+              bagging_time: b.logged_at || null,
             })
           })
         })
@@ -975,7 +975,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
             product_type: b.item, acumatica_id: b.code || null, variant: prod.variant,
-            kg: n(b.weight), bagging_time: b.time || null,
+            kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
         ;(gd.dustOutputs ?? []).forEach(r => {
@@ -996,7 +996,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: prod.lot || null,
             product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
-            kg: n(b.weight), bagging_time: b.time || null,
+            kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
       } else if (isPasteuriser(sectionId)) {
@@ -1010,7 +1010,7 @@ function CaptureScreen() {
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
             product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: prod.variant,
-            kg, bagging_time: l.time || null,
+            kg, bagging_time: l.logged_at || null,
           })
         })
         // By-products (B) — recorded as bagging rows so they count in the output total.
@@ -1031,10 +1031,15 @@ function CaptureScreen() {
             bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
             acumatica_id: b.code || null, variant: prod.variant,
             kg: n(b.weight),
+            bagging_time: b.logged_at || null,   // see bagging_time note above
           })
         })
       }
     })
+    // Stamp the work centre (Sieving Tower / Refining 1 / … / Pasteuriser) on
+    // every output bag so prod_bagging carries the producing line directly,
+    // without having to join back through prod_sessions.section_id.
+    rows.forEach(r => { r.work_centre = meta.name })
     return rows
   }
   // Per-production totals — dispatches by section type. `sh` is the shift the
@@ -1135,8 +1140,32 @@ function CaptureScreen() {
     await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
     if (debag.length) await db.schema('production').from('prod_debagging').insert(debag as any)
 
-    await db.schema('production').from('prod_bagging').delete().eq('session_id', sid)
-    if (bag.length) await db.schema('production').from('prod_bagging').insert(bag as any)
+    // Serialed bags are physical, already-tagged bags (bag_tags has the same
+    // serial) — never blanket-delete those, or a save that races the bag being
+    // dropped from this instant's draft_data permanently loses a real bag from
+    // Quality's QC queue (this is exactly how 44% of Fine/Coarse Leaf bags went
+    // missing from prod_bagging). So only the rows this payload is about to
+    // rewrite are cleared: the no-serial ones (which have no stable identity)
+    // and the specific serials being written. Anything saved earlier under this
+    // session but absent from draft_data right now is left alone.
+    //
+    // Deliberately NOT an upsert-on-conflict: that resolves the target index
+    // through PostgREST's cached constraint metadata, so a stale cache makes
+    // the whole write fail with nothing in the UI to show for it — which is
+    // what emptied Sieving Tower's bagging rows on production for a full day
+    // (draft_data kept saving, the bagging write behind it did not). Plain
+    // delete-then-insert depends on no such metadata.
+    const bagNoSerial   = bag.filter((r: any) => !r.bag_serial_no)
+    const bagWithSerial = bag.filter((r: any) =>  r.bag_serial_no)
+    await db.schema('production').from('prod_bagging')
+      .delete().eq('session_id', sid).is('bag_serial_no', null)
+    if (bagWithSerial.length) {
+      await db.schema('production').from('prod_bagging')
+        .delete().eq('session_id', sid)
+        .in('bag_serial_no', bagWithSerial.map((r: any) => r.bag_serial_no))
+    }
+    if (bagNoSerial.length)   await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
+    if (bagWithSerial.length) await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
 
     // ── Pasteuriser finished-product bags ──────────────────────────────────────
     // Every other section registers each output bag in bag_tags at bagging time,

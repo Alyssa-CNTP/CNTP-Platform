@@ -60,7 +60,7 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     // CON/RA-CON/FT-CON use >12 mesh; ORG/RA-ORG/FT-ORG use >10 mesh
     meshForORG: ['>6 (%)','>10 (%)','>18 (%)','>40 (%)','Dust (%)'],
     meshForCON: ['>6 (%)','>12 (%)','>18 (%)','>40 (%)','Dust (%)'],
-    hasLeafShade: true, hasNeedleCount: true, needle_max: 12,
+    hasLeafShade: true, hasNeedleCount: true, needle_max: 12, qcFieldsFinalOnly: true,
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-002.1 Export CON/RA-CON: >12:5-25, >18:60-85, >40:5-20, Dust:0-1, Shade:4-11
@@ -93,7 +93,7 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     // CON/RA-CON/FT-CON use >12 mesh; ORG/RA-ORG/FT-ORG use >10 mesh (IPS-SIEV-001.2)
     meshForORG: ['>6 (%)','>10 (%)','>18 (%)','>40 (%)','Dust (%)'],
     meshForCON: ['>6 (%)','>12 (%)','>18 (%)','>40 (%)','Dust (%)'],
-    hasLeafShade: true, hasNeedleCount: true, needle_max: 12,
+    hasLeafShade: true, hasNeedleCount: true, needle_max: 12, qcFieldsFinalOnly: true,
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-001.1 Export CON/RA-CON: >12:0-1, >18:15-35, >40:50-85, Dust:0-2, Shade:4-11
@@ -176,6 +176,39 @@ function normSdProductJs(p: string | null | undefined): string | null {
   if (s.includes('indent stick')) return 'Indent Sticks'
   if (s.includes('rb block') || s.includes('rooibos block') || s.trim() === 'blocks') return 'Rooibos Blocks'
   return null
+}
+// Sieving output serials encode their output type: ST{TYPE}-DDMMYY-NNN, e.g.
+// STFL-130826-001 is Fine Leaf and STCL-130826-001 is Coarse Leaf. Mirrors
+// SIEVING_TYPE_ABBR in components/production/capture/SievingCapture.tsx, which
+// generates them. Only the codes that map to a sieve tab are listed — anything
+// else (dust, spillage, an unknown two-letter stem) is not a QC product and is
+// deliberately left unrecognised.
+// Formats a UTC timestamp as its Africa/Johannesburg (SAST) calendar date,
+// YYYY-MM-DD — matching the <input type="date"> value format. A plain
+// `.slice(0,10)` on the raw UTC string is off by one for anything tagged
+// between 00:00-01:59 SAST (still "yesterday" in UTC).
+function sastDateStr(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(iso))
+}
+const SERIAL_CODE_TO_PRODUCT: Record<string, string> = {
+  FL: 'Fine Leaf', CL: 'Coarse Leaf', IS: 'Indent Sticks', RB: 'Rooibos Blocks',
+}
+// Returns the product a serial belongs to when it's a recognisable ST-serial,
+// else null. Legacy hand-typed serials ("13.08.05") return null so they keep
+// working — this only ever blocks a serial that provably belongs elsewhere.
+function productOfSerial(serial: string | null | undefined): string | null {
+  const m = String(serial || '').trim().toUpperCase().match(/^ST([A-Z]{2})-/)
+  return m ? (SERIAL_CODE_TO_PRODUCT[m[1]] ?? null) : null
+}
+// The error message to show when a serial belongs to a different sieve than the
+// tab being captured on, or null when it's fine.
+function serialTabMismatch(serial: string | null | undefined, activeProduct: string): string | null {
+  const p = productOfSerial(serial)
+  return p && p !== activeProduct
+    ? `${String(serial).trim()} is a ${p} bag — it can't be used on the ${activeProduct} tab. Switch to the ${p} tab, or pick a ${activeProduct} serial.`
+    : null
 }
 function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []
@@ -645,10 +678,12 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   )
 }
 
-function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials }: {
+function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials, activeProduct, allRuns }: {
   run: any; specDef: any; activeSpecs: Record<string,any>
   onSave: (f: any) => void; onCancel: () => void; qcNames: string[]
   bagSerials?: {serial:string;lot:string;baggedAt:string}[]
+  activeProduct: string
+  allRuns?: any[]
 }) {
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
@@ -691,6 +726,8 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
   const inputSt: React.CSSProperties = { width:'100%', padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:11, boxSizing:'border-box' }
 
   function handleSaveClick() {
+    const serialMismatch = serialTabMismatch(fields.serialNumber, activeProduct)
+    if (serialMismatch) { alert(serialMismatch); return }
     if (isNegative(fields.bulkDensity)) { alert('Bulk density cannot be negative.'); return }
     if (isNegative(fields.needleCount)) { alert('Needle count cannot be negative.'); return }
     if (Object.keys(gramVals).some(k => isNegative(gramVals[k]))) { alert('Sieve grams cannot be negative.'); return }
@@ -698,6 +735,14 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
     if (fields.runType === 'in-process') {
       const missing = editMesh.filter((m: string) => pcts[m] === '' || pcts[m] == null)
       if (missing.length > 0) { alert(`All sieve mesh results are required for an In-Process run — missing: ${missing.map((m: string) => m.replace(' (%)', '')).join(', ')}`); return }
+    }
+    // A bag can only have one Final QC result — block editing this run's
+    // serial into one that another Final QC row already owns.
+    if (fields.runType === 'final' && fields.serialNumber && fields.serialNumber.trim()) {
+      const dupSerial = (allRuns||[]).find((r: any) =>
+        r.id !== run.id && r.runType === 'final' && r.serialNumber &&
+        r.serialNumber.trim().toUpperCase() === fields.serialNumber.trim().toUpperCase())
+      if (dupSerial) { alert(`Bag ${fields.serialNumber} already has a Final QC result (${dupSerial.date} ${dupSerial.time}, by ${dupSerial.qcName||'—'}). Edit that record instead.`); return }
     }
     onSave({ ...fields, ...pcts, gramValues: gramVals })
   }
@@ -715,7 +760,8 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))', gap:8, marginBottom:12 }}>
         {[['Date','date','date'],['Lot Number','lotNumber','text'],['Serial No.','serialNumber','text'],
-          ['QC Name','qcName','text'],['Time','time','text'],['Bulk Density','bulkDensity','number']]
+          ['QC Name','qcName','text'],['Time','time','text'],
+          ...(!specDef.noBulkDensity&&(!specDef.qcFieldsFinalOnly||fields.runType==='final')?[['Bulk Density','bulkDensity','number']]:[])]
           .map(([label,key,type]) => (
             <div key={key}>
               <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
@@ -724,12 +770,18 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
               ) : key==='serialNumber' ? (
                 <>
                   <input list="edit-serial-dl" value={fields.serialNumber} onChange={e=>setF('serialNumber',e.target.value)}
-                    placeholder="Pick or type a serial" style={inputSt}/>
+                    placeholder="Pick or type a serial"
+                    style={{...inputSt, borderColor: serialTabMismatch(fields.serialNumber, activeProduct) ? '#fca5a5' : '#d1d5db'}}/>
                   <datalist id="edit-serial-dl">
                     {(bagSerials||[]).map(b=>(
                       <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
                     ))}
                   </datalist>
+                  {serialTabMismatch(fields.serialNumber, activeProduct) && (
+                    <div style={{ fontSize:9, color:'#dc2626', marginTop:2 }}>
+                      ⚠ {productOfSerial(fields.serialNumber)} serial — not valid on the {activeProduct} tab
+                    </div>
+                  )}
                 </>
               ) : (
                 <input type={type} min={type==='number'?0:undefined} value={(fields as any)[key]} onChange={e=>setF(key,e.target.value)} style={inputSt}/>
@@ -754,7 +806,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
             <input type="number" min="0" value={fields.needleCount} onChange={e=>setF('needleCount',e.target.value)} style={inputSt}/>
           </div>
         )}
-        {specDef.hasLeafShade && (
+        {specDef.hasLeafShade && (!specDef.qcFieldsFinalOnly||fields.runType==='final') && (
           <div>
             <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Leaf Shade</label>
             <input type="number" min="1" max="11" value={fields.leafShade} onChange={e=>setF('leafShade',e.target.value)} style={inputSt}/>
@@ -866,6 +918,12 @@ export default function SievingPage() {
   // Fine Leaf / Coarse Leaf bagging becomes a pending QC (qms.v_pending_bag_qc).
   const [pendingBags,   setPendingBags]   = useState<any[]>([])
   const [pendingLoading,setPendingLoading]= useState(false)
+  // Set when the pending-bag fetch itself fails, so a broken queue reads as
+  // broken rather than as "nothing to sample".
+  const [pendingError,  setPendingError]  = useState('')
+  // Lets a failed refresh keep the last good list instead of blanking it.
+  const pendingBagsRef = React.useRef<any[]>([])
+  React.useEffect(() => { pendingBagsRef.current = pendingBags }, [pendingBags])
   const [selectedBagId, setSelectedBagId] = useState<string>('')
   const [printBag,      setPrintBag]      = useState<any>(null)
   // Serial numbers actually assigned to bags of the product currently open, so
@@ -944,11 +1002,19 @@ export default function SievingPage() {
   // view (they get bags and labels but never a QC stamp).
   const loadPendingBags = useCallback(async () => {
     setPendingLoading(true)
-    const { data } = await db.schema('qms').from('v_pending_bag_qc')
+    const { data, error } = await db.schema('qms').from('v_pending_bag_qc')
       .select('*').order('bagged_at', { ascending: false }).limit(300)
+    // Surface a failed fetch instead of rendering it as "no bags pending".
+    // Discarding this error is what hid a 20s view + 8s statement timeout
+    // (PostgREST 500 / 57014) for a full shift: the queue looked empty on the
+    // live site while production had bags waiting, and nothing said otherwise.
+    setPendingError(error ? (error.message || 'Could not load the pending bag list.') : '')
+    if (error) { setPendingLoading(false); return pendingBagsRef.current }
     const rows = data ?? []
     setPendingBags(rows)
     setPendingLoading(false)
+    // No pruning needed: the awaiting-QC cards are derived from this list, so
+    // refreshing it is what adds and removes them.
     return rows
   }, [db])
   useEffect(() => { loadPendingBags() }, [loadPendingBags])
@@ -960,9 +1026,10 @@ export default function SievingPage() {
   }
 
   const blankForm = () => {
-    const now = new Date()
     return {
-      date: now.toISOString().slice(0,10),
+      // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
+      // is still yesterday, which would file the run against the wrong day.
+      date: sastDateStr(new Date().toISOString()),
       lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
       bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
@@ -970,6 +1037,21 @@ export default function SievingPage() {
   }
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
+
+  // In-Process runs sample the machine while a specific bag is being filled, so
+  // the serial comes from production rather than being typed: pre-fill the most
+  // recent bag for the sieve currently open. Only fills a blank field, so a QC
+  // who picks a different bag from the list isn't overwritten. Final QC is
+  // untouched here — its serial comes from the bag picked in the queue above.
+  useEffect(() => {
+    if (!showForm || form.runType !== 'in-process') return
+    if (form.serialNumber) return
+    const latest = bagSerialOptions[0]
+    if (!latest) return
+    setForm((f:any) => f.serialNumber || f.runType !== 'in-process' ? f : ({
+      ...f, serialNumber: latest.serial, ...(f.lotNumber ? {} : { lotNumber: latest.lot || '' }),
+    }))
+  }, [showForm, form.runType, form.serialNumber, bagSerialOptions])
 
   // Load all runs
   const load = useCallback(async () => {
@@ -1169,9 +1251,26 @@ export default function SievingPage() {
     if (f.runType==='final' && !f.baggingId && !f.serialNumber.trim()) {
       errs._bag='Pick the bag being sampled from the pending list.'
     }
+    // A serial encodes its own output type, so a Coarse Leaf bag can never be
+    // captured on the Fine Leaf tab (or vice versa) — that would file the run
+    // against the wrong product's specs entirely.
+    const mismatch = serialTabMismatch(f.serialNumber, activeProduct)
+    if (mismatch) errs.serialNumber = mismatch
     if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
       if (dup) errs._dupTime=`A ${f.runType} run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
+    }
+    // A bag can only be sampled once at Final QC — a second "final" run against
+    // the same serial is always a mistake (duplicate save, wrong bag picked
+    // twice), never a legitimate re-test, since the bag itself is consumed by
+    // the first sample. In-Process may legitimately share a serial across
+    // several readings while that bag is still filling, so this only applies
+    // to Final QC.
+    if (f.runType==='final' && f.serialNumber && f.serialNumber.trim()) {
+      const dupSerial = productRuns.find((r:any)=>
+        r.runType==='final' && r.serialNumber &&
+        r.serialNumber.trim().toUpperCase()===f.serialNumber.trim().toUpperCase())
+      if (dupSerial) errs._dupSerial=`Bag ${f.serialNumber} already has a Final QC result (${dupSerial.date} ${dupSerial.time}, by ${dupSerial.qcName||'—'}). Edit that record instead of creating a new one.`
     }
     if (f.runType==='in-process') {
       // In-Process requires every mesh fraction filled in — no partial sieve results.
@@ -1306,7 +1405,10 @@ export default function SievingPage() {
         .select('lot_number,variant,destination,created_at').eq('serial_number', s).maybeSingle()
       if (!data) { setTagLookupState('notfound'); return }
       const grade = DEST_TO_GRADE[data.destination ?? ''] ?? 'Export'
-      const date  = data.created_at ? data.created_at.slice(0, 10) : ''
+      // created_at is a UTC timestamptz — slicing it directly would show the
+      // wrong calendar day for any bag tagged between 00:00-01:59 SAST (still
+      // "yesterday" in UTC). Format in Africa/Johannesburg instead.
+      const date  = data.created_at ? sastDateStr(data.created_at) : ''
       setForm((f: any) => ({
         ...f,
         ...(data.lot_number ? { lotNumber: data.lot_number } : {}),
@@ -1335,7 +1437,16 @@ export default function SievingPage() {
       serialNumber: bag.bag_serial_no || '',
       lotNumber:    bag.lot_number || '',
       variant:      bag.variant || f.variant,
-      date:         bag.bag_date || f.date,
+      // The run's date is WHEN THE QC WAS DONE, to match the time beside it,
+      // which is always stamped at capture. Previously this took the bag's
+      // bagging date instead, so a bag made yesterday and sampled this morning
+      // was stored as date=yesterday + time=this-morning — an instant that
+      // never happened. The table sorts on date+time, so those rows buried
+      // themselves near the bottom of the previous day and read as missing
+      // (STFL-130826-012, sampled 07:33 on the 14th, filed under 13 Aug 07:33).
+      // The bag's own bagging date is not lost: it stays on the bag via the
+      // serial/bagging_id link and is shown in the confirmation line below.
+      date:         sastDateStr(new Date().toISOString()),
       qcName:       f.qcName || myName,
       time:         nowHHMM(),
       ...(pa    ? { paLevel: pa } : {}),
@@ -1343,6 +1454,9 @@ export default function SievingPage() {
     }))
     const bits = [
       `📦 Bag ${bag.bag_serial_no || '—'} · ${bag.product} · lot ${bag.lot_number || '—'}`,
+      // Keep the bag's own bagging moment visible — the run's Date field is now
+      // the QC date, so this is where "when was this bag actually made" lives.
+      bag.bagged_at ? `Bagged ${String(bag.bagged_at).slice(0,10)} ${String(bag.bagged_at).slice(11,16)}` : '',
       pa ? `PA: ${pa}` : '',
       shade != null ? `Shade: ${shade} (from raw material)` : '',
       bag.inprocess_out_of_spec ? `⚠ In-process sieve OUT OF SPEC at ${String(bag.inprocess_at||'').slice(11,16)}` : '',
@@ -1359,38 +1473,31 @@ export default function SievingPage() {
     applyBagToForm(bag)
   }
 
-  // ── "Bag ready for QC" pop-up ──────────────────────────────────────────────
-  // Fires the moment production bags a new Fine Leaf / Coarse Leaf output, via
-  // a live Supabase Realtime subscription on production.prod_bagging — no
-  // polling. This is a nudge only: the "N pending" queue above is the real
-  // backstop, so a missed or dismissed pop-up never loses a bag.
-  const [bagAlerts, setBagAlerts] = useState<any[]>([])
+  // ── "Bag awaiting QC" panel ────────────────────────────────────────────────
+  // Derived straight from the pending queue rather than accumulated from
+  // Realtime events, so every un-sampled Fine Leaf / Coarse Leaf bag keeps a
+  // card on screen until it is actually linked to a Final QC — it can't be
+  // dismissed away and forgotten, and it can't linger after the bag is done.
+  // Realtime and the 60s poll only refresh that queue; they never own the list.
+  const bagAlerts = pendingBags
+  const [alertsCollapsed, setAlertsCollapsed] = useState(false)
+  useEffect(() => {
+    const id = setInterval(loadPendingBags, 60000)
+    return () => clearInterval(id)
+  }, [loadPendingBags])
   useEffect(() => {
     const channel = db.channel('sieving-bag-ready')
-      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, (payload: any) => {
-        const row = payload.new
-        const product = normSdProductJs(row.product_type)
-        if (product !== 'Fine Leaf' && product !== 'Coarse Leaf') return
-        setBagAlerts(prev => prev.some(a => a.bagging_id === row.id) ? prev : [{
-          bagging_id: row.id, bag_serial_no: row.bag_serial_no, lot_number: row.lot_number,
-          product, bagged_at: row.created_at,
-        }, ...prev])
-        loadPendingBags()
-      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, () => loadPendingBags())
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'bag_tags' },     () => loadPendingBags())
       .subscribe()
     return () => { db.removeChannel(channel) }
   }, [db, loadPendingBags])
 
-  function dismissBagAlert(baggingId: string) {
-    setBagAlerts(prev => prev.filter(a => a.bagging_id !== baggingId))
-  }
-
-  // Clicking a pop-up: jump to that sieve's tab, re-fetch the pending queue
-  // (so we get the fully-enriched row — PA/leaf-shade lookups, in-process spec
-  // status — rather than the bare insert payload), open Final QC pre-filled
-  // on that exact bag, and scroll it into view.
+  // Clicking a card: jump to that sieve's tab, re-fetch the pending queue (so
+  // we work from the fully-enriched row — PA/leaf-shade lookups, in-process
+  // spec status), open Final QC pre-filled on that exact bag, and scroll it
+  // into view. The card itself stays until the bag is actually linked.
   async function openBagAlert(bagAlert: any) {
-    dismissBagAlert(bagAlert.bagging_id)
     setActiveProduct(bagAlert.product)
     const fresh = await loadPendingBags()
     const bag = fresh.find((b:any) => String(b.bagging_id) === String(bagAlert.bagging_id))
@@ -1434,27 +1541,34 @@ export default function SievingPage() {
       {/* "Bag ready for QC" pop-ups — fire live the moment production bags a
           new Fine Leaf / Coarse Leaf output. Non-blocking: dismissing one just
           removes the nudge, the bag itself stays in the pending queue above. */}
+      {/* Bags awaiting QC — stays on screen until each bag is actually linked to
+          a Final QC. Deliberately has no per-card dismiss: the whole panel can
+          be collapsed out of the way, but a bag only leaves the list by being
+          sampled, so nothing gets closed and forgotten. */}
       {bagAlerts.length > 0 && (
-        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340}}>
-          {bagAlerts.slice(0,4).map(a=>(
-            <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:'4px solid #166534',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-                <div style={{fontWeight:700,fontSize:12,color:'#166534'}}>📦 {a.product} bag ready for QC</div>
-                <button onClick={()=>dismissBagAlert(a.bagging_id)} style={{background:'none',border:'none',color:'#9ca3af',fontSize:15,cursor:'pointer',lineHeight:1,padding:0}}>×</button>
-              </div>
-              <div style={{fontSize:11,color:'#374151',marginTop:4}}>
-                {a.bag_serial_no || '(no serial)'} · lot {a.lot_number || '—'}
-                {a.bagged_at ? <><br/><span style={{color:'#6b7280'}}>Bagged {String(a.bagged_at).slice(0,10)} {String(a.bagged_at).slice(11,16)}</span></> : null}
-              </div>
-              <button onClick={()=>openBagAlert(a)}
-                style={{marginTop:8,width:'100%',padding:'7px 10px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>
-                Sample now →
-              </button>
-            </div>
-          ))}
-          {bagAlerts.length > 4 && (
-            <div style={{textAlign:'center',fontSize:10,color:'#6b7280',background:'#fff',border:'1px solid #e5e7eb',borderRadius:8,padding:'4px 8px'}}>
-              +{bagAlerts.length - 4} more bag{bagAlerts.length-4>1?'s':''} ready
+        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'calc(100vh - 90px)'}}>
+          <button onClick={()=>setAlertsCollapsed(c=>!c)}
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)'}}>
+            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC</span>
+            <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
+          </button>
+          {!alertsCollapsed && (
+            <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto'}}>
+              {bagAlerts.map(a=>(
+                <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:`4px solid ${a.inprocess_out_of_spec?'#991b1b':'#166534'}`,borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+                  <div style={{fontWeight:700,fontSize:12,color:a.inprocess_out_of_spec?'#991b1b':'#166534'}}>
+                    {a.inprocess_out_of_spec?'⚠':'📦'} {a.product} bag awaiting QC
+                  </div>
+                  <div style={{fontSize:11,color:'#374151',marginTop:4}}>
+                    {a.bag_serial_no || '(no serial)'} · lot {a.lot_number || '—'}
+                    {a.bagged_at ? <><br/><span style={{color:'#6b7280'}}>Bagged {String(a.bagged_at).slice(0,10)} {String(a.bagged_at).slice(11,16)}</span></> : null}
+                  </div>
+                  <button onClick={()=>openBagAlert(a)}
+                    style={{marginTop:8,width:'100%',padding:'7px 10px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>
+                    Sample now →
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -1623,8 +1737,15 @@ export default function SievingPage() {
             <div style={{display:'flex',gap:8}}>
               {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC (bag)','#166534']] as const).map(([val,label,col])=>(
                 <button key={val} type="button" onClick={()=>{
+                  // Switching run type always clears the serial/bag link. Without
+                  // this, the serial auto-filled for In-Process carried over into
+                  // Final QC — showing a populated "✓ from bag" serial while the
+                  // bag picker still read "0 pending / none selected", which is
+                  // exactly the contradiction that looked like a broken dropdown.
                   setF('runType',val)
-                  if (val==='in-process') { setSelectedBagId(''); setForm((f:any)=>({...f,baggingId:'',serialNumber:''})); setLotMsg(''); setTagLookupState('idle') }
+                  setSelectedBagId('')
+                  setForm((f:any)=>({...f, runType: val, baggingId:'', serialNumber:''}))
+                  setLotMsg(''); setTagLookupState('idle')
                 }}
                   style={{flex:1,padding:'13px 16px',borderRadius:8,border:`2px solid ${form.runType===val?col:'#d1d5db'}`,
                     background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
@@ -1659,7 +1780,12 @@ export default function SievingPage() {
                 <button type="button" onClick={loadPendingBags}
                   style={{padding:'10px 14px',borderRadius:7,border:'1px solid #86efac',background:'#fff',fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>↻</button>
               </div>
-              {tabPendingBags.length===0&&!pendingLoading&&(
+              {pendingError&&(
+                <div style={{fontSize:11,color:'#991b1b',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,padding:'6px 8px',marginTop:6}}>
+                  ⚠ Could not load the bags awaiting QC — this list may be incomplete. Tap ↻ to retry. ({pendingError})
+                </div>
+              )}
+              {tabPendingBags.length===0&&!pendingLoading&&!pendingError&&(
                 <div style={{fontSize:11,color:'#6b7280',marginTop:6}}>
                   {['Fine Leaf','Coarse Leaf'].includes(activeProduct)
                     ? `No ${activeProduct} bags awaiting QC — a pending entry appears here each time production bags a ${activeProduct} output.`
@@ -1690,6 +1816,7 @@ export default function SievingPage() {
           )}
 
           {errors._dupTime&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupTime}</div>}
+          {errors._dupSerial&&<div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>⚠ {errors._dupSerial}</div>}
           {errors._mesh&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10}}>⚠ {errors._mesh}</div>}
           {anomalyWarn&&<div style={{padding:'8px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,fontSize:11,color:'#92400e',marginBottom:10,fontWeight:600}}>{anomalyWarn}</div>}
 
@@ -1720,22 +1847,32 @@ export default function SievingPage() {
               <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
-            {/* Serial numbers only exist once a bag is made, so In-Process runs
-                no longer carry one. On Final QC it is pre-filled from the bag
-                and stays editable so the QC can verify it. */}
-            {form.runType==='final'&&<div>
-              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Serial No. <span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span></label>
-              <input value={form.serialNumber}
+            {/* Serial No. — never typed from scratch. On Final QC it comes from
+                the bag the QC picked above. On In-Process it is pre-filled with
+                the most recent bag production has made for this sieve, and can
+                be changed to any other bag of the same product via the list. */}
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ {form.runType==='final'?'from bag':'latest bag'}</span>}
+              </label>
+              <input value={form.serialNumber} list={form.runType==='in-process'?'new-run-serial-dl':undefined}
                 onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
                 onBlur={e=>lookupBagTag(e.target.value)}
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
-                placeholder="Type or scan barcode"
+                placeholder={form.runType==='in-process'?(bagSerialOptions.length?'Pick a bag':`No ${activeProduct} bags yet`):'Type or scan barcode'}
                 style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              {form.runType==='in-process'&&(
+                <datalist id="new-run-serial-dl">
+                  {bagSerialOptions.map(b=>(
+                    <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
+                  ))}
+                </datalist>
+              )}
               {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
               {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
               {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
-            </div>}
+            </div>
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 QC Controller * {myName&&form.qcName===myName&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ logged in</span>}
@@ -1778,7 +1915,7 @@ export default function SievingPage() {
               </select>
               <ErrMsg field="variant"/>
             </div>
-            {!specDef.noBulkDensity&&<div>
+            {!specDef.noBulkDensity&&(!specDef.qcFieldsFinalOnly||form.runType==='final')&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.bulkDensity?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Bulk Density (cc/100g){form.runType==='final'?' *':''}</label>
               <input type="number" min="0" step="any" value={form.bulkDensity} onChange={e=>setF('bulkDensity',e.target.value)} style={{...inputSt,borderColor:errors.bulkDensity?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="bulkDensity"/>
@@ -1793,7 +1930,7 @@ export default function SievingPage() {
                 {['P0','P1','P2','P3','P4','FAIL'].map(lv=><option key={lv}>{lv}</option>)}
               </select>
             </div>
-            {specDef.hasLeafShade&&<div>
+            {specDef.hasLeafShade&&(!specDef.qcFieldsFinalOnly||form.runType==='final')&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.leafShade?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 Leaf Shade (1–11) {form.leafShade&&<span style={{fontSize:9,color:'#166534',fontWeight:400,marginLeft:4}}>✓ auto</span>}
               </label>
@@ -1993,6 +2130,8 @@ export default function SievingPage() {
                         specDef={specDef}
                         activeSpecs={activeSpecs}
                         bagSerials={bagSerialOptions}
+                        activeProduct={activeProduct}
+                        allRuns={productRuns}
                         onSave={async (updated: any) => {
                           const vios: string[] = []
                           const sr = activeSpecs[`${updated.grade}|${updated.variant}`]||{}

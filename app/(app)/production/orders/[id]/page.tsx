@@ -18,6 +18,11 @@ import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play } from 'lucide-react'
 import { loadOrderDetail, type OrderDetail } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
+
+// bagging_time is a timestamptz (the bag's real creation instant) — show it as
+// SAST wall-clock time. Falls back to em-dash for bags with no recorded time.
+const fmtBagTime = (ts: string | null) =>
+  ts ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(ts)) : '—'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
 
 const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 'info'; icon: any }> = {
@@ -149,7 +154,7 @@ export default function ProductionOrderDetailPage() {
                   <Td>{b.product_type || '—'}</Td>
                   <Td>{b.variant || '—'}</Td>
                   <Td right mono>{b.kg.toFixed(1)}</Td>
-                  <Td>{b.bagging_time || '—'}</Td>
+                  <Td>{fmtBagTime(b.bagging_time)}</Td>
                 </Tr>
               ))}
             </Table>
