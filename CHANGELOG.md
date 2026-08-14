@@ -62,6 +62,16 @@ Promotes the scan-first debagging work (staging #603/#613/#645) to production. S
 
 Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
 
+## 2026-08-14 — Gustav (Sieving: fixed the chart/table going blank because the new shared date window defaulted to "today")
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: staging showed no chart at all and "No Fine Leaf runs yet" on a product with 439 total runs.
+
+- The By Hour/Week/Month navigator (restored earlier today) defaulted to `'day'` (today), and the chart+table now share that single window. Any product with no run logged on the exact current date came up completely empty on load.
+- Changed the default to `'week'` — much less likely to be empty, and matches what a developer actually wants to see by default.
+- Separately: the chart (and its nav buttons) was only rendered when the current window had at least one run in it (`rangeRuns.length>0`). That meant landing on a genuinely empty window left no way to click "By Week"/"◀" to get out of it — the only escape was reloading. Removed that gate; the chart's own empty-state message ("No … results for … yet") already handles zero runs, so the nav stays usable no matter what the window contains.
+
 ## 2026-08-14 — Gustav (Sieving: dropped the dual-handle date-range slider, restored the clickable By Hour/Week/Month navigator)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
