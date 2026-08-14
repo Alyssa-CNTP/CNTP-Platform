@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ScanLine } from 'lucide-react'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 
 const SCAN_DEBOUNCE_MS = 250
 
@@ -79,21 +80,24 @@ export default function ScanInput({
           {label}
         </div>
       )}
-      <div className={`relative flex items-center rounded-lg border transition
-                       ${busy ? 'border-info bg-info/5' : 'border-surface-rule bg-white'}
-                       ${disabled ? 'opacity-50' : ''}`}>
-        <ScanLine className={`absolute left-3 w-4 h-4 ${busy ? 'text-info animate-pulse' : 'text-text-muted'}`} />
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={onChange}
-          onKeyDown={onKey}
-          disabled={disabled || busy}
-          placeholder={placeholder ?? 'Scan or type barcode…'}
-          className="w-full bg-transparent pl-10 pr-3 py-2.5 text-sm font-mono tracking-wider focus:outline-none"
-          autoComplete="off"
-          spellCheck={false}
-        />
+      <div className="flex items-center gap-2">
+        <div className={`relative flex-1 flex items-center rounded-lg border transition
+                         ${busy ? 'border-info bg-info/5' : 'border-surface-rule bg-white'}
+                         ${disabled ? 'opacity-50' : ''}`}>
+          <ScanLine className={`absolute left-3 w-4 h-4 ${busy ? 'text-info animate-pulse' : 'text-text-muted'}`} />
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={onChange}
+            onKeyDown={onKey}
+            disabled={disabled || busy}
+            placeholder={placeholder ?? 'Scan or type barcode…'}
+            className="w-full bg-transparent pl-10 pr-3 py-2.5 text-sm font-mono tracking-wider focus:outline-none"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        {!disabled && <ScanCameraButton onScan={fire} className="inline-flex items-center justify-center w-10 h-10 rounded-lg border border-surface-rule bg-white text-text-muted hover:text-brand hover:border-brand/40 transition shrink-0" />}
       </div>
       {hint && (
         <div className="text-[11px] text-text-muted mt-1">{hint}</div>
