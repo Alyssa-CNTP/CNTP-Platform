@@ -511,10 +511,18 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   // scopes `runs` to this same window, but the guard is cheap and keeps this
   // component correct standalone too).
   const { granularity, buckets: bucketLabels, label: rangeLabel } = bucketsForRange(rangeStart, rangeEnd)
-  // Caps the number of x-axis labels actually drawn to ~10 regardless of how
-  // many buckets are in the window — a 31-day month otherwise draws all 31
-  // labels on top of each other.
-  const tickInterval = Math.max(0, Math.ceil(bucketLabels.length / 10) - 1)
+  // Caps the number of x-axis labels actually drawn regardless of how many
+  // buckets are in the window. These mini charts are only ~280-380px wide, so
+  // the target is deliberately small — and smaller still for week buckets,
+  // whose "11 May – 17 May" labels are much wider than a day or hour label.
+  const tickTarget = granularity==='hour' ? 8 : granularity==='day' ? 6 : 4
+  const tickInterval = Math.max(0, Math.ceil(bucketLabels.length / tickTarget) - 1)
+  // Week labels are long enough that even the capped count can collide head-on
+  // at 0°, so angle them and anchor from their end (Recharts convention for
+  // rotated axis ticks — anything else drifts the label off its tick mark).
+  const xAxisAngleProps = granularity==='week'
+    ? { angle: -35, textAnchor: 'end' as const, height: 46 }
+    : {}
   const bucketKeyFor = (r: any): string | null => {
     if (!r.date || r.date < rangeStart || r.date > rangeEnd) return null
     if (granularity === 'hour') {
@@ -579,9 +587,15 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   }))
   const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
   // Bag-metric mode has as many x categories as runs, not buckets — cap its
-  // own tick count the same way tickInterval caps the bucketed charts.
+  // own tick count the same way tickInterval caps the bucketed charts. Its
+  // "14 Aug 09:15" labels are as wide as week labels, so it gets the same
+  // small target and the same rotation treatment.
   const outlierCategoryCount = isBagMetric ? new Set(points.map((p: any) => p.period)).size : bucketLabels.length
-  const outlierTickInterval = Math.max(0, Math.ceil(outlierCategoryCount / 10) - 1)
+  const outlierTickTarget = isBagMetric ? 4 : tickTarget
+  const outlierTickInterval = Math.max(0, Math.ceil(outlierCategoryCount / outlierTickTarget) - 1)
+  const outlierAxisAngleProps = (isBagMetric || granularity==='week')
+    ? { angle: -35, textAnchor: 'end' as const, height: 46 }
+    : {}
 
   return (
     <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
@@ -655,10 +669,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
                       {oosCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>🚩 {oosCount} out of spec</span>}
                     </span>
                   </div>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
+                  <ResponsiveContainer width="100%" height={granularity==='week'?185:160}>
+                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:granularity==='week'?26:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={tickInterval} />
+                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={tickInterval} {...xAxisAngleProps} />
                       <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
                       <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
                       {/* Spec band — in-spec shaded green, out-of-spec zones shaded a dark red so it's unmistakable at a glance, plus solid dark boundary lines */}
@@ -697,10 +711,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
             Not enough {metricDef.label.toLowerCase()} data for {rangeLabel} to plot outliers.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
+          <ResponsiveContainer width="100%" height={(isBagMetric||granularity==='week')?250:220}>
+            <ScatterChart margin={{ top:8, right:20, left:0, bottom:(isBagMetric||granularity==='week')?30:4 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={outlierTickInterval} />
+              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={outlierTickInterval} {...outlierAxisAngleProps} />
               <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
               <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
                 labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
@@ -1758,36 +1772,15 @@ export default function SievingPage() {
       {showForm && canWrite && (
         <div id="sieving-new-run-form" style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
-            <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
+            <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>
+              ⊕ New {activeProduct} {form.runType==='final'?'Output Bag QC':'In-Process'} Run
+            </div>
             <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
-
-          {/* Run Type — prominent tablet-friendly selector */}
-          <div style={{marginBottom:16}}>
-            <label style={{fontSize:10,fontWeight:700,color:errors.runType?'#dc2626':'#6b7280',display:'block',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}}>Run Type *</label>
-            <div style={{display:'flex',gap:8}}>
-              {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC (bag)','#166534']] as const).map(([val,label,col])=>(
-                <button key={val} type="button" onClick={()=>{
-                  // Switching run type always clears the serial/bag link. Without
-                  // this, the serial auto-filled for In-Process carried over into
-                  // Final QC — showing a populated "✓ from bag" serial while the
-                  // bag picker still read "0 pending / none selected", which is
-                  // exactly the contradiction that looked like a broken dropdown.
-                  setF('runType',val)
-                  setSelectedBagId('')
-                  setForm((f:any)=>({...f, runType: val, baggingId:'', serialNumber:''}))
-                  setLotMsg(''); setTagLookupState('idle')
-                }}
-                  style={{flex:1,padding:'13px 16px',borderRadius:8,border:`2px solid ${form.runType===val?col:'#d1d5db'}`,
-                    background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
-                    fontSize:14,fontWeight:700,cursor:'pointer',transition:'all 0.15s',
-                    boxShadow:form.runType===val?`0 2px 8px ${col}44`:'none'}}>
-                  {label}{val==='final'&&tabPendingBags.length>0?` · ${tabPendingBags.length}`:''}
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* Run type is fixed by which toolbar button opened this form — see
+              "+ New In-Process QC" / "+ New Output Bag QC" above — so there's
+              no in-form picker to second-guess it. */}
 
           {/* Final QC — pick the bag production has made. Each bagging of Fine
               Leaf / Coarse Leaf is a pending QC; the bag carries its own serial,
