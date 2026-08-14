@@ -62,6 +62,17 @@ Promotes the scan-first debagging work (staging #603/#613/#645) to production. S
 
 Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
 
+## 2026-08-14 — Gustav (Staging deploys have been silently failing since the camera-scanning PR — fixed the CI script)
+
+**Files changed:** `.github/workflows/deploy-staging.yml`
+
+Reported: today's sieving layout changes (PR #652, merged and reported "success") weren't showing up on the live staging site — it was still running the pre-slicer layout. Traced it to the deploy script, not the merge.
+
+- **`deploy-staging.yml` ran `npm run build 2>&1 | tail -20` with no `set -e`.** In bash, a pipeline's exit status is the *last* command's — `tail` always exits 0, so a failed `npm run build` was invisible to the script. It kept going, restarted `pm2` (with whatever `.next` was already on disk), and printed "✅ Deployed successfully" regardless. The GitHub Actions job showed green the whole time.
+- **The build has actually been failing since PR #649** (camera barcode scanning): it added `@zxing/browser`/`@zxing/library` to `package.json`, but the deploy script never ran `npm install` at all — only `git pull` then straight to `npm run build`. Confirmed locally: `npm run build` fails outright with `Module not found: Can't resolve '@zxing/browser'` on a tree that has the dependency declared but not installed. Every deploy since #649 — including #650, #651, and today's sieving work (#652) — very likely built against the same stale, pre-#649 `.next`, silently.
+- **Fix**: added `npm install --legacy-peer-deps` before the build step, and `set -eo pipefail` at the top of the script so any failing command — including inside a pipe — stops the deploy immediately instead of limping forward on a broken build. A future build failure will now show up as a red, failed Action run, not a lying green one.
+- Scoped to staging only for now; `deploy-production.yml` has the identical bug and is a separate decision.
+
 ## 2026-08-14 — Gustav (Sieving: fixed Edit Specs never actually saving; reworked layout; chart+table now share one date-range slicer; capped to last 3 months)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260814_001_fix_sieving_spec_overrides_schema.sql` (new, applied to production + staging)
