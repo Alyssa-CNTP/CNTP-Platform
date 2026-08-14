@@ -490,11 +490,10 @@ function bucketsForRange(startISO: string, endISO: string): { granularity: Chart
 // trend view, which isn't scoped to one grade/variant.
 const TREND_SPEC_KEY = 'Export|Conventional'
 
-function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeStart, rangeEnd, view, offset, onViewChange, onOffsetChange, onPointClick }: {
+function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeStart, rangeEnd, minDate, maxDate, onRangeChange, onPointClick }: {
   runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>
-  rangeStart: string; rangeEnd: string
-  view: 'day' | 'week' | 'month'; offset: number
-  onViewChange: (v: 'day' | 'week' | 'month') => void; onOffsetChange: (updater: (o: number) => number) => void
+  rangeStart: string; rangeEnd: string; minDate: string; maxDate: string
+  onRangeChange: (start: string, end: string) => void
   onPointClick?: (runId: any) => void
 }) {
   const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
@@ -512,6 +511,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   // scopes `runs` to this same window, but the guard is cheap and keeps this
   // component correct standalone too).
   const { granularity, buckets: bucketLabels, label: rangeLabel } = bucketsForRange(rangeStart, rangeEnd)
+  // Caps the number of x-axis labels actually drawn to ~10 regardless of how
+  // many buckets are in the window — a 31-day month otherwise draws all 31
+  // labels on top of each other.
+  const tickInterval = Math.max(0, Math.ceil(bucketLabels.length / 10) - 1)
   const bucketKeyFor = (r: any): string | null => {
     if (!r.date || r.date < rangeStart || r.date > rangeEnd) return null
     if (granularity === 'hour') {
@@ -550,9 +553,22 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   const hasTrendData = trendData.some(row => meshOptions.some(m => row[m] != null))
 
   // ── Outliers data: every run in the window for the chosen metric, ±2.5σ band ──
+  // Bulk Density / Leaf Shade get one point per run at its own date+time instead
+  // of the shared day/week/month bucket — there's usually only one Final QC
+  // reading per bag, so grouping them into the mesh-trend buckets just stacked
+  // multiple bags on top of each other at the same x position. Every other
+  // metric keeps the shared bucket grouping.
+  const isBagMetric = metric === 'bulkDensity' || metric === 'leafShade'
+  const periodFor = (r: any): string => {
+    if (!isBagMetric) return bucketLabels.find(b => b.key === bucketKeyFor(r))?.label || ''
+    const d = new Date(r.date + 'T12:00:00')
+    const time = (r.time || '').slice(0, 5)
+    return `${fmtShort(d)}${time ? ' ' + time : ''}`
+  }
   const points = inWindow
-    .map((r: any) => ({ period: bucketLabels.find(b => b.key === bucketKeyFor(r))?.label || '', value: parseFloat(r[metric]), run: r }))
+    .map((r: any) => ({ period: periodFor(r), value: parseFloat(r[metric]), run: r }))
     .filter((p: any) => !isNaN(p.value))
+    .sort((a: any, b: any) => isBagMetric ? `${a.run.date}${a.run.time || ''}`.localeCompare(`${b.run.date}${b.run.time || ''}`) : 0)
   const values = points.map((p: any) => p.value)
   const m = mean(values), sd = stdDev(values)
   const upper = m + 2.5 * sd, lower = m - 2.5 * sd
@@ -562,6 +578,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
     isOutlier: sd > 0 && (p.value > upper || p.value < lower),
   }))
   const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
+  // Bag-metric mode has as many x categories as runs, not buckets — cap its
+  // own tick count the same way tickInterval caps the bucketed charts.
+  const outlierCategoryCount = isBagMetric ? new Set(points.map((p: any) => p.period)).size : bucketLabels.length
+  const outlierTickInterval = Math.max(0, Math.ceil(outlierCategoryCount / 10) - 1)
 
   return (
     <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
@@ -575,27 +595,23 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
             </button>
           ))}
         </div>
-        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
-          {(['day','week','month'] as const).map(v => (
-            <button key={v} onClick={()=>onViewChange(v)}
-              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
-                background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
-              {v==='day'?'By Hour':v==='week'?'By Week':'By Month'}
-            </button>
-          ))}
-        </div>
-        {/* Timeline navigator — step back through previous days/weeks/months.
-            The window it sets drives both this chart and the records table
-            below, so they always show the same slice of history. */}
+        {/* Explicit From/To date pickers — the window they set drives both
+            this chart and the records table below, so they always show the
+            same slice of history. Granularity (hour/day/week — see
+            bucketsForRange) adapts automatically to how wide the range is;
+            picking the same From and To date gets you an hour-by-hour view. */}
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <button onClick={()=>onOffsetChange((o:number)=>o+1)} title={`Previous ${view}`}
-            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
-          <span style={{ fontSize:11, fontWeight:700, color:'#374151', minWidth:120, textAlign:'center' }}>{rangeLabel}</span>
-          <button onClick={()=>onOffsetChange((o:number)=>Math.max(0,o-1))} disabled={offset===0} title={`Next ${view}`}
-            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:offset===0?'#f3f4f6':'#fff', color:offset===0?'#d1d5db':'#374151', cursor:offset===0?'default':'pointer' }}>▶</button>
-          {offset!==0 && (
-            <button onClick={()=>onOffsetChange(()=>0)} style={{ padding:'4px 10px', fontSize:11, fontWeight:600, border:'1px solid #1f4e79', borderRadius:6, background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>Today</button>
-          )}
+          <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>From</span>
+          <input type="date" value={rangeStart} min={minDate} max={rangeEnd}
+            onChange={e=>e.target.value && onRangeChange(e.target.value, rangeEnd)}
+            style={{ padding:'4px 6px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6 }} />
+          <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>To</span>
+          <input type="date" value={rangeEnd} min={rangeStart} max={maxDate}
+            onChange={e=>e.target.value && onRangeChange(rangeStart, e.target.value)}
+            style={{ padding:'4px 6px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6 }} />
+          <span style={{ fontSize:11, fontWeight:400, color:'#9ca3af' }}>
+            ({granularity==='hour'?'by hour':granularity==='day'?'by day':'by week'})
+          </span>
         </div>
         {chartType==='outliers' && (
           <select value={metric} onChange={e=>setMetric(e.target.value)}
@@ -642,7 +658,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
                   <ResponsiveContainer width="100%" height={160}>
                     <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={granularity==='hour'?2:0} />
+                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={tickInterval} />
                       <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
                       <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
                       {/* Spec band — in-spec shaded green, out-of-spec zones shaded a dark red so it's unmistakable at a glance, plus solid dark boundary lines */}
@@ -684,7 +700,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
           <ResponsiveContainer width="100%" height={220}>
             <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={granularity==='hour'?1:0} />
+              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={outlierTickInterval} />
               <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
               <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
                 labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
@@ -700,24 +716,6 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
       )}
     </div>
   )
-}
-
-// ─── Sieving range-nav helpers ──────────────────────────────────────────────
-// Replaces the dual-handle slider with the original clickable By Hour/Week/
-// Month navigator. offset steps back in time (0 = current); the parent owns
-// one offset per view so switching tabs doesn't lose your place in the others.
-function dayForOffset(offset: number): Date { const d = new Date(); d.setDate(d.getDate() - offset); return d }
-function weekRangeForOffset(offset: number): { start: Date; end: Date } {
-  const anchor = new Date(); anchor.setDate(anchor.getDate() - offset * 7)
-  const start = startOfWeek(anchor)
-  const end = new Date(start); end.setDate(start.getDate() + 6)
-  return { start, end }
-}
-function monthRangeForOffset(offset: number): { start: Date; end: Date } {
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth() - offset, 1)
-  const end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 0)
-  return { start, end }
 }
 
 function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, bagSerials, activeProduct, allRuns }: {
@@ -944,24 +942,12 @@ export default function SievingPage() {
   const [showSpecEditor, setShowSpecEditor] = useState(false)
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
-  // Replaces the old Daily/Weekly/Monthly/60-Day/All period buttons with the
-  // By Hour/Week/Month navigator (moved here from the chart) so the records
-  // table shares the same window instead of having its own separate control.
-  // One offset per view so switching tabs doesn't lose your place in the others.
-  // Defaults to 'week' rather than 'day' — the table shares this window now,
-  // and defaulting to "today" left both the chart and table empty on any
-  // product with no run logged yet today (was harmless before, when the
-  // table had its own separate All-time filter).
-  const [rangeView,      setRangeView]      = useState<'day'|'week'|'month'>('week')
-  const [dayOffset,      setDayOffset]      = useState(0)
-  const [weekOffset,     setWeekOffset]     = useState(0)
-  const [monthOffset,    setMonthOffset]    = useState(0)
-  const rangeOffset = rangeView==='day' ? dayOffset : rangeView==='week' ? weekOffset : monthOffset
-  const setRangeOffset = rangeView==='day' ? setDayOffset : rangeView==='week' ? setWeekOffset : setMonthOffset
-  const rangeWindow = rangeView==='day' ? (() => { const d = dayForOffset(dayOffset); return { start: d, end: d } })()
-    : rangeView==='week' ? weekRangeForOffset(weekOffset) : monthRangeForOffset(monthOffset)
-  const rangeStart = isoDate(rangeWindow.start)
-  const rangeEnd   = isoDate(rangeWindow.end)
+  // Explicit From/To date window shared by the chart and the records table,
+  // so the two always show the same slice of history. Defaults to the last 7
+  // days rather than just "today" — a single day is often empty for a given
+  // product and left both the chart and table blank on load.
+  const [rangeStart, setRangeStart] = useState(() => { const d = new Date(); d.setDate(d.getDate()-6); return isoDate(d) })
+  const [rangeEnd,   setRangeEnd]   = useState(() => isoDate(new Date()))
   const [searchText,     setSearchText]     = useState('')
   const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
@@ -1658,9 +1644,19 @@ export default function SievingPage() {
       {/* Toolbar A — New Run / Edit Specs sit above the Specifications table so
           editing the spec a run will be checked against is right next to it. */}
       <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        {/* Two dedicated buttons instead of a generic "+ New Run" that then made
+            you pick In-Process vs Final QC inside the form — the run type is
+            set the moment the form opens. */}
         {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle')
+          setForm((f:any)=>({...blankForm(), runType:'in-process'}))
           setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
-          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Run</button>}
+          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New In-Process QC</button>}
+        {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle')
+          setForm((f:any)=>({...blankForm(), runType:'final'}))
+          setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
+          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Output Bag QC</button>}
         {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null)}}
           style={{padding:'5px 12px',borderRadius:6,border:'1px solid #7c3aed',fontSize:11,cursor:'pointer',fontWeight:600,
             background:showSpecEditor?'#7c3aed':'#faf5ff',color:showSpecEditor?'#fff':'#7c3aed'}}>
@@ -2057,8 +2053,8 @@ export default function SievingPage() {
           body already shows "no data for this range" internally. */}
       {showOutlierChart && (
         <SievingOutlierChart runs={rangeRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
-          rangeStart={rangeStart} rangeEnd={rangeEnd}
-          view={rangeView} offset={rangeOffset} onViewChange={setRangeView} onOffsetChange={setRangeOffset}
+          rangeStart={rangeStart} rangeEnd={rangeEnd} minDate={threeMonthsAgoISO()} maxDate={isoDate(new Date())}
+          onRangeChange={(s,e)=>{setRangeStart(s);setRangeEnd(e)}}
           onPointClick={(runId)=>{
             setChartHighlightId(runId)
             const el = document.getElementById(`run-row-${runId}`)
@@ -2091,7 +2087,7 @@ export default function SievingPage() {
 
       {/* Runs table */}
 
-      {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New Run"</div>}
+      {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New In-Process QC" or "+ New Output Bag QC"</div>}
       {!loading&&filteredRuns.length>0&&(
         <div style={{borderRadius:10,border:'1px solid #e5e7eb',background:'#fff',overflow:'hidden'}}>
           <button onClick={()=>setTableCollapsed(c=>!c)}

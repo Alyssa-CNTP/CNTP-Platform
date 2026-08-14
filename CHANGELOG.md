@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-14 — Gustav (Sieving: dedicated QC buttons, decluttered chart axes, From/To date range, per-run Bulk Density/Leaf Shade)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Follow-up feedback on today's sieving work — four changes:
+
+- **Toolbar**: replaced the single "+ New Run" button (which then made you pick In-Process vs Final QC inside the form) with two direct buttons — "+ New In-Process QC" and "+ New Output Bag QC" — that open the form with the run type already set.
+- **Chart x-axis**: a wide window (e.g. a full month) was drawing a label for every single day bucket, all overlapping. Both the Mesh Trend and Outliers charts now cap themselves to ~10 visible labels regardless of how many buckets are in the window.
+- **Date range**: replaced the By Hour/By Week/By Month click-navigator with plain From/To date inputs — pick any custom range instead of only paging by a fixed unit. Granularity (hour/day/week) still adapts automatically to how wide the range is; setting From = To gets the hourly view. Defaults to the last 7 days instead of just today.
+- **Bulk Density / Leaf Shade**: these used to get grouped into the same day/week/month buckets as the sieve-mesh trend, which stacked every bag QC'd in the same bucket on top of each other at one x position. They now always plot one point per run at its own date+time — effectively always "by hour" — since Weekly/Monthly bucketing never suited a once-per-bag reading anyway.
+
 ## 2026-08-14 — Gustav (Sieving: fixed the chart/table going blank because the new shared date window defaulted to "today")
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
