@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: qms.sd_runs.run_timestamp was never actually written by the app)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: a run captured on staging still showed `run_timestamp` as NULL in the Supabase table editor. The column exists (`timestamptz`, no default) but `addRun()`'s insert never included it — nothing in the app ever wrote to it, on staging or otherwise.
+
+- `addRun()` now sets `run_timestamp: new Date().toISOString()` on every insert — a real UTC instant captured once, at save. The edit-run save path deliberately does NOT include this field, so no future edit can ever touch it (it survives independent of the now-locked `date`/`time_of_run` display fields).
+- Mapped it through `mapDbRow()` as `runTimestamp` alongside the existing `created_at → timestamp` mapping, so it's available wherever a run's data is used going forward.
+- Not backfilled: existing rows captured before this change stay NULL for this column (their `created_at` — already auto-set by the database on every insert regardless of app code — is the closest existing equivalent for historical rows).
+
+
 ## 2026-08-14 — Gustav (Sieving: dropped the Outliers tab in favour of always-visible Bulk Density/Leaf Shade panels; locked Date/Time in the edit form)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
