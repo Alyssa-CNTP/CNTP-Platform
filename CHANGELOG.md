@@ -62,6 +62,17 @@ Promotes the scan-first debagging work (staging #603/#613/#645) to production. S
 
 Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
 
+## 2026-08-14 — Gustav (Sieving: In-Process no longer carries a serial at all; fixed the "Conventional" vs "CON" variant split)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Two requests: stop In-Process auto-filling (and requiring) a serial number across all four sieves, and explain/fix the runs table showing two different-looking variant values ("CON" and "Conventional") for the same product/lot.
+
+- **In-Process serial removed entirely.** An In-Process reading samples the machine while a bag is still filling — it isn't a sample of one finished bag, so there was nothing for a serial to correctly identify; the earlier auto-fill just pointed every reading at whichever bag happened to be most recent, with no way to enter a different one either. The Serial No. field, its auto-fill effect, and its datalist are now only rendered for Final QC. Because this is product-agnostic (driven by `activeProduct`, not per-tab code), it applies uniformly to Coarse Leaf, Fine Leaf, Indent Sticks and Rooibos Blocks. **Belt-and-braces:** the save itself now hard-codes `serial_number: null` for any In-Process row, so a lot-number auto-fill pulling a serial from a previous run against the same lot can never attach a stale one behind the scenes, even though the field is gone from the screen.
+- **Root cause of the variant split**: `production.prod_bagging` / `production.bag_tags` spell variant out in full — `'Conventional'`, `'Organic'`, etc. (that table's own CHECK constraint) — while `qms.sd_runs` uses short codes (`SD_VARIANTS`: `CON`, `ORG`, `RA-CON`, `RA-ORG`, `FT-CON`, `FT-ORG`). Two places copied a bag's `variant` straight from production into the QC form without translating it: `applyBagToForm()` (picking a bag for Final QC) and `lookupBagTag()` (typing/scanning a serial and tabbing out). Either path stored the production spelling verbatim, so the same lot ended up with two different variant values in the table — and worse, spec lookups keyed on `${grade}|${variant}` silently missed for any row stored as `"Conventional"`, since that string isn't a key in `SIEVING_SPECS_DB`.
+- **Fix**: new `normProdVariant()` maps the production spellings to the `SD_VARIANTS` codes (case-insensitively; already-short values pass through unchanged), applied at both copy sites plus defensively in the lot-number auto-fill (so a historical bad row can't keep circulating forward when its lot is reused).
+- **Data correction**: 19 existing `qms.sd_runs` rows on production and 2 on staging had `variant = 'Conventional'` — updated to `'CON'` directly (no other full-word variants were present in either database).
+
 ## 2026-08-14 — Alyssa (Scan-first debagging rolled out: shared component + Pasteuriser popup + Blender auto-fill)
 
 **Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`
