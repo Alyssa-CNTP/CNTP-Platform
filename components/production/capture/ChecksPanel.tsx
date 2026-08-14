@@ -19,12 +19,25 @@ const PHASES: CheckPhase[] = ['startup', 'running', 'shutdown']
 interface MassBalance { totalIn: number; totalOut: number; variance: number; withinTol: boolean }
 interface VsdReading { id: string; value: number; at: string; oor: boolean }
 
+// Snapshot strings used to detect "has this check actually changed since we
+// last autosaved it" — cheap dirty-checking so the 20s backstop doesn't
+// rewrite unchanged rows into the append-only audit trail every tick.
+function serializeConfirm(c?: { flagged: boolean; reason: string }): string {
+  return c ? `${c.flagged}|${c.reason}` : ''
+}
+function serializeScale(std: string, act: string): string {
+  const s = std.trim(), a = act.trim()
+  return s || a ? `${s}|${a}` : ''
+}
+
 export function ChecksPanel({
-  sectionId, date, shift, sessionId, locked, operators, variant, grade, massBalance,
+  sectionId, date, shift, sessionId, locked, operators, variant, grade, massBalance, running, active,
 }: {
   sectionId: string; date: string; shift: string; sessionId: string | null; locked: boolean
   operators: { id: string; name: string; pin: string }[]
   variant: string; grade: string; massBalance: MassBalance
+  running: boolean   // machine running cue (material captured) — gates hourly VSD logging
+  active: boolean    // capture live (not locked / submitted) — gates hourly VSD logging
 }) {
   const checks = visibleChecks(sectionId, shift)
   // When exactly one operator is bound (e.g. a person-logged-in tablet) live
@@ -57,6 +70,9 @@ export function ChecksPanel({
 
   const recordIdRef = useRef<string | null>(null)
   recordIdRef.current = recordId
+  // Last-autosaved serialization per check_key, so the debounce/backstop only
+  // writes checks that actually changed since their last save.
+  const lastSavedRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
     loadCheckSpecs(sectionId).then(setSpecs)
@@ -94,6 +110,18 @@ export function ChecksPanel({
         })
         setConfirms(confirmsR); setNumbers(numbersR); setTexts(textsR)
         setScaleStd(scaleStdR); setScaleAct(scaleActR); setMbConfirmed(mbConfirmedR)
+
+        // Seed the autosave snapshot from what's already on record, so the
+        // debounce/backstop below doesn't immediately re-write values that
+        // were only just restored (nothing has actually changed yet).
+        const snap: Record<string, string> = {}
+        visibleChecks(sectionId, shift).forEach(c => {
+          if (c.kind === 'confirm') snap[c.key] = serializeConfirm(confirmsR[c.key])
+          else if (c.kind === 'number' && !c.hourly) snap[c.key] = (numbersR[c.key] ?? '').trim()
+          else if (c.kind === 'text') snap[c.key] = (textsR[c.key] ?? '').trim()
+          else if (c.kind === 'scale') snap[c.key] = serializeScale(scaleStdR, scaleActR)
+        })
+        lastSavedRef.current = snap
       }
       setLoading(false)
     })
@@ -102,7 +130,7 @@ export function ChecksPanel({
   const signed = signedStatus === 'operator_signed' || signedStatus === 'supervisor_verified'
   const readOnly = locked || signed
 
-  async function getRecord(): Promise<string | null> {
+  async function getRecord(): Promise<string> {
     if (recordIdRef.current) return recordIdRef.current
     const id = await ensureCheckRecord(sectionId, date, shift, sessionId)
     setRecordId(id)
@@ -111,33 +139,117 @@ export function ChecksPanel({
 
   // ── Live: hourly VSD reading ───────────────────────────────────────────────
   async function logVsd(value: number, source: 'keypad' | 'photo') {
+    if (!running || !active) { setError('Not available — production isn\'t running or the shift is already submitted'); return }
     const spec = specs['infeed_vsd']
     const oor = outOfRange(value, spec)
-    const id = await getRecord()
-    if (!id) return
-    const at = new Date().toISOString()
-    await appendCheckEvent(id, {
-      phase: 'running', check_key: 'infeed_vsd', check_label: 'Infeed speed (VSD)', kind: 'number',
-      value_num: value, unit: spec?.unit ?? 'Hz', status: oor ? 'flagged' : 'ok',
-      spec_min: spec?.min ?? null, spec_max: spec?.max ?? null, source, recorded_at: at,
-      actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
-    })
-    setVsd(v => [...v, { id: at, value, at, oor }])
+    try {
+      const id = await getRecord()
+      const at = new Date().toISOString()
+      await appendCheckEvent(id, {
+        phase: 'running', check_key: 'infeed_vsd', check_label: 'Infeed speed (VSD)', kind: 'number',
+        value_num: value, unit: spec?.unit ?? 'Hz', status: oor ? 'flagged' : 'ok',
+        spec_min: spec?.min ?? null, spec_max: spec?.max ?? null, source, recorded_at: at,
+        actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
+      })
+      setVsd(v => [...v, { id: at, value, at, oor }])
+    } catch (e: any) { setError(e.message ?? 'Could not save the VSD reading') }
   }
 
   // ── Live: confirm a mass-balance snapshot at shut-down ─────────────────────
   async function confirmMassBalance() {
-    const id = await getRecord()
-    if (!id) return
-    await appendCheckEvent(id, {
-      phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance', kind: 'massbalance',
-      value_num: massBalance.variance, value_text: `${massBalance.totalIn.toFixed(1)} in / ${massBalance.totalOut.toFixed(1)} out`,
-      unit: 'kg', status: massBalance.withinTol ? 'ok' : 'flagged', source: 'keypad',
-      actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
-    })
-    setMbConfirmed(true)
+    try {
+      const id = await getRecord()
+      await appendCheckEvent(id, {
+        phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance', kind: 'massbalance',
+        value_num: massBalance.variance, value_text: `${massBalance.totalIn.toFixed(1)} in / ${massBalance.totalOut.toFixed(1)} out`,
+        unit: 'kg', status: massBalance.withinTol ? 'ok' : 'flagged', source: 'keypad',
+        actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
+      })
+      setMbConfirmed(true)
+    } catch (e: any) { setError(e.message ?? 'Could not confirm the mass balance') }
   }
   const [mbConfirmed, setMbConfirmed] = useState(false)
+
+  // ── Autosave: held checks (confirm/number/text/scale) ──────────────────────
+  // These used to live only in React state until the operator PIN-signed — if
+  // the tablet reloaded, lost power, or a supervisor approved the session
+  // before sign-off happened, everything typed in was gone with no trace in
+  // the DB. This writes each changed value to the audit trail as it's filled
+  // in (source:'auto'), independent of whether sign() ever runs; sign() still
+  // writes its own 'sign'-sourced confirmation of the final values on top.
+  async function flushDirtyChecks() {
+    const dirty: { def: MachineCheckDef; value: string }[] = []
+    for (const c of checks) {
+      if (raised[c.key]) continue   // already written live with its maintenance link
+      let val = ''
+      if (c.kind === 'confirm') val = serializeConfirm(confirms[c.key])
+      else if (c.kind === 'number' && !c.hourly) val = (numbers[c.key] ?? '').trim()
+      else if (c.kind === 'text') val = (texts[c.key] ?? '').trim()
+      else if (c.kind === 'scale') val = serializeScale(scaleStd, scaleAct)
+      else continue
+      if (!val || lastSavedRef.current[c.key] === val) continue
+      dirty.push({ def: c, value: val })
+    }
+    if (!dirty.length) return
+    let id: string
+    try { id = await getRecord() } catch { return }   // next tick retries
+    for (const { def: c, value: val } of dirty) {
+      try {
+        if (c.kind === 'confirm') {
+          const ex = confirms[c.key]
+          await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: 'confirm',
+            status: ex?.flagged ? 'flagged' : 'ok', reason: ex?.reason ?? null, source: 'auto',
+            actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null })
+        } else if (c.kind === 'number') {
+          const v = parseFloat(numbers[c.key])
+          if (!isFinite(v)) continue
+          const spec = specs[c.key]
+          await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: 'number',
+            value_num: v, unit: c.unit ?? spec?.unit ?? null, status: outOfRange(v, spec) ? 'flagged' : 'ok',
+            spec_min: spec?.min ?? null, spec_max: spec?.max ?? null, source: 'auto',
+            actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null })
+        } else if (c.kind === 'scale') {
+          const s = parseFloat(scaleStd), a = parseFloat(scaleAct)
+          if (!isFinite(s) || !isFinite(a)) continue
+          const fail = scaleOutOfTolerance(s, a, specs[c.key])
+          await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: 'scale',
+            value_num: a, value_text: `std ${s} / actual ${a}`, unit: 'kg', status: fail ? 'fail' : 'ok', source: 'auto',
+            actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null })
+        } else if (c.kind === 'text') {
+          await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: 'text',
+            value_text: val, status: 'ok', source: 'auto',
+            actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null })
+        }
+        lastSavedRef.current[c.key] = val
+      } catch { /* leave undirtied — the next debounce/backstop tick retries it */ }
+    }
+  }
+
+  const flushRef = useRef(flushDirtyChecks)
+  flushRef.current = flushDirtyChecks
+
+  // Debounce ~2.5s after each change (mirrors the material-capture autosave).
+  useEffect(() => {
+    if (readOnly || loading) return
+    const t = setTimeout(() => { flushRef.current() }, 2500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirms, numbers, texts, scaleStd, scaleAct, readOnly, loading])
+
+  // Flush on tab hide / app background / page close (tablet screen-lock).
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden') flushRef.current() }
+    document.addEventListener('visibilitychange', onHide)
+    window.addEventListener('pagehide', onHide)
+    return () => { document.removeEventListener('visibilitychange', onHide); window.removeEventListener('pagehide', onHide) }
+  }, [])
+
+  // Backstop interval for active tabs.
+  useEffect(() => {
+    if (readOnly) return
+    const t = setInterval(() => { flushRef.current() }, 20_000)
+    return () => clearInterval(t)
+  }, [readOnly])
 
   // ── Failing-check detection ────────────────────────────────────────────────
   function isFailing(def: MachineCheckDef): boolean {
@@ -188,12 +300,18 @@ export function ChecksPanel({
     const json = await res.json().catch(() => ({}))
     if (!res.ok) { setError(json.error ?? 'Could not raise maintenance job'); setRaiseFor(null); return }
     const cardId = json.card?.id ?? null
-    const id = await getRecord()
-    if (id) await appendCheckEvent(id, {
-      phase: def.phase, check_key: def.key, check_label: def.label, kind: def.kind,
-      status: 'fail', reason, source: 'keypad', maintenance_card_id: cardId,
-      actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
-    })
+    try {
+      const id = await getRecord()
+      await appendCheckEvent(id, {
+        phase: def.phase, check_key: def.key, check_label: def.label, kind: def.kind,
+        status: 'fail', reason, source: 'keypad', maintenance_card_id: cardId,
+        actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
+      })
+    } catch (e: any) {
+      // The maintenance job card was already created — don't hide that, just
+      // flag that the check's own audit-trail link didn't save.
+      setError(`Maintenance job raised, but the check record didn't save: ${e.message}`)
+    }
     if (cardId) setRaised(r => ({ ...r, [def.key]: cardId }))
     setRaiseFor(null)
   }
@@ -211,7 +329,6 @@ export function ChecksPanel({
     setSigning(true)
     try {
       const id = await getRecord()
-      if (!id) throw new Error('Could not create checks record')
       const now = new Date().toISOString()
       const actor = { actor_id: op.id, actor_name: op.name }
 
@@ -282,10 +399,17 @@ export function ChecksPanel({
       })
       const sj = await sres.json().catch(() => ({}))
       if (sj.summary) {
+        // Persist first — only reflect it in the UI once it's actually saved,
+        // so a silent write failure can't leave the summary showing for this
+        // one page-load and then vanishing (unsaved) the next time anyone
+        // opens this record. On failure, leave aiSummary unset so the
+        // "not generated yet" state + Generate retry button still show.
+        const { error } = await getDb().schema('production').from('check_records')
+          .update({ ai_summary: sj.summary } as any).eq('id', id)
+        if (error) throw new Error(error.message)
         setAiSummary(sj.summary)
-        await getDb().schema('production').from('check_records').update({ ai_summary: sj.summary } as any).eq('id', id)
       }
-    } catch { /* summary is best-effort */ }
+    } catch (e: any) { setError(`Shift summary: ${e.message ?? 'could not be saved'}`) }
     setSummarizing(false)
   }
 
@@ -350,7 +474,7 @@ export function ChecksPanel({
                 textValue={texts[def.key] ?? ''} onText={(v: string) => setTexts(t => ({ ...t, [def.key]: v }))}
                 qmsHint={def.key === 'sieving_config' ? qmsHint : null}
                 scaleStd={scaleStd} scaleAct={scaleAct} onScaleStd={setScaleStd} onScaleAct={setScaleAct}
-                vsd={vsd} lastVsd={lastVsd} onLogVsd={logVsd}
+                vsd={vsd} lastVsd={lastVsd} onLogVsd={logVsd} vsdActive={running && active}
                 massBalance={massBalance} mbConfirmed={mbConfirmed} onConfirmMb={confirmMassBalance}
                 failing={isFailing(def)} raisedCard={raised[def.key]} onRaise={() => setRaiseFor(def)}
               />
@@ -393,7 +517,7 @@ export function ChecksPanel({
 function CheckCard(props: any) {
   const {
     def, spec, readOnly, status, confirm, onConfirmOk, onToggleConfirm, onReason, numberValue, onNumber, textValue, onText,
-    qmsHint, scaleStd, scaleAct, onScaleStd, onScaleAct, vsd, lastVsd, onLogVsd,
+    qmsHint, scaleStd, scaleAct, onScaleStd, onScaleAct, vsd, lastVsd, onLogVsd, vsdActive,
     massBalance, mbConfirmed, onConfirmMb, failing, raisedCard, onRaise,
   } = props
   const d = def as MachineCheckDef
@@ -480,12 +604,17 @@ function CheckCard(props: any) {
               ))}
             </div>
           )}
-          {!readOnly && (
+          {!readOnly && vsdActive && (
             <button onClick={() => { const v = parseFloat(numberValue); if (isFinite(v)) { onLogVsd(v, 'keypad'); onNumber('') } }}
               disabled={!numberValue}
               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand/10 text-brand font-medium text-[13px] disabled:opacity-40">
               <Plus size={15} /> Log reading{lastVsd ? ` (last ${lastVsd.value}${d.unit} at ${new Date(lastVsd.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}
             </button>
+          )}
+          {!readOnly && !vsdActive && (
+            <p className="text-[11px] text-stone-400">
+              {lastVsd ? 'Hourly logging stops once the shift is submitted.' : 'Available once production is running.'}
+            </p>
           )}
         </div>
       )}
