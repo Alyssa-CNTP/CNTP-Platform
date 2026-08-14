@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: made the mesh charts' existing hourly view actually discoverable)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: hourly samples for the sieve-mesh charts didn't seem to exist. They already did — `bucketsForRange` switches the mesh trend charts from daily averages to hour-by-hour buckets whenever From and To are set to the same day — but nothing in the UI hinted at that, so setting both date fields to match wasn't something anyone would think to try.
+
+- Added a "🕐 View {date} by hour" button next to the From/To pickers, shown whenever the current range isn't already a single day. One click collapses the range to the current "To" date, which triggers the existing hour-bucket behaviour immediately.
+
+
 ## 2026-08-14 — Gustav (Sieving: Bulk Density/Leaf Shade get their own per-day, by-hour view)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

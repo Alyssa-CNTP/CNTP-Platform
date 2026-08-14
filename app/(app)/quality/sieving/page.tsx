@@ -627,6 +627,17 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
           <span style={{ fontSize:11, fontWeight:400, color:'#9ca3af' }}>
             ({granularity==='hour'?'by hour':granularity==='day'?'by day':'by week'})
           </span>
+          {/* One-click shortcut into hourly mode — the mesh charts already
+              switch to hour buckets whenever From and To are the same day
+              (see bucketsForRange), but manually setting both fields to
+              match wasn't an obvious way to get there. */}
+          {granularity!=='hour' && (
+            <button onClick={()=>onRangeChange(rangeEnd, rangeEnd)}
+              title={`View ${rangeEnd} hour-by-hour instead of averaged`}
+              style={{ fontSize:10, fontWeight:600, padding:'4px 10px', borderRadius:6, border:'1px solid #1f4e79', background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>
+              🕐 View {rangeEnd} by hour
+            </button>
+          )}
         </div>
       </div>
 
