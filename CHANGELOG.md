@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: explicit By Hour/Day/Week/Month tabs for the mesh charts, decoupled from the From/To range)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Granularity was previously auto-inferred purely from how wide the From/To range was (single day → hour, ≤62 days → day, wider → week) — there was no way to pick a coarser or finer view of the same range, e.g. seeing a two-week range as one weekly average, or a whole quarter broken down by day.
+
+- Replaced that auto-detection with an explicit **By Hour / By Day / By Week / By Month** tab row, independent of the From/To range — the range still picks *what* history to look at, the tabs now pick *how* to slice it.
+- Added month bucketing (didn't exist before) and extended hour bucketing to work across a multi-day range (previously hour-view only worked for a single-day range) — capped at 14 days at a time so the chart doesn't try to plot hundreds of hour-points, with a message telling you to narrow the range or switch tabs if you go wider.
+- Removed the "View {date} by hour" shortcut button from the previous pass — the explicit By Hour tab supersedes it.
+- The Bulk Density/Leaf Shade panels' own per-day focus picker (from the previous change) is unaffected — it's independent of this granularity choice, same as it's independent of the From/To range.
+
+
 ## 2026-08-14 — Gustav (Sieving: made the mesh charts' existing hourly view actually discoverable)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
