@@ -13,6 +13,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import { RefreshCw, ChevronDown, ChevronUp, X, ExternalLink } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1561,8 +1563,9 @@ function OutstandingTracker() {
 
 // ─── Manual Entry Modal ───────────────────────────────────────────────────────
 
-function ManualEntryModal({ workflow, onSaved, onClose }: {
+function ManualEntryModal({ workflow, initialDraft, onSaved, onClose }: {
   workflow: string
+  initialDraft?: { pa?: any; res?: any; compounds?: any[]; gly?: any } | null
   onSaved:  () => void
   onClose:  () => void
 }) {
@@ -1570,28 +1573,35 @@ function ManualEntryModal({ workflow, onSaved, onClose }: {
   const [saving, setSaving] = useState(false)
   const [err,    setErr]    = useState('')
 
-  const [pa, setPa] = useState({
+  const [pa, setPa] = useState(initialDraft?.pa ?? {
     batch_no:'', report_name:'', sample_date:'', lab:'Stellenbosch University CAF',
     purchase_order:'', sample_list:'', total_pa_ug_kg:'', total_ta_ug_kg:'',
   })
-  const [res, setRes] = useState({
+  const [res, setRes] = useState(initialDraft?.res ?? {
     batch_no:'', report_reference:'', sample_date:'', lab:'', total_compounds_screened:'',
   })
-  const [compounds, setCompounds] = useState([{
+  const [compounds, setCompounds] = useState(initialDraft?.compounds ?? [{
     compound_name:'', detected_value_prefix:'', detected_value_mg_kg:'', mrl_eu_mg_kg:'', eu_mrl_exceeded:false,
   }])
-  const [gly, setGly] = useState({
+  const [gly, setGly] = useState(initialDraft?.gly ?? {
     batch_no:'', report_reference:'', sample_date:'', grade:'',
     glyphosate_detected:false,  glyphosate_value_mg_kg:'',
     ampa_detected:false,        ampa_value_mg_kg:'',
     glufosinate_detected:false, glufosinate_value_mg_kg:'',
   })
 
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. This modal
+  // fully unmounts on close, so the recovery banner/state lives in the
+  // parent (RawMaterialPage) instead — see there for the read-back side.
+  const draftKey = `rawmaterial_draft_${workflow}`
+  useDraftAutosave(draftKey, { pa, res, compounds, gly }, { enabled: true })
+  const handleClose = () => { clearDraft(draftKey); onClose() }
+
   const paPreview = pa.total_pa_ug_kg ? calcPaLevel(pa.total_pa_ug_kg) : null
-  const setP = (k: string, v: any) => setPa(p => ({ ...p, [k]: v }))
-  const setR = (k: string, v: any) => setRes(p => ({ ...p, [k]: v }))
-  const setG = (k: string, v: any) => setGly(p => ({ ...p, [k]: v }))
-  const setC = (i: number, k: string, v: any) => setCompounds(cs => cs.map((c, ci) => ci === i ? { ...c, [k]: v } : c))
+  const setP = (k: string, v: any) => setPa((p:any) => ({ ...p, [k]: v }))
+  const setR = (k: string, v: any) => setRes((p:any) => ({ ...p, [k]: v }))
+  const setG = (k: string, v: any) => setGly((p:any) => ({ ...p, [k]: v }))
+  const setC = (i: number, k: string, v: any) => setCompounds((cs:any[]) => cs.map((c, ci) => ci === i ? { ...c, [k]: v } : c))
 
   async function save() {
     setErr(''); setSaving(true)
@@ -1674,6 +1684,7 @@ function ManualEntryModal({ workflow, onSaved, onClose }: {
         workcenter: 'rawMaterial', workflow, batch_number, data_json, file_name: 'manual_entry',
       })
       if (error) throw new Error(error.message)
+      clearDraft(draftKey)
       onSaved()
       onClose()
     } catch (e: any) {
@@ -1699,7 +1710,7 @@ function ManualEntryModal({ workflow, onSaved, onClose }: {
             <div className="text-white font-bold text-[15px]">✏️ Manual Entry — {WF_TITLES[workflow] ?? workflow}</div>
             <div className="text-blue-200 text-[11px] mt-0.5">Raw Material · results will be graded automatically</div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/15 text-white text-lg">×</button>
+          <button onClick={handleClose} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/15 text-white text-lg">×</button>
         </div>
 
         <div className="p-6 space-y-5">
@@ -1882,7 +1893,7 @@ function ManualEntryModal({ workflow, onSaved, onClose }: {
           )}
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
-            <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted hover:text-text text-[12px]">
+            <button onClick={handleClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted hover:text-text text-[12px]">
               Cancel
             </button>
             <button onClick={save} disabled={saving} className="px-6 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold disabled:opacity-50">
@@ -2304,6 +2315,15 @@ export default function RawMaterialPage() {
   const [showManual,  setShowManual]  = useState(false)
   const [spinning,    setSpinning]    = useState(false)
 
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. The modal
+  // fully unmounts on close, so this parent holds the recovered-draft state
+  // and passes it back in as ManualEntryModal's initialDraft on Restore.
+  const [recoveredDraft, setRecoveredDraft] = useState<{data:any;savedAt:string}|null>(null)
+  useEffect(() => {
+    if (showManual) return
+    setRecoveredDraft(readDraft(`rawmaterial_draft_${tab}`))
+  }, [showManual, tab])
+
   const load = useCallback(async () => {
     setLoading(true)
     // qms is the single source (legacy public consolidated 2026-06-24; data_json now jsonb)
@@ -2382,13 +2402,22 @@ export default function RawMaterialPage() {
             <DropZone workcenter="rawMaterial" workflow={tab} onSuccess={() => { setSpinning(true); load() }} />
             <div className="text-center mb-4">
               <button
-                onClick={() => setShowManual(true)}
+                onClick={() => { setShowManual(true); setRecoveredDraft(null) }}
                 className="px-5 py-2 rounded-xl border-2 border-dashed border-brand/30 bg-info/5 text-brand text-[12px] font-bold hover:bg-info/10 transition-colors"
               >
                 ✏️ Manual Entry — enter results without a PDF
               </button>
             </div>
           </>
+        )}
+
+        {/* Recovered draft — see lib/hooks/useDraftAutosave.ts. Only surfaces
+            when the manual-entry modal is closed, so it never fights an
+            in-progress entry. */}
+        {recoveredDraft && !showManual && (
+          <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+            onRestore={()=>{ setShowManual(true) }}
+            onDiscard={()=>{ clearDraft(`rawmaterial_draft_${tab}`); setRecoveredDraft(null) }} />
         )}
 
         {/* Loading state */}
@@ -2413,6 +2442,7 @@ export default function RawMaterialPage() {
         {showManual && (
           <ManualEntryModal
             workflow={tab}
+            initialDraft={recoveredDraft?.data}
             onSaved={() => { setShowManual(false); setSpinning(true); load() }}
             onClose={() => setShowManual(false)}
           />
