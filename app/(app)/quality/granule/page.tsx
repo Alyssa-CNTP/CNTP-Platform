@@ -20,7 +20,9 @@ import { checkOutlier } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { exportGranuleRun } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import LmDecisionModal from '@/components/shared/LmDecisionModal'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -60,6 +62,17 @@ const SCORE_LABELS: Record<string, string[]> = {
   briskness:       ['', 'Very Flat',   'Flat',          'Acceptable', 'Lively',           'Very Lively'        ],
   strength:        ['', 'Very Weak',   'Weak',          'Medium',     'Bold',             'Very Bold'          ],
   cup_colour:      ['', 'Murky',       'Dull',          'Acceptable', 'Clear',            'Clear & Bright'     ],
+}
+
+// Local-storage draft-autosave keys — see lib/hooks/useDraftAutosave.ts. Each
+// of the three "new capture" modals (new run / add sample / add tasting) can
+// only ever have one instance open at a time, so a single constant key per
+// modal is enough; the draft payload itself carries whatever run/sample
+// context is needed to reattach it on restore.
+const GRANULE_DRAFT_KEYS = {
+  newRun: 'granule_draft_new_run',
+  sample: 'granule_draft_sample',
+  tasting: 'granule_draft_tasting',
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -246,7 +259,7 @@ function SieveTable({ grams, pcts, focusedSieve, setFocusedSieve, specJson, erro
 
 // ─── GranuleNewRunModal ───────────────────────────────────────────────────────
 
-function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: (f: any) => void; onClose: () => void }) {
+function GranuleNewRunModal({ specs, initialForm, onSave, onClose }: { specs: any[]; initialForm?: any; onSave: (f: any) => void; onClose: () => void }) {
   const today = new Date().toISOString().split('T')[0]
   const qcNames = useQcNames()
 
@@ -254,12 +267,18 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
     batch_number: string; qc_name: string; production_date: string;
     type_grade: string; customer: string; is_cntp: boolean; reference_used: string;
     spec_id: number | null; spec_json: Record<string, any>
-  }>({
+  }>(() => initialForm ?? {
     batch_number: '', qc_name: '', production_date: today,
     type_grade: '', customer: '', is_cntp: true, reference_used: '',
     spec_id: null, spec_json: {},
   })
   const [errors, setErrors] = useState<string[]>([])
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. This modal
+  // only exists in the tree while open, so the autosave interval naturally
+  // runs for exactly as long as the form is up; the recovery banner (offered
+  // once this unmounts) lives in the parent, since that's what survives close.
+  useDraftAutosave(GRANULE_DRAFT_KEYS.newRun, form, { enabled: true })
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
 
@@ -408,13 +427,13 @@ function GranuleNewRunModal({ specs, onSave, onClose }: { specs: any[]; onSave: 
 
 // ─── GranuleAddSampleModal ────────────────────────────────────────────────────
 
-function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f: any) => void; onClose: () => void }) {
+function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: any; initialDraft?: { form: any; grams: Record<string,string> }; onSave: (f: any) => void; onClose: () => void }) {
   const qcNames = useQcNames()
   const prevSamples  = run.samples || []
   const lastSample   = prevSamples.length > 0 ? prevSamples[prevSamples.length - 1] : null
   const now          = new Date()
 
-  const [form, setForm] = useState(() => ({
+  const [form, setForm] = useState<any>(() => initialDraft?.form ?? {
     sample_time:  `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
     sample_date:  now.toISOString().split('T')[0],
     qc_name:      now.getHours() >= 16 ? '' : (run.qc_name || ''),
@@ -425,12 +444,17 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
     sieve_g: null as any, sieve_pct: null as any,
     bag_type: 'bulk', weight_1: '', weight_2: '', weight_3: '',
     dryer2_running: false, dryer2_moisture: '', dryer2_bulk_density: '', dryer2_dryer_temp: '',
-  }))
-  const [grams, setGrams]               = useState<Record<string,string>>(() => Object.fromEntries(GRANULE_SIEVES.map(s => [s.key, ''])))
+  })
+  const [grams, setGrams]               = useState<Record<string,string>>(() => initialDraft?.grams ?? Object.fromEntries(GRANULE_SIEVES.map(s => [s.key, ''])))
   const [focusedSieve, setFocusedSieve] = useState(GRANULE_SIEVES[0].key)
   const [errors, setErrors]             = useState<string[]>([])
   const [warnings, setWarnings]         = useState<string[]>([])
   const [confirmAnomaly, setConfirmAnomaly] = useState(false)
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. runId/
+  // batchNumber ride along in the payload purely so the parent's recovery
+  // banner can re-attach the restored draft to the right run.
+  useDraftAutosave(GRANULE_DRAFT_KEYS.sample, { form, grams, runId: run.id, batchNumber: run.batch_number }, { enabled: true })
 
   const isAfterShift = (() => { const [hh] = (form.sample_time || '').split(':').map(Number); return !isNaN(hh) && hh >= 16 })()
 
@@ -452,7 +476,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
   })()
 
   const set = (k: string, v: any) => {
-    setForm(f => {
+    setForm((f: any) => {
       const next: any = { ...f, [k]: v }
       if (k === 'sieving_done' && !v) { next.sieve_g = null; next.sieve_pct = null }
       return next
@@ -468,7 +492,7 @@ function GranuleAddSampleModal({ run, onSave, onClose }: { run: any; onSave: (f:
   // Sync sieve_g/sieve_pct into form whenever grams change
   useEffect(() => {
     if (GRANULE_SIEVES.some(s => grams[s.key] !== '')) {
-      setForm(f => ({ ...f, sieve_g: grams, sieve_pct: pcts }))
+      setForm((f: any) => ({ ...f, sieve_g: grams, sieve_pct: pcts }))
     }
   }, [grams])
 
@@ -986,10 +1010,15 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
 
 // ─── GranuleAddTastingModal ───────────────────────────────────────────────────
 
-function GranuleAddTastingModal({ run, sampleId, onSave, onClose }: { run: any; sampleId: number | null; onSave: (f: any) => void; onClose: () => void }) {
-  const [form, setForm] = useState({ assessed_by: run.qc_name || '', granule_aroma: '', flavour_profile: '', briskness: '', strength: '', cup_colour: '', notes: '', pass_reject: 'Pass' })
+function GranuleAddTastingModal({ run, sampleId, initialForm, onSave, onClose }: { run: any; sampleId: number | null; initialForm?: any; onSave: (f: any) => void; onClose: () => void }) {
+  const [form, setForm] = useState<any>(() => initialForm ?? { assessed_by: run.qc_name || '', granule_aroma: '', flavour_profile: '', briskness: '', strength: '', cup_colour: '', notes: '', pass_reject: 'Pass' })
   const [errors, setErrors] = useState<string[]>([])
-  const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
+  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. runId/
+  // sampleId ride along purely so the parent's recovery banner can re-attach
+  // the restored draft to the right run/sample.
+  useDraftAutosave(GRANULE_DRAFT_KEYS.tasting, { ...form, runId: run.id, sampleId }, { enabled: true })
 
   function validate() {
     const errs: string[] = []
@@ -2110,6 +2139,17 @@ export default function GranulePage() {
   const [tastingTarget, setTastingTarget]       = useState<any>(null) // { run, sampleId }
   const [selectedRunId, setSelectedRunId]       = useState<number | null>(null)
 
+  // Recovered drafts — see lib/hooks/useDraftAutosave.ts. Each of the three
+  // capture modals autosaves itself while mounted; here we check for a
+  // leftover draft whenever that modal is closed, so a dropped connection or
+  // closed tab doesn't silently lose an in-progress run/sample/tasting entry.
+  const [recoveredRunDraft, setRecoveredRunDraft]         = useState<{data:any;savedAt:string}|null>(null)
+  const [recoveredSampleDraft, setRecoveredSampleDraft]   = useState<{data:any;savedAt:string}|null>(null)
+  const [recoveredTastingDraft, setRecoveredTastingDraft] = useState<{data:any;savedAt:string}|null>(null)
+  useEffect(() => { if (showNewRun) return; setRecoveredRunDraft(readDraft(GRANULE_DRAFT_KEYS.newRun)) }, [showNewRun])
+  useEffect(() => { if (sampleTarget) return; setRecoveredSampleDraft(readDraft(GRANULE_DRAFT_KEYS.sample)) }, [sampleTarget])
+  useEffect(() => { if (tastingTarget) return; setRecoveredTastingDraft(readDraft(GRANULE_DRAFT_KEYS.tasting)) }, [tastingTarget])
+
   // ── Load runs, samples, tastings, and specs in parallel ──
   // Paginated — the duplicate-batch-number check depends on ALL history being
   // loaded, not just the newest page (PostgREST caps a single request at 1000 rows).
@@ -2156,6 +2196,9 @@ export default function GranulePage() {
       spec_json: form.spec_json || {}, reference_used: form.reference_used || '', overall_status: 'Pass',
     }).select().single()
     if (error) { alert(error.message); return }
+    // Now safely in the database — drop the local draft so it doesn't
+    // resurface stale, already-saved data on the next visit.
+    clearDraft(GRANULE_DRAFT_KEYS.newRun)
     setRuns(prev => [{ ...data, samples: [], tastings: [] }, ...prev])
     setShowNewRun(false)
   }
@@ -2173,6 +2216,8 @@ export default function GranulePage() {
       dryer2_bulk_density: form.dryer2_bulk_density || null, dryer2_dryer_temp: form.dryer2_dryer_temp || null,
     }).select().single()
     if (error) { alert(error.message); return }
+    // Now safely in the database — drop the local draft.
+    clearDraft(GRANULE_DRAFT_KEYS.sample)
     if (violations.length > 0) {
       await db.schema('qms').from('granule_runs').update({ overall_status: 'Fail' }).eq('id', form.run_id)
     }
@@ -2197,6 +2242,8 @@ export default function GranulePage() {
       notes: form.notes || '', pass_reject: form.pass_reject || 'Pass',
     }).select().single()
     if (error) { alert(error.message); return }
+    // Now safely in the database — drop the local draft.
+    clearDraft(GRANULE_DRAFT_KEYS.tasting)
     setRuns(prev => prev.map(r => r.id !== form.run_id ? r : { ...r, tastings: [...(r.tastings || []), data] }))
     setTastingTarget(null)
   }
@@ -2329,6 +2376,9 @@ export default function GranulePage() {
         !confirm(`⚠ There ${currentRuns.length === 1 ? 'is' : 'are'} already ${currentRuns.length} open granule run${currentRuns.length !== 1 ? 's' : ''}.\n\nAdd a sample to an existing run instead of starting a new one?\n\nClick OK to start a NEW run anyway, or Cancel to go back.`)) {
       return
     }
+    // A deliberate fresh start abandons any leftover draft rather than
+    // letting it resurface the next time the modal closes.
+    clearDraft(GRANULE_DRAFT_KEYS.newRun); setRecoveredRunDraft(null)
     setShowNewRun(true)
   }
 
@@ -2353,6 +2403,31 @@ export default function GranulePage() {
           <div className="text-center py-16 text-text-muted text-[12px] animate-pulse">Loading granule runs…</div>
         ) : tab === 'dashboard' ? (
           <div className="space-y-4">
+            {/* Recovered drafts — see lib/hooks/useDraftAutosave.ts. Only
+                surfaces when its modal is closed, so it never fights with an
+                entry already in progress. */}
+            {recoveredRunDraft && !showNewRun && (
+              <DraftRecoveryBanner savedAt={recoveredRunDraft.savedAt}
+                onRestore={() => setShowNewRun(true)}
+                onDiscard={() => { clearDraft(GRANULE_DRAFT_KEYS.newRun); setRecoveredRunDraft(null) }} />
+            )}
+            {recoveredSampleDraft && !sampleTarget && (
+              <DraftRecoveryBanner savedAt={recoveredSampleDraft.savedAt}
+                onRestore={() => {
+                  const targetRun = runs.find(r => r.id === recoveredSampleDraft.data?.runId) || selectedRun
+                  if (targetRun) setSampleTarget(targetRun)
+                }}
+                onDiscard={() => { clearDraft(GRANULE_DRAFT_KEYS.sample); setRecoveredSampleDraft(null) }} />
+            )}
+            {recoveredTastingDraft && !tastingTarget && (
+              <DraftRecoveryBanner savedAt={recoveredTastingDraft.savedAt}
+                onRestore={() => {
+                  const targetRun = runs.find(r => r.id === recoveredTastingDraft.data?.runId) || selectedRun
+                  if (targetRun) setTastingTarget({ run: targetRun, sampleId: recoveredTastingDraft.data?.sampleId ?? null })
+                }}
+                onDiscard={() => { clearDraft(GRANULE_DRAFT_KEYS.tasting); setRecoveredTastingDraft(null) }} />
+            )}
+
             {currentRuns.length > 0 && (
               <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-warn/10 border border-warn/30">
                 <span className="text-warn text-[16px]">⚠</span>
@@ -2395,8 +2470,8 @@ export default function GranulePage() {
               </div>
             ) : selectedRun ? (
               <GranuleRunCard key={selectedRun.id} run={selectedRun} isAdmin={isAdmin}
-                onAddSample={r => setSampleTarget(r)}
-                onAddTasting={(r, sid) => setTastingTarget({ run: r, sampleId: sid })}
+                onAddSample={r => { clearDraft(GRANULE_DRAFT_KEYS.sample); setRecoveredSampleDraft(null); setSampleTarget(r) }}
+                onAddTasting={(r, sid) => { clearDraft(GRANULE_DRAFT_KEYS.tasting); setRecoveredTastingDraft(null); setTastingTarget({ run: r, sampleId: sid }) }}
                 onDelete={handleDeleteRun}
                 onFinalise={handleFinaliseRun}
                 onUpdateSpec={handleUpdateSpec}
@@ -2419,10 +2494,21 @@ export default function GranulePage() {
         )}
       </div>
 
-      {/* Modals */}
-      {showNewRun && <GranuleNewRunModal specs={specs} onSave={handleCreateRun} onClose={() => setShowNewRun(false)} />}
-      {sampleTarget && <GranuleAddSampleModal run={sampleTarget} onSave={handleAddSample} onClose={() => setSampleTarget(null)} />}
-      {tastingTarget && <GranuleAddTastingModal run={tastingTarget.run} sampleId={tastingTarget.sampleId} onSave={handleAddTasting} onClose={() => setTastingTarget(null)} />}
+      {/* Modals — explicit Cancel/× also clears the matching draft (below):
+          deliberate abandonment, not a crash, so there's no reason to keep
+          offering to restore it. */}
+      {showNewRun && (
+        <GranuleNewRunModal specs={specs} initialForm={recoveredRunDraft?.data} onSave={handleCreateRun}
+          onClose={() => { clearDraft(GRANULE_DRAFT_KEYS.newRun); setShowNewRun(false) }} />
+      )}
+      {sampleTarget && (
+        <GranuleAddSampleModal run={sampleTarget} initialDraft={recoveredSampleDraft?.data} onSave={handleAddSample}
+          onClose={() => { clearDraft(GRANULE_DRAFT_KEYS.sample); setSampleTarget(null) }} />
+      )}
+      {tastingTarget && (
+        <GranuleAddTastingModal run={tastingTarget.run} sampleId={tastingTarget.sampleId} initialForm={recoveredTastingDraft?.data} onSave={handleAddTasting}
+          onClose={() => { clearDraft(GRANULE_DRAFT_KEYS.tasting); setTastingTarget(null) }} />
+      )}
     </div>
   )
 }

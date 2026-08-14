@@ -30,7 +30,9 @@ import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import LmDecisionModal from '@/components/shared/LmDecisionModal'
 import { exportPasteuriserBatch, exportPasteuriserBatches } from '@/lib/utils/exportExcel'
 import {
@@ -487,6 +489,16 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   const [specLoading, setSpecL] = useState(false)
   const [err, setErr]           = useState('')
 
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Only one
+  // "New Batch" modal can ever be open at a time, so a single fixed key is
+  // enough (unlike the per-active-batch AddSampleModal draft below). Cleared
+  // once saveBatchToDB() confirms the insert succeeded (in RunDashboard's
+  // createBatch), and also on explicit Cancel/×.
+  const draftKey = 'pasteuriser_draft_newbatch'
+  const [recoveredDraft, setRecoveredDraft] = useState<{ data: any; savedAt: string } | null>(null)
+  useDraftAutosave(draftKey, { form, batchSpecs }, { enabled: true })
+  useEffect(() => { setRecoveredDraft(readDraft(draftKey)) }, [])
+
   // Data-driven dropdowns: load the families / grades / variants that actually
   // exist in the customer specs so any new product the lab adds (e.g. Pure Leaf)
   // is immediately selectable here — no hardcoded list to maintain.
@@ -566,9 +578,18 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
       <div className="bg-surface-card border border-surface-rule rounded-2xl w-full max-w-2xl shadow-menu my-auto">
         <div className="flex items-center justify-between px-6 py-4 bg-brand rounded-t-2xl">
           <div className="text-white font-bold text-[15px]">🔬 New Pasteuriser Run</div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/15 text-white">×</button>
+          <button onClick={() => { clearDraft(draftKey); onClose() }} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/15 text-white">×</button>
         </div>
         <div className="p-6 space-y-5">
+          {recoveredDraft && (
+            <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+              onRestore={() => {
+                setForm(recoveredDraft.data.form)
+                setBatchSpecs(recoveredDraft.data.batchSpecs)
+                setRecoveredDraft(null)
+              }}
+              onDiscard={() => { clearDraft(draftKey); setRecoveredDraft(null) }} />
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className={lbl}>Batch Number <span className="text-err">*</span></label>
@@ -686,7 +707,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
           {err && <div className="px-4 py-3 bg-err/8 border border-err/20 rounded-xl text-[12px] text-err">⚠ {err}</div>}
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
-            <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
+            <button onClick={() => { clearDraft(draftKey); onClose() }} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
             <button onClick={save} className="px-6 py-2 rounded-xl bg-brand text-white text-[12px] font-semibold">Create Batch</button>
           </div>
         </div>
@@ -722,6 +743,16 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
   const [row, setRow] = useState<any>(initialRow ? { ...blank(), ...initialRow } : blank())
   const set = (k: string, v: any) => setRow((p: any) => ({ ...p, [k]: v }))
   const spec = (field: string) => getPastSpec(batch.customer, field, batch._spec, batch.batch_specs)
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Scoped to
+  // this batch + this exact sample (the initial row's id, or 'new' for a
+  // fresh capture) so a new-sample draft and an in-progress edit of an
+  // existing sample never collide. Cleared once RunDashboard's addSample/
+  // updateSample confirms the save landed, and also on explicit Cancel/×.
+  const draftKey = `pasteuriser_draft_sample_${batch.id}_${initialRow?.id || 'new'}`
+  const [recoveredDraft, setRecoveredDraft] = useState<{ data: any; savedAt: string } | null>(null)
+  useDraftAutosave(draftKey, row, { enabled: true })
+  useEffect(() => { setRecoveredDraft(readDraft(draftKey)) }, [])
   // Family-aware sieve fractions (Rosehips gets an extra >40 mesh).
   const sieveCols = pastSieveCols(batch.product_family)
 
@@ -806,9 +837,14 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             </div>
             <div className="text-blue-200 text-[11px] mt-0.5">{batch.batch_number} · {batch.type_grade}</div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/15 text-white">×</button>
+          <button onClick={() => { clearDraft(draftKey); onClose() }} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/15 text-white">×</button>
         </div>
         <div className="p-5 space-y-4">
+          {recoveredDraft && (
+            <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+              onRestore={() => { setRow(recoveredDraft.data); setRecoveredDraft(null) }}
+              onDiscard={() => { clearDraft(draftKey); setRecoveredDraft(null) }} />
+          )}
           {/* Type indicator + toggles */}
           <div className={`flex items-center gap-3 px-4 py-3 rounded-xl flex-wrap border ${isOdd ? 'bg-info/5 border-info/20' : 'bg-purple-50 border-purple-100'}`}>
             <div className="flex items-center gap-2">
@@ -1248,17 +1284,22 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     if (activeBatchId !== prevBatchIdRef.current) { setCollapsed(false); prevBatchIdRef.current = activeBatchId }
   }, [activeBatchId])
 
-  async function saveBatchToDB(batch: Batch) {
+  // `opts.clearDraftKey` — see lib/hooks/useDraftAutosave.ts — is cleared only
+  // once the write is confirmed to have actually landed (no error), not just
+  // fired off, so a failed insert/update leaves the local draft intact.
+  async function saveBatchToDB(batch: Batch, opts?: { clearDraftKey?: string }) {
     setDbSaving(true)
     const { _db_id, ...batchData } = batch as any
     if (_db_id) {
-      await db.schema('qms').from('quality_records').update({ data_json: batchData, batch_number: batchData.batch_number }).eq('id', _db_id)
+      const { error } = await db.schema('qms').from('quality_records').update({ data_json: batchData, batch_number: batchData.batch_number }).eq('id', _db_id)
+      if (!error && opts?.clearDraftKey) clearDraft(opts.clearDraftKey)
     } else {
-      const { data: saved } = await db.schema('qms').from('quality_records').insert({
+      const { data: saved, error } = await db.schema('qms').from('quality_records').insert({
         workcenter:'pasteuriser', workflow:'pasteuriser_run',
         batch_number: batchData.batch_number || 'UNKNOWN', data_json: batchData,
       }).select().single()
       if (saved) setBatches(p => p.map(b => b.id === batch.id ? { ...b, _db_id: (saved as any).id } : b))
+      if (!error && opts?.clearDraftKey) clearDraft(opts.clearDraftKey)
     }
     setDbSaving(false)
   }
@@ -1282,14 +1323,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     setBatches(p => [nb, ...p])
     setActiveBatchId(nb.id)
     setShowNewBatch(false)
-    saveBatchToDB(nb)
+    saveBatchToDB(nb, { clearDraftKey: 'pasteuriser_draft_newbatch' })
   }
 
   function addSample(row: any) {
     setBatches(p => {
       const updated = p.map(b => b.id !== activeBatchId ? b : { ...b, samples: [...b.samples, { ...row, id: Math.random().toString(36).slice(2) }] })
       const batch = updated.find(b => b.id === activeBatchId)
-      if (batch) saveBatchToDB(batch)
+      // Draft key must match AddSampleModal's own — see its useDraftAutosave call.
+      if (batch) saveBatchToDB(batch, { clearDraftKey: `pasteuriser_draft_sample_${activeBatchId}_new` })
       return updated
     })
     setShowAddRow(false)
@@ -1299,7 +1341,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     setBatches(p => {
       const updated = p.map(b => b.id !== activeBatchId ? b : { ...b, samples: b.samples.map(s => s.id === editSampleId ? { ...s, ...row, id: s.id } : s) })
       const batch = updated.find(b => b.id === activeBatchId)
-      if (batch) saveBatchToDB(batch)
+      if (batch) saveBatchToDB(batch, { clearDraftKey: `pasteuriser_draft_sample_${activeBatchId}_${editSampleId}` })
       return updated
     })
     setEditSampleId(null)
