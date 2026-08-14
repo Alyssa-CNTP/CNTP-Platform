@@ -423,7 +423,7 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
 }
 
 // ─── SievingOutlierChart ────────────────────────────────────────────────────
-// Bucketed over whatever [rangeStart, rangeEnd] the page's date-range slicer
+// Bucketed over whatever [rangeStart, rangeEnd] the page's date-range picker
 // is set to — the same window the records table below it is filtered to, so
 // the two always show the same slice of history instead of the chart having
 // its own separate navigation. Granularity adapts to the span so it stays
@@ -431,10 +431,12 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
 //   single day   → by hour (same-shift visibility for an out-of-spec reading)
 //   up to ~9 wks → by day
 //   longer       → by Monday-based week
-// Two chart types share that same window:
-//   Mesh Trend — every sieve fraction as its own line (like the old chart)
-//   Outliers   — one chosen metric plotted with a ±2.5σ band, flagging points
-//                 outside it (Bulk Density, Leaf Shade, or a sieve fraction)
+// One grid of panels, always shown together (no tab to switch between them):
+//   sieve fractions — bucketed mean per window, one line per fraction
+//   Bulk Density / Leaf Shade — one point per Final QC bag at its own
+//     date+time, never bucketed (there's usually only one reading per bag,
+//     so averaging into the sieve buckets just stacked bags on top of
+//     each other at one x position)
 
 const TREND_LINE_COLORS = ['#ef4444','#f97316','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#06b6d4','#6b7280','#84cc16']
 
@@ -498,15 +500,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   onRangeChange: (start: string, end: string) => void
   onPointClick?: (runId: any) => void
 }) {
-  const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
   const meshOptions = sdGetMesh(activeProduct, 'Conventional')
-  const metricOptions = [
-    { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
-    ...(specDef.hasLeafShade ? [{ key: 'leafShade', label: 'Leaf Shade', suffix: '' }] : []),
-    ...meshOptions.map(m => ({ key: m, label: m.replace(' (%)', ''), suffix: '%' })),
-  ]
-  const [metric, setMetric] = useState(metricOptions[0].key)
-  const metricDef = metricOptions.find(m => m.key === metric) || metricOptions[0]
 
   // Granularity and buckets adapt to the slicer's span — see bucketsForRange().
   // Runs outside [rangeStart, rangeEnd] are excluded (the parent already
@@ -562,55 +556,43 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   })
   const hasTrendData = trendData.some(row => meshOptions.some(m => row[m] != null))
 
-  // ── Outliers data: every run in the window for the chosen metric, ±2.5σ band ──
-  // Bulk Density / Leaf Shade get one point per run at its own date+time instead
-  // of the shared day/week/month bucket — there's usually only one Final QC
-  // reading per bag, so grouping them into the mesh-trend buckets just stacked
-  // multiple bags on top of each other at the same x position. Every other
-  // metric keeps the shared bucket grouping.
-  const isBagMetric = metric === 'bulkDensity' || metric === 'leafShade'
-  const periodFor = (r: any): string => {
-    if (!isBagMetric) return bucketLabels.find(b => b.key === bucketKeyFor(r))?.label || ''
-    const d = new Date(r.date + 'T12:00:00')
-    const time = (r.time || '').slice(0, 5)
-    return `${fmtShort(d)}${time ? ' ' + time : ''}`
+  // ── Bulk Density / Leaf Shade: one point per run at its own date+time,
+  // never grouped into the shared day/week/month bucket — there's usually
+  // only one Final QC reading per bag, so bucketing would just stack every
+  // bag QC'd in the same window on top of each other at one x position.
+  // Replaces the old separate "Outliers" tab: these two now always render
+  // as their own panels alongside the sieve-mesh trend charts below.
+  function bagMetricPoints(metricKey: string) {
+    const points = inWindow
+      .map((r: any) => {
+        const d = new Date(r.date + 'T12:00:00')
+        const time = (r.time || '').slice(0, 5)
+        return { period: `${fmtShort(d)}${time ? ' ' + time : ''}`, value: parseFloat(r[metricKey]), run: r }
+      })
+      .filter((p: any) => !isNaN(p.value))
+      .sort((a: any, b: any) => `${a.run.date}${a.run.time || ''}`.localeCompare(`${b.run.date}${b.run.time || ''}`))
+    const values = points.map((p: any) => p.value)
+    const m = mean(values), sd = stdDev(values)
+    const upper = m + 2.5 * sd, lower = m - 2.5 * sd
+    const scatterData = points.map((p: any) => ({
+      period: p.period, value: p.value, runId: p.run.id,
+      label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
+      isOutlier: sd > 0 && (p.value > upper || p.value < lower),
+    }))
+    const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
+    // Per-run labels ("14 Aug 09:15") are as wide as week labels — same small
+    // tick target and rotation treatment as those get.
+    const categoryCount = new Set(points.map((p: any) => p.period)).size
+    const tickInterval = Math.max(0, Math.ceil(categoryCount / 4) - 1)
+    return { scatterData, m, sd, upper, lower, outlierCount, tickInterval }
   }
-  const points = inWindow
-    .map((r: any) => ({ period: periodFor(r), value: parseFloat(r[metric]), run: r }))
-    .filter((p: any) => !isNaN(p.value))
-    .sort((a: any, b: any) => isBagMetric ? `${a.run.date}${a.run.time || ''}`.localeCompare(`${b.run.date}${b.run.time || ''}`) : 0)
-  const values = points.map((p: any) => p.value)
-  const m = mean(values), sd = stdDev(values)
-  const upper = m + 2.5 * sd, lower = m - 2.5 * sd
-  const scatterData = points.map((p: any) => ({
-    period: p.period, value: p.value, runId: p.run.id,
-    label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
-    isOutlier: sd > 0 && (p.value > upper || p.value < lower),
-  }))
-  const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
-  // Bag-metric mode has as many x categories as runs, not buckets — cap its
-  // own tick count the same way tickInterval caps the bucketed charts. Its
-  // "14 Aug 09:15" labels are as wide as week labels, so it gets the same
-  // small target and the same rotation treatment.
-  const outlierCategoryCount = isBagMetric ? new Set(points.map((p: any) => p.period)).size : bucketLabels.length
-  const outlierTickTarget = isBagMetric ? 4 : tickTarget
-  const outlierTickInterval = Math.max(0, Math.ceil(outlierCategoryCount / outlierTickTarget) - 1)
-  const outlierAxisAngleProps = (isBagMetric || granularity==='week')
-    ? { angle: -35, textAnchor: 'end' as const, height: 46 }
-    : {}
+  const bulkDensityPanel = bagMetricPoints('bulkDensity')
+  const leafShadePanel = specDef.hasLeafShade ? bagMetricPoints('leafShade') : null
+  const bagAxisAngleProps = { angle: -35, textAnchor: 'end' as const, height: 46 }
 
   return (
     <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
       <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
-        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
-          {(['trend','outliers'] as const).map(t => (
-            <button key={t} onClick={()=>setChartType(t)}
-              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
-                background:chartType===t?'#166534':'#fff', color:chartType===t?'#fff':'#374151' }}>
-              {t==='trend'?'📈 Mesh Trend':'⚠ Outliers'}
-            </button>
-          ))}
-        </div>
         {/* Explicit From/To date pickers — the window they set drives both
             this chart and the records table below, so they always show the
             same slice of history. Granularity (hour/day/week — see
@@ -629,27 +611,46 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
             ({granularity==='hour'?'by hour':granularity==='day'?'by day':'by week'})
           </span>
         </div>
-        {chartType==='outliers' && (
-          <select value={metric} onChange={e=>setMetric(e.target.value)}
-            style={{ padding:'4px 8px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6, background:'#fff' }}>
-            {metricOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-        )}
-        {chartType==='outliers' && outlierCount>0 && (
-          <span style={{ fontSize:11, fontWeight:700, color:'#dc2626', marginLeft:'auto' }}>
-            ⚠ {outlierCount} outlier{outlierCount!==1?'s':''} (&gt;2.5σ from mean)
-          </span>
-        )}
       </div>
 
-      {chartType==='trend' ? (
-        !hasTrendData ? (
-          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
-            No in-process sieve results for {rangeLabel} yet.
-          </div>
-        ) : (
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:14 }}>
-            {meshOptions.map((m,i) => {
+      {!hasTrendData && bulkDensityPanel.scatterData.length===0 && !leafShadePanel?.scatterData.length ? (
+        <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+          No results for {rangeLabel} yet.
+        </div>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:14 }}>
+          {[
+            { key:'bulkDensity', label:'Bulk Density', panel:bulkDensityPanel, bounds:null as {min:number;max:number}|null },
+            ...(leafShadePanel ? [{ key:'leafShade', label:'Leaf Shade', panel:leafShadePanel, bounds:specBoundsFor('Leaf Shade') }] : []),
+          ].map(({ key, label, panel, bounds }) => (
+            <div key={key} style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 12px 4px' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+                <span style={{ fontSize:12, fontWeight:700, color:'#1f2937' }}>{label}</span>
+                <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  {bounds && <span style={{ fontSize:10, color:'#6b7280', fontWeight:600 }}>Spec {bounds.min}–{bounds.max}</span>}
+                  {panel.outlierCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>⚠ {panel.outlierCount} &gt;2.5σ</span>}
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <ScatterChart margin={{ top:8, right:12, left:0, bottom:30 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
+                  <XAxis dataKey="period" type="category" tick={{ fontSize:9 }} interval={panel.tickInterval} {...bagAxisAngleProps} />
+                  <YAxis dataKey="value" tick={{ fontSize:9 }} width={36} />
+                  <Tooltip formatter={(v:any)=>`${v}`} labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
+                  {bounds && <ReferenceLine y={bounds.min} stroke="#111827" strokeWidth={1.5} label={{ value:`min ${bounds.min}`, fontSize:9, fill:'#111827', position:'insideBottomLeft' }} />}
+                  {bounds && <ReferenceLine y={bounds.max} stroke="#111827" strokeWidth={1.5} label={{ value:`max ${bounds.max}`, fontSize:9, fill:'#111827', position:'insideTopLeft' }} />}
+                  {!isNaN(panel.m) && <ReferenceLine y={panel.m} stroke="#6b7280" strokeDasharray="4 2" label={{ value:'mean', fontSize:9, fill:'#6b7280' }} />}
+                  {panel.sd>0 && <ReferenceLine y={panel.upper} stroke="#f59e0b" strokeDasharray="3 3" />}
+                  {panel.sd>0 && <ReferenceLine y={panel.lower} stroke="#f59e0b" strokeDasharray="3 3" />}
+                  <Scatter data={panel.scatterData} onClick={(d:any)=>onPointClick?.(d?.runId ?? d?.payload?.runId)} cursor="pointer">
+                    {panel.scatterData.map((d:any,i:number) => <Cell key={i} fill={d.isOutlier?'#dc2626':'#3b82f6'} />)}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          ))}
+
+          {meshOptions.map((m,i) => {
               const bounds = specBoundsFor(m)
               const oosCount = trendData.filter(row => row[`${m}__oos`]).length
               const lineColor = TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]
@@ -707,29 +708,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
             })}
           </div>
         )
-      ) : (
-        scatterData.length < 3 ? (
-          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
-            Not enough {metricDef.label.toLowerCase()} data for {rangeLabel} to plot outliers.
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={(isBagMetric||granularity==='week')?250:220}>
-            <ScatterChart margin={{ top:8, right:20, left:0, bottom:(isBagMetric||granularity==='week')?30:4 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={outlierTickInterval} {...outlierAxisAngleProps} />
-              <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
-              <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
-                labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
-              {!isNaN(m) && <ReferenceLine y={m} stroke="#6b7280" strokeDasharray="4 2" label={{ value:'mean', fontSize:9, fill:'#6b7280' }} />}
-              {sd>0 && <ReferenceLine y={upper} stroke="#f59e0b" strokeDasharray="3 3" />}
-              {sd>0 && <ReferenceLine y={lower} stroke="#f59e0b" strokeDasharray="3 3" />}
-              <Scatter data={scatterData} onClick={(d:any)=>onPointClick?.(d?.runId ?? d?.payload?.runId)} cursor="pointer">
-                {scatterData.map((d:any,i:number) => <Cell key={i} fill={d.isOutlier?'#dc2626':'#3b82f6'} />)}
-              </Scatter>
-            </ScatterChart>
-          </ResponsiveContainer>
-        )
-      )}
+      }
     </div>
   )
 }
@@ -820,8 +799,17 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
           ...(!specDef.noBulkDensity&&(!specDef.qcFieldsFinalOnly||fields.runType==='final')?[['Bulk Density','bulkDensity','number']]:[])]
           .map(([label,key,type]) => (
             <div key={key}>
-              <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
-              {key==='qcName' ? (
+              <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>
+                {label}
+                {/* Date/time are the capture record, not editable data — a wrong
+                    one gets fixed directly in the database (IT), never here. */}
+                {(key==='date'||key==='time') && <span style={{fontSize:8,color:'#6b7280',fontWeight:400,textTransform:'none'}}> 🔒 fixed at capture</span>}
+              </label>
+              {key==='date'||key==='time' ? (
+                <input type="text" value={(fields as any)[key]} readOnly
+                  title="Recorded automatically at capture — contact IT to correct a date or time"
+                  style={{...inputSt,background:'#f3f4f6',color:'#6b7280',cursor:'not-allowed'}}/>
+              ) : key==='qcName' ? (
                 <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
               ) : key==='serialNumber' ? (
                 <>
@@ -1081,10 +1069,11 @@ export default function SievingPage() {
   useEffect(() => { loadPendingBags() }, [loadPendingBags])
 
   // The QC's time is always the moment of capture — never typed or edited.
-  const nowHHMM = () => {
-    const n = new Date()
-    return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`
-  }
+  // Explicitly SAST (Africa/Johannesburg), not whatever timezone the
+  // capturing device happens to be set to — same reasoning as sastDateStr().
+  const nowHHMM = () => new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date())
 
   const blankForm = () => {
     return {

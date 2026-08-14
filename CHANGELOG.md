@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: dropped the Outliers tab in favour of always-visible Bulk Density/Leaf Shade panels; locked Date/Time in the edit form)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Removed the Mesh Trend/Outliers toggle and its metric dropdown. Bulk Density and (where applicable) Leaf Shade now render as their own panels in the same grid as the sieve-fraction charts, always visible — no tab, no dropdown. Each is plotted per-run (one point per Final QC bag at its own date+time) rather than bucketed into the sieve-trend's day/week/month averages, since there's usually only one reading per bag.
+- The Edit-Run screen's Date and Time fields are now locked (read-only, greyed, "🔒 fixed at capture") — previously both were freely editable text/date inputs, letting anyone silently rewrite when a historical run was actually captured. A wrong date/time now has to be corrected directly in the database.
+- `nowHHMM()` (the time stamped on every new capture) now reads explicitly from the Africa/Johannesburg timezone via `Intl.DateTimeFormat`, instead of trusting whatever timezone the capturing device happens to be set to — same reasoning `sastDateStr()` already used for the date.
+
+
 ## 2026-08-14 — Gustav (Quality: local-storage draft autosave/recovery across every capture form, matching production capture's offline safety net)
 
 **Files added:** `lib/hooks/useDraftAutosave.ts`, `components/shared/DraftRecoveryBanner.tsx`
