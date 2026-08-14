@@ -11,9 +11,16 @@
 // what caused the old "permission granted but no camera" bug.
 // Rear camera by default (facingMode: environment) — this is for scanning
 // physical labels, not a selfie camera.
+//
+// Camera acquisition and decoder startup are two separate failure points, and
+// they're reported separately: getUserMedia failing means there's genuinely no
+// camera/permission, but on iOS the camera opens fine and it's the zxing
+// decoder that can fail to attach — that's not "could not start the camera"
+// (misleading — it did), so the preview stays up and only the auto-decode
+// step is reported as unavailable, with typing still on offer right there.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, X } from 'lucide-react'
+import { Camera, Loader2, X } from 'lucide-react'
 import BottomSheet from '@/components/ui/BottomSheet'
 
 interface DetectedBarcode { rawValue: string }
@@ -37,6 +44,8 @@ export interface BarcodeScannerProps {
   formats?: string[]
 }
 
+type Mode = 'starting' | 'native' | 'zxing' | 'zxing-failed' | 'camera-error'
+
 export default function BarcodeScanner({
   onDetect,
   onClose,
@@ -50,7 +59,7 @@ export default function BarcodeScanner({
   const zxingControlsRef = useRef<{ stop: () => void } | null>(null)
   const doneRef = useRef(false)
 
-  const [mode, setMode] = useState<'starting' | 'native' | 'zxing' | 'error'>('starting')
+  const [mode, setMode] = useState<Mode>('starting')
   const [err, setErr] = useState('')
   const [manual, setManual] = useState('')
 
@@ -78,36 +87,49 @@ export default function BarcodeScanner({
     if (!video) return
 
     async function start() {
+      let stream: MediaStream
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
-        streamRef.current = stream
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      } catch (e: any) {
+        if (cancelled) return
+        console.error('[BarcodeScanner] camera failed to start', e)
+        setMode('camera-error')
+        setErr(e?.name === 'NotAllowedError' ? 'Camera permission denied.' : 'Could not start the camera.')
+        return
+      }
+      if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+      streamRef.current = stream
+
+      const Ctor = getBarcodeDetectorCtor()
+      if (Ctor) {
         video.srcObject = stream
         await video.play().catch(() => {})
         if (cancelled) return
-
-        const Ctor = getBarcodeDetectorCtor()
-        if (Ctor) {
-          setMode('native')
-          const detector = new Ctor({ formats })
-          const tick = async () => {
-            if (cancelled) return
-            if (video.readyState >= 2) {
-              try {
-                const found = await detector.detect(video)
-                const code = found?.[0]?.rawValue
-                if (code) { fire(code); return }
-              } catch { /* transient decode error — keep looping */ }
-            }
-            rafRef.current = requestAnimationFrame(tick)
+        setMode('native')
+        const detector = new Ctor({ formats })
+        const tick = async () => {
+          if (cancelled) return
+          if (video.readyState >= 2) {
+            try {
+              const found = await detector.detect(video)
+              const code = found?.[0]?.rawValue
+              if (code) { fire(code); return }
+            } catch { /* transient decode error — keep looping */ }
           }
           rafRef.current = requestAnimationFrame(tick)
-          return
         }
+        rafRef.current = requestAnimationFrame(tick)
+        return
+      }
 
-        // No native BarcodeDetector (iOS Safari, Firefox) — fall back to a JS
-        // decoder, loaded on demand so browsers with native support never pay for it.
-        setMode('zxing')
+      // No native BarcodeDetector (iOS Safari, Firefox) — fall back to a JS
+      // decoder, loaded on demand so browsers with native support never pay
+      // for it. The camera has already opened successfully at this point
+      // (getUserMedia above succeeded), so a failure from here on is a
+      // decoder problem, not a camera problem, and is reported as such —
+      // separate try/catch, doesn't touch the "could not start the camera"
+      // message.
+      try {
         const [{ BrowserMultiFormatReader }, { DecodeHintType, BarcodeFormat }] = await Promise.all([
           import('@zxing/browser'),
           import('@zxing/library'),
@@ -127,15 +149,25 @@ export default function BarcodeScanner({
         const hints = new Map()
         hints.set(DecodeHintType.POSSIBLE_FORMATS, possible)
         const reader = new BrowserMultiFormatReader(hints)
-        const controls = await reader.decodeFromVideoElement(video, (result) => {
+        // decodeFromStream (not decodeFromVideoElement) — it owns attaching
+        // the stream to the video element and waiting for it to actually be
+        // playable, which is exactly the iOS Safari timing a bare
+        // `video.play()` can race (camera opens, but the first decode
+        // attempt fires before frames are really flowing).
+        const controls = await reader.decodeFromStream(stream, video, (result) => {
           if (!cancelled && result) fire(result.getText())
         })
         if (cancelled) { controls.stop(); return }
         zxingControlsRef.current = controls
+        setMode('zxing')
       } catch (e: any) {
         if (cancelled) return
-        setMode('error')
-        setErr(e?.name === 'NotAllowedError' ? 'Camera permission denied.' : 'Could not start the camera.')
+        console.error('[BarcodeScanner] decoder failed to start (camera itself opened fine)', e)
+        // The camera stream is live even though the decoder never attached —
+        // show it anyway so typing the code is at least visually anchored to
+        // "yes, this is the bag in front of you", not a dead black box.
+        if (!video.srcObject) { video.srcObject = stream; video.play().catch(() => {}) }
+        setMode('zxing-failed')
       }
     }
 
@@ -143,6 +175,27 @@ export default function BarcodeScanner({
     return () => { cancelled = true; stop() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const manualEntry = (
+    <div className="flex gap-2">
+      <input
+        autoFocus
+        value={manual}
+        onChange={e => setManual(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && manual.trim()) fire(manual) }}
+        placeholder="Type the code instead…"
+        className="h-10 flex-1 rounded-lg border border-surface-rule bg-surface-card px-3 text-[13px] font-mono text-text focus:outline-none focus:ring-2 focus:ring-brand/30"
+        autoCapitalize="characters" spellCheck={false}
+      />
+      <button
+        onClick={() => manual.trim() && fire(manual)}
+        disabled={!manual.trim()}
+        className="px-4 rounded-lg bg-brand text-white text-[13px] font-semibold disabled:opacity-40"
+      >
+        Use
+      </button>
+    </div>
+  )
 
   return (
     <BottomSheet open onClose={close} center>
@@ -157,36 +210,39 @@ export default function BarcodeScanner({
           </button>
         </div>
         <div className="p-4 space-y-3">
-          <div className="relative rounded-lg overflow-hidden border border-surface-rule bg-black">
+          <div className="relative min-h-[180px] rounded-lg overflow-hidden border border-surface-rule bg-black flex items-center justify-center">
             {/* Always rendered (even before the stream starts) so the effect has
                 a mounted <video> to attach the stream to — no mount-order race. */}
             <video ref={videoRef} muted playsInline className="w-full max-h-[280px] object-cover" />
-            {mode !== 'error' && <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 h-0.5 bg-brand/70" />}
+            {mode === 'starting' && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/70 bg-black/40">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="text-[11px]">Starting camera…</span>
+              </div>
+            )}
+            {mode === 'camera-error' && (
+              <div className="absolute inset-0 flex items-center justify-center text-white/30">
+                <Camera className="w-6 h-6" />
+              </div>
+            )}
+            {(mode === 'native' || mode === 'zxing') && (
+              <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 h-0.5 bg-brand/70" />
+            )}
           </div>
 
-          {mode === 'error' ? (
+          {mode === 'camera-error' && (
             <>
               <div className="text-[12px] text-err text-center">{err}</div>
-              <div className="flex gap-2">
-                <input
-                  autoFocus
-                  value={manual}
-                  onChange={e => setManual(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && manual.trim()) fire(manual) }}
-                  placeholder="Type the code instead…"
-                  className="h-10 flex-1 rounded-lg border border-surface-rule bg-surface-card px-3 text-[13px] font-mono text-text focus:outline-none focus:ring-2 focus:ring-brand/30"
-                  autoCapitalize="characters" spellCheck={false}
-                />
-                <button
-                  onClick={() => manual.trim() && fire(manual)}
-                  disabled={!manual.trim()}
-                  className="px-4 rounded-lg bg-brand text-white text-[13px] font-semibold disabled:opacity-40"
-                >
-                  Use
-                </button>
-              </div>
+              {manualEntry}
             </>
-          ) : (
+          )}
+          {mode === 'zxing-failed' && (
+            <>
+              <div className="text-[12px] text-warn text-center">Couldn't read barcodes automatically on this device — type the code below.</div>
+              {manualEntry}
+            </>
+          )}
+          {(mode === 'native' || mode === 'zxing') && (
             <div className="text-[11px] text-text-faint text-center">{hint}</div>
           )}
         </div>
