@@ -2,6 +2,7 @@
 import { useRef, useState, useCallback } from 'react'
 import { ScanLine } from 'lucide-react'
 import { sanitizeSerial } from '@/lib/production/scan-utils'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 
 interface Props {
   onScan: (serial: string) => void
@@ -26,16 +27,20 @@ export default function ScanInput({
     setTimeout(() => inputRef.current?.focus(), 100)
   }, [])
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key !== 'Enter') return
-    const val = sanitizeSerial(inputRef.current?.value ?? '')
+  const commit = useCallback((raw: string) => {
+    const val = sanitizeSerial(raw)
     if (!val) return
-    e.preventDefault()
     if (inputRef.current) inputRef.current.value = ''
     setFlash(true)
     setTimeout(() => setFlash(false), 300)
     onScan(val)
     refocus()
+  }, [onScan, refocus])
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    commit(inputRef.current?.value ?? '')
   }
 
   // Re-focus if the user accidentally clicks elsewhere on the page.
@@ -54,33 +59,43 @@ export default function ScanInput({
   return (
     <div className="space-y-1.5">
       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">{label}</label>
-      <div
-        className={`relative flex items-center rounded-2xl border-2 transition-all duration-200 ${
-          flash
-            ? 'border-ok bg-ok/5'
-            : disabled
-            ? 'border-stone-200 bg-stone-50 opacity-50'
-            : 'border-stone-300 bg-white focus-within:border-brand focus-within:ring-4 focus-within:ring-brand/8'
-        }`}
-      >
-        <ScanLine
-          size={22}
-          className={`absolute left-4 flex-shrink-0 transition-colors pointer-events-none ${flash ? 'text-ok' : 'text-stone-400'}`}
-        />
-        <input
-          ref={inputRef}
-          type="text"
-          autoFocus={!formOpen}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          disabled={disabled}
-          placeholder={placeholder}
-          onKeyDown={handleKeyDown}
-          onBlur={handleBlur}
-          className="w-full pl-12 pr-4 py-4 bg-transparent text-[15px] font-mono text-text outline-none placeholder:text-stone-400 placeholder:font-sans placeholder:text-[13px] disabled:cursor-not-allowed"
-        />
+      <div className="flex items-center gap-2">
+        <div
+          className={`relative flex-1 flex items-center rounded-2xl border-2 transition-all duration-200 ${
+            flash
+              ? 'border-ok bg-ok/5'
+              : disabled
+              ? 'border-stone-200 bg-stone-50 opacity-50'
+              : 'border-stone-300 bg-white focus-within:border-brand focus-within:ring-4 focus-within:ring-brand/8'
+          }`}
+        >
+          <ScanLine
+            size={22}
+            className={`absolute left-4 flex-shrink-0 transition-colors pointer-events-none ${flash ? 'text-ok' : 'text-stone-400'}`}
+          />
+          <input
+            ref={inputRef}
+            type="text"
+            autoFocus={!formOpen}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            disabled={disabled}
+            placeholder={placeholder}
+            onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
+            className="w-full pl-12 pr-4 py-4 bg-transparent text-[15px] font-mono text-text outline-none placeholder:text-stone-400 placeholder:font-sans placeholder:text-[13px] disabled:cursor-not-allowed"
+          />
+        </div>
+        {!disabled && (
+          <ScanCameraButton
+            title="Scan bag barcode"
+            hint="Point the camera at the bag's barcode…"
+            onScan={commit}
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl border-2 border-stone-300 bg-white text-stone-400 hover:text-brand hover:border-brand transition shrink-0"
+          />
+        )}
       </div>
       <p className="text-[10px] text-stone-400 px-1">Press Enter after typing, or scan with USB barcode reader</p>
     </div>
