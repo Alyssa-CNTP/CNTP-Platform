@@ -2024,6 +2024,7 @@ function CaptureScreen() {
               operators={candidateOps}
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
               massBalance={{ totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rtVariance, withinTol: rtWithinTol }}
+              running={totalIn > 0} active={status !== 'submitted' && status !== 'approved'}
             />
           )}
 
