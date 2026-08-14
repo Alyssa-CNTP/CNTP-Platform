@@ -563,32 +563,48 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   // bag QC'd in the same window on top of each other at one x position.
   // Replaces the old separate "Outliers" tab: these two now always render
   // as their own panels alongside the sieve-mesh trend charts below.
-  function bagMetricPoints(metricKey: string) {
-    const points = inWindow
+  //
+  // Each of the two also has its own optional "focus day" — independent of
+  // the shared From/To range above, which stays in charge of the sieve
+  // trend charts and the records table. Picking a day here switches that one
+  // panel to every sample on that day plotted by hour, since plotting every
+  // bag across a multi-week range squeezed them into unreadable clusters.
+  const [bagFocusDay, setBagFocusDay] = useState<{bulkDensity: string|null; leafShade: string|null}>({ bulkDensity: null, leafShade: null })
+  function bagMetricPoints(metricKey: string, focusDay: string | null) {
+    const source = focusDay ? runs.filter((r: any) => r.date === focusDay) : inWindow
+    const points = source
       .map((r: any) => {
+        if (focusDay) {
+          const hh = parseInt((r.time || '').split(':')[0], 10)
+          if (isNaN(hh) || hh < 0 || hh > 23) return null
+          return { period: `${String(hh).padStart(2, '0')}:00`, value: parseFloat(r[metricKey]), run: r }
+        }
         const d = new Date(r.date + 'T12:00:00')
         const time = (r.time || '').slice(0, 5)
         return { period: `${fmtShort(d)}${time ? ' ' + time : ''}`, value: parseFloat(r[metricKey]), run: r }
       })
-      .filter((p: any) => !isNaN(p.value))
-      .sort((a: any, b: any) => `${a.run.date}${a.run.time || ''}`.localeCompare(`${b.run.date}${b.run.time || ''}`))
-    const values = points.map((p: any) => p.value)
+      .filter((p): p is {period:string; value:number; run:any} => p != null && !isNaN(p.value))
+      .sort((a, b) => focusDay
+        ? a.period.localeCompare(b.period)
+        : `${a.run.date}${a.run.time || ''}`.localeCompare(`${b.run.date}${b.run.time || ''}`))
+    const values = points.map((p) => p.value)
     const m = mean(values), sd = stdDev(values)
     const upper = m + 2.5 * sd, lower = m - 2.5 * sd
-    const scatterData = points.map((p: any) => ({
+    const scatterData = points.map((p) => ({
       period: p.period, value: p.value, runId: p.run.id,
       label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
       isOutlier: sd > 0 && (p.value > upper || p.value < lower),
     }))
     const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
     // Per-run labels ("14 Aug 09:15") are as wide as week labels — same small
-    // tick target and rotation treatment as those get.
-    const categoryCount = new Set(points.map((p: any) => p.period)).size
-    const tickInterval = Math.max(0, Math.ceil(categoryCount / 4) - 1)
+    // tick target and rotation treatment as those get. Hour-of-day labels
+    // ("09:00") in focus-day mode are short, so they get a bigger target.
+    const categoryCount = new Set(points.map((p) => p.period)).size
+    const tickInterval = Math.max(0, Math.ceil(categoryCount / (focusDay ? 8 : 4)) - 1)
     return { scatterData, m, sd, upper, lower, outlierCount, tickInterval }
   }
-  const bulkDensityPanel = bagMetricPoints('bulkDensity')
-  const leafShadePanel = specDef.hasLeafShade ? bagMetricPoints('leafShade') : null
+  const bulkDensityPanel = bagMetricPoints('bulkDensity', bagFocusDay.bulkDensity)
+  const leafShadePanel = specDef.hasLeafShade ? bagMetricPoints('leafShade', bagFocusDay.leafShade) : null
   const bagAxisAngleProps = { angle: -35, textAnchor: 'end' as const, height: 46 }
 
   return (
@@ -621,15 +637,32 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
       ) : (
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:14 }}>
           {[
-            { key:'bulkDensity', label:'Bulk Density', panel:bulkDensityPanel, bounds:null as {min:number;max:number}|null },
-            ...(leafShadePanel ? [{ key:'leafShade', label:'Leaf Shade', panel:leafShadePanel, bounds:specBoundsFor('Leaf Shade') }] : []),
-          ].map(({ key, label, panel, bounds }) => (
+            { key:'bulkDensity' as const, label:'Bulk Density', panel:bulkDensityPanel, bounds:null as {min:number;max:number}|null },
+            ...(leafShadePanel ? [{ key:'leafShade' as const, label:'Leaf Shade', panel:leafShadePanel, bounds:specBoundsFor('Leaf Shade') }] : []),
+          ].map(({ key, label, panel, bounds }) => {
+            const focusDay = bagFocusDay[key]
+            const setFocusDay = (d: string | null) => setBagFocusDay(f => ({ ...f, [key]: d }))
+            return (
             <div key={key} style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 12px 4px' }}>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
-                <span style={{ fontSize:12, fontWeight:700, color:'#1f2937' }}>{label}</span>
-                <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4, flexWrap:'wrap', gap:6 }}>
+                <span style={{ fontSize:12, fontWeight:700, color:'#1f2937' }}>
+                  {label} <span style={{ fontWeight:400, color:'#9ca3af', fontSize:10 }}>({focusDay?'by hour':'by sample'})</span>
+                </span>
+                <span style={{ display:'flex', alignItems:'center', gap:6 }}>
                   {bounds && <span style={{ fontSize:10, color:'#6b7280', fontWeight:600 }}>Spec {bounds.min}–{bounds.max}</span>}
                   {panel.outlierCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>⚠ {panel.outlierCount} &gt;2.5σ</span>}
+                  {/* Independent of the From/To range above — picking a day here
+                      shows every sample from that day by hour, regardless of
+                      what the shared range (which still drives the sieve trend
+                      charts and the table below) is set to. */}
+                  <input type="date" value={focusDay||''} min={minDate} max={maxDate}
+                    onChange={e=>setFocusDay(e.target.value||null)}
+                    title="Pick a day to see that day's samples by hour"
+                    style={{ fontSize:9, padding:'2px 4px', border:'1px solid #d1d5db', borderRadius:4 }} />
+                  {focusDay && (
+                    <button onClick={()=>setFocusDay(null)} title="Back to the date range above"
+                      style={{ fontSize:9, padding:'2px 6px', border:'1px solid #d1d5db', borderRadius:4, background:'#fff', cursor:'pointer' }}>✕</button>
+                  )}
                 </span>
               </div>
               <ResponsiveContainer width="100%" height={200}>
@@ -649,7 +682,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
-          ))}
+          )})}
 
           {meshOptions.map((m,i) => {
               const bounds = specBoundsFor(m)
