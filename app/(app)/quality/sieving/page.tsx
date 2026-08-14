@@ -948,7 +948,11 @@ export default function SievingPage() {
   // By Hour/Week/Month navigator (moved here from the chart) so the records
   // table shares the same window instead of having its own separate control.
   // One offset per view so switching tabs doesn't lose your place in the others.
-  const [rangeView,      setRangeView]      = useState<'day'|'week'|'month'>('day')
+  // Defaults to 'week' rather than 'day' — the table shares this window now,
+  // and defaulting to "today" left both the chart and table empty on any
+  // product with no run logged yet today (was harmless before, when the
+  // table had its own separate All-time filter).
+  const [rangeView,      setRangeView]      = useState<'day'|'week'|'month'>('week')
   const [dayOffset,      setDayOffset]      = useState(0)
   const [weekOffset,     setWeekOffset]     = useState(0)
   const [monthOffset,    setMonthOffset]    = useState(0)
@@ -2047,7 +2051,11 @@ export default function SievingPage() {
           📈 {showOutlierChart?'Hide':'Show'} Chart
         </button>
       </div>
-      {showOutlierChart && rangeRuns.length>0 && (
+      {/* Not gated on rangeRuns.length — the chart's own nav (By Hour/Week/Month
+          + prev/next) is the only way to move off an empty window, so it must
+          stay rendered even when the current window has zero runs; the chart
+          body already shows "no data for this range" internally. */}
+      {showOutlierChart && (
         <SievingOutlierChart runs={rangeRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
           rangeStart={rangeStart} rangeEnd={rangeEnd}
           view={rangeView} offset={rangeOffset} onViewChange={setRangeView} onOffsetChange={setRangeOffset}
