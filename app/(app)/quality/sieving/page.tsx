@@ -450,42 +450,70 @@ function startOfWeek(d: Date): Date {
 function fmtShort(d: Date): string { return d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' }) }
 
 type ChartBucket = { key: string; label: string; from?: Date; to?: Date }
-type ChartGranularity = 'hour' | 'day' | 'week'
+type ChartGranularity = 'hour' | 'day' | 'week' | 'month'
 
-// Picks a granularity and the buckets covering [startISO, endISO] (inclusive,
-// 'YYYY-MM-DD') at that granularity. A single-day range gets hour buckets so
-// a same-shift out-of-spec reading is still visible before the day rolls
-// over; anything wider than ~9 weeks steps up to weekly so the chart doesn't
-// try to plot 90+ individual day-points.
-function bucketsForRange(startISO: string, endISO: string): { granularity: ChartGranularity; buckets: ChartBucket[]; label: string } {
+// An hour view over more than this many days plots more points than is
+// readable (or reasonable to ask the browser to render) — narrow the From/To
+// range first instead.
+const MAX_HOUR_VIEW_DAYS = 14
+
+// Buckets [startISO, endISO] (inclusive, 'YYYY-MM-DD') at an explicitly
+// chosen granularity — the person picks how they want the selected range
+// sliced (hour/day/week/month), independent of how wide that range is.
+// 'hour' still supports a multi-day range (one 24-bucket group per day, date
+// included in the label once there's more than one day) but is capped at
+// MAX_HOUR_VIEW_DAYS to stay renderable.
+function bucketsForRange(startISO: string, endISO: string, granularity: ChartGranularity): { buckets: ChartBucket[]; label: string; tooWide: boolean } {
   const start = new Date(startISO + 'T00:00:00'), end = new Date(endISO + 'T00:00:00')
   const spanDays = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000))
   const label = spanDays === 0
     ? start.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
     : `${fmtShort(start)} – ${fmtShort(end)}${start.getFullYear() !== end.getFullYear() ? ' ' + start.getFullYear() : ', ' + end.getFullYear()}`
 
-  if (spanDays === 0) {
-    const buckets = Array.from({ length: 24 }, (_, h) => ({
-      key: `${startISO}T${String(h).padStart(2, '0')}`, label: `${String(h).padStart(2, '0')}:00`,
-    }))
-    return { granularity: 'hour', buckets, label }
+  if (granularity === 'hour') {
+    if (spanDays > MAX_HOUR_VIEW_DAYS) return { buckets: [], label, tooWide: true }
+    const multiDay = spanDays > 0
+    const buckets: ChartBucket[] = []
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateISO = isoDate(d)
+      for (let h = 0; h < 24; h++) {
+        buckets.push({
+          key: `${dateISO}T${String(h).padStart(2, '0')}`,
+          label: multiDay ? `${fmtShort(d)} ${String(h).padStart(2, '0')}:00` : `${String(h).padStart(2, '0')}:00`,
+        })
+      }
+    }
+    return { buckets, label, tooWide: false }
   }
-  if (spanDays <= 62) {
+  if (granularity === 'day') {
     const buckets: ChartBucket[] = []
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       buckets.push({ key: isoDate(d), label: fmtShort(d) })
     }
-    return { granularity: 'day', buckets, label }
+    return { buckets, label, tooWide: false }
   }
+  if (granularity === 'week') {
+    const buckets: ChartBucket[] = []
+    let cursor = startOfWeek(start)
+    while (cursor <= end) {
+      const from = new Date(cursor)
+      const to = new Date(cursor); to.setDate(to.getDate() + 6)
+      buckets.push({ key: isoDate(from), label: `${fmtShort(from)} – ${fmtShort(to)}`, from, to })
+      cursor.setDate(cursor.getDate() + 7)
+    }
+    return { buckets, label, tooWide: false }
+  }
+  // month
   const buckets: ChartBucket[] = []
-  let cursor = startOfWeek(start)
-  while (cursor <= end) {
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1)
+  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1)
+  while (cursor <= lastMonth) {
     const from = new Date(cursor)
-    const to = new Date(cursor); to.setDate(to.getDate() + 6)
-    buckets.push({ key: isoDate(from), label: `${fmtShort(from)} – ${fmtShort(to)}`, from, to })
-    cursor.setDate(cursor.getDate() + 7)
+    const to = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0)
+    buckets.push({ key: isoDate(from), label: cursor.toLocaleDateString('en-ZA', { month: 'short', year: 'numeric' }), from, to })
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
   }
-  return { granularity: 'week', buckets, label }
+  return { buckets, label, tooWide: false }
 }
 
 // Representative spec key used for the mesh-trend reference band. The %
@@ -503,21 +531,26 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
 }) {
   const meshOptions = sdGetMesh(activeProduct, 'Conventional')
 
-  // Granularity and buckets adapt to the slicer's span — see bucketsForRange().
+  // Granularity is an explicit choice (By Hour/Day/Week/Month below), not
+  // inferred from the range's span — a two-week range might as well be
+  // viewed as daily points or as one weekly average, so the person picks.
   // Runs outside [rangeStart, rangeEnd] are excluded (the parent already
   // scopes `runs` to this same window, but the guard is cheap and keeps this
   // component correct standalone too).
-  const { granularity, buckets: bucketLabels, label: rangeLabel } = bucketsForRange(rangeStart, rangeEnd)
+  const [granularity, setGranularity] = useState<ChartGranularity>('day')
+  const { buckets: bucketLabels, label: rangeLabel, tooWide } = bucketsForRange(rangeStart, rangeEnd, granularity)
   // Caps the number of x-axis labels actually drawn regardless of how many
   // buckets are in the window. These mini charts are only ~280-380px wide, so
   // the target is deliberately small — and smaller still for week buckets,
   // whose "11 May – 17 May" labels are much wider than a day or hour label.
   const tickTarget = granularity==='hour' ? 8 : granularity==='day' ? 6 : 4
   const tickInterval = Math.max(0, Math.ceil(bucketLabels.length / tickTarget) - 1)
-  // Week labels are long enough that even the capped count can collide head-on
-  // at 0°, so angle them and anchor from their end (Recharts convention for
-  // rotated axis ticks — anything else drifts the label off its tick mark).
-  const xAxisAngleProps = granularity==='week'
+  // Week labels — and multi-day hour labels, which carry a date prefix
+  // ("13 Aug 09:00") — are long enough that even the capped count can
+  // collide head-on at 0°, so angle them and anchor from their end
+  // (Recharts convention for rotated ticks — anything else drifts the
+  // label off its tick mark).
+  const xAxisAngleProps = (granularity==='week' || (granularity==='hour' && rangeStart!==rangeEnd))
     ? { angle: -35, textAnchor: 'end' as const, height: 46 }
     : {}
   const bucketKeyFor = (r: any): string | null => {
@@ -610,11 +643,19 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
   return (
     <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
       <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
-        {/* Explicit From/To date pickers — the window they set drives both
-            this chart and the records table below, so they always show the
-            same slice of history. Granularity (hour/day/week — see
-            bucketsForRange) adapts automatically to how wide the range is;
-            picking the same From and To date gets you an hour-by-hour view. */}
+        {/* From/To picks WHAT slice of history; these tabs pick HOW to
+            aggregate it — independent choices, so a two-week range can be
+            viewed as daily points or as one weekly average, and a whole
+            quarter can still be drilled into by day or by hour. */}
+        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
+          {(['hour','day','week','month'] as const).map(g => (
+            <button key={g} onClick={()=>setGranularity(g)}
+              style={{ padding:'5px 10px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:granularity===g?'#1f4e79':'#fff', color:granularity===g?'#fff':'#374151' }}>
+              {g==='hour'?'By Hour':g==='day'?'By Day':g==='week'?'By Week':'By Month'}
+            </button>
+          ))}
+        </div>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>From</span>
           <input type="date" value={rangeStart} min={minDate} max={rangeEnd}
@@ -624,24 +665,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
           <input type="date" value={rangeEnd} min={rangeStart} max={maxDate}
             onChange={e=>e.target.value && onRangeChange(rangeStart, e.target.value)}
             style={{ padding:'4px 6px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6 }} />
-          <span style={{ fontSize:11, fontWeight:400, color:'#9ca3af' }}>
-            ({granularity==='hour'?'by hour':granularity==='day'?'by day':'by week'})
-          </span>
-          {/* One-click shortcut into hourly mode — the mesh charts already
-              switch to hour buckets whenever From and To are the same day
-              (see bucketsForRange), but manually setting both fields to
-              match wasn't an obvious way to get there. */}
-          {granularity!=='hour' && (
-            <button onClick={()=>onRangeChange(rangeEnd, rangeEnd)}
-              title={`View ${rangeEnd} hour-by-hour instead of averaged`}
-              style={{ fontSize:10, fontWeight:600, padding:'4px 10px', borderRadius:6, border:'1px solid #1f4e79', background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>
-              🕐 View {rangeEnd} by hour
-            </button>
-          )}
         </div>
       </div>
 
-      {!hasTrendData && bulkDensityPanel.scatterData.length===0 && !leafShadePanel?.scatterData.length ? (
+      {!tooWide && !hasTrendData && bulkDensityPanel.scatterData.length===0 && !leafShadePanel?.scatterData.length ? (
         <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
           No results for {rangeLabel} yet.
         </div>
@@ -695,7 +722,11 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
             </div>
           )})}
 
-          {meshOptions.map((m,i) => {
+          {tooWide ? (
+            <div style={{ gridColumn:'1 / -1', textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+              An hourly view of the sieve-mesh charts only covers up to {MAX_HOUR_VIEW_DAYS} days at a time — narrow the From/To range above, or switch to By Day/Week/Month for {rangeLabel}.
+            </div>
+          ) : meshOptions.map((m,i) => {
               const bounds = specBoundsFor(m)
               const oosCount = trendData.filter(row => row[`${m}__oos`]).length
               const lineColor = TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]
@@ -717,8 +748,8 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeS
                       {oosCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>🚩 {oosCount} out of spec</span>}
                     </span>
                   </div>
-                  <ResponsiveContainer width="100%" height={granularity==='week'?185:160}>
-                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:granularity==='week'?26:2 }}>
+                  <ResponsiveContainer width="100%" height={xAxisAngleProps.angle?185:160}>
+                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:xAxisAngleProps.angle?26:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
                       <XAxis dataKey="period" tick={{ fontSize:9 }} interval={tickInterval} {...xAxisAngleProps} />
                       <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
