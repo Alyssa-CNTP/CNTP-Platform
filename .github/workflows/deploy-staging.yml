@@ -17,9 +17,11 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 2022
           script: |
+            set -eo pipefail
             export NVM_DIR="$HOME/.nvm" && source "$NVM_DIR/nvm.sh"
             cd /home/cntpdev/apps/staging/app/cntp-ops
             git pull origin staging
+            npm install --legacy-peer-deps 2>&1 | tail -20
             npm run build 2>&1 | tail -20
             /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-staging
             echo "✅ Deployed successfully"
