@@ -62,6 +62,16 @@ Promotes the scan-first debagging work (staging #603/#613/#645) to production. S
 
 Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
 
+## 2026-08-14 — Gustav (Sieving: dropped the dual-handle date-range slider, restored the clickable By Hour/Week/Month navigator)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Feedback on today's slicer (PR #652): it didn't look good and the developer asked for the old clickable By Hour/By Week/By Month navigator back instead of a drag slider.
+
+- Removed `SievingDateRangeSlider` (the dual `<input type="range">` widget).
+- Restored the original clickable nav — By Hour/By Week/By Month tabs, ◀/▶ step buttons, and a "Today" reset — now living in the Mesh Trend/Outliers chart's header as before.
+- Kept the one improvement from #652 worth keeping: the chart and the records table still share the exact same window (moving the nav also refilters the table), rather than reverting to two independent date controls. State (view + a separate offset per view, so switching tabs doesn't lose your place) now lives in the page component and is passed down as props instead of living inside the chart.
+
 ## 2026-08-14 — Gustav (Staging deploys have been silently failing since the camera-scanning PR — fixed the CI script)
 
 **Files changed:** `.github/workflows/deploy-staging.yml`
