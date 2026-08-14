@@ -3,6 +3,17 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-14 — Alyssa (Sieving Tower capture: checks now autosave, VSD logging gated to running/pre-submit, AI summary write verified)
+
+**Files changed:** `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: Sieving Tower checks get filled out but aren't saved; the hourly VSD reading isn't tracked properly; the AI summary isn't saved/readable for the life of the record.
+
+- **Checks not saved**: confirm/number/text/scale checks only ever reached the DB in one all-or-nothing write at PIN sign-off — held only in React state until then. If the operator never finished signing, or a supervisor approved the session before sign-off (which locks the panel for good), everything typed in was lost with no trace. Confirmed live on staging: sieving `check_records` for 2026-08-03, 08-04 and 08-13 are stuck `in_progress` with none of that shift's checks saved. `ChecksPanel` now autosaves each changed check continuously (debounced ~2.5s after a change, flushed on tab-hide/pagehide, and a 20s backstop interval) with `source:'auto'`, independent of whether `sign()` ever runs; `sign()` still writes its own `'sign'`-sourced confirmation of the final values on top, so the PIN-verified audit trail is unchanged.
+- **VSD reading not tracked properly**: the inline "Log reading" button inside the Checks tab had no running/submitted gating at all — unlike the existing page-level hourly popup (`HourlyVsdPrompt`), which already only nags while production is running and stops once the shift is submitted/approved. A reading could be logged before any material was captured, or any time after submission as long as the panel wasn't yet locked. The inline button now shares the same `running && active` gate, with a note explaining why it's hidden when unavailable.
+- **AI summary not durable**: `generateAiSummary`'s write to `check_records.ai_summary` never checked its own error response — a failed save could still flip the UI to "generated" for that page load and then silently vanish (unsaved) the next time anyone opened the record. The summary is now only shown once its write is confirmed to have succeeded; a failed save keeps the "not generated yet" + Generate retry control visible instead.
+- Hardened `checks-db.ts`'s `ensureCheckRecord`/`appendCheckEvent` to throw on a DB error instead of silently swallowing it — that silent-failure shape (mirrors the `qms.sieving_spec_overrides` bug fixed earlier today) is what let all three symptoms look like nothing was wrong until checked against the live data.
+
 ## 2026-08-14 — Gustav (Sieving: dedicated QC buttons, decluttered chart axes, From/To date range, per-run Bulk Density/Leaf Shade)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
