@@ -28,6 +28,17 @@ Two requests: stop In-Process auto-filling (and requiring) a serial number acros
 - **Fix**: new `normProdVariant()` maps the production spellings to the `SD_VARIANTS` codes (case-insensitively; already-short values pass through unchanged), applied at both copy sites plus defensively in the lot-number auto-fill (so a historical bad row can't keep circulating forward when its lot is reused).
 - **Data correction**: 19 existing `qms.sd_runs` rows on production and 2 on staging had `variant = 'Conventional'` — updated to `'CON'` directly (no other full-word variants were present in either database).
 
+## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners)
+
+**Files changed:** `components/shared/BarcodeScanner.tsx` (new), `components/shared/ScanCameraButton.tsx` (new), `components/production/capture/BagScanIn.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/live/ScanInput.tsx`, `components/logistics/ScanInput.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx`, `app/(app)/tags/page.tsx`, `package.json`
+
+Until now, bag scanning only worked with a hardware USB/Bluetooth keyboard-wedge scanner — a phone or tablet with no such scanner attached had no way to scan a bag at all (the only real camera-decoder in the app, `PartScanner.tsx`, is scoped to spare parts and only supports Chrome/Android's native `BarcodeDetector`, so it silently does nothing on iOS Safari anyway).
+
+- New **`BarcodeScanner`** modal: native `BarcodeDetector` on Chrome/Android/Edge, lazy-loaded **`@zxing/browser`** decoder as a fallback on iOS Safari/Firefox (no native API there), and a manual type-in fallback if the camera itself fails to start. Chrome/Android users never download the zxing bundle since it's only imported when the native API is absent.
+- New **`ScanCameraButton`**: a small feature-detected trigger (renders nothing if `getUserMedia` doesn't exist) that opens the modal and returns the decoded code via a callback — a one-line drop-in next to any existing scan input.
+- Wired in **additively** everywhere a bag is scanned today — the existing hardware-scanner text inputs are untouched, this just adds a camera option beside them: Refining + Pasteuriser debagging (shared `ScanBox` in `BagScanIn.tsx`), Granule dust-input rows, Blender's add-bag modal, the `production/live` capture scan input, the logistics scan input (dispatch, warehouse units), receive-from-production, and the `/tags` quick lookup.
+- Not wired into GRN receiving (`logistics/receiving/[id]/page.tsx`) — that screen picks a location from a dropdown rather than scanning a barcode, so there's no text input to sit alongside.
+
 ## 2026-08-14 — Alyssa (Scan-first debagging rolled out: shared component + Pasteuriser popup + Blender auto-fill)
 
 **Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`
