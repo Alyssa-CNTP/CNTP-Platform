@@ -3,6 +3,15 @@
 All changes deployed to staging are logged here automatically.  
 Format: date · developer · files changed · description of code changes.
 
+## 2026-08-14 — Alyssa (Scan-first debagging rolled out: shared component + Pasteuriser popup + Blender auto-fill)
+
+**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`
+
+- New shared **`BagScanIn.tsx`** (`ScanBox` auto-fires ~350 ms after the serial settles; `BagScanModal` shows the bag's `bag_tags` record + validity via `validateBagScan`), extracted from Refining so every section shares one implementation. Refining imports it (no behaviour change).
+- **Pasteuriser** — full scan-first popup; one field routes the bag (granule output → post-sieve stream E, else main debagging D) and the popup shows the target before consuming. Pick-from-system / manual stay on each stream.
+- **Blender** — debagging modal now auto-fires the lookup on scan (was Enter/"Look up" only). Full popup + BOM-slot auto-routing to follow once each blend's accepted ingredients are defined.
+- **Granule** already auto-fills on scan. Per-section input-acceptance rules are the next refinement.
+
 ## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
