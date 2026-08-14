@@ -22,6 +22,7 @@ import {
 import { transferBagWeight } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG } from '@/lib/production/capture-config'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface BagTag {
@@ -862,6 +863,7 @@ function SerialLookup({ allTags, onSelect }: { allTags: BagTag[]; onSelect: (tag
             </button>
           )}
         </div>
+        <ScanCameraButton title="Scan bag barcode" onScan={handleChange} />
         {result && result !== 'not_found' && (
           <button
             onClick={handleOpen}
