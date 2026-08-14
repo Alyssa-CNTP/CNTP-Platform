@@ -156,15 +156,19 @@ git push origin HEAD          # open PR → squash-merge to staging → deploy-s
 **Production (deliberate, manual):**
 ```bash
 # 1. Promote code: merge staging → main (PR). This triggers db-migrate.yml against PROD.
-# 2. Deploy the app on the VPS:
-ssh -p 2022 cntpdev@154.65.97.200 '
-  export NVM_DIR="$HOME/.nvm" && source "$NVM_DIR/nvm.sh"
-  cd /home/cntpdev/apps/production/app/cntp-ops
-  git pull origin main
-  npm run build 2>&1 | tail -15
-  /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-production
-'
+# 2. Deploy the app on the VPS — use the deploy script, not raw commands (see note below):
+ssh -p 2022 cntpdev@154.65.97.200 'bash /home/cntpdev/apps/production/app/cntp-ops/scripts/production-deploy.sh'
 ```
+
+> ⚠️ **Don't hand-roll `git pull; npm run build; pm2 restart`.** `next build` clears
+> the live `.next` dir at the *start*, and a plain `;`/newline-chained script still
+> runs `pm2 restart` even if the build failed or was interrupted (e.g. killed by SSH
+> resource contention) — restarting into a half-written `.next` crash-loops the app
+> (missing `prerender-manifest.json`). This caused a real production outage on
+> 2026-08-14. `scripts/production-deploy.sh` builds into a side directory, atomically
+> swaps only once the build is verified complete, restarts, HTTP-checks a few routes,
+> and rolls back automatically if the new build doesn't serve. It mirrors
+> `scripts/staging-deploy.sh`, which exists for the identical reason on staging.
 
 ---
 
