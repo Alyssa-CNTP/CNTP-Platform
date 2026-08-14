@@ -19,6 +19,7 @@ import { getDb } from '@/lib/supabase/db'
 import { logisticsDb } from '@/lib/logistics/db'
 import { receiveProductionUnit } from '@/lib/logistics/actions'
 import { useAuth } from '@/lib/auth/context'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import type { Location } from '@/lib/logistics/types'
 import { ArrowLeft, Loader2, CheckCircle2, AlertCircle, ScanBarcode, Boxes } from 'lucide-react'
 
@@ -133,6 +134,10 @@ export default function ReceiveFromProductionPage() {
               className="px-4 py-2 rounded-lg border border-surface-rule bg-white text-sm hover:bg-surface disabled:opacity-40 inline-flex items-center gap-1.5">
               {looking ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanBarcode className="w-4 h-4" />} Look up
             </button>
+            <ScanCameraButton
+              title="Scan bag barcode"
+              onScan={code => { setSerial(code.toUpperCase()); setPreviewErr(null) }}
+            />
           </div>
           {previewErr && (
             <div className="mt-2 flex items-center gap-2 text-sm text-err"><AlertCircle className="w-4 h-4 shrink-0" /> {previewErr}</div>

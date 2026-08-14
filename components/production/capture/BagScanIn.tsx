@@ -9,6 +9,7 @@
 import { useRef, useEffect } from 'react'
 import { Package, X, Check, AlertTriangle, PackageCheck } from 'lucide-react'
 import { sanitizeSerial } from '@/lib/production/scan-utils'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import type { ScanValidationResult } from '@/lib/production/validate-scan'
 
 const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
@@ -43,6 +44,11 @@ export function ScanBox({ serial, busy, color, onChange, onScan }: {
           className="px-4 rounded-xl text-white text-[13px] font-semibold disabled:opacity-40 shrink-0" style={{ background: color }}>
           {busy ? '…' : 'Look up'}
         </button>
+        <ScanCameraButton
+          title="Scan bag barcode"
+          hint="Point the camera at the bag's barcode…"
+          onScan={code => { const v = sanitizeSerial(code); onChange(v); onScan(v) }}
+        />
       </div>
       <p className="text-[11px] text-stone-400 mt-1.5">Scan a bag — its record opens so you can confirm and consume it here.</p>
     </div>
