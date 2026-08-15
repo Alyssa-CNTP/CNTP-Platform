@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Lab Results: a combined report could file one analysis's results under another's test type)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+Reported: the Glyphosate tab was showing Chlorate and Perchlorate rows. Confirmed in the database — `qms.lab_results` id 37 was saved as `test_type='glyphosate'` for batch 26135-ORG/RA-SG with analytes `["Chlorate","Perchlorate"]`.
+
+Cause: every per-type prompt was written assuming the PDF contains only that one analysis. Dropping the combined Eurofins report on the Glyphosate tab asked for glyphosate — but that section is entirely below the reporting limit (`< 0.01`), so the only numbers in the document with actual detections were the chlorate ones, and the model returned those instead. Nothing downstream questioned it, so it saved under the wrong test type. That matters beyond the tab: a wrong `test_type` is invisible once stored and feeds the COA.
+
+- **Prompt scoping (the fix):** every single-analysis prompt now carries explicit combined-report rules — extract only the requested analysis, treat below-reporting-limit values as valid results for it, and return empty rather than substituting another section's numbers when the requested analysis isn't in the report. Not applied to `pa_ta_analysis`/`residue`, the raw-material multi-sample formats whose own parsing rules it would contradict.
+- **Mismatch guard (the net under it):** the server now checks whether the extracted analytes unanimously belong to a *different* analysis, and the review panel turns red and says so before it can be saved. Only fires on unanimity — a single unrecognised analyte stays quiet, since crying wolf on good data just trains people to click through. Verified against the real failure plus correct-data and unknown-analyte cases.
+
 ## 2026-08-14 — Gustav (Lab uploads: pdf-parse was being bundled, so every PDF fell back to Gemini vision and combined-report detection never ran)
 
 **Files changed:** `next.config.js`, `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
