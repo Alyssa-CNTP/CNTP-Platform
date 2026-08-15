@@ -222,6 +222,21 @@ function computePaGrade(sample: any): any {
 
 // ─── Prompts — exact copy from Express server ─────────────────────────────────
 
+// Appended to every single-analysis lab-results prompt.
+//
+// Labs like Eurofins bundle several analyses for one sample into one PDF. The
+// per-type prompts were all written assuming a report contains only their own
+// analysis, so on a combined report the model would return whichever section
+// actually had detections — that is exactly how a Chlorate/Perchlorate result
+// got filed under Glyphosate (the glyphosate section was all "< 0.01", so the
+// only detected numbers in the document were the chlorate ones).
+const SECTION_SCOPE = `
+
+SCOPE — READ FIRST. This PDF may be a COMBINED report holding several different analyses for the same sample (pesticide screens, ethylene oxide, glyphosate, chlorate/perchlorate, PA/TA alkaloids, heavy metals, and so on), each under its own heading.
+- Extract ONLY the analysis these instructions ask for. Every other section must be ignored completely, even when it is the only one with values above the reporting limit.
+- Results below a reporting limit (e.g. "< 0.01") ARE valid results for the requested analysis — report them as printed. Never substitute a different section's numbers because they look more interesting.
+- If this report has no section for the requested analysis at all, return the output structure with an empty analytes/compounds array and leave the header fields blank. Returning nothing is correct; returning another analysis's results is not.`
+
 const PROMPTS: Record<string, string> = {
   pa_ta_analysis: `You are a precision quality data extraction agent for herbal tea manufacturing.
 Your goal is to extract Pyrrolizidine Alkaloid (PA) and Tropane Alkaloid (TA) data from laboratory reports.
@@ -444,6 +459,39 @@ const SECTION_PATTERNS: { type: string; label: string; re: RegExp }[] = [
   { type: 'micro',                label: 'Microbiology',         re: /total\s+plate\s+count|aerobic\s+plate\s+count|\bsalmonella\b|listeria\s+monocytogenes|enterobacteriaceae/i },
 ]
 
+// Which analysis an analyte name belongs to. Used only to catch an extraction
+// whose results clearly belong to a DIFFERENT analysis than the tab it is
+// about to be saved under — the combined-report failure mode, where the model
+// can latch onto whichever section has actual detections. Prompt scoping is
+// the real fix; this is the net under it, because a wrong test_type is a
+// silent data-integrity problem rather than a visible error.
+const ANALYTE_OWNER: { type: string; label: string; re: RegExp }[] = [
+  { type: 'chlorate_perchlorate', label: 'Chlorate/Perchlorate', re: /\b(per)?chlorate\b/i },
+  { type: 'glyphosate',           label: 'Glyphosate',           re: /glyphosate|\bampa\b|aminomethylphosphonic|glufosinate/i },
+  { type: 'eto',                  label: 'Ethylene oxide',       re: /ethylene\s*oxide|chloro-?ethanol/i },
+  { type: 'aflatoxins',           label: 'Aflatoxins',           re: /aflatoxin|ochratoxin/i },
+  { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil/i },
+  { type: 'heavy_metals',         label: 'Heavy metals',         re: /\b(lead|cadmium|mercury|arsenic|copper|nickel|zinc|chromium|tin)\b|alumini?um/i },
+  { type: 'pa_final',             label: 'PA/TA alkaloids',      re: /pyrrolizidine|tropane|atropine|scopolamine|senecionine|echimidine|lycopsamine|retrorsine|intermedine|lasiocarpine|europine|heliotrine|jacobine|monocrotaline/i },
+]
+
+// Returns the analysis the extracted results actually look like, when that is
+// unanimously something other than the requested one. Deliberately only fires
+// on unanimity — a partial match is far more likely to be an analyte this
+// table doesn't know about than a genuinely misfiled extraction, and crying
+// wolf on good data would train people to click through the warning.
+function analyteMismatch(workflow: string, extracted: any): { type: string; label: string } | null {
+  const rows: any[] = Array.isArray(extracted?.analytes) ? extracted.analytes
+                    : Array.isArray(extracted?.compounds_detected) ? extracted.compounds_detected : []
+  const names = rows.map(r => String(r?.analyte ?? r?.metal ?? r?.compound_name ?? '')).filter(Boolean)
+  if (!names.length) return null
+  const owners = names.map(n => ANALYTE_OWNER.find(o => o.re.test(n))?.type).filter(Boolean) as string[]
+  if (owners.length !== names.length) return null   // something unrecognised — don't guess
+  if (!owners.every(o => o === owners[0])) return null
+  if (owners[0] === workflow) return null
+  return ANALYTE_OWNER.find(o => o.type === owners[0]) ?? null
+}
+
 function detectSections(text: string): { type: string; label: string }[] {
   if (!text) return []
   // Everything after "List of analysed substances" is the screening panel —
@@ -556,10 +604,16 @@ export async function POST(req: NextRequest) {
     workflow === 'residue'    && workcenter === 'pasteuriser'  ? 'residue_fp' :
     workflow
 
-  const systemPrompt = PROMPTS[promptKey]
-  if (!systemPrompt) {
+  const basePrompt = PROMPTS[promptKey]
+  if (!basePrompt) {
     return NextResponse.json({ error: `Unknown workflow: ${workflow}` }, { status: 400 })
   }
+  // Single-analysis prompts get the combined-report scoping rules. Excluded:
+  // pa_ta_analysis and residue, the raw-material workflows, whose reports are
+  // whole-document multi-sample formats with their own detailed parsing rules —
+  // the scope note would contradict them.
+  const SCOPED = ['glyphosate', 'residue_fp', 'micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'chlorate_perchlorate']
+  const systemPrompt = SCOPED.includes(promptKey) ? basePrompt + SECTION_SCOPE : basePrompt
 
   const uploaderName = await getCallerEmail()
   const fileName     = pdfFile.name
@@ -629,6 +683,10 @@ export async function POST(req: NextRequest) {
         // of just showing nothing — silence here previously hid a real bug
         // (pdf-parse being bundled) for an entire release.
         text_layer_read: !isScanned,
+        // Set when the extracted analytes unanimously belong to a different
+        // analysis — the reviewer is warned before this can be saved under the
+        // wrong test_type.
+        analyte_mismatch: analyteMismatch(workflow, extracted),
       })
     }
 
