@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Final Lab Results: test-type tabs were unreachable past the screen edge on mobile)
+
+**Files changed:** `app/(app)/quality/lab-results/page.tsx`
+
+Reported: on a phone the Micro / Residue / Heavy Metals tab row can't be moved to the right, so everything past Heavy Metals is unusable.
+
+Cause: the tab row is `width: fit-content` with `overflow: hidden` (there only to clip the first/last buttons to the rounded border), and both the app shell's `main` and `body` are `overflow-x: hidden`. The row is far wider than a phone viewport, so tabs past the edge were clipped with no scroller anywhere to reach them. Today's new Chlorate/Perchlorate tab made it a 9-tab row and pushed it further out of reach.
+
+- The row now sits inside its own `overflow-x: auto` container (with `-webkit-overflow-scrolling: touch`), and the buttons no longer shrink, so the tabs scroll properly on a phone. The inner row keeps its `overflow: hidden` for the rounded-corner clipping it was actually there for.
+- The selected tab now scrolls itself into view. That matters for the combined-report follow-ups added earlier today, which switch tabs for you — landing on a tab that's off-screen otherwise reads as nothing having happened.
+
+Checked the rest of the app for the same `fit-content` + `overflow: hidden` row pattern; this was the only instance. The records tables already have their own `overflow-x: auto`.
+
 ## 2026-08-14 — Gustav (Sieving: the "bags awaiting QC" panel made the page unscrollable on a phone)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
