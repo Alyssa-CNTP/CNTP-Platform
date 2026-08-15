@@ -1630,6 +1630,14 @@ export default function SievingPage() {
   // Realtime and the 60s poll only refresh that queue; they never own the list.
   const bagAlerts = pendingBags
   const [alertsCollapsed, setAlertsCollapsed] = useState(false)
+  // Start collapsed on a phone. Expanded, this panel is nearly the whole
+  // screen there, which buries the page it's meant to sit alongside. On a
+  // desktop it stays open as before, where there's room for it.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches) {
+      setAlertsCollapsed(true)
+    }
+  }, [])
   useEffect(() => {
     const id = setInterval(loadPendingBags, 60000)
     return () => clearInterval(id)
@@ -1694,15 +1702,21 @@ export default function SievingPage() {
           a Final QC. Deliberately has no per-card dismiss: the whole panel can
           be collapsed out of the way, but a bag only leaves the list by being
           sampled, so nothing gets closed and forgotten. */}
+      {/* pointerEvents:'none' on the container, 'auto' on the actual button and
+          cards: a position:fixed panel otherwise swallows every touch across
+          its whole box — including the empty gaps between cards — so on a
+          phone, where it's most of the screen, the page underneath could not
+          be scrolled at all. Height is capped too, so it can never own the
+          full viewport even when expanded. */}
       {bagAlerts.length > 0 && (
-        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'calc(100vh - 90px)'}}>
+        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'min(60vh, calc(100vh - 90px))',pointerEvents:'none'}}>
           <button onClick={()=>setAlertsCollapsed(c=>!c)}
-            style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)'}}>
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)',pointerEvents:'auto',flexShrink:0}}>
             <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC</span>
             <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
           </button>
           {!alertsCollapsed && (
-            <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto'}}>
+            <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto',pointerEvents:'auto'}}>
               {bagAlerts.map(a=>(
                 <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:`4px solid ${a.inprocess_out_of_spec?'#991b1b':'#166534'}`,borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
                   <div style={{fontWeight:700,fontSize:12,color:a.inprocess_out_of_spec?'#991b1b':'#166534'}}>
