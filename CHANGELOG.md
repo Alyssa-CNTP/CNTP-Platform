@@ -2,6 +2,25 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Quality: Chlorate/Perchlorate lab results + COA row, and combined lab reports no longer lose everything except the tab they landed on)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`, `app/(app)/quality/coa/page.tsx`
+
+Driven by two real Eurofins Dr. Specht reports: a Chlorate/Perchlorate-only certificate, and a 22-page combined report carrying pesticide screens + EtO + Glyphosate + Chlorate/Perchlorate + PA/TA for one sample.
+
+**New Chlorate/Perchlorate test type**
+- New "🧂 Chlorate/Perchlorate" tab in Final Lab Results, with its own Gemini prompt. No migration needed — `qms.lab_results.test_type` is free-form text with no CHECK constraint on either database (verified), and `coa_specs.specs` is jsonb.
+- The prompt is written against these reports' actual layout: `batch_no` comes from **"Sample Code (Client)"** (e.g. `26134-ORG/RA-SG`), explicitly *not* the lab's own "Sample Code" (`347-2026-00045039`) or the Report number, which are the obvious things to grab by mistake. Results keep their printed operator (`< 0.01`) with the `± uncertainty` split into its own field, so `0.062 ± 0.019` stores a comparable `0.062`.
+- **COA**: `coa_specs` already had a `chlorate_perchlorate` contaminant field with nothing able to fill it — that row now renders on the COA, driven by the customer spec when one matches, and appears in the data-source panel, the section toggles and the outstanding-data warning.
+
+**Combined reports — flag the other analyses instead of dropping them**
+- Dropping a PDF only ever extracted the tab it landed on; everything else in a combined report was silently lost. The server now reports which other analyses it can see in the same file, and the page offers each as a one-click follow-up that extracts it with *that* type's own prompt and opens it for review.
+- Detection is a deterministic keyword scan, not a second AI call — no tokens, no rate-limit cost, can't hallucinate a section, and it only ever advises. Verified against both PDFs: the combined report flags exactly its five analyses, the single-analyte one flags only Chlorate/Perchlorate, with no false positives.
+
+**Two extraction bugs found while testing this**
+- `pdf-parse` was upgraded to v2 at some point, which replaced the callable `require('pdf-parse')(buf)` export with a `PDFParse` class. The route still called it the v1 way, so text extraction threw on **every** upload and was swallowed by a `catch` that assumed "not installed" — silently sending every PDF down the Gemini vision path instead. Nothing surfaced because vision works, but it's slower, ignores the per-workflow text limits, and has no model fallback. Now handles both export shapes.
+- The per-workflow text limit slices from the top, and on the combined report the 35k-character "List of analysed substances" appendix (the screening panel — what was tested *for*, not what was found) pushed real results off the end: PA/TA's summary rows land at ~8.1–8.4k, just past `pa_final`'s 8k limit, so it would have seen every individual analyte and none of the totals it actually needs. The appendix is now stripped before the limit applies (47k → 12k on that report), and `pa_final`/`chlorate_perchlorate` get their own 16k limits. Verified every workflow now sees its required values.
+
 ## 2026-08-14 — Gustav (Sieving: explicit By Hour/Day/Week/Month tabs for the mesh charts, decoupled from the From/To range)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`

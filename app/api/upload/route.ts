@@ -38,8 +38,11 @@ const WORKFLOW_MAX_TOKENS: Record<string, number> = {
   mosh_moah:       600,
   pa_final:       2000,
   residue_fp:      800,
+  chlorate_perchlorate: 800,
 }
 
+// Applied AFTER stripScreeningAppendix(), so these budget the real results
+// body rather than being spent on a screening list.
 const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
   pa_ta_analysis: 20000,
   residue:        12000,
@@ -47,6 +50,11 @@ const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
   micro:           8000,
   default:         8000,
   residue_fp:      3000,
+  // Both of these have to survive being one section among many in a combined
+  // report. pa_final's summary rows sit ~8.4k into such a report — past the
+  // old 8k default — which is why it gets its own limit rather than inheriting.
+  pa_final:            16000,
+  chlorate_perchlorate: 16000,
 }
 
 // ─── Rate limiter (simple in-process queue) ───────────────────────────────────
@@ -80,10 +88,24 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // ─── Gemini call with model fallback ─────────────────────────────────────────
 
+// Everything after "List of analysed substances" is the screening panel — the
+// hundreds of compound names a lab lists to show what it tested FOR, not what
+// it found. On a combined Eurofins report that appendix is 35k of the 47k
+// characters, and because the text limit slices from the top, it used to push
+// the real results off the end: the PA/TA summary rows (Sum of Pyrrolizidine,
+// Atropine, Scopolamine) land at ~8.1-8.4k, just past the 8k default, so
+// pa_final saw every individual analyte but none of the totals it actually
+// needs. Dropping the appendix first leaves the whole results body in budget.
+function stripScreeningAppendix(text: string): string {
+  const idx = text.search(/List of analysed substances/i)
+  return idx > 500 ? text.slice(0, idx) : text
+}
+
 async function callGemini(systemPrompt: string, text: string, workflow: string) {
   const maxTokens = WORKFLOW_MAX_TOKENS[workflow] ?? 1500
   const textLimit = WORKFLOW_TEXT_LIMIT[workflow] ?? WORKFLOW_TEXT_LIMIT.default
-  const fullPrompt = `${systemPrompt}\n\nExtract all data from this report:\n\n${text.slice(0, textLimit)}`
+  const body = stripScreeningAppendix(text)
+  const fullPrompt = `${systemPrompt}\n\nExtract all data from this report:\n\n${body.slice(0, textLimit)}`
 
   const tryModel = async (model: string) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
@@ -324,6 +346,30 @@ EU limits (µg/kg): Aflatoxin B1 ≤5, Total Aflatoxins ≤10, Ochratoxin A ≤2
   mosh_moah: `INSTRUCTIONS: Extract MOSH/MOAH data. Output ONLY raw JSON. No markdown.
 Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status), overall_status.`,
 
+  chlorate_perchlorate: `INSTRUCTIONS: Extract Chlorate and Perchlorate results from this laboratory report. Output ONLY a single raw JSON object. Start with { and end with }. No markdown, no preamble.
+
+HEADER FIELDS — these reports print several similar-looking codes; pick carefully:
+- batch_no: the CUSTOMER's own sample code, labelled "Sample Code (Client)" / "Client Sample Code" / "Your reference" (e.g. "26134-ORG/RA-SG"). NEVER the laboratory's own "Sample Code" (e.g. "347-2026-00045039") and never the "Report" number.
+- report_reference: the lab's report number (e.g. "AR-347-2026-00045039-01").
+- lab: the testing laboratory's full name (e.g. "Eurofins Dr. Specht International GmbH").
+- sample_description: the customer's description of the material (e.g. "Organic Rooibos RA SG").
+- date_issued: the "Report date".
+- date_received: the "Sample Reception Date".
+
+ANALYTES — one entry per substance that actually appears in a TEST RESULTS table. Include only what is present: a report may carry Chlorate only, Perchlorate only, or both.
+- analyte: exactly "Chlorate" or "Perchlorate".
+- result: copy the Results cell EXACTLY as printed, including any comparison operator, but WITHOUT the measurement-uncertainty part. So "< 0.01" stays "< 0.01", and "0.062 ± 0.019" becomes "0.062".
+- uncertainty: the "± value" part when printed (e.g. "± 0.019"), otherwise null.
+- unit: as printed, normally "mg/kg".
+- spec: the MRL printed on that row (commonly 0.05 for Chlorate, 0.75 for Perchlorate). If the report prints no MRL, use null — never invent one.
+- status: "Pass" when the result is below the MRL (a "<" result is always Pass), "Fail" when it reaches or exceeds it, "—" when there is no MRL to compare against.
+
+Ignore any appendix headed "List of analysed substances" — that is the screening panel, not results.
+
+overall_status: "Pass" unless any analyte is "Fail".
+
+Output: {"batch_no":"","report_reference":"","lab":"","sample_description":"","date_issued":"","date_received":"","analytes":[{"analyte":"","result":"","uncertainty":null,"unit":"mg/kg","spec":null,"status":""}],"overall_status":"Pass"}`,
+
   pa_final: `INSTRUCTIONS: Extract PA/TA final product summary data from this lab report. Output ONLY raw JSON. No markdown.
 Extract top-level fields: batch_no, report_reference, lab, sample_description, date_issued, date_received, overall_status.
 Extract an "analytes" array — one entry per SUMMARY PA/TA measurement row (e.g. Total PA by EU regulation, Total PA by BfR 28, Scopolamine, Total TA, etc.). Each entry: { analyte, result, unit, spec, status }.
@@ -335,6 +381,77 @@ Rules:
 - overall_status: "Pass" if total PA (EU) is null or below 400, "Fail" if above 400.`,
 }
 
+
+// ─── PDF text extraction ──────────────────────────────────────────────────────
+//
+// pdf-parse changed shape between majors and this route only ever handled v1:
+// v1 exports a callable `(buf) => {text}`, v2 (installed here, ^2.4.5) exports
+// a `PDFParse` CLASS. Calling the v2 module object threw `is not a function`
+// on every single upload — swallowed by a bare catch that assumed "not
+// installed" and silently routed EVERY pdf down the Gemini vision path.
+// Nothing surfaced, because vision does work; it's just the slower, costlier
+// path, it ignores the per-workflow text limits, and it has no model fallback.
+// It also left `text` empty, which would have made the combined-report
+// detection below dead on arrival.
+//
+// Handles both shapes so it can't break again on a version bump in either
+// direction.
+async function extractPdfText(buf: Buffer): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require('pdf-parse')
+
+  // v2: class-based API
+  const PDFParse = mod?.PDFParse ?? mod?.default?.PDFParse
+  if (typeof PDFParse === 'function') {
+    const parser = new PDFParse({ data: new Uint8Array(buf) })
+    try {
+      const res = await parser.getText()
+      return res?.text ?? ''
+    } finally {
+      await parser.destroy?.().catch(() => {})
+    }
+  }
+
+  // v1: module (or its default) is itself the parse function
+  const fn = typeof mod === 'function' ? mod : mod?.default
+  if (typeof fn === 'function') return (await fn(buf))?.text ?? ''
+
+  throw new Error('pdf-parse: no usable export (neither PDFParse class nor callable)')
+}
+
+// ─── Combined-report section detection ───────────────────────────────────────
+//
+// Labs like Eurofins bundle several analyses for ONE sample into a single PDF
+// (pesticide screens + EtO + glyphosate + chlorate/perchlorate + PA/TA). The
+// tab a person drops the file on only ever extracts that tab's own test type,
+// so every other result in the same PDF silently goes nowhere — the reason
+// this exists.
+//
+// Deliberately a keyword scan and NOT a second AI call: it costs no tokens, is
+// not subject to the Gemini rate limiter, cannot hallucinate a section that
+// isn't there, and only ever advises. The person still clicks to extract each
+// one, which then runs that type's own tuned prompt — so detection being
+// approximate here can't corrupt any extracted data.
+const SECTION_PATTERNS: { type: string; label: string; re: RegExp }[] = [
+  { type: 'residue',              label: 'Pesticide residue',    re: /pesticides?\s+quechers|multi-?residue|pesticide\(s\)\s+detected|screened\s+pesticides/i },
+  { type: 'eto',                  label: 'Ethylene oxide',       re: /ethylene\s*oxide|2-chloro-?ethanol/i },
+  { type: 'glyphosate',           label: 'Glyphosate',           re: /\bglyphosate\b|\bglufosinate\b|aminomethylphosphonic/i },
+  { type: 'chlorate_perchlorate', label: 'Chlorate/Perchlorate', re: /\bchlorate\b|\bperchlorate\b/i },
+  { type: 'pa_final',             label: 'PA/TA alkaloids',      re: /pyrrolizidine|tropane\s+alkaloid|\batropine\b|\bscopolamine\b/i },
+  { type: 'heavy_metals',         label: 'Heavy metals',         re: /heavy\s+metals|\bcadmium\b|\bmercury\b|\barsenic\b/i },
+  { type: 'aflatoxins',           label: 'Aflatoxins',           re: /aflatoxin|ochratoxin/i },
+  { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil\s+(saturated|aromatic)/i },
+  { type: 'micro',                label: 'Microbiology',         re: /total\s+plate\s+count|aerobic\s+plate\s+count|\bsalmonella\b|listeria\s+monocytogenes|enterobacteriaceae/i },
+]
+
+function detectSections(text: string): { type: string; label: string }[] {
+  if (!text) return []
+  // Everything after "List of analysed substances" is the screening panel —
+  // hundreds of compound names that would false-positive nearly every pattern
+  // above (a 22-page report is mostly this). Results only live before it.
+  const body = text.split(/List of analysed substances/i)[0].slice(0, 40000)
+  return SECTION_PATTERNS.filter(p => p.re.test(body)).map(({ type, label }) => ({ type, label }))
+}
 
 // ─── Residue grade computation (inlined — no external module needed) ──────────
 
@@ -456,14 +573,11 @@ export async function POST(req: NextRequest) {
     let text = ''
     let isScanned = false
     try {
-      // Dynamic import — pdf-parse must be installed: npm install pdf-parse
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>
-      const parsed   = await pdfParse(pdfBuffer)
-      text      = parsed.text ?? ''
+      text      = await extractPdfText(pdfBuffer)
       isScanned = !text || text.trim().length < 100
-    } catch {
-      // pdf-parse failed or not installed — fall back to vision
+    } catch (e: any) {
+      // Genuinely unreadable text layer — fall back to Gemini vision.
+      console.error('pdf text extraction failed, using vision:', e?.message)
       isScanned = true
     }
 
@@ -494,7 +608,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Pasteuriser lab workflows — return extract_only for client-side review panel
-    const EXTRACT_ONLY = ['micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'residue_fp']
+    const EXTRACT_ONLY = ['micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'residue_fp', 'chlorate_perchlorate']
     const EXTRACT_ONLY_IF_PASTEURISER = ['glyphosate', 'residue']
     const isExtractOnly =
       EXTRACT_ONLY.includes(workflow) ||
@@ -506,6 +620,11 @@ export async function POST(req: NextRequest) {
         extract_only: true,
         data:         { ...extracted, _doc: fileName },
         model_used:   modelUsed,
+        // Other analyses present in this same PDF that this tab did NOT
+        // extract — the client offers them as one-click follow-ups so a
+        // combined report doesn't lose everything except the tab it landed on.
+        // Empty for scanned PDFs (no text layer to scan).
+        detected_sections: detectSections(text).filter(s => s.type !== workflow),
       })
     }
 
