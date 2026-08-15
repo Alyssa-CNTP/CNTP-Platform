@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Sieving: the "bags awaiting QC" panel made the page unscrollable on a phone)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: can't scroll the Sieving page on mobile.
+
+Cause: the "📦 N bags awaiting QC" panel is `position:fixed` at `zIndex:5000`, up to 340px wide and `calc(100vh - 90px)` tall, and it starts expanded. On a phone (~375px wide) that is essentially the entire screen — and a fixed container swallows touches across its whole box, including the empty gaps between cards. Every scroll gesture went to that panel instead of the page, and with only a few bags in it there was nothing to scroll, so the page simply appeared frozen. It was worse the more bags were pending (10 on staging).
+
+- The container is now `pointerEvents:'none'` with the button and cards set back to `'auto'`, so only the actual controls take touches and everything around them scrolls the page normally.
+- Height capped to `min(60vh, calc(100vh - 90px))` so the panel can never own the whole viewport even fully expanded.
+- Starts collapsed on screens ≤640px (unchanged on desktop, where there's room for it).
+
+Checked the rest of the app for the same pattern: this was the only non-modal fixed panel: every other `position:fixed` element is a conditionally-rendered `inset:0` modal.
+
 ## 2026-08-14 — Gustav (Quality: Chlorate/Perchlorate lab results + COA row, and combined lab reports no longer lose everything except the tab they landed on)
 
 **Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`, `app/(app)/quality/coa/page.tsx`
