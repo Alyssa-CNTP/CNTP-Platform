@@ -760,6 +760,15 @@ export default function LabResultsPage() {
   const [sourceFile,    setSourceFile]    = useState<File|null>(null)
   const [extractingType,setExtractingType]= useState<string|null>(null)
 
+  // Keep the selected tab visible in the scroller. Matters most on a phone,
+  // where only ~2 tabs fit at a time and the combined-report follow-ups switch
+  // tabs for you — landing on a tab you can't see reads as nothing happening.
+  const tabBarRef = useRef<HTMLDivElement|null>(null)
+  useEffect(() => {
+    tabBarRef.current?.querySelector(`[data-tab="${activeTab}"]`)
+      ?.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'nearest' })
+  }, [activeTab])
+
   // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Checks for
   // a recovered draft whenever there's no review in progress, keyed per test
   // type since each tab's extraction/review is independent.
@@ -956,16 +965,24 @@ export default function LabResultsPage() {
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display:'flex', border:'1px solid #e5e7eb', borderRadius:10, overflow:'hidden', width:'fit-content', marginBottom:16 }}>
-        {TEST_TYPES.map((t,i)=>(
-          <button key={t.key} onClick={()=>{setActiveTab(t.key);setPending(null);setDupWarn(null)}}
-            style={{ padding:'8px 16px', fontWeight:700, fontSize:12, cursor:'pointer', borderLeft:i>0?'1px solid #e5e7eb':'none',
-              background:activeTab===t.key?'#1f4e79':'#fff', color:activeTab===t.key?'#fff':'#6b7280', transition:'all .15s', whiteSpace:'nowrap' }}>
-            {t.label}
-            {records[t.key].length>0&&<span style={{ marginLeft:5, fontFamily:'monospace', fontSize:10, opacity:.6 }}>({records[t.key].length})</span>}
-          </button>
-        ))}
+      {/* Tab bar — needs its own horizontal scroller. The row is `fit-content`
+          and far wider than a phone viewport, while the app shell and body are
+          both overflow-x:hidden, so every tab past the screen edge (Heavy
+          Metals onward) was simply unreachable on mobile — no way to scroll to
+          it. The inner row keeps overflow:hidden purely to clip the first/last
+          buttons to the rounded border. */}
+      <div ref={tabBarRef}
+        style={{ overflowX:'auto', overflowY:'hidden', WebkitOverflowScrolling:'touch', marginBottom:16, paddingBottom:2 }}>
+        <div style={{ display:'flex', border:'1px solid #e5e7eb', borderRadius:10, overflow:'hidden', width:'fit-content' }}>
+          {TEST_TYPES.map((t,i)=>(
+            <button key={t.key} data-tab={t.key} onClick={()=>{setActiveTab(t.key);setPending(null);setDupWarn(null)}}
+              style={{ padding:'8px 16px', fontWeight:700, fontSize:12, cursor:'pointer', borderLeft:i>0?'1px solid #e5e7eb':'none', flexShrink:0,
+                background:activeTab===t.key?'#1f4e79':'#fff', color:activeTab===t.key?'#fff':'#6b7280', transition:'all .15s', whiteSpace:'nowrap' }}>
+              {t.label}
+              {records[t.key].length>0&&<span style={{ marginLeft:5, fontFamily:'monospace', fontSize:10, opacity:.6 }}>({records[t.key].length})</span>}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, fontSize:11, color:'#991b1b', padding:'8px 14px', background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8 }}>⚠ {error}</div>}
