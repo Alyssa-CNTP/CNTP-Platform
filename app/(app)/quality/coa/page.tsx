@@ -126,13 +126,13 @@ const CUT_LENGTH_ROWS: { key: string; label: string }[] = [
 interface CoaLine { label: string; spec: string; result: string }
 interface CoaModel {
   batch: string
-  found: { pasteuriser: boolean; micro: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean; sieving: boolean }
+  found: { pasteuriser: boolean; micro: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean; chloratePerchlorate: boolean; sieving: boolean }
   header: Record<string, string>
   isOrganic: boolean
   micro: CoaLine[]
   cutLength: CoaLine[]
   other: CoaLine[]
-  sections: { micro: boolean; cutLength: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean }
+  sections: { micro: boolean; cutLength: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean; chloratePerchlorate: boolean }
   matchedDoc: string          // doc_no of the customer spec applied ('' = none)
   candidateDocs: { doc_no: string; label: string }[]  // this customer's specs, for the picker
 }
@@ -372,6 +372,7 @@ export default function CoaGeneratorPage() {
     const paRec     = labFor('pa_final')
     const hmRec     = labFor('heavy_metals')
     const moshRec   = labFor('mosh_moah')
+    const clRec     = labFor('chlorate_perchlorate')
     const microData = microRec ? (microRec.results || microRec) : {}
 
     const customer = past?.customer || ''
@@ -388,10 +389,11 @@ export default function CoaGeneratorPage() {
 
     const src = {
       batch, past, microData, moistureAvg, bdAvg, cutResults, hasSieve,
-      found: { pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec, sieving: hasSieve },
+      found: { pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec, chloratePerchlorate: !!clRec, sieving: hasSieve },
       results: {
         residue: residueRec ? coaComplies(residueRec) : '', pa: paRec ? coaComplies(paRec) : '',
         hm: hmRec ? coaComplies(hmRec) : '', mosh: moshRec ? coaComplies(moshRec) : '',
+        chlorate: clRec ? coaComplies(clRec) : '',
       },
       isOrganic: !!(past?.is_organic) || /org/i.test(past?.variant || '') || /organic|org/i.test(key),
       header: {
@@ -426,14 +428,14 @@ export default function CoaGeneratorPage() {
   const openFromHistory = (h: any) => {
     const s = h.snapshot || {}
     if (!s.header) { alert('This history entry has no saved snapshot to edit. Look up the batch number to regenerate it instead.'); return }
-    const sections = s.sections || { micro: true, cutLength: false, residue: false, pa: false, heavyMetals: false, moshMoah: false }
+    const sections = { micro: true, cutLength: false, residue: false, pa: false, heavyMetals: false, moshMoah: false, chloratePerchlorate: false, ...(s.sections || {}) }
     setSources(null)
     setBatchInput(h.batch_no || s.header.batch_number || '')
     setModel({
       batch: h.batch_no || s.header.batch_number || '',
       // mirror the included sections so the data-source panel / outstanding
       // banner don't flag a historical COA that was already complete.
-      found: { pasteuriser: true, micro: !!sections.micro, sieving: !!sections.cutLength, residue: !!sections.residue, pa: !!sections.pa, heavyMetals: !!sections.heavyMetals, moshMoah: !!sections.moshMoah },
+      found: { pasteuriser: true, micro: !!sections.micro, sieving: !!sections.cutLength, residue: !!sections.residue, pa: !!sections.pa, heavyMetals: !!sections.heavyMetals, moshMoah: !!sections.moshMoah, chloratePerchlorate: !!sections.chloratePerchlorate },
       isOrganic: !!s.isOrganic,
       header: s.header,
       micro: s.micro || [],
@@ -496,6 +498,7 @@ export default function CoaGeneratorPage() {
     if (model.sections.pa && !model.found.pa) outstanding.push('Pyrrolizidine Alkaloids')
     if (model.sections.heavyMetals && !model.found.heavyMetals) outstanding.push('Heavy metals')
     if (model.sections.moshMoah && !model.found.moshMoah) outstanding.push('MOSH/MOAH')
+    if (model.sections.chloratePerchlorate && !model.found.chloratePerchlorate) outstanding.push('Chlorate/Perchlorate')
   }
 
   if (!canUse) return <div className="p-5 text-[13px] text-gray-500">You don't have permission to generate COAs.</div>
@@ -668,7 +671,7 @@ export default function CoaGeneratorPage() {
           <div className="mb-4 grid grid-cols-2 gap-3 no-print">
             <div className="border border-gray-200 rounded-lg p-3">
               <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">Data sources</div>
-              {([['pasteuriser','Pasteuriser'],['micro','Microbiology'],['sieving','Sieving / cut-length'],['residue','Residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH']] as const).map(([k,l]) => (
+              {([['pasteuriser','Pasteuriser'],['micro','Microbiology'],['sieving','Sieving / cut-length'],['residue','Residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH'],['chloratePerchlorate','Chlorate/Perchlorate']] as const).map(([k,l]) => (
                 <div key={k} className="flex items-center justify-between text-[12px] py-0.5">
                   <span>{l}</span>
                   <span className={(model.found as any)[k] ? 'text-green-700 font-semibold' : 'text-gray-400'}>
@@ -679,7 +682,7 @@ export default function CoaGeneratorPage() {
             </div>
             <div className="border border-gray-200 rounded-lg p-3">
               <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">Include sections</div>
-              {([['micro','Microbiology'],['cutLength','Cut length / sieving'],['residue','Pesticide residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH']] as const).map(([k,l]) => (
+              {([['micro','Microbiology'],['cutLength','Cut length / sieving'],['residue','Pesticide residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH'],['chloratePerchlorate','Chlorate/Perchlorate']] as const).map(([k,l]) => (
                 <label key={k} className="flex items-center gap-2 text-[12px] py-0.5 cursor-pointer">
                   <input type="checkbox" checked={model.sections[k]} onChange={() => toggleSection(k)} />
                   {l}
@@ -812,24 +815,14 @@ export default function CoaGeneratorPage() {
                 lines={model.cutLength} onEdit={(i, f, v) => setLine('cutLength', i, f, v)} />
             )}
 
-            {/* Other analysis */}
+            {/* Other analysis — the row list and the edit-index mapping must use
+                the SAME predicate, so it's defined once (they were previously
+                two copies that had to be kept in step by hand). */}
             <CoaTable title="Other Analysis" cols={['Description', 'Specification', 'Result']}
-              lines={model.other.filter(l => {
-                if (l.label === 'Pesticide residue') return model.sections.residue
-                if (l.label === 'Pyrrolizidine Alkaloids') return model.sections.pa
-                if (l.label === 'Heavy Metals') return model.sections.heavyMetals
-                if (l.label === 'MOSH/MOAH') return model.sections.moshMoah
-                return true
-              })}
+              lines={model.other.filter(l => otherRowVisible(l, model.sections))}
               onEdit={(i, f, v) => {
                 // map filtered index back to full `other` array
-                const shown = model.other.filter(l => {
-                  if (l.label === 'Pesticide residue') return model.sections.residue
-                  if (l.label === 'Pyrrolizidine Alkaloids') return model.sections.pa
-                  if (l.label === 'Heavy Metals') return model.sections.heavyMetals
-                  if (l.label === 'MOSH/MOAH') return model.sections.moshMoah
-                  return true
-                })
+                const shown = model.other.filter(l => otherRowVisible(l, model.sections))
                 const target = shown[i]
                 const realIdx = model.other.indexOf(target)
                 if (realIdx >= 0) setLine('other', realIdx, f, v)
@@ -897,10 +890,14 @@ function buildModel(src: any, spec: any): CoaModel {
   const wantPa      = spec ? req(sp.contaminants?.pyrrolizidine_alkaloids) : src.found.pa
   const wantHm      = spec ? ['lead','cadmium','mercury','arsenic','copper'].some(k => req(sp.contaminants?.[k])) : src.found.heavyMetals
   const wantMosh    = spec ? req(sp.contaminants?.mosh_moah) : src.found.moshMoah
+  // coa_specs already carried a chlorate_perchlorate contaminant field — this
+  // is the row that finally renders it, now that a lab result can supply one.
+  const wantChlor   = spec ? req(sp.contaminants?.chlorate_perchlorate) : src.found.chloratePerchlorate
   if (wantResidue) other.push({ label: 'Pesticide residue', spec: (spec && req(sp.other?.residue_reg)) ? String(sp.other.residue_reg) : COA_WORDING.residueRegulation, result: src.results.residue })
   if (wantPa)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: (spec && req(sp.contaminants?.pyrrolizidine_alkaloids)) ? String(sp.contaminants.pyrrolizidine_alkaloids) : '<50 μg', result: src.results.pa })
   if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? ['lead','cadmium','mercury','arsenic','copper'].filter(k => req(sp.contaminants?.[k])).map(k => `${k[0].toUpperCase()+k.slice(1)} ${sp.contaminants[k]}`).join('; ') : '', result: src.results.hm })
   if (wantMosh)    other.push({ label: 'MOSH/MOAH', spec: (spec && req(sp.contaminants?.mosh_moah)) ? String(sp.contaminants.mosh_moah) : '', result: src.results.mosh })
+  if (wantChlor)   other.push({ label: 'Chlorate/Perchlorate', spec: (spec && req(sp.contaminants?.chlorate_perchlorate)) ? String(sp.contaminants.chlorate_perchlorate) : '', result: src.results.chlorate })
   other.push({ label: 'Sensorical Properties', spec: (spec && req(sp.other?.sensorial)) ? String(sp.other.sensorial) : COA_WORDING.sensorical, result: 'Complies' })
 
   const wantMicro = spec ? micro.length > 0 : src.found.micro
@@ -909,7 +906,7 @@ function buildModel(src: any, spec: any): CoaModel {
   return {
     batch: src.batch, found: src.found, isOrganic: src.isOrganic, header: { ...src.header },
     micro, cutLength, other,
-    sections: { micro: wantMicro, cutLength: wantCut, residue: wantResidue, pa: wantPa, heavyMetals: wantHm, moshMoah: wantMosh },
+    sections: { micro: wantMicro, cutLength: wantCut, residue: wantResidue, pa: wantPa, heavyMetals: wantHm, moshMoah: wantMosh, chloratePerchlorate: wantChlor },
     matchedDoc: spec?.doc_no || '',
     candidateDocs: src.candidateDocs || [],
   }
@@ -966,6 +963,20 @@ function DraggableSignature({ src, adjust, onChange }: {
 }
 
 // Result string for a "Complies / None detected" style block from a lab record.
+// Whether an "Other Analysis" row belongs on the COA, given which sections are
+// switched on. Rows with no toggle of their own (Moisture, Bulk Density,
+// Foreign Material, Sensorical Properties) always show.
+function otherRowVisible(l: CoaLine, sections: CoaModel['sections']): boolean {
+  switch (l.label) {
+    case 'Pesticide residue':         return sections.residue
+    case 'Pyrrolizidine Alkaloids':   return sections.pa
+    case 'Heavy Metals':              return sections.heavyMetals
+    case 'MOSH/MOAH':                 return sections.moshMoah
+    case 'Chlorate/Perchlorate':      return sections.chloratePerchlorate
+    default:                          return true
+  }
+}
+
 function coaComplies(rec: any): string {
   const d = rec.results || rec
   const status = String(d.overall_status || rec.overall_status || '').toLowerCase()
