@@ -237,6 +237,20 @@ SCOPE — READ FIRST. This PDF may be a COMBINED report holding several differen
 - Results below a reporting limit (e.g. "< 0.01") ARE valid results for the requested analysis — report them as printed. Never substitute a different section's numbers because they look more interesting.
 - If this report has no section for the requested analysis at all, return the output structure with an empty analytes/compounds array and leave the header fields blank. Returning nothing is correct; returning another analysis's results is not.`
 
+// Appended alongside SECTION_SCOPE. Only chlorate_perchlorate and residue_fp
+// ever said which of a report's several codes is the batch, so the others
+// picked whichever the model liked on the day — the same Eurofins PDF produced
+// "26135-ORG/RA-SG" on one pa_final run and the lab's "347-2026-00051307" on
+// the next. A wrong batch is worse than a missing one: it never matches on a
+// COA lookup, and it defeats the duplicate check, which keys on batch_no.
+const BATCH_RULE = `
+
+BATCH NUMBER — these reports print several similar-looking codes. Choosing the wrong one files the result against a batch that does not exist, so be deliberate:
+- batch_no MUST be the CUSTOMER's own code — the value labelled "Sample Code (Client)", "Client Sample Code", "Your reference", "Customer reference", "Sample Reference", or given in a Sample/Client Details block (e.g. "26135-ORG/RA-SG", "26136-CON-SFC", "26203-CON-SFC", "MAT-0379"). It always contains letters.
+- NEVER put the laboratory's own internal sample id (e.g. "347-2026-00051307") or the report number (e.g. "AR-347-2026-00051307-01") in batch_no. Those go in report_reference.
+- When both a client code and a lab code appear, the client code is always batch_no.
+- If no client code appears anywhere, leave batch_no empty rather than falling back to a lab code.`
+
 const PROMPTS: Record<string, string> = {
   pa_ta_analysis: `You are a precision quality data extraction agent for herbal tea manufacturing.
 Your goal is to extract Pyrrolizidine Alkaloid (PA) and Tropane Alkaloid (TA) data from laboratory reports.
@@ -492,6 +506,24 @@ function analyteMismatch(workflow: string, extracted: any): { type: string; labe
   return ANALYTE_OWNER.find(o => o.type === owners[0]) ?? null
 }
 
+// Flags a batch_no that is almost certainly the lab's own reference rather
+// than a CNTP batch. Every real batch carries letters — 26135-ORG/RA-SG,
+// 26136-CON-SFC, 26132-CON/RA-FSE40, MAT-0379 — while the lab ids that get
+// grabbed by mistake are digits and hyphens only ("347-2026-00051307"). Advice
+// only: the reviewer can correct the field in place before saving.
+function batchLooksWrong(extracted: any): string | null {
+  const batch = String(extracted?.batch_no ?? '').trim()
+  if (!batch) return null
+  if (!/[A-Za-z]/.test(batch)) {
+    return 'It contains no letters. Batch numbers here always do (e.g. 26135-ORG/RA-SG), so this is most likely the laboratory’s own sample or order number.'
+  }
+  const ref = String(extracted?.report_reference ?? '').trim()
+  if (ref && ref.length > 4 && (ref === batch || ref.includes(batch))) {
+    return 'It is part of the lab’s own report reference, so it is probably their number rather than the batch.'
+  }
+  return null
+}
+
 function detectSections(text: string): { type: string; label: string }[] {
   if (!text) return []
   // Everything after "List of analysed substances" is the screening panel —
@@ -613,7 +645,7 @@ export async function POST(req: NextRequest) {
   // whole-document multi-sample formats with their own detailed parsing rules —
   // the scope note would contradict them.
   const SCOPED = ['glyphosate', 'residue_fp', 'micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'chlorate_perchlorate']
-  const systemPrompt = SCOPED.includes(promptKey) ? basePrompt + SECTION_SCOPE : basePrompt
+  const systemPrompt = SCOPED.includes(promptKey) ? basePrompt + SECTION_SCOPE + BATCH_RULE : basePrompt
 
   const uploaderName = await getCallerEmail()
   const fileName     = pdfFile.name
@@ -687,6 +719,10 @@ export async function POST(req: NextRequest) {
         // analysis — the reviewer is warned before this can be saved under the
         // wrong test_type.
         analyte_mismatch: analyteMismatch(workflow, extracted),
+        // Set when batch_no looks like the lab's own reference. A wrong batch
+        // silently never matches on a COA lookup and defeats the duplicate
+        // check, so it's surfaced for correction before saving.
+        batch_warning: batchLooksWrong(extracted),
       })
     }
 

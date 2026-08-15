@@ -168,7 +168,7 @@ function PdfDropZone({ testType, onExtracted, onSectionsDetected }: {
       try {
         const data = await upload(item.file)
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'done',message:'Extracted'} : x))
-        if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'', _mismatch:data.analyte_mismatch??null })
+        if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'', _mismatch:data.analyte_mismatch??null, _batchWarning:data.batch_warning??null })
         else if (data.data) onExtracted({ ...data.data, _sourceFile:item.file.name })
         // A combined report carries other analyses this tab didn't extract —
         // hand them up so they can be offered as follow-ups rather than lost.
@@ -250,6 +250,11 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
   ].filter(([f]) => pending[f] !== undefined) as [string,string][]
 
   const mismatch = pending._mismatch as { type:string; label:string } | null | undefined
+  // Only warn while the batch still looks wrong — editing the field below
+  // clears it, so the warning tracks what's actually about to be saved.
+  const batchWarning = (pending._batchWarning as string|null|undefined) &&
+    (!/[A-Za-z]/.test(String(pending.batch_no ?? '').trim()) || String(pending.batch_no ?? '').trim() === '')
+      ? pending._batchWarning as string : null
 
   return (
     <div style={{ background: mismatch?'#fef2f2':'#f0fdf4', border:`2px solid ${mismatch?'#fca5a5':'#86efac'}`, borderRadius:10, padding:16, marginBottom:14 }}>
@@ -266,6 +271,20 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
             Every extracted analyte belongs to {mismatch.label}. This usually means the report has no
             {' '}{TEST_TYPES.find(t=>t.key===testType)?.label.replace(/^[^ ]+ /,'')} section, and the wrong one was picked up.
             Saving now would file them under the wrong test type. Discard and drop this PDF on the {mismatch.label} tab instead.
+          </div>
+        </div>
+      )}
+      {/* Wrong batch is a quiet failure: it never matches on a COA lookup and
+          it defeats the duplicate check, which keys on batch_no. Flagged here,
+          next to the editable Batch No. field, so it can be corrected before
+          saving rather than discovered later. */}
+      {batchWarning && (
+        <div style={{ background:'#fffbeb', border:'1px solid #fcd34d', borderRadius:8, padding:'10px 12px', marginBottom:12 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#92400e', marginBottom:4 }}>
+            ⚠ Check the batch number — “{String(pending.batch_no ?? '').trim() || '(empty)'}” doesn’t look right
+          </div>
+          <div style={{ fontSize:11, color:'#78350f' }}>
+            {batchWarning} Correct it in the Batch No. field below before saving.
           </div>
         </div>
       )}
@@ -846,7 +865,7 @@ export default function LabResultsPage() {
       setOtherSections(prev => prev.filter(s => s.type !== type))
       setActiveTab(type as TestType)
       setDupWarn(null)
-      setPending({ ...data.data, _sourceFile: sourceFile.name, _model_used: data.model_used||'', _mismatch: data.analyte_mismatch??null })
+      setPending({ ...data.data, _sourceFile: sourceFile.name, _model_used: data.model_used||'', _mismatch: data.analyte_mismatch??null, _batchWarning: data.batch_warning??null })
     } catch (e:any) {
       setError(e.message || `Could not extract ${label}`)
     } finally {
