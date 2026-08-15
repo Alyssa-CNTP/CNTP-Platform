@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Lab Results: extractions could file a result against the lab's reference instead of the batch number)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+Reported: a PA record showed batch `347-2026-00051307` — the laboratory's own Sample Code, not a CNTP batch. The same PDF produced the correct `26135-ORG/RA-SG` on an earlier run, so it was picking differently run to run.
+
+Cause: only the `chlorate_perchlorate` and `residue_fp` prompts ever said *which* of a report's several codes is the batch. A Eurofins report prints three that look alike — `Report: AR-347-2026-00051307-01`, `Sample Code: 347-2026-00051307` and `Sample Code (Client): 26135-ORG/RA-SG` — and only the last is the batch. With no rule, the other prompts were free to pick any of them. A wrong batch is worse than a missing one: it never matches on a COA lookup, and it defeats the duplicate check, which keys on `batch_no` (which is how the same PA report saved twice without warning).
+
+- **The rule is now shared by every lab-results prompt:** batch_no must be the customer's own code (Sample Code (Client) / Your reference / Sample Details), never the lab's internal sample id or report number — those belong in `report_reference` — and it should be left empty rather than falling back to a lab code.
+- **Backed by a deterministic check:** the server flags a batch that carries no letters (every real batch here does — `26135-ORG/RA-SG`, `26136-CON-SFC`, `MAT-0379`) or that is part of the report reference. The review panel warns next to the editable Batch No. field so it can be corrected before saving, and the warning clears as soon as it is. Verified against every batch currently in `qms.lab_results` — no false positives.
+
 ## 2026-08-14 — Gustav (Lab Results: a combined report could file one analysis's results under another's test type)
 
 **Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
