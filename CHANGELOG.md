@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Gustav (Lab uploads: pdf-parse was being bundled, so every PDF fell back to Gemini vision and combined-report detection never ran)
+
+**Files changed:** `next.config.js`, `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+Reported: uploading the combined Eurofins report extracted Chlorate/Perchlorate correctly, but no "this report also contains…" suggestion appeared. The giveaway was the model line reading **`gemini-3.1-flash-lite-preview (vision)`**.
+
+- Root cause: `pdf-parse` was not in `serverExternalPackages`, so turbopack inlined it — and its bundled `pdfjs-dist` — into the route chunk. pdfjs resolves its own worker/module URLs at runtime and breaks when inlined, so text extraction threw on every upload and `route.ts` quietly fell back to Gemini vision. Vision still returns a usable answer, which is why nothing looked broken: the only symptoms were "(vision)" on the model name and an empty `text` — and since section detection scans that text, it could never find anything. Verified at the bundle level: before the change a server chunk contained `pdfjs-dist/legacy/build/pdf.mjs`; after it, zero, with the route instead tracing to `node_modules/pdf-parse/dist/pdf-parse/cjs/index.cjs` at runtime.
+- This also means the per-workflow text limits and the appendix strip added earlier today were never actually reached — every extraction was going through vision instead.
+- Made the fallback visible so it can't hide again: the API now reports whether the text layer was read, and when it wasn't, Lab Results says so plainly rather than leaving the space blank — an empty area looked identical to "this report only has one test", which is exactly how this went unnoticed.
+
 ## 2026-08-14 — Gustav (Final Lab Results: test-type tabs were unreachable past the screen edge on mobile)
 
 **Files changed:** `app/(app)/quality/lab-results/page.tsx`

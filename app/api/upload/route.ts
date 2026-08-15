@@ -623,8 +623,12 @@ export async function POST(req: NextRequest) {
         // Other analyses present in this same PDF that this tab did NOT
         // extract — the client offers them as one-click follow-ups so a
         // combined report doesn't lose everything except the tab it landed on.
-        // Empty for scanned PDFs (no text layer to scan).
         detected_sections: detectSections(text).filter(s => s.type !== workflow),
+        // Detection reads the text layer, so it can't run when we fell back to
+        // vision. Reported so the UI can say "couldn't scan this one" instead
+        // of just showing nothing — silence here previously hid a real bug
+        // (pdf-parse being bundled) for an entire release.
+        text_layer_read: !isScanned,
       })
     }
 
