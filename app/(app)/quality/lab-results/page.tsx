@@ -142,7 +142,7 @@ interface QueueItem { id:string; file:File; status:'pending'|'processing'|'done'
 
 function PdfDropZone({ testType, onExtracted, onSectionsDetected }: {
   testType:TestType; onExtracted:(d:any)=>void
-  onSectionsDetected?: (sections:{type:string;label:string}[], file:File)=>void
+  onSectionsDetected?: (sections:{type:string;label:string}[], file:File, textLayerRead:boolean)=>void
 }) {
   const { session } = useAuth() // needed for upload auth
   // Upload goes to Next.js API route — no external service needed
@@ -172,7 +172,10 @@ function PdfDropZone({ testType, onExtracted, onSectionsDetected }: {
         else if (data.data) onExtracted({ ...data.data, _sourceFile:item.file.name })
         // A combined report carries other analyses this tab didn't extract —
         // hand them up so they can be offered as follow-ups rather than lost.
-        if (data.detected_sections?.length) onSectionsDetected?.(data.detected_sections, item.file)
+        // Always fires (even with nothing found) so the page can distinguish
+        // "no other analyses in this report" from "couldn't read the text
+        // layer, so we never looked".
+        if (data.extract_only) onSectionsDetected?.(data.detected_sections ?? [], item.file, data.text_layer_read !== false)
       } catch (err:any) {
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'error',message:err.message} : x))
       }
@@ -759,6 +762,9 @@ export default function LabResultsPage() {
   const [otherSections, setOtherSections] = useState<{type:string;label:string}[]>([])
   const [sourceFile,    setSourceFile]    = useState<File|null>(null)
   const [extractingType,setExtractingType]= useState<string|null>(null)
+  // false when the PDF had no readable text layer, so the scan for other
+  // analyses never ran. Distinct from "ran and found none".
+  const [sectionsScanned,setSectionsScanned]= useState(true)
 
   // Keep the selected tab visible in the scroller. Matters most on a phone,
   // where only ~2 tabs fit at a time and the combined-report follow-ups switch
@@ -999,7 +1005,18 @@ export default function LabResultsPage() {
       {canWrite && !pending && (
         <PdfDropZone testType={activeTab}
           onExtracted={d=>{setPending(d);setDupWarn(null);setRecoveredDraft(null)}}
-          onSectionsDetected={(sections,file)=>{ setOtherSections(sections); setSourceFile(file) }}/>
+          onSectionsDetected={(sections,file,textLayerRead)=>{ setOtherSections(sections); setSourceFile(file); setSectionsScanned(textLayerRead) }}/>
+      )}
+
+      {/* Couldn't scan for the report's other analyses at all. Called out
+          rather than left blank — an empty space here looks identical to
+          "this report only contains one test", which is how a real bug went
+          unnoticed for a release. */}
+      {canWrite && !sectionsScanned && otherSections.length === 0 && (
+        <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:10, padding:'8px 14px', marginBottom:14, fontSize:11, color:'#6b7280' }}>
+          ℹ This PDF had no readable text layer (it was read as a scan), so it couldn&apos;t be checked for other analyses.
+          If it&apos;s a combined report, open the other tabs and drop it there too.
+        </div>
       )}
 
       {/* Combined report — other analyses found in the same PDF. Without this
