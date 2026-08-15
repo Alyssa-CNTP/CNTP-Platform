@@ -168,7 +168,7 @@ function PdfDropZone({ testType, onExtracted, onSectionsDetected }: {
       try {
         const data = await upload(item.file)
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'done',message:'Extracted'} : x))
-        if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'' })
+        if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'', _mismatch:data.analyte_mismatch??null })
         else if (data.data) onExtracted({ ...data.data, _sourceFile:item.file.name })
         // A combined report carries other analyses this tab didn't extract —
         // hand them up so they can be offered as follow-ups rather than lost.
@@ -249,12 +249,30 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
     ['po_number','PO Number'],['requested_by','Requested By'],['commodity','Commodity'],
   ].filter(([f]) => pending[f] !== undefined) as [string,string][]
 
+  const mismatch = pending._mismatch as { type:string; label:string } | null | undefined
+
   return (
-    <div style={{ background:'#f0fdf4', border:'2px solid #86efac', borderRadius:10, padding:16, marginBottom:14 }}>
+    <div style={{ background: mismatch?'#fef2f2':'#f0fdf4', border:`2px solid ${mismatch?'#fca5a5':'#86efac'}`, borderRadius:10, padding:16, marginBottom:14 }}>
+      {/* The extracted results belong to a different analysis than this tab.
+          Saving would file them under the wrong test_type — invisible once
+          saved, and it would feed the COA — so it's called out before that
+          can happen rather than after. */}
+      {mismatch && (
+        <div style={{ background:'#fff', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', marginBottom:12 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#991b1b', marginBottom:4 }}>
+            ⚠ These results look like {mismatch.label}, not {TEST_TYPES.find(t=>t.key===testType)?.label.replace(/^[^ ]+ /,'')}
+          </div>
+          <div style={{ fontSize:11, color:'#7f1d1d' }}>
+            Every extracted analyte belongs to {mismatch.label}. This usually means the report has no
+            {' '}{TEST_TYPES.find(t=>t.key===testType)?.label.replace(/^[^ ]+ /,'')} section, and the wrong one was picked up.
+            Saving now would file them under the wrong test type. Discard and drop this PDF on the {mismatch.label} tab instead.
+          </div>
+        </div>
+      )}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
         <div>
-          <div style={{ fontWeight:700, fontSize:12, color:'#166534' }}>
-            ✅ Review — {TEST_TYPES.find(t=>t.key===testType)?.label}
+          <div style={{ fontWeight:700, fontSize:12, color: mismatch?'#991b1b':'#166534' }}>
+            {mismatch?'⚠':'✅'} Review — {TEST_TYPES.find(t=>t.key===testType)?.label}
           </div>
           {pending._sourceFile && <div style={{ fontSize:9, color:'#9ca3af', marginTop:2 }}>📄 {pending._sourceFile}</div>}
         </div>
@@ -828,7 +846,7 @@ export default function LabResultsPage() {
       setOtherSections(prev => prev.filter(s => s.type !== type))
       setActiveTab(type as TestType)
       setDupWarn(null)
-      setPending({ ...data.data, _sourceFile: sourceFile.name, _model_used: data.model_used||'' })
+      setPending({ ...data.data, _sourceFile: sourceFile.name, _model_used: data.model_used||'', _mismatch: data.analyte_mismatch??null })
     } catch (e:any) {
       setError(e.message || `Could not extract ${label}`)
     } finally {
