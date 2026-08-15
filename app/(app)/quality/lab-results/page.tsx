@@ -24,6 +24,7 @@ const TEST_TYPES = [
   { key:'mosh_moah',   label:'🛢 MOSH/MOAH',       icon:'🛢', desc:'Mineral oil hydrocarbons' },
   { key:'pa_final',    label:'💊 PAs',             icon:'💊', desc:'PA/TA Final · EU limits · Scopolamine' },
   { key:'glyphosate',  label:'🧫 Glyphosate',      icon:'🧫', desc:'Glyphosate · AMPA · Glufosinate' },
+  { key:'chlorate_perchlorate', label:'🧂 Chlorate/Perchlorate', icon:'🧂', desc:'Chlorate · Perchlorate · EU MRLs' },
 ] as const
 
 type TestType = typeof TEST_TYPES[number]['key']
@@ -51,6 +52,7 @@ const COLS: Record<string, [string,string][]> = {
   mosh_moah: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
   pa_final:  [['analyte','PA/TA Analyte'],['result','Result (µg/kg)'],['unit','Unit'],['spec','EU Limit'],['status','Status']],
   glyphosate:[['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
+  chlorate_perchlorate: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','MRL (mg/kg)'],['status','Status']],
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -138,7 +140,10 @@ function expandRecord(r: LabResult): any[] {
 
 interface QueueItem { id:string; file:File; status:'pending'|'processing'|'done'|'error'; message:string }
 
-function PdfDropZone({ testType, onExtracted }: { testType:TestType; onExtracted:(d:any)=>void }) {
+function PdfDropZone({ testType, onExtracted, onSectionsDetected }: {
+  testType:TestType; onExtracted:(d:any)=>void
+  onSectionsDetected?: (sections:{type:string;label:string}[], file:File)=>void
+}) {
   const { session } = useAuth() // needed for upload auth
   // Upload goes to Next.js API route — no external service needed
   const [drag,  setDrag]  = useState(false)
@@ -165,6 +170,9 @@ function PdfDropZone({ testType, onExtracted }: { testType:TestType; onExtracted
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'done',message:'Extracted'} : x))
         if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'' })
         else if (data.data) onExtracted({ ...data.data, _sourceFile:item.file.name })
+        // A combined report carries other analyses this tab didn't extract —
+        // hand them up so they can be offered as follow-ups rather than lost.
+        if (data.detected_sections?.length) onSectionsDetected?.(data.detected_sections, item.file)
       } catch (err:any) {
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'error',message:err.message} : x))
       }
@@ -736,11 +744,21 @@ export default function LabResultsPage() {
   const db = getDb()
 
   const [activeTab,   setActiveTab]   = useState<TestType>('micro')
-  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[] })
+  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[],chlorate_perchlorate:[] })
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState('')
   const [pending,     setPending]     = useState<any|null>(null)
   const [dupWarn,     setDupWarn]     = useState<string|null>(null)
+
+  // ── Combined-report follow-ups ──
+  // One PDF from a lab like Eurofins often carries several analyses for the
+  // same sample. The drop zone extracts only the active tab's type; these hold
+  // the other sections the server spotted in that same file, plus the file
+  // itself, so each can be extracted into its own tab on demand instead of
+  // being silently dropped.
+  const [otherSections, setOtherSections] = useState<{type:string;label:string}[]>([])
+  const [sourceFile,    setSourceFile]    = useState<File|null>(null)
+  const [extractingType,setExtractingType]= useState<string|null>(null)
 
   // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Checks for
   // a recovered draft whenever there's no review in progress, keyed per test
@@ -776,6 +794,32 @@ export default function LabResultsPage() {
   }, [db])
 
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
+
+  // Re-run extraction on the SAME file for one of the other analyses found in
+  // it, then switch to that tab with the result loaded for review. Runs that
+  // type's own tuned prompt rather than reusing anything from the first pass,
+  // so each section is extracted exactly as it would be if dropped there
+  // directly. Saving still goes through the normal review panel.
+  async function extractSection(type: string, label: string) {
+    if (!sourceFile || extractingType) return
+    setExtractingType(type)
+    setError('')
+    try {
+      const fd = new FormData()
+      fd.append('pdf', sourceFile); fd.append('workcenter','pasteuriser'); fd.append('workflow', type)
+      const res  = await fetch('/api/upload', { method:'POST', body:fd })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Could not extract ${label}`)
+      setOtherSections(prev => prev.filter(s => s.type !== type))
+      setActiveTab(type as TestType)
+      setDupWarn(null)
+      setPending({ ...data.data, _sourceFile: sourceFile.name, _model_used: data.model_used||'' })
+    } catch (e:any) {
+      setError(e.message || `Could not extract ${label}`)
+    } finally {
+      setExtractingType(null)
+    }
+  }
 
   async function saveRecord(data: any, force = false) {
     if (!force) {
@@ -935,7 +979,36 @@ export default function LabResultsPage() {
       )}
 
       {/* Upload zone */}
-      {canWrite && !pending && <PdfDropZone testType={activeTab} onExtracted={d=>{setPending(d);setDupWarn(null);setRecoveredDraft(null)}}/>}
+      {canWrite && !pending && (
+        <PdfDropZone testType={activeTab}
+          onExtracted={d=>{setPending(d);setDupWarn(null);setRecoveredDraft(null)}}
+          onSectionsDetected={(sections,file)=>{ setOtherSections(sections); setSourceFile(file) }}/>
+      )}
+
+      {/* Combined report — other analyses found in the same PDF. Without this
+          they'd be lost: the drop zone only extracts the tab it landed on. */}
+      {canWrite && otherSections.length > 0 && (
+        <div style={{ background:'#eff6ff', border:'1px solid #93c5fd', borderRadius:10, padding:'10px 14px', marginBottom:14 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+            <span style={{ fontSize:12, fontWeight:700, color:'#1e40af' }}>📎 This report also contains:</span>
+            {otherSections.map(s => (
+              <button key={s.type} onClick={()=>extractSection(s.type, s.label)} disabled={!!extractingType}
+                title={`Extract ${s.label} from this same PDF and review it under that tab`}
+                style={{ padding:'4px 12px', borderRadius:20, border:'1px solid #1d4ed8', fontSize:11, fontWeight:600,
+                  background: extractingType===s.type ? '#1d4ed8' : '#fff', color: extractingType===s.type ? '#fff' : '#1d4ed8',
+                  cursor: extractingType ? 'default' : 'pointer', opacity: extractingType && extractingType!==s.type ? 0.5 : 1 }}>
+                {extractingType===s.type ? 'Extracting…' : `+ ${s.label}`}
+              </button>
+            ))}
+            <button onClick={()=>{setOtherSections([]);setSourceFile(null)}} disabled={!!extractingType}
+              title="Dismiss — don't capture the other analyses in this report"
+              style={{ marginLeft:'auto', background:'none', border:'none', color:'#6b7280', cursor:'pointer', fontSize:14 }}>×</button>
+          </div>
+          <div style={{ fontSize:10, color:'#1e40af', marginTop:4, opacity:0.8 }}>
+            Each one is extracted separately with its own rules, then shown for review before saving.
+          </div>
+        </div>
+      )}
 
       {/* Duplicate warning */}
       {dupWarn && (
