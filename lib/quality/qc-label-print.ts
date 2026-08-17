@@ -52,7 +52,14 @@ function esc(v: unknown, max = 24): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function buildQcLabelHtml(d: QcLabelData): string {
+/**
+ * `embed: true` drops the print/rotate control bar and its script — for
+ * showing the label inline (e.g. an iframe preview) rather than in its own
+ * print window, where there's no print button to click and no per-printer
+ * feed orientation to remember.
+ */
+export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {}): string {
+  const embed = !!opts.embed
   const serial     = (d.serialNumber || '').trim()
   const isFineLeaf = d.product === 'Fine Leaf'
   const outOfSpec  = !!d.bag?.inprocess_out_of_spec
@@ -118,13 +125,21 @@ export function buildQcLabelHtml(d: QcLabelData): string {
   .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 2mm; }
   .product { font-size: 15pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; }
   .qc-tag  { font-size: 6pt; font-weight: 700; letter-spacing: .1em; color: #333; margin-top: .5mm; text-transform: uppercase; }
+  .head-right { display: flex; align-items: center; gap: 2mm; flex-shrink: 0; }
+  .qc-flag { font-size: 13pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; white-space: nowrap; }
   .badge {
     background: #000; color: #fff; padding: 1mm 2mm; flex-shrink: 0;
     font-size: 6.5pt; font-weight: 700; white-space: nowrap; text-transform: uppercase;
   }
-  .idrow { display: flex; flex-direction: column; align-items: center; margin-top: .8mm; }
-  .idrow svg { display: block; height: 6mm; width: auto; max-width: 62mm; }
+  /* Barcode centred, Lot/Batch and Date in the margins either side of it —
+     same arrangement as the printed label (qc-label-zpl.ts), instead of a
+     separate footer row below the grid. */
+  .idrow { display: flex; align-items: center; justify-content: space-between; gap: 1.5mm; margin-top: .8mm; }
+  .idrow svg { display: block; height: 6mm; width: auto; max-width: 52mm; }
+  .barcode-col { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0; }
   .serial { font-family: 'Courier New', monospace; font-size: 8pt; font-weight: 700; letter-spacing: .12em; margin-top: .4mm; }
+  .side-field { flex-shrink: 0; max-width: 17mm; overflow: hidden; }
+  .side-field.right { text-align: right; }
   .metrics {
     flex: 1; min-height: 0; margin-top: .8mm;
     display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
@@ -147,13 +162,8 @@ export function buildQcLabelHtml(d: QcLabelData): string {
     font-size: 6pt; font-weight: 800; letter-spacing: .05em; text-align: center;
     padding: .7mm 1mm; text-transform: uppercase;
   }
-  .foot {
-    display: grid; grid-template-columns: 1fr auto auto; gap: 2mm;
-    margin-top: .8mm; align-items: end;
-  }
   .f-label { font-size: 5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #666; }
   .f-value { font-size: 7.5pt; font-weight: 800; line-height: 1.15; text-transform: uppercase; }
-  .foot > div:not(:first-child) { text-align: right; }
   /* Screen-only controls, laid out clear of the label so they never sit on top
      of it, and never printed. */
   .bar {
@@ -178,12 +188,25 @@ export function buildQcLabelHtml(d: QcLabelData): string {
         <div class="product">${esc(d.product, 22)}</div>
         <div class="qc-tag">Final QC${d.qcName ? ' · ' + esc(d.qcName, 28) : ''}</div>
       </div>
-      ${badge ? `<div class="badge">${esc(badge, 26)}</div>` : ''}
+      <div class="head-right">
+        <span class="qc-flag">QC-Label</span>
+        ${badge ? `<span class="badge">${esc(badge, 26)}</span>` : ''}
+      </div>
     </div>
 
     <div class="idrow">
-      ${barcode}
-      <div class="serial">${esc(serial, 30)}</div>
+      <div class="side-field">
+        <div class="f-label">Lot / Batch</div>
+        <div class="f-value">${esc(d.lotNumber, 16)}</div>
+      </div>
+      <div class="barcode-col">
+        ${barcode}
+        <div class="serial">${esc(serial, 30)}</div>
+      </div>
+      <div class="side-field right">
+        <div class="f-label">Date</div>
+        <div class="f-value">${dateFormatted}</div>
+      </div>
     </div>
 
     <div class="metrics">
@@ -197,19 +220,8 @@ export function buildQcLabelHtml(d: QcLabelData): string {
 
     ${outOfSpec ? '<div class="warn">⚠ In-process sieve out of spec — review before release</div>' : ''}
     ${failed && !outOfSpec ? '<div class="warn">⚠ Final QC failed — do not release</div>' : ''}
-
-    <div class="foot">
-      <div>
-        <div class="f-label">Lot / Batch</div>
-        <div class="f-value">${esc(d.lotNumber, 20)}</div>
-      </div>
-      <div>
-        <div class="f-label">Date</div>
-        <div class="f-value">${dateFormatted}</div>
-      </div>
-    </div>
   </div>
-
+${embed ? '' : `
   <div class="bar no-print">
     <button class="primary" onclick="window.print()">🖨 Print Label</button>
     <button onclick="toggleFeed()">↻ Rotate (feed: <span id="feed-name">long edge</span>)</button>
@@ -244,7 +256,7 @@ export function buildQcLabelHtml(d: QcLabelData): string {
   var saved = 'long'
   try { saved = localStorage.getItem('cntp.qcLabelFeed') || 'long' } catch (e) { /* private mode */ }
   setFeed(saved)
-</script>
+</script>`}
 </body>
 </html>`
 }

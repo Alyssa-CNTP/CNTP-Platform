@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC: on-screen preview now shows the real label design; dropped the manual browser-print button)
+
+**Files changed:** `lib/quality/qc-label-print.ts`, `app/(app)/quality/sieving/page.tsx`
+
+Reported: the modal shown right after saving a Final QC did not reflect any of the recent label changes (QC-LABEL tag, Lot/Batch and Date beside the barcode, no Product line) — it was a plain SERIAL/PRODUCT/LOT summary plus a hand-built metrics grid, a completely separate piece of markup from the label that actually gets printed, so the two had already drifted apart.
+
+- **The modal now renders the actual label design**, not a lookalike: `buildQcLabelHtml()` (`lib/quality/qc-label-print.ts`) is shown inline in an iframe sized to the label's real 100×50mm proportions, so what the operator sees after saving a QC is what comes out of the printer — one builder, not two.
+- **`buildQcLabelHtml()` gained an `embed` option** for this — it drops the print/rotate control bar and its script (which target a print pop-up window, not an inline preview) without touching the label markup itself.
+- **The browser-rendered label's own layout was brought in line with the direct-ZPL one** (`lib/quality/qc-label-zpl.ts`, the last few entries): a big "QC-LABEL" tag next to the product name, Lot/Batch and Date moved beside the barcode instead of a footer row. It had been left on the old layout since only the ZPL builder feeds the physical printer — now both agree, so the preview doesn't show something the printer wouldn't actually produce.
+- **Removed the "Print via browser instead" button** — the escape hatch is no longer offered since the preview now shows the same design either path would print; the automatic fallback (if the direct print to the Intermec fails) still opens that browser print window unchanged.
+- Verified by rendering both builders in headless Chromium — a typical case and an all-fields-long worst case (long product name, long QC name, out-of-spec warning band) — at the iframe's exact embedded size, confirming no clipped or overlapping fields and no console/page errors from the `embed` mode's stripped script.
+
 ## 2026-08-17 — Gustav (Sieving Final QC label: add a big "QC-LABEL" tag next to the product name)
 
 **Files changed:** `lib/quality/qc-label-zpl.ts`
