@@ -2,6 +2,14 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (COA sign-off: fix the customer field never actually being sent)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+`postSignoff()` read `model.matchedDoc?.customer` — but `matchedDoc` is just the applied spec's `doc_no` (a string), which never had a `.customer` property, so this always sent `undefined` and the sign-off row's `customer` column was always null. Caught by `tsc`, not reported as a functional bug.
+
+- Now sends the pasteuriser batch's own `customer` field (from `sources.past.customer`, the actual source `header.destination` itself falls back to), with `header.destination` as the fallback for a reopened historical COA where `sources` is null.
+
 ## 2026-08-17 — Gustav (Lab Results: add Water Activity as a new test type)
 
 **Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`, `app/(app)/quality/coa/page.tsx`, `components/quality/CoaSpecsTab.tsx`, `QUALITY_MIGRATION_NOTES.md`

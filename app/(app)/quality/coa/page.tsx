@@ -285,7 +285,12 @@ export default function CoaGeneratorPage() {
     try {
       const res = await fetch('/api/quality/coa-signoff', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_no: model.batch, customer: model.matchedDoc?.customer, grade: model.header?.grade, ...payload }),
+        // matchedDoc is just the applied spec's doc_no (a string) — never had
+        // a .customer property, so this always sent undefined. The pasteuriser
+        // batch's own customer field is the accurate source; header.destination
+        // (which can be overridden by a saved logistics order) is the fallback
+        // for a reopened historical COA, where sources is null.
+        body: JSON.stringify({ batch_no: model.batch, customer: sources?.past?.customer || model.header?.destination || '', grade: model.header?.grade, ...payload }),
       })
       const d = await res.json()
       if (!res.ok) {
