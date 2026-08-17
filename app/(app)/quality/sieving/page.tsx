@@ -18,7 +18,7 @@ import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
-import { printQcLabel, printQcLabelAuto } from '@/lib/quality/qc-label-print'
+import { printQcLabelAuto, buildQcLabelHtml } from '@/lib/quality/qc-label-print'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -1844,7 +1844,9 @@ export default function SievingPage() {
       {/* New Run Form */}
       {/* Bag label — printed after a Final QC, carrying the two values the QC
           measured (bulk density + leaf shade) alongside the bag's identity. */}
-      {printBag && (
+      {printBag && (() => {
+        const qcLabelData = { ...printBag, product: printBag.product || activeProduct }
+        return (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
           onClick={()=>setPrintBag(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:12,width:'100%',maxWidth:420,overflow:'hidden'}}>
@@ -1852,64 +1854,42 @@ export default function SievingPage() {
               <span style={{fontWeight:700,fontSize:14}}>✓ Final QC saved — bag label</span>
               <button onClick={()=>setPrintBag(null)} style={{background:'rgba(255,255,255,.2)',border:'none',borderRadius:6,color:'#fff',fontSize:18,cursor:'pointer',padding:'0 8px'}}>×</button>
             </div>
-            <div id="bag-qc-label" style={{padding:18,fontFamily:'monospace',color:'#111'}}>
-              <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 10px',fontSize:13}}>
-                <b>SERIAL</b><span>{printBag.serialNumber||'—'}</span>
-                <b>PRODUCT</b><span>{printBag.product||activeProduct}</span>
-                <b>LOT</b><span>{printBag.lotNumber||'—'}</span>
-              </div>
-              <div style={{marginTop:12,border:'2px solid #111',borderRadius:6,display:'grid',gridTemplateColumns:'1fr 1fr'}}>
-                {([
-                  ['BULK DENSITY', printBag.bulkDensity, 'cc/100g'],
-                  ['LEAF SHADE',   printBag.leafShade,   '1–11'],
-                  ['PA LEVEL',     printBag.paLevel,      ''],
-                  ['RESIDUE',      printBag.residue,      ''],
-                ] as [string, any, string][]).map(([label, value, unit], i) => (
-                  <div key={label} style={{textAlign:'center',padding:'10px 8px',borderTop:i>=2?'1px solid #111':undefined,borderLeft:i%2===1?'1px solid #111':undefined}}>
-                    <div style={{fontSize:10,letterSpacing:'.08em'}}>{label}</div>
-                    <div style={{fontSize:22,fontWeight:800}}>{value||'—'}</div>
-                    {unit && <div style={{fontSize:9}}>{unit}</div>}
-                  </div>
-                ))}
-              </div>
-              {printBag.bag?.inprocess_out_of_spec && (
-                <div style={{marginTop:10,padding:'6px 10px',border:'2px solid #991b1b',color:'#991b1b',borderRadius:6,fontSize:11,fontWeight:700,textAlign:'center'}}>
-                  ⚠ IN-PROCESS SIEVE OUT OF SPEC — REVIEW BEFORE RELEASE
-                </div>
-              )}
+            {/* Same builder that generates what actually gets printed
+                (lib/quality/qc-label-print.ts) — this is a live preview of the
+                real label, not a separate hand-built summary that can drift
+                out of sync with it. `embed` drops the print/rotate controls
+                meant for that builder's own pop-up window. */}
+            <div style={{padding:18,display:'flex',justifyContent:'center'}}>
+              <iframe
+                title="QC label preview"
+                srcDoc={buildQcLabelHtml(qcLabelData, { embed: true })}
+                style={{width:378,height:189,border:'1px solid #e5e7eb',borderRadius:8,display:'block'}}
+              />
             </div>
             <div style={{padding:'10px 16px',borderTop:'1px solid #eee',display:'flex',justifyContent:'flex-end',gap:8}}>
               <button onClick={()=>setPrintBag(null)} style={{padding:'8px 16px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Close</button>
               {/* Sends the label straight to the lab's networked Intermec —
                   the browser print dialog's Portrait/Landscape control could
                   not fix the sideways/clipped output it was giving there, so
-                  this bypasses it. Falls back to that browser window (its own
-                  100×50mm page, not a window.print() of the whole screen) if
-                  the printer is unreachable. */}
+                  this bypasses it. Falls back to that builder's own pop-up
+                  window (its own 100×50mm page, not a window.print() of the
+                  whole screen) if the printer is unreachable. */}
               <button
                 disabled={labelPrinting}
                 onClick={async ()=>{
                   setLabelPrinting(true)
-                  try { await printQcLabelAuto({ ...printBag, product: printBag.product || activeProduct }) }
+                  try { await printQcLabelAuto(qcLabelData) }
                   finally { setLabelPrinting(false) }
                 }}
                 style={{padding:'8px 20px',borderRadius:7,border:'none',background:labelPrinting?'#94a3b8':'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:labelPrinting?'default':'pointer'}}
               >
                 {labelPrinting ? 'Printing…' : '🖨 Print label'}
               </button>
-              {/* Escape hatch: force the browser window even when the direct
-                  print appears to succeed (e.g. it queued but the printer is
-                  jammed/offline) — same window as the automatic fallback. */}
-              <button
-                onClick={()=>printQcLabel({ ...printBag, product: printBag.product || activeProduct })}
-                style={{padding:'8px 12px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:11,color:'#6b7280',cursor:'pointer'}}
-              >
-                Print via browser instead
-              </button>
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {showForm && canWrite && (
         <div id="sieving-new-run-form" style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
