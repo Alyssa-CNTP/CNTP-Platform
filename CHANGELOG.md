@@ -2,6 +2,14 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC label: add a big "QC-LABEL" tag next to the product name)
+
+**Files changed:** `lib/quality/qc-label-zpl.ts`
+
+- "QC-LABEL" now prints in the same big font as the product name, right-justified on that same top row (e.g. "FINE LEAF ... QC-LABEL"), so the label reads unambiguously as a QC label at a glance.
+- The product name's own field width shrinks to make room, rather than sharing one width with the new field — the two `^FB` boxes don't overlap even for a longer product name (verified with a 25-character one).
+- Re-verified programmatically across the same five cases as before (typical, worst-case, the previously-photographed data, empty, plus a long-product-name case) for position/box-overflow/field-balance/integer-coordinate correctness.
+
 ## 2026-08-17 — Gustav (Sieving Final QC label: relocate Lot/Batch and Date next to the barcode, drop the duplicate Product line)
 
 **Files changed:** `lib/quality/qc-label-zpl.ts`
