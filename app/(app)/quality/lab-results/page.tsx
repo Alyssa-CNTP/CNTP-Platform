@@ -25,6 +25,7 @@ const TEST_TYPES = [
   { key:'pa_final',    label:'💊 PAs',             icon:'💊', desc:'PA/TA Final · EU limits · Scopolamine' },
   { key:'glyphosate',  label:'🧫 Glyphosate',      icon:'🧫', desc:'Glyphosate · AMPA · Glufosinate' },
   { key:'chlorate_perchlorate', label:'🧂 Chlorate/Perchlorate', icon:'🧂', desc:'Chlorate · Perchlorate · EU MRLs' },
+  { key:'water_activity', label:'💧 Water Activity',  icon:'💧', desc:'Aw @ 20°C · Peter Johnson Labs' },
 ] as const
 
 type TestType = typeof TEST_TYPES[number]['key']
@@ -53,6 +54,10 @@ const COLS: Record<string, [string,string][]> = {
   pa_final:  [['analyte','PA/TA Analyte'],['result','Result (µg/kg)'],['unit','Unit'],['spec','EU Limit'],['status','Status']],
   glyphosate:[['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
   chlorate_perchlorate: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','MRL (mg/kg)'],['status','Status']],
+  // type/grade come from the sample identification block, not a results
+  // table — carried alongside batch_no so this record can be matched to the
+  // right COA/spec without opening the source PDF again.
+  water_activity: [['type','Type'],['grade','Grade'],['analyte','Analyte'],['result','Result'],['unit','Unit']],
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -120,8 +125,11 @@ function expandRecord(r: LabResult): any[] {
   }
 
   if (d.analytes && Array.isArray(d.analytes)) {
+    // type/grade are record-level (from the sample identification block, not
+    // a results row) but an analyte can override — neither currently does,
+    // this just keeps a later per-row extraction possible without a shape change.
     if (d.analytes.length === 0)
-      return [{ batch_no:batchKey, id:r.id, created_at:r.created_at, compound:'None detected', analyte:'None detected', result:'None detected', unit:'—', mrl:'—', spec:'—', status:d.overall_status||'Pass' }]
+      return [{ batch_no:batchKey, id:r.id, created_at:r.created_at, compound:'None detected', analyte:'None detected', result:'None detected', unit:'—', mrl:'—', spec:'—', status:d.overall_status||'Pass', type:d.type||'—', grade:d.grade||'—' }]
     return d.analytes.map((c: any) => ({
       batch_no:batchKey, id:r.id, created_at:r.created_at,
       compound:c.analyte||c.metal||'—', analyte:c.analyte||c.metal||'—',
@@ -129,6 +137,7 @@ function expandRecord(r: LabResult): any[] {
       unit:c.unit||'—',
       mrl:c.eu_mrl??c.spec??'—', spec: c.spec!=null?formatSpec(c.spec):formatSpec(c.eu_mrl),
       status:c.status||d.overall_status||'—',
+      type:c.type||d.type||'—', grade:c.grade||d.grade||'—',
     }))
   }
 
@@ -247,6 +256,10 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
     ['_date_issued','Date Issued'],['date_validated','Date Validated'],
     ['_order','Order No.'],['lab_reference','Lab Ref'],['report_reference','Report Ref'],
     ['po_number','PO Number'],['requested_by','Requested By'],['commodity','Commodity'],
+    // From the sample identification block (currently only water_activity) —
+    // shown here so a wrong TYPE/GRADE line can be caught before saving, the
+    // same reasoning as the Batch No. field above.
+    ['type','Type'],['grade','Grade'],['sample_date','Sample Date'],['sample_description','Sample Description'],
   ].filter(([f]) => pending[f] !== undefined) as [string,string][]
 
   const mismatch = pending._mismatch as { type:string; label:string } | null | undefined
@@ -641,6 +654,12 @@ function RecordEditModal({ record, onClose, onSaved }: { record: any; onClose: (
 
   const [batchNo, setBatchNo]   = useState(record.batch_no || d.batch_no || '')
   const [overallStatus, setOverallStatus] = useState(d.overall_status || record.overall_status || 'Pass')
+  // type/grade (from the sample identification block, e.g. water_activity) —
+  // only shown when this record actually carries them, so the eight existing
+  // analytes-shaped tabs (none of which have these) don't gain blank inputs.
+  const hasTypeGrade = 'type' in d || 'grade' in d
+  const [typeVal,  setTypeVal]  = useState(d.type  ?? '')
+  const [gradeVal, setGradeVal] = useState(d.grade ?? '')
   const [rows, setRows] = useState<any[]>(() => {
     if (isCompounds) return d.compounds_detected.map((c: any) => ({ ...c }))
     if (isAnalytes)   return d.analytes.map((a: any) => ({ ...a }))
@@ -660,6 +679,7 @@ function RecordEditModal({ record, onClose, onSaved }: { record: any; onClose: (
   async function save() {
     setSaving(true)
     const newResults: any = { ...d, overall_status: overallStatus, batch_no: batchNo }
+    if (hasTypeGrade) { newResults.type = typeVal; newResults.grade = gradeVal }
     if (isCompounds) newResults.compounds_detected = rows
     else if (isAnalytes) newResults.analytes = rows
     else Object.assign(newResults, flatForm)
@@ -692,6 +712,20 @@ function RecordEditModal({ record, onClose, onSaved }: { record: any; onClose: (
               <option>Pass</option><option>Fail</option>
             </select>
           </div>
+          {hasTypeGrade && (
+            <>
+              <div>
+                <label style={{ fontSize:10, fontWeight:700, display:'block', marginBottom:2, color:'#374151' }}>Type</label>
+                <input value={typeVal} onChange={e=>setTypeVal(e.target.value)}
+                  style={{ padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:12 }}/>
+              </div>
+              <div>
+                <label style={{ fontSize:10, fontWeight:700, display:'block', marginBottom:2, color:'#374151' }}>Grade</label>
+                <input value={gradeVal} onChange={e=>setGradeVal(e.target.value)}
+                  style={{ padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:12 }}/>
+              </div>
+            </>
+          )}
         </div>
 
         {isCompounds && (
@@ -784,7 +818,7 @@ export default function LabResultsPage() {
   const db = getDb()
 
   const [activeTab,   setActiveTab]   = useState<TestType>('micro')
-  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[],chlorate_perchlorate:[] })
+  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[],chlorate_perchlorate:[],water_activity:[] })
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState('')
   const [pending,     setPending]     = useState<any|null>(null)
@@ -886,7 +920,10 @@ export default function LabResultsPage() {
       order_no:     data._order||data.report_reference||data.order_no||'',
       date_issued:  data._date_issued||data.date_issued||'',
       date_received:data.date_received||'',
-      results:      data.results||(data.analytes?{analytes:data.analytes}:data),
+      // type/grade/sample_description/sample_date have no dedicated column —
+      // carried through explicitly here or the analytes branch below would
+      // drop them (it replaces the whole extraction with just {analytes:[]}).
+      results:      data.results||(data.analytes?{analytes:data.analytes, type:data.type, grade:data.grade, sample_description:data.sample_description, sample_date:data.sample_date}:data),
       overall_status: data.overall_status||'',
       pdf_path:     data._doc||data._sourceFile||'',
     }

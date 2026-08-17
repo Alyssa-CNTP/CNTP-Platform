@@ -38,6 +38,10 @@ const CONTAM_FIELDS: [string, string][] = [
 ]
 const OTHER_FIELDS: [string, string][] = [
   ['residue_reg', 'Pesticide / Residue Reg.'], ['foreign_material', 'Foreign Material'], ['sensorial', 'Sensorial'],
+  // A limit here is optional — Peter Johnson's water activity report prints
+  // no threshold of its own, so this is blank (not required) for most
+  // customers; filled in only if a specific one asks for a spec value.
+  ['water_activity', 'Water Activity'],
 ]
 
 // Count of required analyses (any filled field in micro + contaminants + mesh).
