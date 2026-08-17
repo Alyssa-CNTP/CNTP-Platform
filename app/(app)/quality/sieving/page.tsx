@@ -1158,7 +1158,6 @@ export default function SievingPage() {
       // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
       // is still yesterday, which would file the run against the wrong day.
       date: sastDateStr(new Date().toISOString()),
-      lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
       lotNumber:'', serialNumber:'', grade:'Export', variant:'Conventional',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
       bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
@@ -1588,7 +1587,6 @@ export default function SievingPage() {
       baggingId:    bag.bagging_id,
       serialNumber: bag.bag_serial_no || '',
       lotNumber:    bag.lot_number || '',
-      variant:      bag.variant || f.variant,
       variant:      normProdVariant(bag.variant) || f.variant,
       // The run's date is WHEN THE QC WAS DONE, to match the time beside it,
       // which is always stamped at capture. Previously this took the bag's
