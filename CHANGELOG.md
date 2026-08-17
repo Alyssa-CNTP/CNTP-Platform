@@ -265,6 +265,18 @@ Reported: `STFL-130826-012` was captured as a Final QC and is in the database, b
 - **Note on the duplicate:** `STFL-130826-012` has **two** Final QC rows (07:33 and 07:35, both 340 / shade 5). The guard that blocks a second Final QC on one serial is merged to staging but is sitting in PR #641 awaiting approval for `main`, so it was not yet protecting the live site when these were captured.
 - Historical records were **not** bulk-rewritten: of 10 rows since 1 Aug where the stored date differs from the capture date, several are legitimate night-shift back-dating (time typed as 23:30, captured 00:12), which this change deliberately still allows.
 
+## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: `STFL-130826-012` was captured as a Final QC and is in the database, but could not be found in the sieving runs table.
+
+- **What happened.** The run is in the table — it had sorted itself dozens of rows down. `applyBagToForm()` set the run's **Date** from `bag.bag_date` (when *production bagged* the bag) while the **Time** beside it is always stamped at the moment of capture. The bag was made on 13 Aug and sampled at 07:33 on the morning of the 14th, so the run was stored as `date = 2026-08-13, time = 07:33` — an instant that never happened. The table sorts on `date + time`, so instead of appearing at the top it filed itself near the *bottom* of the 13 August block, below every run from that day's shift.
+- **Fix.** A Final QC run's Date is now the date the QC was performed, matching the capture-stamped Time next to it. The bag's own bagging moment isn't lost — it stays attached to the bag through the serial / `bagging_id` link, and is now shown explicitly in the green confirmation line ("Bagged 2026-08-13 15:33") when a bag is picked. The Date field stays editable, so a night shift can still back-date a run deliberately.
+- **Also fixed a latent midnight bug in the same area:** `blankForm()` seeded the date with `new Date().toISOString().slice(0,10)` — raw UTC. Between 00:00 and 01:59 SAST that is still *yesterday*, so any run captured in that window was filed against the wrong day. Now uses the same `sastDateStr()` (Africa/Johannesburg) helper. One record on production (`16-07-18`, captured 00:37) shows exactly this signature.
+- **Note on the duplicate:** `STFL-130826-012` has **two** Final QC rows (07:33 and 07:35, both 340 / shade 5). The guard that blocks a second Final QC on one serial is merged to staging but is sitting in PR #641 awaiting approval for `main`, so it was not yet protecting the live site when these were captured.
+- Historical records were **not** bulk-rewritten: of 10 rows since 1 Aug where the stored date differs from the capture date, several are legitimate night-shift back-dating (time typed as 23:30, captured 00:12), which this change deliberately still allows.
+
 ## 2026-08-13 — Gustav (The real cause of "0 bags awaiting QC" on live: the view took 20s and hit the 8s statement timeout)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260813_008_fix_bag_inprocess_link_performance.sql`, `supabase/migrations/20260813_009_bag_qc_status_lateral_inprocess.sql` (both new, applied to production + staging)
