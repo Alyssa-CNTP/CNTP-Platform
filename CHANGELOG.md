@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC label: print straight to the lab's printer, bypassing the browser)
+
+**Files changed:** `lib/quality/qc-label-zpl.ts` (new), `app/api/print/qc-label/route.ts` (new), `lib/quality/qc-label-print.ts`, `lib/production/capture-config.ts`, `app/(app)/quality/sieving/page.tsx`
+
+Reported after the previous browser-orientation fix: the label was still printing rotated and cut off, on an Intermec PD (SN 175C1950042, 192.168.0.26) in the lab — a different physical printer from the sieving tower's own Argox. The dialog's Portrait/Landscape control was never going to fix this class of problem (see the previous entry) — it can rotate the drawing, not change the page's physical feed direction — so the browser print path is no longer the primary route for this label at all.
+
+- **Print label now sends raw ZPL straight to the printer** (it's configured for ZSim — Zebra ZPL emulation), the same way production's own bag tags already do: `app/api/print/label/route.ts`'s relay/direct split (`lib/production/print-queue.ts`, `lib/production/print-socket.ts`) is reused rather than duplicated, so this automatically works the same way in whichever mode (relay on the VPS, direct on the factory LAN) the deployment is already running in.
+- **New `lib/quality/qc-label-zpl.ts`** lays out the same content as the browser label — product, grade/variant badge, Code 128 serial, Bulk Density/Leaf Shade/PA Level/Residue, out-of-spec/failed warning band, Lot/Product/Date footer — in ZPL II at 800×400 dots (100×50mm @ 203dpi), added to `SECTION_PRINTER` as a new `quality_lab` entry, distinct from the tower's own `sieving` entry since they're two different physical printers.
+- **The browser label is kept as an automatic fallback** if the printer is unreachable, plus a manual "Print via browser instead" escape hatch — same 100×50mm standalone window as before, not `window.print()` of the app screen.
+- ZPL has no auto-wrap or ellipsis — unlike the browser build's CSS, text that doesn't fit a box is simply drawn past its edge, not clipped or shrunk. Every text field is bounded with `^FB` (ZPL's field-block command) rather than hand-computed character widths, so a long grade/variant, lot number or QC name is dropped at the box edge instead of overlapping its neighbour.
+- Caught during layout verification, not on a physical print (this printer is on the factory LAN, unreachable from where this was built): the grid's bottom edge and the out-of-spec warning band were both pinned to fixed positions that only agreed with the footer when the other was absent — with the warning band showing, both landed on top of the footer, and the shrunk cell had no room left for the third (unit) line stacked beneath label and value. The vertical layout is now derived bottom-up from the footer with an explicit minimum gap between every pair of blocks, and the unit line is dropped rather than overflowing when a cell is too short for it.
+- Verified programmatically for a typical run, an all-fields-long worst case (long serial/grade/QC name, out-of-spec warning present), a failed-but-in-spec case, and an empty one: every `^FO` position and `^GB` box stays within the 800×400 label, `^FB` widths are all positive and on-label, and `^FO`/`^FS` pairs balance. Genuine end-to-end confirmation on the physical Intermec — including which rotation, if any, it needs — is still outstanding; a single `FLIP_180` constant in `qc-label-zpl.ts` is the one-line fix if it prints upside down; a sideways print points at the stock's feed direction on the printer, not the code.
+
 ## 2026-08-17 — Gustav (Sieving Final QC label: printed sideways and cut off on the lab printer)
 
 **Files changed:** `lib/quality/qc-label-print.ts`

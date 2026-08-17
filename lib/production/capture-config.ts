@@ -171,6 +171,13 @@ export const SECTION_PRINTER: Record<string, PrinterConfig> = {
   refining2:   { ip: '', lang: 'pplb' },
   granule:     { ip: '', lang: 'pplb' },
   blender:     { ip: '', lang: 'pplb' },
+  // Not a production bagging section — the Sieving Final QC lab's own label
+  // printer, keyed separately from `sieving` above (which is the tower's bag
+  // tag printer, a different physical unit). Configured for ZSim (Zebra ZPL
+  // emulation) on its front panel — it also supports IPL/ESim/DPL, but ZPL
+  // lets this reuse the same builder/registry/socket path as every other
+  // printer here instead of a one-off command language.
+  quality_lab: { ip: '192.168.0.26', lang: 'zpl' }, // Intermec PD series — SN 175C1950042
 }
 
 // Which master-inventory product groups a section bags as outputs. The picker
