@@ -199,9 +199,14 @@ export function granuleTotals(d: GranuleData) {
 // is never left without a unique, findable tag. Sequence continues across days
 // for one lot.
 
-async function nextGranuleSerial(lot: string, localSerials: string[]): Promise<string> {
-  const now = new Date()
-  const ddmmyy = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getFullYear()).slice(-2)}`
+// dateStr is the session's own pinned date (YYYY-MM-DD), not a fresh
+// `new Date()` — only matters for the no-lot fallback stem below, but a
+// session spanning midnight (the afternoon/night shift runs 16h00–01h00)
+// must keep stamping bags under the date the session is filed under, same
+// reasoning as Sieving's nextSievingSerial().
+async function nextGranuleSerial(lot: string, localSerials: string[], dateStr: string): Promise<string> {
+  const [y, m, d] = dateStr.split('-')
+  const ddmmyy = `${d}${m}${y.slice(-2)}`
   const lotStem = lot.trim()
   const stem = lotStem || `GL-${ddmmyy}`
   const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
@@ -678,7 +683,7 @@ export function GranuleCapture({
   async function addOutputBag() {
     if (n(outWeight) <= 0 || adding) return
     setAdding(true)
-    const serial = await nextGranuleSerial(lot, value.outputs.map(o => o.serial))
+    const serial = await nextGranuleSerial(lot, value.outputs.map(o => o.serial), date)
     const now = nowISO()
     const acCode = getAcumaticaCode(item, variantShort, 'A')
     try {
@@ -722,7 +727,7 @@ export function GranuleCapture({
   async function addDustOutput() {
     const weight = computedDustWeight()
     if (weight <= 0) return
-    const serial = await nextGranuleSerial(lot, [...value.outputs.map(o => o.serial), ...value.dustOutputs.map(o => o.serial)])
+    const serial = await nextGranuleSerial(lot, [...value.outputs.map(o => o.serial), ...value.dustOutputs.map(o => o.serial)], date)
     const now = nowISO()
     const acCode = getAcumaticaCode(dustType, variantShort, 'A')
     try {

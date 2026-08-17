@@ -2,7 +2,6 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { format } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar,
 } from 'lucide-react'
@@ -16,6 +15,7 @@ import { upperCode } from '@/lib/production/normalize-code'
 import { OperatorPicker } from '@/components/production/capture/OperatorPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
 import { WORK_CENTRE_FOR_SECTION, autoLot, resolveExistingBlendRunNo } from '@/components/production/capture/BlenderCapture'
+import { productionShiftNow } from '@/lib/production/shifts'
 import type { Operator, Variant, InventoryItem } from '@/lib/supabase/database.types'
 
 const isBlenderSection = (id: string) => id === 'blender' || id === 'smallblender'
@@ -57,14 +57,18 @@ function AssignScreen() {
   const { user } = useAuth()
 
   // Date/shift can be deep-linked (e.g. from the supervisor calendar); otherwise
-  // default to today + the current shift.
-  const [date, setDate]   = useState(sp.get('date') ?? format(new Date(), 'yyyy-MM-dd'))
+  // default to whichever production shift "now" belongs to — see
+  // productionShiftNow()'s comment. Between 00h00–06h59 that's still
+  // yesterday's afternoon/night shift, not today, so a supervisor opening
+  // this page to fix up the shift that's still running lands on the right
+  // one instead of one that doesn't exist yet.
+  const nowFallback = productionShiftNow()
+  const [date, setDate]   = useState(sp.get('date') ?? nowFallback.date)
   const [shift, setShift] = useState<Shift>(() => {
     const q = sp.get('shift')
     if (q === 'morning' || q === 'afternoon') return q
     if (q === 'night') return 'afternoon'   // legacy deep-links → afternoon/night shift
-    const h = new Date().getHours()
-    return h >= 7 && h < 16 ? 'morning' : 'afternoon'
+    return nowFallback.shift
   })
 
   const [operators, setOperators] = useState<Operator[]>([])
