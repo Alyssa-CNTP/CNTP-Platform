@@ -2,6 +2,33 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC: the bag label printed the whole screen instead of the label)
+
+**Files changed:** `lib/quality/qc-label-print.ts` (new), `app/(app)/quality/sieving/page.tsx`
+
+Reported: the label printer in the lab could not print the Final QC bag label — the print came out as the whole page, background and all, rather than the label.
+
+Cause: the "Print label" button in the Final QC pop-up called `window.print()` on the app page itself. That prints whatever is on screen — sidebar, runs table, modal backdrop — onto the browser's default paper size. The production sieving tower labels never had this problem because they render the label as its own document in its own window (`lib/production/label-print.ts`), which is what actually constrains the print to the label media.
+
+- **Same mechanism as production now:** the QC label is built as a standalone document and opened in its own window with `@page { size: 100mm 50mm; margin: 0 }`, so only the label is sent to the printer. Pick the lab printer once in the browser's print dialog and it is remembered for subsequent labels.
+- **Sized to the label stock:** 100mm × 50mm exactly, `overflow: hidden` on the page box so content can never spill onto a second label — a blank label feeding after every print is the usual symptom of that.
+- **Its own layout, not the production bag label**, because it carries what the QC measured: product, grade/variant, Code 128 of the bag serial, and Bulk Density / Leaf Shade / PA Level / Residue, with Lot and Date in the footer. Out-of-spec in-process results and a failed Final QC print as a black warning band.
+- **Verified the information fits** by rendering the label in Chromium at exactly 100mm × 50mm and measuring the laid-out geometry, for a typical run, an all-fields-long worst case (long serial, long QC name, warning band present), and an empty one: one page, nothing beyond 50mm, no element overflowing its box. The first attempt did overflow — with the warning band present the second metrics row's values escaped their cells — so type sizes and the barcode height are now budgeted against that tightest case, and long values truncate rather than break the layout.
+- Variant words are shortened on the badge the way the production label does it (`FT-Conventional` → `FT CON`), which stopped `EXPORT BLEND · FT-CONVENT…` truncating mid-word.
+- The re-print button on the runs history uses the same pop-up, so it is fixed by the same change.
+
+## 2026-08-17 — Gustav (Lab uploads: a batch number containing a backslash threw away the entire extraction)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported: uploading an Assurecloud micro report failed with *"AI returned invalid JSON — Bad escaped character in JSON at position 128"*. Nothing was extracted at all.
+
+Cause: that report prints `Batch No: 26291-CON\FL-SFCO` — a literal backslash in the batch. The model passes it through verbatim, so its reply contained `"batch_no": "26291-CON\FL-SFCO"`. `\F` is not a valid JSON escape, so `JSON.parse` threw and the whole response was discarded — every other correctly-extracted field with it. Position 128 lines up with `batch_no` being the fifth field. Not micro-specific: it would hit any tab, any workflow, for any value a report prints with a backslash in it.
+
+- `parseJSON` now retries once with a repair pass that doubles any backslash which doesn't begin a valid JSON escape, so it parses back to the character the report actually prints. The normal parse is attempted first and unchanged, so well-formed responses take exactly the same path as before.
+- The backslash is preserved rather than stripped, because the batch genuinely contains it — as with the rest of the extraction, correcting it stays the reviewer's call via the editable Batch No. field.
+- Verified against the real failing payload plus valid escapes (`\n`, `\"`, `\\`, `\uXXXX`), a legitimate double backslash followed by an invalid-escape character, plain JSON, and the array-wrapped form — valid sequences are consumed whole, so `\\` is left alone.
+
 ## 2026-08-14 — Gustav (Lab Results: extractions could file a result against the lab's reference instead of the batch number)
 
 **Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`

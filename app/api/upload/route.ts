@@ -175,6 +175,20 @@ async function callGeminiWithPdf(systemPrompt: string, pdfBase64: string, workfl
 
 // ─── JSON parser ──────────────────────────────────────────────────────────────
 
+// Lab reports occasionally print a literal backslash inside a value — e.g. the
+// Assurecloud batch "26291-CON\FL-SFCO". The model passes it through verbatim,
+// producing `"\F"`, which is not a valid JSON escape and made JSON.parse throw
+// away the whole extraction. Double any backslash that doesn't start a valid
+// escape so it parses back to the character the report actually prints.
+// Valid sequences are consumed whole, so a legitimate `\\` is left alone.
+function repairInvalidEscapes(s: string): string {
+  return s.replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/g, (m, valid) => (valid ? m : '\\\\'))
+}
+
+function parseAny(s: string): any {
+  try { return JSON.parse(s) } catch { return JSON.parse(repairInvalidEscapes(s)) }
+}
+
 function parseJSON(raw: string): any {
   if (!raw || typeof raw !== 'string') throw new Error('Empty response from AI model')
   let clean = raw.trim()
@@ -185,12 +199,12 @@ function parseJSON(raw: string): any {
 
   if (arrStart !== -1 && (objStart === -1 || arrStart < objStart)) {
     if (arrEnd > arrStart) {
-      const arr = JSON.parse(clean.slice(arrStart, arrEnd + 1))
+      const arr = parseAny(clean.slice(arrStart, arrEnd + 1))
       return Array.isArray(arr) && arr.length > 0 ? arr[0] : arr
     }
   }
-  if (objStart !== -1 && objEnd > objStart) return JSON.parse(clean.slice(objStart, objEnd + 1))
-  return JSON.parse(clean)
+  if (objStart !== -1 && objEnd > objStart) return parseAny(clean.slice(objStart, objEnd + 1))
+  return parseAny(clean)
 }
 
 // ─── PA grade computation ─────────────────────────────────────────────────────
