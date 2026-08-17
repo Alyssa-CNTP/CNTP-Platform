@@ -18,6 +18,7 @@ import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { printQcLabel } from '@/lib/quality/qc-label-print'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -1878,7 +1879,11 @@ export default function SievingPage() {
             </div>
             <div style={{padding:'10px 16px',borderTop:'1px solid #eee',display:'flex',justifyContent:'flex-end',gap:8}}>
               <button onClick={()=>setPrintBag(null)} style={{padding:'8px 16px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Close</button>
-              <button onClick={()=>window.print()} style={{padding:'8px 20px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>🖨 Print label</button>
+              {/* Prints the label on its own 100×50mm page in a separate
+                  window — window.print() here would send the whole app screen,
+                  backdrop and all, at A4. Same approach as the production
+                  sieving tower labels. */}
+              <button onClick={()=>printQcLabel({ ...printBag, product: printBag.product || activeProduct })} style={{padding:'8px 20px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>🖨 Print label</button>
             </div>
           </div>
         </div>
