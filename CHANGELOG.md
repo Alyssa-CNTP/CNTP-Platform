@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC label: relocate Lot/Batch and Date next to the barcode, drop the duplicate Product line)
+
+**Files changed:** `lib/quality/qc-label-zpl.ts`
+
+First physical print off the new direct-ZPL path (previous entry) confirmed the printer itself is fine — correct content, no rotation issue, ZSim is behaving. This is a pure layout follow-up from marked-up feedback on that print.
+
+- Lot/Batch and Date moved from the bottom footer row up into the blank margins to the left and right of the barcode, so both read at a glance next to the serial they belong to.
+- The footer's Product line was dropped — it duplicated the product name already shown in the header — and that whole bottom strip is now left blank rather than backfilled with something else.
+- The margins beside the barcode shrink as the serial gets longer; below a minimum usable width the Lot/Batch and Date fields are skipped outright rather than squeezed in unreadably (an all-fields-long case with a 32-character serial was added to the verification below to exercise exactly that).
+- Caught in verification, not on a physical print: the barcode's right-margin field position was a non-integer dot coordinate (from an unrounded barcode-width estimate), which ZPL coordinates can't be — rounded before this went anywhere near the printer.
+- Re-verified programmatically (position/box-overflow/field-balance/integer-coordinate checks) across a typical run, an all-fields-long worst case, the exact data from the marked-up print, an empty case, and the new extra-long-serial case.
+
 ## 2026-08-17 — Gustav (Sieving Final QC label: print straight to the lab's printer, bypassing the browser)
 
 **Files changed:** `lib/quality/qc-label-zpl.ts` (new), `app/api/print/qc-label/route.ts` (new), `lib/quality/qc-label-print.ts`, `lib/production/capture-config.ts`, `app/(app)/quality/sieving/page.tsx`
