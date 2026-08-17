@@ -34,9 +34,16 @@ function sievingAbbr(productType: string): string {
   const letters = (productType || '').replace(/[^A-Za-z]/g, '').toUpperCase()
   return letters.slice(0, 2) || 'XX'
 }
-async function nextSievingSerial(productType: string, localSerials: string[]): Promise<string> {
-  const now = new Date()
-  const ddmmyy = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getFullYear()).slice(-2)}`
+// dateStr is the shift assignment's own date (YYYY-MM-DD), not a fresh
+// `new Date()` — a session spanning midnight (the afternoon/night shift runs
+// 16h00–01h00) must keep stamping bags under the date the shift is filed
+// under, or a bag bagged just after midnight gets today's date while the
+// session, mass balance and everything else stays on yesterday's, and the
+// per-day sequence restarts at 001 mid-shift against a prefix nothing else
+// in the session recognises.
+async function nextSievingSerial(productType: string, localSerials: string[], dateStr: string): Promise<string> {
+  const [y, m, d] = dateStr.split('-')
+  const ddmmyy = `${d}${m}${y.slice(-2)}`
   const prefix = `ST${sievingAbbr(productType)}-${ddmmyy}-`
   const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
   // Seed the per-type sequence from bags already tagged under this exact prefix
@@ -227,7 +234,7 @@ export function SievingCapture({
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
-    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial))
+    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial), assignment.date)
     const grade  = gradeLetter || 'A'
     const now    = new Date().toISOString()
     const bag: OutputBag = {

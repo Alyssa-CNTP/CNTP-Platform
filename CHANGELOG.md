@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Production capture: fix the night shift disappearing at midnight)
+
+**Files changed:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `app/(app)/quality/granule/page.tsx`
+
+Reported: operators struggle to capture inputs and outputs around 00:00. Root cause found by deep-diving every date/shift computation in the capture flow, plus every scheduled job that could plausibly contend with it — the scheduled-job angle turned out to be a dead end (nothing fires at 00:00 SAST; the two jobs bracketing midnight each do one small write to an unrelated table).
+
+**The real cause:** the Afternoon/Night shift runs 16:00–01:00, crossing a calendar-date rollover, but the capture landing page computed "today's date" and "current shift" independently — `format(new Date(),'yyyy-MM-dd')` rolls to the new day at the stroke of midnight, while a separate `currentShift()` still (correctly) says the shift is `afternoon`. Every capture query is keyed on `(date, shift)`, and the night shift's `shift_assignments`/`prod_sessions` rows are filed under the date the shift *started* — so from 00:00 SAST the app queries `(today, afternoon)`, finds nothing, and shows "No sections assigned for this shift yet" / "No assignment for this section", even though last night's shift is still running and its session is still open. This is not the classic SAST-vs-UTC bug (that one's still real and separately fixed below) — it reproduces on a correctly-configured device, at the true local midnight.
+
+- **New `productionShiftNow()`** in `lib/production/shifts.ts` — the one place that now decides which (date, shift) "right now" belongs to: 00:00–06:59 resolves to *yesterday's* afternoon/night shift (the one still running, or just wrapping up), 07:00–15:59 to today's morning, 16:00–23:59 to today's afternoon/night just having started.
+- Replaced three independent, subtly different copies of this logic — the capture landing page's `currentShift()` + raw date, the section capture page's hardcoded `shift ?? 'morning'` fallback, and the assign page's own `getHours()` check — with the one shared, correct function.
+- **A related bug this exposed, not separately reported:** Sieving and Granule generate each bag's serial number from a *live* `new Date()` rather than the session's own pinned date. A session open across midnight would stamp a bag bagged at 00:05 with today's date while the session, mass balance, and everything else stayed filed under yesterday's — and the per-day sequence would restart at 001 mid-shift against a prefix nothing else in the session recognised. Both now use the session's own date.
+- **The classic SAST-vs-UTC bug, found separately while auditing every date default in the capture-adjacent code:** three spots in Quality's Granule page (`production_date`/`sample_date` defaults) used `new Date().toISOString().split('T')[0]` — the raw UTC date, which is a calendar day behind for the two hours after every true SAST midnight (South Africa is UTC+2 with no DST). Fixed to use SAST (or, where a sibling field is already device-local, kept internally consistent with it rather than mixing conventions).
+- No scheduled job fires at 00:00 SAST — checked every GitHub Actions cron, VPS crontab, and confirmed there's no `pg_cron` or Supabase Edge Function schedule either. Ruled out as a contributing factor.
+
 ## 2026-08-17 — Gustav (COA sign-off: fix the customer field never actually being sent)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

@@ -24,6 +24,7 @@ import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAut
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import LmDecisionModal from '@/components/shared/LmDecisionModal'
+import { sastToday } from '@/lib/production/shifts'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -260,7 +261,10 @@ function SieveTable({ grams, pcts, focusedSieve, setFocusedSieve, specJson, erro
 // ─── GranuleNewRunModal ───────────────────────────────────────────────────────
 
 function GranuleNewRunModal({ specs, initialForm, onSave, onClose }: { specs: any[]; initialForm?: any; onSave: (f: any) => void; onClose: () => void }) {
-  const today = new Date().toISOString().split('T')[0]
+  // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
+  // is still yesterday, which would default a new run's production_date to
+  // the wrong day right when it's captured.
+  const today = sastToday()
   const qcNames = useQcNames()
 
   const [form, setForm] = useState<{
@@ -435,7 +439,10 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
 
   const [form, setForm] = useState<any>(() => initialDraft?.form ?? {
     sample_time:  `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
-    sample_date:  now.toISOString().split('T')[0],
+    // Device-local date, matching sample_time's device-local hours above —
+    // not the raw UTC slice, which is a day behind for two hours after every
+    // real SAST midnight and would disagree with the time right next to it.
+    sample_date:  `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`,
     qc_name:      now.getHours() >= 16 ? '' : (run.qc_name || ''),
     dryer_number: lastSample?.dryer_number || '',
     bulk_bag_serial: '',
@@ -809,7 +816,7 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
   const [grams, setGrams]               = useState<Record<string,string>>(() => Object.fromEntries(GRANULE_SIEVES.map(s => [s.key, sample.sieve_g?.[s.key] ?? ''])))
   const [focusedSieve, setFocusedSieve] = useState(GRANULE_SIEVES[0].key)
   const [form, setForm]                 = useState({
-    sample_time: sample.sample_time || '', sample_date: sample.sample_date || new Date().toISOString().split('T')[0],
+    sample_time: sample.sample_time || '', sample_date: sample.sample_date || sastToday(),
     dryer_number: sample.dryer_number || '', bulk_bag_serial: sample.bulk_bag_serial || '',
     moisture: sample.moisture ?? '', bulk_density: sample.bulk_density ?? '', dryer_temp: sample.dryer_temp ?? '', flow_time: sample.flow_time ?? '',
     sieving_done: sample.sieving_done !== false, compares_to_ref: sample.compares_to_ref !== false, final_weight_ok: sample.final_weight_ok !== false,
