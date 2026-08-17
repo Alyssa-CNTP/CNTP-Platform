@@ -39,6 +39,7 @@ const WORKFLOW_MAX_TOKENS: Record<string, number> = {
   pa_final:       2000,
   residue_fp:      800,
   chlorate_perchlorate: 800,
+  water_activity:  500,
 }
 
 // Applied AFTER stripScreeningAppendix(), so these budget the real results
@@ -55,6 +56,7 @@ const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
   // old 8k default — which is why it gets its own limit rather than inheriting.
   pa_final:            16000,
   chlorate_perchlorate: 16000,
+  water_activity:       4000,
 }
 
 // ─── Rate limiter (simple in-process queue) ───────────────────────────────────
@@ -413,6 +415,31 @@ overall_status: "Pass" unless any analyte is "Fail".
 
 Output: {"batch_no":"","report_reference":"","lab":"","sample_description":"","date_issued":"","date_received":"","analytes":[{"analyte":"","result":"","uncertainty":null,"unit":"mg/kg","spec":null,"status":""}],"overall_status":"Pass"}`,
 
+  water_activity: `INSTRUCTIONS: Extract Water Activity results from this laboratory test report (typically Peter Johnson Laboratories, SANAS accredited). Output ONLY a single raw JSON object. Start with { and end with }. No markdown, no preamble.
+
+HEADER FIELDS:
+- report_reference: the "OUR REF" value (e.g. "LN607146-26C"). Never the ORDER NO.
+- lab: the testing laboratory's full name, e.g. "Peter Johnson Laboratories".
+- date_issued: the "DATE OF ISSUE".
+- date_received: the "DATE SAMPLES RECEIVED".
+
+SAMPLE IDENTIFICATION — this report describes the sample in a "SAMPLE IDENTIFICATION" block with several lines; read each one:
+- batch_no: the "BATCH NO" line (e.g. "26135-ORG/RA-SG"). This is the CUSTOMER's own batch code — always contains letters. Never the "OUR REF" or "ORDER NO".
+- type: the "TYPE" line (e.g. "ORGANIC ROOIBOS", "CONVENTIONAL ROOIBOS").
+- grade: the "GRADE" line (e.g. "SUPER GRADE", "EXPORT", "STANDARD").
+- sample_date: the "DATE" line within that same block (the sample's own production/cut date, e.g. "01-02/07/2026") — distinct from date_issued/date_received above.
+
+RESULTS — one entry per row in the "Analyte" results table (normally exactly one: Water Activity):
+- analyte: as printed, e.g. "Water Activity @ 20°C".
+- result: the value from the Results column, with any comma decimal separator converted to a period (e.g. printed "0,628" becomes "0.628"). Never invent a value.
+- unit: as printed, normally "Aw".
+- spec: null — this report prints no limit/threshold for water activity. Never invent one.
+- status: "—" — this report contains no pass/fail interpretation, only a measurement.
+
+overall_status: "—" (no pass/fail is printed on this report type).
+
+Output: {"batch_no":"","type":"","grade":"","sample_date":"","report_reference":"","lab":"","date_issued":"","date_received":"","analytes":[{"analyte":"","result":"","unit":"Aw","spec":null,"status":"—"}],"overall_status":"—"}`,
+
   pa_final: `INSTRUCTIONS: Extract PA/TA final product summary data from this lab report. Output ONLY raw JSON. No markdown.
 Extract top-level fields: batch_no, report_reference, lab, sample_description, date_issued, date_received, overall_status.
 Extract an "analytes" array — one entry per SUMMARY PA/TA measurement row (e.g. Total PA by EU regulation, Total PA by BfR 28, Scopolamine, Total TA, etc.). Each entry: { analyte, result, unit, spec, status }.
@@ -485,6 +512,7 @@ const SECTION_PATTERNS: { type: string; label: string; re: RegExp }[] = [
   { type: 'aflatoxins',           label: 'Aflatoxins',           re: /aflatoxin|ochratoxin/i },
   { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil\s+(saturated|aromatic)/i },
   { type: 'micro',                label: 'Microbiology',         re: /total\s+plate\s+count|aerobic\s+plate\s+count|\bsalmonella\b|listeria\s+monocytogenes|enterobacteriaceae/i },
+  { type: 'water_activity',       label: 'Water Activity',       re: /water\s+activity/i },
 ]
 
 // Which analysis an analyte name belongs to. Used only to catch an extraction
@@ -501,6 +529,7 @@ const ANALYTE_OWNER: { type: string; label: string; re: RegExp }[] = [
   { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil/i },
   { type: 'heavy_metals',         label: 'Heavy metals',         re: /\b(lead|cadmium|mercury|arsenic|copper|nickel|zinc|chromium|tin)\b|alumini?um/i },
   { type: 'pa_final',             label: 'PA/TA alkaloids',      re: /pyrrolizidine|tropane|atropine|scopolamine|senecionine|echimidine|lycopsamine|retrorsine|intermedine|lasiocarpine|europine|heliotrine|jacobine|monocrotaline/i },
+  { type: 'water_activity',       label: 'Water Activity',       re: /water\s+activity/i },
 ]
 
 // Returns the analysis the extracted results actually look like, when that is
@@ -658,7 +687,7 @@ export async function POST(req: NextRequest) {
   // pa_ta_analysis and residue, the raw-material workflows, whose reports are
   // whole-document multi-sample formats with their own detailed parsing rules —
   // the scope note would contradict them.
-  const SCOPED = ['glyphosate', 'residue_fp', 'micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'chlorate_perchlorate']
+  const SCOPED = ['glyphosate', 'residue_fp', 'micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'chlorate_perchlorate', 'water_activity']
   const systemPrompt = SCOPED.includes(promptKey) ? basePrompt + SECTION_SCOPE + BATCH_RULE : basePrompt
 
   const uploaderName = await getCallerEmail()
@@ -708,7 +737,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Pasteuriser lab workflows — return extract_only for client-side review panel
-    const EXTRACT_ONLY = ['micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'residue_fp', 'chlorate_perchlorate']
+    const EXTRACT_ONLY = ['micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'residue_fp', 'chlorate_perchlorate', 'water_activity']
     const EXTRACT_ONLY_IF_PASTEURISER = ['glyphosate', 'residue']
     const isExtractOnly =
       EXTRACT_ONLY.includes(workflow) ||
