@@ -132,12 +132,13 @@ export function buildQcLabelHtml(d: QcLabelData): string {
     padding: .7mm 1mm; text-transform: uppercase;
   }
   .foot {
-    display: grid; grid-template-columns: 1fr auto auto; gap: 2mm;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 2.5mm;
     margin-top: .8mm; align-items: end;
   }
   .f-label { font-size: 5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #666; }
-  .f-value { font-size: 7.5pt; font-weight: 800; line-height: 1.15; text-transform: uppercase; }
-  .foot > div:not(:first-child) { text-align: right; }
+  .f-value { font-size: 7.5pt; font-weight: 800; line-height: 1.15; text-transform: uppercase; white-space: nowrap; }
+  .foot > div:nth-child(2) { text-align: center; }
+  .foot > div:last-child   { text-align: right; }
   .print-btn {
     position: fixed; bottom: 8px; right: 8px;
     background: #166534; color: #fff; border: none; border-radius: 8px;
@@ -178,6 +179,10 @@ export function buildQcLabelHtml(d: QcLabelData): string {
       <div>
         <div class="f-label">Lot / Batch</div>
         <div class="f-value">${esc(d.lotNumber, 20)}</div>
+      </div>
+      <div>
+        <div class="f-label">Product</div>
+        <div class="f-value">${esc(d.product, 22)}</div>
       </div>
       <div>
         <div class="f-label">Date</div>
