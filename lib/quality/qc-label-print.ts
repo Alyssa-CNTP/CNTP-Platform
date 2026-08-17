@@ -264,3 +264,32 @@ export function printQcLabel(data: QcLabelData): void {
   // Short delay lets the barcode render before the print dialog opens.
   setTimeout(() => win.print(), 600)
 }
+
+async function printQcLabelDirect(data: QcLabelData): Promise<void> {
+  const res = await fetch('/api/print/qc-label', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ data }),
+  })
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: 'Unknown error' }))
+    throw new Error(error)
+  }
+}
+
+/**
+ * Print straight to the lab's networked Intermec (bypassing the browser's
+ * print dialog, whose Portrait/Landscape control turned out unable to fix the
+ * sideways/clipped output this label was getting there — the printer's own
+ * feed direction, not the dialog, decides the page box). Falls back to the
+ * browser print window if the printer is unreachable.
+ */
+export async function printQcLabelAuto(data: QcLabelData): Promise<void> {
+  try {
+    await printQcLabelDirect(data)
+    return
+  } catch (err) {
+    console.warn('[printQcLabelAuto] Direct print failed, falling back to browser:', err)
+  }
+  printQcLabel(data)
+}

@@ -18,7 +18,7 @@ import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
-import { printQcLabel } from '@/lib/quality/qc-label-print'
+import { printQcLabel, printQcLabelAuto } from '@/lib/quality/qc-label-print'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -1052,6 +1052,7 @@ export default function SievingPage() {
   React.useEffect(() => { pendingBagsRef.current = pendingBags }, [pendingBags])
   const [selectedBagId, setSelectedBagId] = useState<string>('')
   const [printBag,      setPrintBag]      = useState<any>(null)
+  const [labelPrinting, setLabelPrinting] = useState(false)
   // Serial numbers actually assigned to bags of the product currently open, so
   // the inline row editor can offer a dropdown instead of free-typing one —
   // sourced from every bagging (not just pending ones), since an edit may need
@@ -1879,11 +1880,32 @@ export default function SievingPage() {
             </div>
             <div style={{padding:'10px 16px',borderTop:'1px solid #eee',display:'flex',justifyContent:'flex-end',gap:8}}>
               <button onClick={()=>setPrintBag(null)} style={{padding:'8px 16px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Close</button>
-              {/* Prints the label on its own 100×50mm page in a separate
-                  window — window.print() here would send the whole app screen,
-                  backdrop and all, at A4. Same approach as the production
-                  sieving tower labels. */}
-              <button onClick={()=>printQcLabel({ ...printBag, product: printBag.product || activeProduct })} style={{padding:'8px 20px',borderRadius:7,border:'none',background:'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>🖨 Print label</button>
+              {/* Sends the label straight to the lab's networked Intermec —
+                  the browser print dialog's Portrait/Landscape control could
+                  not fix the sideways/clipped output it was giving there, so
+                  this bypasses it. Falls back to that browser window (its own
+                  100×50mm page, not a window.print() of the whole screen) if
+                  the printer is unreachable. */}
+              <button
+                disabled={labelPrinting}
+                onClick={async ()=>{
+                  setLabelPrinting(true)
+                  try { await printQcLabelAuto({ ...printBag, product: printBag.product || activeProduct }) }
+                  finally { setLabelPrinting(false) }
+                }}
+                style={{padding:'8px 20px',borderRadius:7,border:'none',background:labelPrinting?'#94a3b8':'#166534',color:'#fff',fontSize:12,fontWeight:700,cursor:labelPrinting?'default':'pointer'}}
+              >
+                {labelPrinting ? 'Printing…' : '🖨 Print label'}
+              </button>
+              {/* Escape hatch: force the browser window even when the direct
+                  print appears to succeed (e.g. it queued but the printer is
+                  jammed/offline) — same window as the automatic fallback. */}
+              <button
+                onClick={()=>printQcLabel({ ...printBag, product: printBag.product || activeProduct })}
+                style={{padding:'8px 12px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:11,color:'#6b7280',cursor:'pointer'}}
+              >
+                Print via browser instead
+              </button>
             </div>
           </div>
         </div>
