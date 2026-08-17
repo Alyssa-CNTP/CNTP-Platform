@@ -38,8 +38,11 @@ const WORKFLOW_MAX_TOKENS: Record<string, number> = {
   mosh_moah:       600,
   pa_final:       2000,
   residue_fp:      800,
+  chlorate_perchlorate: 800,
 }
 
+// Applied AFTER stripScreeningAppendix(), so these budget the real results
+// body rather than being spent on a screening list.
 const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
   pa_ta_analysis: 20000,
   residue:        12000,
@@ -47,6 +50,11 @@ const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
   micro:           8000,
   default:         8000,
   residue_fp:      3000,
+  // Both of these have to survive being one section among many in a combined
+  // report. pa_final's summary rows sit ~8.4k into such a report — past the
+  // old 8k default — which is why it gets its own limit rather than inheriting.
+  pa_final:            16000,
+  chlorate_perchlorate: 16000,
 }
 
 // ─── Rate limiter (simple in-process queue) ───────────────────────────────────
@@ -80,10 +88,24 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // ─── Gemini call with model fallback ─────────────────────────────────────────
 
+// Everything after "List of analysed substances" is the screening panel — the
+// hundreds of compound names a lab lists to show what it tested FOR, not what
+// it found. On a combined Eurofins report that appendix is 35k of the 47k
+// characters, and because the text limit slices from the top, it used to push
+// the real results off the end: the PA/TA summary rows (Sum of Pyrrolizidine,
+// Atropine, Scopolamine) land at ~8.1-8.4k, just past the 8k default, so
+// pa_final saw every individual analyte but none of the totals it actually
+// needs. Dropping the appendix first leaves the whole results body in budget.
+function stripScreeningAppendix(text: string): string {
+  const idx = text.search(/List of analysed substances/i)
+  return idx > 500 ? text.slice(0, idx) : text
+}
+
 async function callGemini(systemPrompt: string, text: string, workflow: string) {
   const maxTokens = WORKFLOW_MAX_TOKENS[workflow] ?? 1500
   const textLimit = WORKFLOW_TEXT_LIMIT[workflow] ?? WORKFLOW_TEXT_LIMIT.default
-  const fullPrompt = `${systemPrompt}\n\nExtract all data from this report:\n\n${text.slice(0, textLimit)}`
+  const body = stripScreeningAppendix(text)
+  const fullPrompt = `${systemPrompt}\n\nExtract all data from this report:\n\n${body.slice(0, textLimit)}`
 
   const tryModel = async (model: string) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
@@ -199,6 +221,35 @@ function computePaGrade(sample: any): any {
 }
 
 // ─── Prompts — exact copy from Express server ─────────────────────────────────
+
+// Appended to every single-analysis lab-results prompt.
+//
+// Labs like Eurofins bundle several analyses for one sample into one PDF. The
+// per-type prompts were all written assuming a report contains only their own
+// analysis, so on a combined report the model would return whichever section
+// actually had detections — that is exactly how a Chlorate/Perchlorate result
+// got filed under Glyphosate (the glyphosate section was all "< 0.01", so the
+// only detected numbers in the document were the chlorate ones).
+const SECTION_SCOPE = `
+
+SCOPE — READ FIRST. This PDF may be a COMBINED report holding several different analyses for the same sample (pesticide screens, ethylene oxide, glyphosate, chlorate/perchlorate, PA/TA alkaloids, heavy metals, and so on), each under its own heading.
+- Extract ONLY the analysis these instructions ask for. Every other section must be ignored completely, even when it is the only one with values above the reporting limit.
+- Results below a reporting limit (e.g. "< 0.01") ARE valid results for the requested analysis — report them as printed. Never substitute a different section's numbers because they look more interesting.
+- If this report has no section for the requested analysis at all, return the output structure with an empty analytes/compounds array and leave the header fields blank. Returning nothing is correct; returning another analysis's results is not.`
+
+// Appended alongside SECTION_SCOPE. Only chlorate_perchlorate and residue_fp
+// ever said which of a report's several codes is the batch, so the others
+// picked whichever the model liked on the day — the same Eurofins PDF produced
+// "26135-ORG/RA-SG" on one pa_final run and the lab's "347-2026-00051307" on
+// the next. A wrong batch is worse than a missing one: it never matches on a
+// COA lookup, and it defeats the duplicate check, which keys on batch_no.
+const BATCH_RULE = `
+
+BATCH NUMBER — these reports print several similar-looking codes. Choosing the wrong one files the result against a batch that does not exist, so be deliberate:
+- batch_no MUST be the CUSTOMER's own code — the value labelled "Sample Code (Client)", "Client Sample Code", "Your reference", "Customer reference", "Sample Reference", or given in a Sample/Client Details block (e.g. "26135-ORG/RA-SG", "26136-CON-SFC", "26203-CON-SFC", "MAT-0379"). It always contains letters.
+- NEVER put the laboratory's own internal sample id (e.g. "347-2026-00051307") or the report number (e.g. "AR-347-2026-00051307-01") in batch_no. Those go in report_reference.
+- When both a client code and a lab code appear, the client code is always batch_no.
+- If no client code appears anywhere, leave batch_no empty rather than falling back to a lab code.`
 
 const PROMPTS: Record<string, string> = {
   pa_ta_analysis: `You are a precision quality data extraction agent for herbal tea manufacturing.
@@ -324,6 +375,30 @@ EU limits (µg/kg): Aflatoxin B1 ≤5, Total Aflatoxins ≤10, Ochratoxin A ≤2
   mosh_moah: `INSTRUCTIONS: Extract MOSH/MOAH data. Output ONLY raw JSON. No markdown.
 Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status), overall_status.`,
 
+  chlorate_perchlorate: `INSTRUCTIONS: Extract Chlorate and Perchlorate results from this laboratory report. Output ONLY a single raw JSON object. Start with { and end with }. No markdown, no preamble.
+
+HEADER FIELDS — these reports print several similar-looking codes; pick carefully:
+- batch_no: the CUSTOMER's own sample code, labelled "Sample Code (Client)" / "Client Sample Code" / "Your reference" (e.g. "26134-ORG/RA-SG"). NEVER the laboratory's own "Sample Code" (e.g. "347-2026-00045039") and never the "Report" number.
+- report_reference: the lab's report number (e.g. "AR-347-2026-00045039-01").
+- lab: the testing laboratory's full name (e.g. "Eurofins Dr. Specht International GmbH").
+- sample_description: the customer's description of the material (e.g. "Organic Rooibos RA SG").
+- date_issued: the "Report date".
+- date_received: the "Sample Reception Date".
+
+ANALYTES — one entry per substance that actually appears in a TEST RESULTS table. Include only what is present: a report may carry Chlorate only, Perchlorate only, or both.
+- analyte: exactly "Chlorate" or "Perchlorate".
+- result: copy the Results cell EXACTLY as printed, including any comparison operator, but WITHOUT the measurement-uncertainty part. So "< 0.01" stays "< 0.01", and "0.062 ± 0.019" becomes "0.062".
+- uncertainty: the "± value" part when printed (e.g. "± 0.019"), otherwise null.
+- unit: as printed, normally "mg/kg".
+- spec: the MRL printed on that row (commonly 0.05 for Chlorate, 0.75 for Perchlorate). If the report prints no MRL, use null — never invent one.
+- status: "Pass" when the result is below the MRL (a "<" result is always Pass), "Fail" when it reaches or exceeds it, "—" when there is no MRL to compare against.
+
+Ignore any appendix headed "List of analysed substances" — that is the screening panel, not results.
+
+overall_status: "Pass" unless any analyte is "Fail".
+
+Output: {"batch_no":"","report_reference":"","lab":"","sample_description":"","date_issued":"","date_received":"","analytes":[{"analyte":"","result":"","uncertainty":null,"unit":"mg/kg","spec":null,"status":""}],"overall_status":"Pass"}`,
+
   pa_final: `INSTRUCTIONS: Extract PA/TA final product summary data from this lab report. Output ONLY raw JSON. No markdown.
 Extract top-level fields: batch_no, report_reference, lab, sample_description, date_issued, date_received, overall_status.
 Extract an "analytes" array — one entry per SUMMARY PA/TA measurement row (e.g. Total PA by EU regulation, Total PA by BfR 28, Scopolamine, Total TA, etc.). Each entry: { analyte, result, unit, spec, status }.
@@ -335,6 +410,128 @@ Rules:
 - overall_status: "Pass" if total PA (EU) is null or below 400, "Fail" if above 400.`,
 }
 
+
+// ─── PDF text extraction ──────────────────────────────────────────────────────
+//
+// pdf-parse changed shape between majors and this route only ever handled v1:
+// v1 exports a callable `(buf) => {text}`, v2 (installed here, ^2.4.5) exports
+// a `PDFParse` CLASS. Calling the v2 module object threw `is not a function`
+// on every single upload — swallowed by a bare catch that assumed "not
+// installed" and silently routed EVERY pdf down the Gemini vision path.
+// Nothing surfaced, because vision does work; it's just the slower, costlier
+// path, it ignores the per-workflow text limits, and it has no model fallback.
+// It also left `text` empty, which would have made the combined-report
+// detection below dead on arrival.
+//
+// Handles both shapes so it can't break again on a version bump in either
+// direction.
+async function extractPdfText(buf: Buffer): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require('pdf-parse')
+
+  // v2: class-based API
+  const PDFParse = mod?.PDFParse ?? mod?.default?.PDFParse
+  if (typeof PDFParse === 'function') {
+    const parser = new PDFParse({ data: new Uint8Array(buf) })
+    try {
+      const res = await parser.getText()
+      return res?.text ?? ''
+    } finally {
+      await parser.destroy?.().catch(() => {})
+    }
+  }
+
+  // v1: module (or its default) is itself the parse function
+  const fn = typeof mod === 'function' ? mod : mod?.default
+  if (typeof fn === 'function') return (await fn(buf))?.text ?? ''
+
+  throw new Error('pdf-parse: no usable export (neither PDFParse class nor callable)')
+}
+
+// ─── Combined-report section detection ───────────────────────────────────────
+//
+// Labs like Eurofins bundle several analyses for ONE sample into a single PDF
+// (pesticide screens + EtO + glyphosate + chlorate/perchlorate + PA/TA). The
+// tab a person drops the file on only ever extracts that tab's own test type,
+// so every other result in the same PDF silently goes nowhere — the reason
+// this exists.
+//
+// Deliberately a keyword scan and NOT a second AI call: it costs no tokens, is
+// not subject to the Gemini rate limiter, cannot hallucinate a section that
+// isn't there, and only ever advises. The person still clicks to extract each
+// one, which then runs that type's own tuned prompt — so detection being
+// approximate here can't corrupt any extracted data.
+const SECTION_PATTERNS: { type: string; label: string; re: RegExp }[] = [
+  { type: 'residue',              label: 'Pesticide residue',    re: /pesticides?\s+quechers|multi-?residue|pesticide\(s\)\s+detected|screened\s+pesticides/i },
+  { type: 'eto',                  label: 'Ethylene oxide',       re: /ethylene\s*oxide|2-chloro-?ethanol/i },
+  { type: 'glyphosate',           label: 'Glyphosate',           re: /\bglyphosate\b|\bglufosinate\b|aminomethylphosphonic/i },
+  { type: 'chlorate_perchlorate', label: 'Chlorate/Perchlorate', re: /\bchlorate\b|\bperchlorate\b/i },
+  { type: 'pa_final',             label: 'PA/TA alkaloids',      re: /pyrrolizidine|tropane\s+alkaloid|\batropine\b|\bscopolamine\b/i },
+  { type: 'heavy_metals',         label: 'Heavy metals',         re: /heavy\s+metals|\bcadmium\b|\bmercury\b|\barsenic\b/i },
+  { type: 'aflatoxins',           label: 'Aflatoxins',           re: /aflatoxin|ochratoxin/i },
+  { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil\s+(saturated|aromatic)/i },
+  { type: 'micro',                label: 'Microbiology',         re: /total\s+plate\s+count|aerobic\s+plate\s+count|\bsalmonella\b|listeria\s+monocytogenes|enterobacteriaceae/i },
+]
+
+// Which analysis an analyte name belongs to. Used only to catch an extraction
+// whose results clearly belong to a DIFFERENT analysis than the tab it is
+// about to be saved under — the combined-report failure mode, where the model
+// can latch onto whichever section has actual detections. Prompt scoping is
+// the real fix; this is the net under it, because a wrong test_type is a
+// silent data-integrity problem rather than a visible error.
+const ANALYTE_OWNER: { type: string; label: string; re: RegExp }[] = [
+  { type: 'chlorate_perchlorate', label: 'Chlorate/Perchlorate', re: /\b(per)?chlorate\b/i },
+  { type: 'glyphosate',           label: 'Glyphosate',           re: /glyphosate|\bampa\b|aminomethylphosphonic|glufosinate/i },
+  { type: 'eto',                  label: 'Ethylene oxide',       re: /ethylene\s*oxide|chloro-?ethanol/i },
+  { type: 'aflatoxins',           label: 'Aflatoxins',           re: /aflatoxin|ochratoxin/i },
+  { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil/i },
+  { type: 'heavy_metals',         label: 'Heavy metals',         re: /\b(lead|cadmium|mercury|arsenic|copper|nickel|zinc|chromium|tin)\b|alumini?um/i },
+  { type: 'pa_final',             label: 'PA/TA alkaloids',      re: /pyrrolizidine|tropane|atropine|scopolamine|senecionine|echimidine|lycopsamine|retrorsine|intermedine|lasiocarpine|europine|heliotrine|jacobine|monocrotaline/i },
+]
+
+// Returns the analysis the extracted results actually look like, when that is
+// unanimously something other than the requested one. Deliberately only fires
+// on unanimity — a partial match is far more likely to be an analyte this
+// table doesn't know about than a genuinely misfiled extraction, and crying
+// wolf on good data would train people to click through the warning.
+function analyteMismatch(workflow: string, extracted: any): { type: string; label: string } | null {
+  const rows: any[] = Array.isArray(extracted?.analytes) ? extracted.analytes
+                    : Array.isArray(extracted?.compounds_detected) ? extracted.compounds_detected : []
+  const names = rows.map(r => String(r?.analyte ?? r?.metal ?? r?.compound_name ?? '')).filter(Boolean)
+  if (!names.length) return null
+  const owners = names.map(n => ANALYTE_OWNER.find(o => o.re.test(n))?.type).filter(Boolean) as string[]
+  if (owners.length !== names.length) return null   // something unrecognised — don't guess
+  if (!owners.every(o => o === owners[0])) return null
+  if (owners[0] === workflow) return null
+  return ANALYTE_OWNER.find(o => o.type === owners[0]) ?? null
+}
+
+// Flags a batch_no that is almost certainly the lab's own reference rather
+// than a CNTP batch. Every real batch carries letters — 26135-ORG/RA-SG,
+// 26136-CON-SFC, 26132-CON/RA-FSE40, MAT-0379 — while the lab ids that get
+// grabbed by mistake are digits and hyphens only ("347-2026-00051307"). Advice
+// only: the reviewer can correct the field in place before saving.
+function batchLooksWrong(extracted: any): string | null {
+  const batch = String(extracted?.batch_no ?? '').trim()
+  if (!batch) return null
+  if (!/[A-Za-z]/.test(batch)) {
+    return 'It contains no letters. Batch numbers here always do (e.g. 26135-ORG/RA-SG), so this is most likely the laboratory’s own sample or order number.'
+  }
+  const ref = String(extracted?.report_reference ?? '').trim()
+  if (ref && ref.length > 4 && (ref === batch || ref.includes(batch))) {
+    return 'It is part of the lab’s own report reference, so it is probably their number rather than the batch.'
+  }
+  return null
+}
+
+function detectSections(text: string): { type: string; label: string }[] {
+  if (!text) return []
+  // Everything after "List of analysed substances" is the screening panel —
+  // hundreds of compound names that would false-positive nearly every pattern
+  // above (a 22-page report is mostly this). Results only live before it.
+  const body = text.split(/List of analysed substances/i)[0].slice(0, 40000)
+  return SECTION_PATTERNS.filter(p => p.re.test(body)).map(({ type, label }) => ({ type, label }))
+}
 
 // ─── Residue grade computation (inlined — no external module needed) ──────────
 
@@ -439,10 +636,16 @@ export async function POST(req: NextRequest) {
     workflow === 'residue'    && workcenter === 'pasteuriser'  ? 'residue_fp' :
     workflow
 
-  const systemPrompt = PROMPTS[promptKey]
-  if (!systemPrompt) {
+  const basePrompt = PROMPTS[promptKey]
+  if (!basePrompt) {
     return NextResponse.json({ error: `Unknown workflow: ${workflow}` }, { status: 400 })
   }
+  // Single-analysis prompts get the combined-report scoping rules. Excluded:
+  // pa_ta_analysis and residue, the raw-material workflows, whose reports are
+  // whole-document multi-sample formats with their own detailed parsing rules —
+  // the scope note would contradict them.
+  const SCOPED = ['glyphosate', 'residue_fp', 'micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'chlorate_perchlorate']
+  const systemPrompt = SCOPED.includes(promptKey) ? basePrompt + SECTION_SCOPE + BATCH_RULE : basePrompt
 
   const uploaderName = await getCallerEmail()
   const fileName     = pdfFile.name
@@ -456,14 +659,11 @@ export async function POST(req: NextRequest) {
     let text = ''
     let isScanned = false
     try {
-      // Dynamic import — pdf-parse must be installed: npm install pdf-parse
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>
-      const parsed   = await pdfParse(pdfBuffer)
-      text      = parsed.text ?? ''
+      text      = await extractPdfText(pdfBuffer)
       isScanned = !text || text.trim().length < 100
-    } catch {
-      // pdf-parse failed or not installed — fall back to vision
+    } catch (e: any) {
+      // Genuinely unreadable text layer — fall back to Gemini vision.
+      console.error('pdf text extraction failed, using vision:', e?.message)
       isScanned = true
     }
 
@@ -494,7 +694,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Pasteuriser lab workflows — return extract_only for client-side review panel
-    const EXTRACT_ONLY = ['micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'residue_fp']
+    const EXTRACT_ONLY = ['micro', 'heavy_metals', 'eto', 'aflatoxins', 'mosh_moah', 'pa_final', 'residue_fp', 'chlorate_perchlorate']
     const EXTRACT_ONLY_IF_PASTEURISER = ['glyphosate', 'residue']
     const isExtractOnly =
       EXTRACT_ONLY.includes(workflow) ||
@@ -506,6 +706,23 @@ export async function POST(req: NextRequest) {
         extract_only: true,
         data:         { ...extracted, _doc: fileName },
         model_used:   modelUsed,
+        // Other analyses present in this same PDF that this tab did NOT
+        // extract — the client offers them as one-click follow-ups so a
+        // combined report doesn't lose everything except the tab it landed on.
+        detected_sections: detectSections(text).filter(s => s.type !== workflow),
+        // Detection reads the text layer, so it can't run when we fell back to
+        // vision. Reported so the UI can say "couldn't scan this one" instead
+        // of just showing nothing — silence here previously hid a real bug
+        // (pdf-parse being bundled) for an entire release.
+        text_layer_read: !isScanned,
+        // Set when the extracted analytes unanimously belong to a different
+        // analysis — the reviewer is warned before this can be saved under the
+        // wrong test_type.
+        analyte_mismatch: analyteMismatch(workflow, extracted),
+        // Set when batch_no looks like the lab's own reference. A wrong batch
+        // silently never matches on a COA lookup and defeats the duplicate
+        // check, so it's surfaced for correction before saving.
+        batch_warning: batchLooksWrong(extracted),
       })
     }
 

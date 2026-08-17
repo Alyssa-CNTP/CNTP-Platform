@@ -8,7 +8,14 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  serverExternalPackages: ['xlsx'],
+  // Loaded at runtime from node_modules instead of being bundled.
+  // pdf-parse v2 wraps pdfjs-dist, which resolves its own worker/module URLs at
+  // runtime and breaks when inlined into the route chunk — the failure was
+  // silent, because app/api/upload/route.ts catches it and falls back to Gemini
+  // vision. Vision still returns an answer, so the only visible symptom was
+  // "(vision)" on the model name, an empty `text`, and therefore no
+  // combined-report section detection at all.
+  serverExternalPackages: ['xlsx', 'pdf-parse'],
   // Note: eslint key was removed in Next.js 15+. ESLint is disabled via --no-lint in build script.
 };
 

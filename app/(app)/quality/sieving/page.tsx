@@ -18,7 +18,9 @@ import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { exportSievingRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -32,26 +34,26 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     volumetrics: '280-300', bulk_bags: '500kg', temp_range: '85-105',
     variants: {
       // IPS-SIEV-003.1 Export CON/RA-CON: >6:Max1, >12:>80, >18:10-20, >40:<5, Dust:Max1
-      'Export|CON':          {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|RA-CON':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|Conventional':          {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|RA-Conventional':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
       // IPS-SIEV-003.2 Export ORG/RA-ORG: >6:Max1, >10:>70, >18:5-15, >40:<5, Dust:Max1
-      'Export|ORG':          {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|RA-ORG':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|FT-CON':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export|FT-ORG':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|CON':    {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|RA-CON': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|ORG':    {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|RA-ORG': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|FT-CON': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Export Blend|FT-ORG': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|Organic':          {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|RA-Organic':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|FT-Conventional':       {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export|FT-Organic':       {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|Conventional':    {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|RA-Conventional': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|Organic':    {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|RA-Organic': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|FT-Conventional': {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Export Blend|FT-Organic': {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
       // IPS-SIEV-003 Domestic CON/RA-CON: same mesh as Export CON
-      'Domestic|CON':        {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|RA-CON':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|ORG':        {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|RA-ORG':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|FT-CON':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
-      'Domestic|FT-ORG':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|Conventional':        {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|RA-Conventional':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|Organic':        {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|RA-Organic':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|FT-Conventional':     {'>6 (%)':[0,1],'>12 (%)':[80,100],'>18 (%)':[10,20],'>40 (%)':[0,5],'Dust (%)':[0,1]},
+      'Domestic|FT-Organic':     {'>6 (%)':[0,1],'>10 (%)':[70,100],'>18 (%)':[5,15],'>40 (%)':[0,5],'Dust (%)':[0,1]},
     },
   },
   'Coarse Leaf': {
@@ -64,27 +66,27 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-002.1 Export CON/RA-CON: >12:5-25, >18:60-85, >40:5-20, Dust:0-1, Shade:4-11
-      'Export|CON':          {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|RA-CON':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|Conventional':          {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|RA-Conventional':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
       // IPS-SIEV-002.2 Export ORG/RA-ORG: >10:25-100, >18:65-85, >40:10-20, Dust:0-1, Shade:4-11
-      'Export|ORG':          {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|RA-ORG':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|FT-CON':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export|FT-ORG':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|Organic':          {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|RA-Organic':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|FT-Conventional':       {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export|FT-Organic':       {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
       // Export Blend: same mesh values as Export
-      'Export Blend|CON':    {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|RA-CON': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|ORG':    {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|RA-ORG': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|FT-CON': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
-      'Export Blend|FT-ORG': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|Conventional':    {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Conventional': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|Organic':    {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Organic': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Conventional': {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Organic': {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[4,11]},
       // IPS-SIEV-002 Domestic CON/RA-CON: same mesh, Shade:1-3
-      'Domestic|CON':        {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|RA-CON':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|ORG':        {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|RA-ORG':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|FT-CON':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
-      'Domestic|FT-ORG':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|Conventional':        {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|RA-Conventional':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|Organic':        {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|RA-Organic':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|FT-Conventional':     {'>12 (%)':[5,25],'>18 (%)':[60,85],'>40 (%)':[5,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
+      'Domestic|FT-Organic':     {'>10 (%)':[25,100],'>18 (%)':[65,85],'>40 (%)':[10,20],'Dust (%)':[0,1],'Leaf Shade':[1,3]},
     },
   },
   'Fine Leaf': {
@@ -97,27 +99,27 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     volumetrics: '280-340', leaf_shade: '1-3 (Domestic) / 4-11 (Export)', temp_range: '85-105',
     variants: {
       // IPS-SIEV-001.1 Export CON/RA-CON: >12:0-1, >18:15-35, >40:50-85, Dust:0-2, Shade:4-11
-      'Export|CON':          {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export|RA-CON':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export|Conventional':          {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export|RA-Conventional':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
       // IPS-SIEV-001.2 Export ORG/RA-ORG: >10:0-1, >18:15-35, >40:50-85, Dust:0-5, Shade:4-11
-      'Export|ORG':          {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export|RA-ORG':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export|FT-CON':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export|FT-ORG':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export|Organic':          {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export|RA-Organic':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export|FT-Conventional':       {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export|FT-Organic':       {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
       // Export Blend: same mesh values as Export
-      'Export Blend|CON':    {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export Blend|RA-CON': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export Blend|ORG':    {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export Blend|RA-ORG': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
-      'Export Blend|FT-CON': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
-      'Export Blend|FT-ORG': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export Blend|Conventional':    {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Conventional': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export Blend|Organic':    {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export Blend|RA-Organic': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Conventional': {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[4,11]},
+      'Export Blend|FT-Organic': {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[4,11]},
       // IPS-SIEV-001 Domestic CON/RA-CON: same mesh, Shade:1-3
-      'Domestic|CON':        {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
-      'Domestic|RA-CON':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
-      'Domestic|ORG':        {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
-      'Domestic|RA-ORG':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
-      'Domestic|FT-CON':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
-      'Domestic|FT-ORG':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
+      'Domestic|Conventional':        {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
+      'Domestic|RA-Conventional':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
+      'Domestic|Organic':        {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
+      'Domestic|RA-Organic':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
+      'Domestic|FT-Conventional':     {'>12 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,2],'Leaf Shade':[1,3]},
+      'Domestic|FT-Organic':     {'>10 (%)':[0,1],'>18 (%)':[15,35],'>40 (%)':[50,85],'Dust (%)':[0,5],'Leaf Shade':[1,3]},
     },
   },
   'Indent Sticks': {
@@ -130,37 +132,42 @@ const SIEVING_SPECS_DB: Record<string,any> = {
     temp_range: '85-105',
     variants: {
       // IPS-SIEV-005.1 Export CON/RA-CON: >6:5-25, >12:40-65, >18:10-25, >40:<5, Dust:Max1, Fine Tea:<25
-      'Export|CON':          {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|RA-CON':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|Conventional':          {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|RA-Conventional':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
       // IPS-SIEV-005.2 Export ORG/RA-ORG: >6:5-25, >10:40-65, >18:15-35, >40:<5, Dust:Max1, Fine Tea:<25
-      'Export|ORG':          {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|RA-ORG':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|FT-CON':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export|FT-ORG':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|CON':    {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|RA-CON': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|ORG':    {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|RA-ORG': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|FT-CON': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Export Blend|FT-ORG': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|Organic':          {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|RA-Organic':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|FT-Conventional':       {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export|FT-Organic':       {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|Conventional':    {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|RA-Conventional': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|Organic':    {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|RA-Organic': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|FT-Conventional': {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Export Blend|FT-Organic': {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
       // IPS-SIEV-005 Domestic CON/RA-CON: >6:5-25, >12:40-65, >18:10-25, >40:<5, Dust:Max1, Fine Tea:<25
-      'Domestic|CON':        {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|RA-CON':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|ORG':        {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|RA-ORG':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|FT-CON':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
-      'Domestic|FT-ORG':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|Conventional':        {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|RA-Conventional':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|Organic':        {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|RA-Organic':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|FT-Conventional':     {'>6 (%)':[5,25],'>12 (%)':[40,65],'>18 (%)':[10,25],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
+      'Domestic|FT-Organic':     {'>6 (%)':[5,25],'>10 (%)':[40,65],'>18 (%)':[15,35],'>40 (%)':[0,5],'Dust (%)':[0,1],'Fine Leaf (%)':[0,25]},
     },
   },
 }
 
 const SD_GRADES   = ['Export','Export Blend','Domestic']
-const SD_VARIANTS = ['CON','ORG','RA-ORG','RA-CON','FT-CON','FT-ORG']
+const SD_VARIANTS = ['Conventional','Organic','RA-Organic','RA-Conventional','FT-Conventional','FT-Organic']
 const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function sdIsOrg(v: string) { return v==='ORG' || v==='RA-ORG' || v==='FT-ORG' || v.toLowerCase().includes('organic') }
+// Kept case/spelling-tolerant (not a strict list match) so it still works for
+// any historical row not yet normalized by normProdVariant() below.
+function sdIsOrg(v: string) {
+  const s = (v || '').trim().toLowerCase()
+  return s.includes('organic') || s === 'org' || s === 'ra-org' || s === 'ft-org'
+}
 // Same normalisation used everywhere a lot number keys into paLookup/
 // rLookup/leafShadeLookup, so a bag's lot always matches its raw-material
 // record regardless of dash spacing ("GS-0098" / "GS 0098" / "gs-0098").
@@ -191,6 +198,42 @@ function sastDateStr(iso: string): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(iso))
+}
+// The default (and only fetched) window for the runs table and chart — see
+// load()'s query filter below. 'YYYY-MM-DD' so it compares lexicographically
+// against sd_runs.date the same way the rest of the file does.
+function threeMonthsAgoISO(): string {
+  const d = new Date()
+  d.setMonth(d.getMonth() - 3)
+  return isoDate(d)
+}
+// qms.sd_runs (and SIEVING_SPECS_DB / SD_VARIANTS) now spell variant out in
+// full — 'Conventional', 'Organic', 'RA-Conventional', 'RA-Organic',
+// 'FT-Conventional', 'FT-Organic' — matching production.prod_bagging /
+// production.bag_tags' own CHECK constraint, EXCEPT that constraint only
+// actually contains the abbreviated 'FT-ORG' (no 'FT-Conventional' has ever
+// been written there). Any bag-driven auto-fill that copies a production
+// `variant` straight into the form without going through this first risks
+// storing whatever production happens to spell it as — historically that was
+// short codes ('CON'), producing two different spellings of the same variant
+// in the runs table and silently missing spec lookups keyed on
+// `${grade}|${variant}`. Kept tolerant of both the current full words and the
+// old short codes so a historical row or an unmapped upstream value still
+// normalizes correctly instead of falling through unrecognized.
+function normProdVariant(v: string | null | undefined): string {
+  const s = (v || '').trim()
+  if (!s) return ''
+  if ((SD_VARIANTS as string[]).includes(s)) return s
+  const key = s.toUpperCase()
+  const map: Record<string,string> = {
+    'CONVENTIONAL': 'Conventional', 'ORGANIC': 'Organic',
+    'RA-CONVENTIONAL': 'RA-Conventional', 'RA-ORGANIC': 'RA-Organic',
+    'FT-CONVENTIONAL': 'FT-Conventional', 'FT-ORGANIC': 'FT-Organic',
+    'CON': 'Conventional', 'ORG': 'Organic',
+    'RA-CON': 'RA-Conventional', 'RA-ORG': 'RA-Organic',
+    'FT-CON': 'FT-Conventional', 'FT-ORG': 'FT-Organic',
+  }
+  return map[key] || s
 }
 const SERIAL_CODE_TO_PRODUCT: Record<string, string> = {
   FL: 'Fine Leaf', CL: 'Coarse Leaf', IS: 'Indent Sticks', RB: 'Rooibos Blocks',
@@ -259,6 +302,7 @@ function mapDbRow(r: any) {
     gramValues:   typeof r.gram_values==='object'&&r.gram_values!=null?r.gram_values:{},
     editHistory:  Array.isArray(r.edit_history)?r.edit_history:[],
     timestamp:    r.created_at,
+    runTimestamp: r.run_timestamp,
     ...(typeof r.sieve_results==='object'&&r.sieve_results!=null?r.sieve_results:{}),
   }
 }
@@ -380,12 +424,20 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
 }
 
 // ─── SievingOutlierChart ────────────────────────────────────────────────────
-// Bounded to "This Week" (bucketed by day) or "This Month" (bucketed by
-// week-of-month) — never the full history — so it never becomes the
-// unreadable "all runs" chart it replaced. Two views share that same window:
-//   Mesh Trend — every sieve fraction as its own line (like the old chart)
-//   Outliers   — one chosen metric plotted with a ±2.5σ band, flagging points
-//                 outside it (Bulk Density, Leaf Shade, or a sieve fraction)
+// Bucketed over whatever [rangeStart, rangeEnd] the page's date-range picker
+// is set to — the same window the records table below it is filtered to, so
+// the two always show the same slice of history instead of the chart having
+// its own separate navigation. Granularity adapts to the span so it stays
+// readable at any zoom level:
+//   single day   → by hour (same-shift visibility for an out-of-spec reading)
+//   up to ~9 wks → by day
+//   longer       → by Monday-based week
+// One grid of panels, always shown together (no tab to switch between them):
+//   sieve fractions — bucketed mean per window, one line per fraction
+//   Bulk Density / Leaf Shade — one point per Final QC bag at its own
+//     date+time, never bucketed (there's usually only one reading per bag,
+//     so averaging into the sieve buckets just stacked bags on top of
+//     each other at one x position)
 
 const TREND_LINE_COLORS = ['#ef4444','#f97316','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#06b6d4','#6b7280','#84cc16']
 
@@ -395,113 +447,124 @@ function startOfWeek(d: Date): Date {
   s.setDate(s.getDate() - dow + 1)
   return s
 }
+function fmtShort(d: Date): string { return d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' }) }
 
-// weekOffset/monthOffset: 0 = current, 1 = one week/month back, 2 = two back, etc.
-// Negative values are allowed (future) so "Next" can step back toward today.
-function dayBucketsForWeek(weekOffset: number): { key: string; label: string }[] {
-  const anchor = new Date(); anchor.setDate(anchor.getDate() - weekOffset * 7)
-  const start = startOfWeek(anchor)
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(start); d.setDate(start.getDate() + i)
-    return { key: isoDate(d), label: d.toLocaleDateString('en-ZA', { weekday: 'short' }) + ' ' + d.getDate() }
-  })
-}
+type ChartBucket = { key: string; label: string; from?: Date; to?: Date }
+type ChartGranularity = 'hour' | 'day' | 'week' | 'month'
 
-function weekRangeLabel(weekOffset: number): string {
-  const buckets = dayBucketsForWeek(weekOffset)
-  const from = new Date(buckets[0].key + 'T12:00:00'), to = new Date(buckets[6].key + 'T12:00:00')
-  const fmt = (d: Date) => d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })
-  return `${fmt(from)} – ${fmt(to)}${from.getFullYear() !== new Date().getFullYear() ? ' ' + from.getFullYear() : ', ' + from.getFullYear()}`
-}
+// An hour view over more than this many days plots more points than is
+// readable (or reasonable to ask the browser to render) — narrow the From/To
+// range first instead.
+const MAX_HOUR_VIEW_DAYS = 14
 
-function weekBucketsForMonth(monthOffset: number): { key: string; label: string; from: Date; to: Date }[] {
-  const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
-  const monthEnd   = new Date(now.getFullYear(), now.getMonth() - monthOffset + 1, 0)
-  const buckets: { key: string; label: string; from: Date; to: Date }[] = []
-  let cursor = new Date(monthStart)
-  let i = 1
-  while (cursor <= monthEnd) {
-    const from = new Date(cursor)
-    const to   = new Date(Math.min(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 6).getTime(), monthEnd.getTime()))
-    buckets.push({ key: `W${i}`, label: `Week ${i}`, from, to })
-    cursor.setDate(cursor.getDate() + 7)
-    i++
+// Buckets [startISO, endISO] (inclusive, 'YYYY-MM-DD') at an explicitly
+// chosen granularity — the person picks how they want the selected range
+// sliced (hour/day/week/month), independent of how wide that range is.
+// 'hour' still supports a multi-day range (one 24-bucket group per day, date
+// included in the label once there's more than one day) but is capped at
+// MAX_HOUR_VIEW_DAYS to stay renderable.
+function bucketsForRange(startISO: string, endISO: string, granularity: ChartGranularity): { buckets: ChartBucket[]; label: string; tooWide: boolean } {
+  const start = new Date(startISO + 'T00:00:00'), end = new Date(endISO + 'T00:00:00')
+  const spanDays = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000))
+  const label = spanDays === 0
+    ? start.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    : `${fmtShort(start)} – ${fmtShort(end)}${start.getFullYear() !== end.getFullYear() ? ' ' + start.getFullYear() : ', ' + end.getFullYear()}`
+
+  if (granularity === 'hour') {
+    if (spanDays > MAX_HOUR_VIEW_DAYS) return { buckets: [], label, tooWide: true }
+    const multiDay = spanDays > 0
+    const buckets: ChartBucket[] = []
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateISO = isoDate(d)
+      for (let h = 0; h < 24; h++) {
+        buckets.push({
+          key: `${dateISO}T${String(h).padStart(2, '0')}`,
+          label: multiDay ? `${fmtShort(d)} ${String(h).padStart(2, '0')}:00` : `${String(h).padStart(2, '0')}:00`,
+        })
+      }
+    }
+    return { buckets, label, tooWide: false }
   }
-  return buckets
-}
-
-function monthRangeLabel(monthOffset: number): string {
-  const now = new Date()
-  const d = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1)
-  return d.toLocaleDateString('en-ZA', { month: 'long', year: 'numeric' })
-}
-
-// dayOffset: 0 = today, 1 = yesterday, etc. — for the live, per-hour "By Hour"
-// view so an out-of-spec reading is visible the same shift it happened, not
-// just once the day rolls into a weekly bucket.
-function dateForDayOffset(dayOffset: number): Date {
-  const d = new Date(); d.setDate(d.getDate() - dayOffset); return d
-}
-function hourBucketsForDay(dayOffset: number): { key: string; label: string }[] {
-  const dateKey = isoDate(dateForDayOffset(dayOffset))
-  return Array.from({ length: 24 }, (_, h) => ({ key: `${dateKey}T${String(h).padStart(2, '0')}`, label: `${String(h).padStart(2, '0')}:00` }))
-}
-function dayRangeLabel(dayOffset: number): string {
-  return dateForDayOffset(dayOffset).toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+  if (granularity === 'day') {
+    const buckets: ChartBucket[] = []
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      buckets.push({ key: isoDate(d), label: fmtShort(d) })
+    }
+    return { buckets, label, tooWide: false }
+  }
+  if (granularity === 'week') {
+    const buckets: ChartBucket[] = []
+    let cursor = startOfWeek(start)
+    while (cursor <= end) {
+      const from = new Date(cursor)
+      const to = new Date(cursor); to.setDate(to.getDate() + 6)
+      buckets.push({ key: isoDate(from), label: `${fmtShort(from)} – ${fmtShort(to)}`, from, to })
+      cursor.setDate(cursor.getDate() + 7)
+    }
+    return { buckets, label, tooWide: false }
+  }
+  // month
+  const buckets: ChartBucket[] = []
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1)
+  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1)
+  while (cursor <= lastMonth) {
+    const from = new Date(cursor)
+    const to = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0)
+    buckets.push({ key: isoDate(from), label: cursor.toLocaleDateString('en-ZA', { month: 'short', year: 'numeric' }), from, to })
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
+  }
+  return { buckets, label, tooWide: false }
 }
 
 // Representative spec key used for the mesh-trend reference band. The %
-// mesh bounds are identical across Export/Domestic for a given CON/ORG
-// mesh set in every product in SIEVING_SPECS_DB — only Leaf Shade differs
-// by grade — so "Export|CON" is a safe stand-in for the trend view, which
-// isn't scoped to one grade/variant.
-const TREND_SPEC_KEY = 'Export|CON'
+// mesh bounds are identical across Export/Domestic for a given Conventional/
+// Organic mesh set in every product in SIEVING_SPECS_DB — only Leaf Shade
+// differs by grade — so "Export|Conventional" is a safe stand-in for the
+// trend view, which isn't scoped to one grade/variant.
+const TREND_SPEC_KEY = 'Export|Conventional'
 
-function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPointClick }: {
-  runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>; onPointClick?: (runId: any) => void
+function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, rangeStart, rangeEnd, minDate, maxDate, onRangeChange, onPointClick }: {
+  runs: any[]; activeProduct: string; specDef: any; activeSpecs?: Record<string,any>
+  rangeStart: string; rangeEnd: string; minDate: string; maxDate: string
+  onRangeChange: (start: string, end: string) => void
+  onPointClick?: (runId: any) => void
 }) {
-  const [view, setView]           = useState<'day' | 'week' | 'month'>('day')
-  const [chartType, setChartType] = useState<'trend' | 'outliers'>('trend')
-  const [dayOffset, setDayOffset]     = useState(0)   // 0 = today, 1 = yesterday, ...
-  const [weekOffset, setWeekOffset]   = useState(0)   // 0 = this week, 1 = last week, ...
-  const [monthOffset, setMonthOffset] = useState(0)   // 0 = this month, 1 = last month, ...
-  const offset = view === 'day' ? dayOffset : view === 'week' ? weekOffset : monthOffset
-  const setOffset = view === 'day' ? setDayOffset : view === 'week' ? setWeekOffset : setMonthOffset
-  const meshOptions = sdGetMesh(activeProduct, 'CON')
-  const metricOptions = [
-    { key: 'bulkDensity', label: 'Bulk Density', suffix: '' },
-    ...(specDef.hasLeafShade ? [{ key: 'leafShade', label: 'Leaf Shade', suffix: '' }] : []),
-    ...meshOptions.map(m => ({ key: m, label: m.replace(' (%)', ''), suffix: '%' })),
-  ]
-  const [metric, setMetric] = useState(metricOptions[0].key)
-  const metricDef = metricOptions.find(m => m.key === metric) || metricOptions[0]
+  const meshOptions = sdGetMesh(activeProduct, 'Conventional')
 
-  // Bucket definitions for the selected window — hour-of-day for "By Hour"
-  // (live, same-shift visibility), day-of-week for "By Week", week-of-month
-  // for "By Month". Runs outside the window are excluded. dayOffset/
-  // weekOffset/monthOffset step the window back in time — a timeline, not
-  // just the current day/week/month.
-  const hourBuckets = hourBucketsForDay(dayOffset)
-  const dayBuckets  = dayBucketsForWeek(weekOffset)
-  const weekBuckets = weekBucketsForMonth(monthOffset)
-  const rangeLabel  = view === 'day' ? dayRangeLabel(dayOffset) : view === 'week' ? weekRangeLabel(weekOffset) : monthRangeLabel(monthOffset)
+  // Granularity is an explicit choice (By Hour/Day/Week/Month below), not
+  // inferred from the range's span — a two-week range might as well be
+  // viewed as daily points or as one weekly average, so the person picks.
+  // Runs outside [rangeStart, rangeEnd] are excluded (the parent already
+  // scopes `runs` to this same window, but the guard is cheap and keeps this
+  // component correct standalone too).
+  const [granularity, setGranularity] = useState<ChartGranularity>('day')
+  const { buckets: bucketLabels, label: rangeLabel, tooWide } = bucketsForRange(rangeStart, rangeEnd, granularity)
+  // Caps the number of x-axis labels actually drawn regardless of how many
+  // buckets are in the window. These mini charts are only ~280-380px wide, so
+  // the target is deliberately small — and smaller still for week buckets,
+  // whose "11 May – 17 May" labels are much wider than a day or hour label.
+  const tickTarget = granularity==='hour' ? 8 : granularity==='day' ? 6 : 4
+  const tickInterval = Math.max(0, Math.ceil(bucketLabels.length / tickTarget) - 1)
+  // Week labels — and multi-day hour labels, which carry a date prefix
+  // ("13 Aug 09:00") — are long enough that even the capped count can
+  // collide head-on at 0°, so angle them and anchor from their end
+  // (Recharts convention for rotated ticks — anything else drifts the
+  // label off its tick mark).
+  const xAxisAngleProps = (granularity==='week' || (granularity==='hour' && rangeStart!==rangeEnd))
+    ? { angle: -35, textAnchor: 'end' as const, height: 46 }
+    : {}
   const bucketKeyFor = (r: any): string | null => {
-    if (!r.date) return null
-    if (view === 'day') {
-      if (r.date !== hourBuckets[0].key.slice(0, 10)) return null
+    if (!r.date || r.date < rangeStart || r.date > rangeEnd) return null
+    if (granularity === 'hour') {
       const hh = parseInt((r.time || '').split(':')[0], 10)
       if (isNaN(hh) || hh < 0 || hh > 23) return null
       return `${r.date}T${String(hh).padStart(2, '0')}`
     }
-    if (view === 'week') {
-      return dayBuckets.some(b => b.key === r.date) ? r.date : null
-    }
+    if (granularity === 'day') return r.date
     const d = new Date(r.date + 'T12:00:00')
-    const b = weekBuckets.find(wb => d >= wb.from && d <= wb.to)
+    const b = bucketLabels.find(wb => wb.from && wb.to && d >= wb.from && d <= wb.to)
     return b ? b.key : null
   }
-  const bucketLabels = view === 'day' ? hourBuckets : view === 'week' ? dayBuckets : weekBuckets
 
   const inWindow = runs.filter((r: any) => bucketKeyFor(r) != null)
 
@@ -527,73 +590,143 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
   })
   const hasTrendData = trendData.some(row => meshOptions.some(m => row[m] != null))
 
-  // ── Outliers data: every run in the window for the chosen metric, ±2.5σ band ──
-  const points = inWindow
-    .map((r: any) => ({ period: bucketLabels.find(b => b.key === bucketKeyFor(r))?.label || '', value: parseFloat(r[metric]), run: r }))
-    .filter((p: any) => !isNaN(p.value))
-  const values = points.map((p: any) => p.value)
-  const m = mean(values), sd = stdDev(values)
-  const upper = m + 2.5 * sd, lower = m - 2.5 * sd
-  const scatterData = points.map((p: any) => ({
-    period: p.period, value: p.value, runId: p.run.id,
-    label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
-    isOutlier: sd > 0 && (p.value > upper || p.value < lower),
-  }))
-  const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
+  // ── Bulk Density / Leaf Shade: one point per run at its own date+time,
+  // never grouped into the shared day/week/month bucket — there's usually
+  // only one Final QC reading per bag, so bucketing would just stack every
+  // bag QC'd in the same window on top of each other at one x position.
+  // Replaces the old separate "Outliers" tab: these two now always render
+  // as their own panels alongside the sieve-mesh trend charts below.
+  //
+  // Each of the two also has its own optional "focus day" — independent of
+  // the shared From/To range above, which stays in charge of the sieve
+  // trend charts and the records table. Picking a day here switches that one
+  // panel to every sample on that day plotted by hour, since plotting every
+  // bag across a multi-week range squeezed them into unreadable clusters.
+  const [bagFocusDay, setBagFocusDay] = useState<{bulkDensity: string|null; leafShade: string|null}>({ bulkDensity: null, leafShade: null })
+  function bagMetricPoints(metricKey: string, focusDay: string | null) {
+    const source = focusDay ? runs.filter((r: any) => r.date === focusDay) : inWindow
+    const points = source
+      .map((r: any) => {
+        if (focusDay) {
+          const hh = parseInt((r.time || '').split(':')[0], 10)
+          if (isNaN(hh) || hh < 0 || hh > 23) return null
+          return { period: `${String(hh).padStart(2, '0')}:00`, value: parseFloat(r[metricKey]), run: r }
+        }
+        const d = new Date(r.date + 'T12:00:00')
+        const time = (r.time || '').slice(0, 5)
+        return { period: `${fmtShort(d)}${time ? ' ' + time : ''}`, value: parseFloat(r[metricKey]), run: r }
+      })
+      .filter((p): p is {period:string; value:number; run:any} => p != null && !isNaN(p.value))
+      .sort((a, b) => focusDay
+        ? a.period.localeCompare(b.period)
+        : `${a.run.date}${a.run.time || ''}`.localeCompare(`${b.run.date}${b.run.time || ''}`))
+    const values = points.map((p) => p.value)
+    const m = mean(values), sd = stdDev(values)
+    const upper = m + 2.5 * sd, lower = m - 2.5 * sd
+    const scatterData = points.map((p) => ({
+      period: p.period, value: p.value, runId: p.run.id,
+      label: `${p.run.lotNumber || p.run.serialNumber || '—'} · ${p.run.date}`,
+      isOutlier: sd > 0 && (p.value > upper || p.value < lower),
+    }))
+    const outlierCount = scatterData.filter((d: any) => d.isOutlier).length
+    // Per-run labels ("14 Aug 09:15") are as wide as week labels — same small
+    // tick target and rotation treatment as those get. Hour-of-day labels
+    // ("09:00") in focus-day mode are short, so they get a bigger target.
+    const categoryCount = new Set(points.map((p) => p.period)).size
+    const tickInterval = Math.max(0, Math.ceil(categoryCount / (focusDay ? 8 : 4)) - 1)
+    return { scatterData, m, sd, upper, lower, outlierCount, tickInterval }
+  }
+  const bulkDensityPanel = bagMetricPoints('bulkDensity', bagFocusDay.bulkDensity)
+  const leafShadePanel = specDef.hasLeafShade ? bagMetricPoints('leafShade', bagFocusDay.leafShade) : null
+  const bagAxisAngleProps = { angle: -35, textAnchor: 'end' as const, height: 46 }
 
   return (
     <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:16 }}>
       <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+        {/* From/To picks WHAT slice of history; these tabs pick HOW to
+            aggregate it — independent choices, so a two-week range can be
+            viewed as daily points or as one weekly average, and a whole
+            quarter can still be drilled into by day or by hour. */}
         <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
-          {(['trend','outliers'] as const).map(t => (
-            <button key={t} onClick={()=>setChartType(t)}
-              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
-                background:chartType===t?'#166534':'#fff', color:chartType===t?'#fff':'#374151' }}>
-              {t==='trend'?'📈 Mesh Trend':'⚠ Outliers'}
+          {(['hour','day','week','month'] as const).map(g => (
+            <button key={g} onClick={()=>setGranularity(g)}
+              style={{ padding:'5px 10px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
+                background:granularity===g?'#1f4e79':'#fff', color:granularity===g?'#fff':'#374151' }}>
+              {g==='hour'?'By Hour':g==='day'?'By Day':g==='week'?'By Week':'By Month'}
             </button>
           ))}
         </div>
-        <div style={{ display:'flex', border:'1px solid #d1d5db', borderRadius:6, overflow:'hidden' }}>
-          {(['day','week','month'] as const).map(v => (
-            <button key={v} onClick={()=>setView(v)}
-              style={{ padding:'5px 12px', fontSize:11, fontWeight:600, border:'none', cursor:'pointer',
-                background:view===v?'#1f4e79':'#fff', color:view===v?'#fff':'#374151' }}>
-              {v==='day'?'By Hour':v==='week'?'By Week':'By Month'}
-            </button>
-          ))}
-        </div>
-        {/* Timeline navigator — step back through previous days/weeks/months */}
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <button onClick={()=>setOffset((o:number)=>o+1)} title={`Previous ${view}`}
-            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:'#fff', cursor:'pointer' }}>◀</button>
-          <span style={{ fontSize:11, fontWeight:700, color:'#374151', minWidth:120, textAlign:'center' }}>{rangeLabel}</span>
-          <button onClick={()=>setOffset((o:number)=>Math.max(0,o-1))} disabled={offset===0} title={`Next ${view}`}
-            style={{ padding:'4px 8px', fontSize:12, border:'1px solid #d1d5db', borderRadius:6, background:offset===0?'#f3f4f6':'#fff', color:offset===0?'#d1d5db':'#374151', cursor:offset===0?'default':'pointer' }}>▶</button>
-          {offset!==0 && (
-            <button onClick={()=>setOffset(0)} style={{ padding:'4px 10px', fontSize:11, fontWeight:600, border:'1px solid #1f4e79', borderRadius:6, background:'#eff6ff', color:'#1f4e79', cursor:'pointer' }}>Today</button>
-          )}
+          <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>From</span>
+          <input type="date" value={rangeStart} min={minDate} max={rangeEnd}
+            onChange={e=>e.target.value && onRangeChange(e.target.value, rangeEnd)}
+            style={{ padding:'4px 6px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6 }} />
+          <span style={{ fontSize:10, fontWeight:700, color:'#6b7280', textTransform:'uppercase' }}>To</span>
+          <input type="date" value={rangeEnd} min={rangeStart} max={maxDate}
+            onChange={e=>e.target.value && onRangeChange(rangeStart, e.target.value)}
+            style={{ padding:'4px 6px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6 }} />
         </div>
-        {chartType==='outliers' && (
-          <select value={metric} onChange={e=>setMetric(e.target.value)}
-            style={{ padding:'4px 8px', fontSize:11, border:'1px solid #d1d5db', borderRadius:6, background:'#fff' }}>
-            {metricOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-        )}
-        {chartType==='outliers' && outlierCount>0 && (
-          <span style={{ fontSize:11, fontWeight:700, color:'#dc2626', marginLeft:'auto' }}>
-            ⚠ {outlierCount} outlier{outlierCount!==1?'s':''} (&gt;2.5σ from mean)
-          </span>
-        )}
       </div>
 
-      {chartType==='trend' ? (
-        !hasTrendData ? (
-          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
-            No in-process sieve results for {rangeLabel} yet.
-          </div>
-        ) : (
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:14 }}>
-            {meshOptions.map((m,i) => {
+      {!tooWide && !hasTrendData && bulkDensityPanel.scatterData.length===0 && !leafShadePanel?.scatterData.length ? (
+        <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+          No results for {rangeLabel} yet.
+        </div>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:14 }}>
+          {[
+            { key:'bulkDensity' as const, label:'Bulk Density', panel:bulkDensityPanel, bounds:null as {min:number;max:number}|null },
+            ...(leafShadePanel ? [{ key:'leafShade' as const, label:'Leaf Shade', panel:leafShadePanel, bounds:specBoundsFor('Leaf Shade') }] : []),
+          ].map(({ key, label, panel, bounds }) => {
+            const focusDay = bagFocusDay[key]
+            const setFocusDay = (d: string | null) => setBagFocusDay(f => ({ ...f, [key]: d }))
+            return (
+            <div key={key} style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 12px 4px' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4, flexWrap:'wrap', gap:6 }}>
+                <span style={{ fontSize:12, fontWeight:700, color:'#1f2937' }}>
+                  {label} <span style={{ fontWeight:400, color:'#9ca3af', fontSize:10 }}>({focusDay?'by hour':'by sample'})</span>
+                </span>
+                <span style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  {bounds && <span style={{ fontSize:10, color:'#6b7280', fontWeight:600 }}>Spec {bounds.min}–{bounds.max}</span>}
+                  {panel.outlierCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>⚠ {panel.outlierCount} &gt;2.5σ</span>}
+                  {/* Independent of the From/To range above — picking a day here
+                      shows every sample from that day by hour, regardless of
+                      what the shared range (which still drives the sieve trend
+                      charts and the table below) is set to. */}
+                  <input type="date" value={focusDay||''} min={minDate} max={maxDate}
+                    onChange={e=>setFocusDay(e.target.value||null)}
+                    title="Pick a day to see that day's samples by hour"
+                    style={{ fontSize:9, padding:'2px 4px', border:'1px solid #d1d5db', borderRadius:4 }} />
+                  {focusDay && (
+                    <button onClick={()=>setFocusDay(null)} title="Back to the date range above"
+                      style={{ fontSize:9, padding:'2px 6px', border:'1px solid #d1d5db', borderRadius:4, background:'#fff', cursor:'pointer' }}>✕</button>
+                  )}
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <ScatterChart margin={{ top:8, right:12, left:0, bottom:30 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
+                  <XAxis dataKey="period" type="category" tick={{ fontSize:9 }} interval={panel.tickInterval} {...bagAxisAngleProps} />
+                  <YAxis dataKey="value" tick={{ fontSize:9 }} width={36} />
+                  <Tooltip formatter={(v:any)=>`${v}`} labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
+                  {bounds && <ReferenceLine y={bounds.min} stroke="#111827" strokeWidth={1.5} label={{ value:`min ${bounds.min}`, fontSize:9, fill:'#111827', position:'insideBottomLeft' }} />}
+                  {bounds && <ReferenceLine y={bounds.max} stroke="#111827" strokeWidth={1.5} label={{ value:`max ${bounds.max}`, fontSize:9, fill:'#111827', position:'insideTopLeft' }} />}
+                  {!isNaN(panel.m) && <ReferenceLine y={panel.m} stroke="#6b7280" strokeDasharray="4 2" label={{ value:'mean', fontSize:9, fill:'#6b7280' }} />}
+                  {panel.sd>0 && <ReferenceLine y={panel.upper} stroke="#f59e0b" strokeDasharray="3 3" />}
+                  {panel.sd>0 && <ReferenceLine y={panel.lower} stroke="#f59e0b" strokeDasharray="3 3" />}
+                  <Scatter data={panel.scatterData} onClick={(d:any)=>onPointClick?.(d?.runId ?? d?.payload?.runId)} cursor="pointer">
+                    {panel.scatterData.map((d:any,i:number) => <Cell key={i} fill={d.isOutlier?'#dc2626':'#3b82f6'} />)}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          )})}
+
+          {tooWide ? (
+            <div style={{ gridColumn:'1 / -1', textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
+              An hourly view of the sieve-mesh charts only covers up to {MAX_HOUR_VIEW_DAYS} days at a time — narrow the From/To range above, or switch to By Day/Week/Month for {rangeLabel}.
+            </div>
+          ) : meshOptions.map((m,i) => {
               const bounds = specBoundsFor(m)
               const oosCount = trendData.filter(row => row[`${m}__oos`]).length
               const lineColor = TREND_LINE_COLORS[i%TREND_LINE_COLORS.length]
@@ -615,10 +748,10 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
                       {oosCount>0 && <span style={{ fontSize:10, fontWeight:700, color:'#dc2626' }}>🚩 {oosCount} out of spec</span>}
                     </span>
                   </div>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:2 }}>
+                  <ResponsiveContainer width="100%" height={xAxisAngleProps.angle?185:160}>
+                    <LineChart data={trendData} margin={{ top:6, right:12, left:0, bottom:xAxisAngleProps.angle?26:2 }}>
                       <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
-                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={view==='day'?2:0} />
+                      <XAxis dataKey="period" tick={{ fontSize:9 }} interval={tickInterval} {...xAxisAngleProps} />
                       <YAxis tick={{ fontSize:9 }} unit="%" width={36} domain={[domainMin, domainMax]} />
                       <Tooltip formatter={(v:any)=>v==null?'—':`${v}%`} />
                       {/* Spec band — in-spec shaded green, out-of-spec zones shaded a dark red so it's unmistakable at a glance, plus solid dark boundary lines */}
@@ -651,29 +784,7 @@ function SievingOutlierChart({ runs, activeProduct, specDef, activeSpecs, onPoin
             })}
           </div>
         )
-      ) : (
-        scatterData.length < 3 ? (
-          <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:11 }}>
-            Not enough {metricDef.label.toLowerCase()} data for {rangeLabel} to plot outliers.
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <ScatterChart margin={{ top:8, right:20, left:0, bottom:4 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.4} />
-              <XAxis dataKey="period" type="category" tick={{ fontSize:10 }} interval={view==='day'?1:0} />
-              <YAxis dataKey="value" tick={{ fontSize:10 }} unit={metricDef.suffix} width={44} />
-              <Tooltip formatter={(v:any)=>`${v}${metricDef.suffix}`}
-                labelFormatter={(_l:any, payload:any) => payload?.[0]?.payload?.label || ''} />
-              {!isNaN(m) && <ReferenceLine y={m} stroke="#6b7280" strokeDasharray="4 2" label={{ value:'mean', fontSize:9, fill:'#6b7280' }} />}
-              {sd>0 && <ReferenceLine y={upper} stroke="#f59e0b" strokeDasharray="3 3" />}
-              {sd>0 && <ReferenceLine y={lower} stroke="#f59e0b" strokeDasharray="3 3" />}
-              <Scatter data={scatterData} onClick={(d:any)=>onPointClick?.(d?.runId ?? d?.payload?.runId)} cursor="pointer">
-                {scatterData.map((d:any,i:number) => <Cell key={i} fill={d.isOutlier?'#dc2626':'#3b82f6'} />)}
-              </Scatter>
-            </ScatterChart>
-          </ResponsiveContainer>
-        )
-      )}
+      }
     </div>
   )
 }
@@ -688,7 +799,7 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
     qcName: run.qcName||'', time: run.time||'',
-    bulkDensity: run.bulkDensity||'', grade: run.grade||SD_GRADES[0], variant: run.variant||'CON',
+    bulkDensity: run.bulkDensity||'', grade: run.grade||SD_GRADES[0], variant: run.variant||'Conventional',
     runType: run.runType||'in-process', needleCount: run.needleCount||'',
     leafShade: run.leafShade||'', comment: run.comment||'', paLevel: run.paLevel||'',
   })
@@ -764,8 +875,17 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
           ...(!specDef.noBulkDensity&&(!specDef.qcFieldsFinalOnly||fields.runType==='final')?[['Bulk Density','bulkDensity','number']]:[])]
           .map(([label,key,type]) => (
             <div key={key}>
-              <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>{label}</label>
-              {key==='qcName' ? (
+              <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>
+                {label}
+                {/* Date/time are the capture record, not editable data — a wrong
+                    one gets fixed directly in the database (IT), never here. */}
+                {(key==='date'||key==='time') && <span style={{fontSize:8,color:'#6b7280',fontWeight:400,textTransform:'none'}}> 🔒 fixed at capture</span>}
+              </label>
+              {key==='date'||key==='time' ? (
+                <input type="text" value={(fields as any)[key]} readOnly
+                  title="Recorded automatically at capture — contact IT to correct a date or time"
+                  style={{...inputSt,background:'#f3f4f6',color:'#6b7280',cursor:'not-allowed'}}/>
+              ) : key==='qcName' ? (
                 <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
               ) : key==='serialNumber' ? (
                 <>
@@ -902,7 +1022,12 @@ export default function SievingPage() {
   const [showSpecEditor, setShowSpecEditor] = useState(false)
   const [showSpecPanel,  setShowSpecPanel]  = useState(true)
   const [filter,         setFilter]         = useState('all')
-  const [period,         setPeriod]         = useState<'today'|'week'|'month'|'60d'|'all'>('all')
+  // Explicit From/To date window shared by the chart and the records table,
+  // so the two always show the same slice of history. Defaults to the last 7
+  // days rather than just "today" — a single day is often empty for a given
+  // product and left both the chart and table blank on load.
+  const [rangeStart, setRangeStart] = useState(() => { const d = new Date(); d.setDate(d.getDate()-6); return isoDate(d) })
+  const [rangeEnd,   setRangeEnd]   = useState(() => isoDate(new Date()))
   const [searchText,     setSearchText]     = useState('')
   const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
@@ -1020,16 +1145,18 @@ export default function SievingPage() {
   useEffect(() => { loadPendingBags() }, [loadPendingBags])
 
   // The QC's time is always the moment of capture — never typed or edited.
-  const nowHHMM = () => {
-    const n = new Date()
-    return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`
-  }
+  // Explicitly SAST (Africa/Johannesburg), not whatever timezone the
+  // capturing device happens to be set to — same reasoning as sastDateStr().
+  const nowHHMM = () => new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date())
 
   const blankForm = () => {
-    const now = new Date()
     return {
-      date: now.toISOString().slice(0,10),
-      lotNumber:'', serialNumber:'', grade:'Export', variant:'CON',
+      // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
+      // is still yesterday, which would file the run against the wrong day.
+      date: sastDateStr(new Date().toISOString()),
+      lotNumber:'', serialNumber:'', grade:'Export', variant:'Conventional',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
       bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
     }
@@ -1037,29 +1164,41 @@ export default function SievingPage() {
   const [form, setForm]           = useState<any>(blankForm())
   const [gramValues, setGramValues] = useState<Record<string,string>>({})
 
-  // In-Process runs sample the machine while a specific bag is being filled, so
-  // the serial comes from production rather than being typed: pre-fill the most
-  // recent bag for the sieve currently open. Only fills a blank field, so a QC
-  // who picks a different bag from the list isn't overwritten. Final QC is
-  // untouched here — its serial comes from the bag picked in the queue above.
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Autosaves
+  // every 15s while the New Run form is open so a dropped connection or
+  // closed tab doesn't lose an in-progress capture; cleared once addRun()
+  // confirms the insert. Keyed per-product since each product tab can have
+  // its own in-progress entry.
+  const draftKey = `sieving_draft_${activeProduct}`
+  const [recoveredDraft, setRecoveredDraft] = useState<{data:any;savedAt:string}|null>(null)
+  useDraftAutosave(draftKey, { form, gramValues }, { enabled: showForm })
   useEffect(() => {
-    if (!showForm || form.runType !== 'in-process') return
-    if (form.serialNumber) return
-    const latest = bagSerialOptions[0]
-    if (!latest) return
-    setForm((f:any) => f.serialNumber || f.runType !== 'in-process' ? f : ({
-      ...f, serialNumber: latest.serial, ...(f.lotNumber ? {} : { lotNumber: latest.lot || '' }),
-    }))
-  }, [showForm, form.runType, form.serialNumber, bagSerialOptions])
+    if (showForm) return
+    setRecoveredDraft(readDraft(draftKey))
+  }, [draftKey, showForm])
+
+  // In-Process no longer carries a serial at all — it's a reading off the
+  // machine while a bag is still filling, not a sample of one finished bag, so
+  // there's nothing for a serial to identify. (Previously this auto-filled the
+  // most recent bag's serial, which just meant every In-Process reading for a
+  // sieve pointed at whatever bag happened to be latest, with no way to enter
+  // one manually either — it looked like a required field nobody could
+  // usefully fill in.) Only Final QC — sampling one specific finished bag —
+  // has a serial, picked from the pending-bag list above.
 
   // Load all runs
   const load = useCallback(async () => {
     setLoading(true); setSdError('')
     // qms is the single source (legacy public.sd_runs consolidated in 2026-06-24).
-    // Paginate — qms.sd_runs exceeds the default 1000-row page.
+    // Only the last 3 months is fetched — this table is thousands of rows deep
+    // and nothing in the UI (chart or table) shows further back than the
+    // date-range slicer's window anyway. Paginate within that window since a
+    // busy quarter can still exceed the default 1000-row page.
+    const sinceDate = threeMonthsAgoISO()
     let allData: any[] = []
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db.schema('qms').from('sd_runs').select('*')
+        .gte('date', sinceDate)
         .order('created_at', { ascending: false }).range(from, from + 999)
       if (error) { setSdError(error.message); setLoading(false); return }
       allData = allData.concat(data || [])
@@ -1098,17 +1237,10 @@ export default function SievingPage() {
   const activeSpecs = customSpecs[activeProduct] || specDef.variants
   const productRuns = runs[activeProduct] || []
 
-  // Period cutoff — Daily / Weekly / Monthly / 60 Days / All. Dates are stored
-  // as 'YYYY-MM-DD' so lexicographic comparison against the cutoff works.
-  const periodCutoff = (() => {
-    if (period === 'all') return null
-    const d = new Date()
-    if (period === 'today') return isoDate(d)
-    if (period === 'week')  d.setDate(d.getDate() - 7)
-    if (period === 'month') d.setMonth(d.getMonth() - 1)
-    if (period === '60d')   d.setDate(d.getDate() - 60)
-    return isoDate(d)
-  })()
+  // The runs feeding both the chart and the table are scoped to the same
+  // slicer range — dates are stored as 'YYYY-MM-DD' so lexicographic
+  // comparison works.
+  const rangeRuns = productRuns.filter((r:any) => (r.date||'') >= rangeStart && (r.date||'') <= rangeEnd)
 
   // Global search — case-insensitive substring match across every displayed
   // field (date, lot, serial, grade, variant, type, QC, time, BD, needles,
@@ -1142,8 +1274,7 @@ export default function SievingPage() {
   const toggleSort = (key: string) =>
     setSdSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
 
-  const filteredRuns = (filter==='all' ? productRuns : productRuns.filter((r:any) => r.runType===filter))
-    .filter((r:any) => !periodCutoff || (r.date||'') >= periodCutoff)
+  const filteredRuns = (filter==='all' ? rangeRuns : rangeRuns.filter((r:any) => r.runType===filter))
     .filter((r:any) => !searchText.trim() || rowSearchText(r).includes(searchText.trim().toLowerCase()))
     .slice().sort((a:any,b:any) => {
       const va = sortKeyVal(a, sdSort.key), vb = sortKeyVal(b, sdSort.key)
@@ -1167,7 +1298,10 @@ export default function SievingPage() {
     if (matches.length) {
       const latest: any = matches[0]
       if (latest.grade)        fields.grade = latest.grade
-      if (latest.variant)      fields.variant = latest.variant
+      // Normalized defensively — a handful of historical rows saved the
+      // production-schema spelling ("Conventional") before this was fixed at
+      // the source, and copying one forward here would keep it circulating.
+      if (latest.variant)      fields.variant = normProdVariant(latest.variant) || latest.variant
       if (latest.serialNumber) fields.serialNumber = latest.serialNumber
       if (latest.leafShade)    fields.leafShade = latest.leafShade
     }
@@ -1309,13 +1443,22 @@ export default function SievingPage() {
       product:       activeProduct,
       date:          form.date,
       lot_number:    form.lotNumber||null,
-      serial_number: form.serialNumber||null,
+      // In-Process never carries a serial — enforced here too (not just by
+      // hiding the field) so the lot-number auto-fill below can't silently
+      // attach a stale serial from a previous run against the same lot.
+      serial_number: form.runType==='final' ? (form.serialNumber||null) : null,
       grade:         form.grade||null,
       variant:       form.variant||null,
       run_type:      form.runType||null,
       qc_name:       form.qcName||null,
       // Always the capture moment — the QC cannot type or edit this.
       time_of_run:   nowHHMM(),
+      // The tamper-resistant record of when this run was actually captured —
+      // a real UTC instant, set once here and never touched by the edit path
+      // below (see the onSave handler's dbRow, which omits it entirely). The
+      // human-facing date/time_of_run fields stay locked in the edit screen
+      // too, but this is the one nothing in the app can ever rewrite.
+      run_timestamp: new Date().toISOString(),
       bagging_id:    form.baggingId || null,
       needle_count:  form.needleCount||null,
       leaf_shade:    form.leafShade||null,
@@ -1331,6 +1474,9 @@ export default function SievingPage() {
     setSaving(true)
     const { data: saved, error } = await db.schema('qms').from('sd_runs').insert(newRun).select().single()
     if (error) { setSdError('Could not save run: '+error.message); setSaving(false); return }
+    // Now safely in the database — the local draft would only ever resurface
+    // stale, already-saved data from here on, so drop it.
+    clearDraft(draftKey)
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
 
@@ -1375,12 +1521,16 @@ export default function SievingPage() {
     const updated = { ...customSpecs, [activeProduct]: newSpecs }
     setCustomSpecs(updated)
     setShowSpecEditor(false)
-    // Persist to Supabase directly
+    // Persist to Supabase so every PC shares the same specs. A schema
+    // mismatch or RLS denial comes back as {error}, not a thrown exception —
+    // that's exactly how this silently never persisted for a long stretch —
+    // so check it explicitly rather than only try/catching network failures.
     try {
-      await getDb().schema('qms').from('sieving_spec_overrides')
-        .upsert({ product: activeProduct, specs: newSpecs }, { onConflict: 'product' })
+      const { error } = await getDb().schema('qms').from('sieving_spec_overrides')
+        .upsert({ product: activeProduct, specs: newSpecs, updated_by: myName || null }, { onConflict: 'product' })
+      if (error) alert('Specs saved for this session, but could not save to the shared database (other PCs won\'t see this change): ' + error.message)
     } catch (_) {
-      // Non-fatal: specs saved in local state even if Supabase unreachable
+      alert('Specs saved for this session, but could not reach the database — other PCs won\'t see this change until it saves successfully.')
     }
   }
 
@@ -1411,7 +1561,7 @@ export default function SievingPage() {
       setForm((f: any) => ({
         ...f,
         ...(data.lot_number ? { lotNumber: data.lot_number } : {}),
-        ...(data.variant    ? { variant: data.variant }       : {}),
+        ...(data.variant    ? { variant: normProdVariant(data.variant) } : {}),
         grade,
         ...(date            ? { date }                        : {}),
       }))
@@ -1435,8 +1585,17 @@ export default function SievingPage() {
       baggingId:    bag.bagging_id,
       serialNumber: bag.bag_serial_no || '',
       lotNumber:    bag.lot_number || '',
-      variant:      bag.variant || f.variant,
-      date:         bag.bag_date || f.date,
+      variant:      normProdVariant(bag.variant) || f.variant,
+      // The run's date is WHEN THE QC WAS DONE, to match the time beside it,
+      // which is always stamped at capture. Previously this took the bag's
+      // bagging date instead, so a bag made yesterday and sampled this morning
+      // was stored as date=yesterday + time=this-morning — an instant that
+      // never happened. The table sorts on date+time, so those rows buried
+      // themselves near the bottom of the previous day and read as missing
+      // (STFL-130826-012, sampled 07:33 on the 14th, filed under 13 Aug 07:33).
+      // The bag's own bagging date is not lost: it stays on the bag via the
+      // serial/bagging_id link and is shown in the confirmation line below.
+      date:         sastDateStr(new Date().toISOString()),
       qcName:       f.qcName || myName,
       time:         nowHHMM(),
       ...(pa    ? { paLevel: pa } : {}),
@@ -1444,6 +1603,9 @@ export default function SievingPage() {
     }))
     const bits = [
       `📦 Bag ${bag.bag_serial_no || '—'} · ${bag.product} · lot ${bag.lot_number || '—'}`,
+      // Keep the bag's own bagging moment visible — the run's Date field is now
+      // the QC date, so this is where "when was this bag actually made" lives.
+      bag.bagged_at ? `Bagged ${String(bag.bagged_at).slice(0,10)} ${String(bag.bagged_at).slice(11,16)}` : '',
       pa ? `PA: ${pa}` : '',
       shade != null ? `Shade: ${shade} (from raw material)` : '',
       bag.inprocess_out_of_spec ? `⚠ In-process sieve OUT OF SPEC at ${String(bag.inprocess_at||'').slice(11,16)}` : '',
@@ -1468,6 +1630,14 @@ export default function SievingPage() {
   // Realtime and the 60s poll only refresh that queue; they never own the list.
   const bagAlerts = pendingBags
   const [alertsCollapsed, setAlertsCollapsed] = useState(false)
+  // Start collapsed on a phone. Expanded, this panel is nearly the whole
+  // screen there, which buries the page it's meant to sit alongside. On a
+  // desktop it stays open as before, where there's room for it.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches) {
+      setAlertsCollapsed(true)
+    }
+  }, [])
   useEffect(() => {
     const id = setInterval(loadPendingBags, 60000)
     return () => clearInterval(id)
@@ -1532,15 +1702,21 @@ export default function SievingPage() {
           a Final QC. Deliberately has no per-card dismiss: the whole panel can
           be collapsed out of the way, but a bag only leaves the list by being
           sampled, so nothing gets closed and forgotten. */}
+      {/* pointerEvents:'none' on the container, 'auto' on the actual button and
+          cards: a position:fixed panel otherwise swallows every touch across
+          its whole box — including the empty gaps between cards — so on a
+          phone, where it's most of the screen, the page underneath could not
+          be scrolled at all. Height is capped too, so it can never own the
+          full viewport even when expanded. */}
       {bagAlerts.length > 0 && (
-        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'calc(100vh - 90px)'}}>
+        <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'min(60vh, calc(100vh - 90px))',pointerEvents:'none'}}>
           <button onClick={()=>setAlertsCollapsed(c=>!c)}
-            style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)'}}>
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)',pointerEvents:'auto',flexShrink:0}}>
             <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC</span>
             <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
           </button>
           {!alertsCollapsed && (
-            <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto'}}>
+            <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto',pointerEvents:'auto'}}>
               {bagAlerts.map(a=>(
                 <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:`4px solid ${a.inprocess_out_of_spec?'#991b1b':'#166534'}`,borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
                   <div style={{fontWeight:700,fontSize:12,color:a.inprocess_out_of_spec?'#991b1b':'#166534'}}>
@@ -1582,6 +1758,40 @@ export default function SievingPage() {
         ))}
       </div>
 
+      {/* Recovered draft — see lib/hooks/useDraftAutosave.ts. Only surfaces when
+          the form is closed, so it never fights with an entry in progress. */}
+      {recoveredDraft && !showForm && (
+        <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+          onRestore={()=>{
+            setForm(recoveredDraft.data.form); setGramValues(recoveredDraft.data.gramValues||{})
+            setShowForm(true); setShowSpecEditor(false); setEditRunId(null); setRecoveredDraft(null)
+            setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)
+          }}
+          onDiscard={()=>{ clearDraft(draftKey); setRecoveredDraft(null) }} />
+      )}
+
+      {/* Toolbar A — New Run / Edit Specs sit above the Specifications table so
+          editing the spec a run will be checked against is right next to it. */}
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        {/* Two dedicated buttons instead of a generic "+ New Run" that then made
+            you pick In-Process vs Final QC inside the form — the run type is
+            set the moment the form opens. */}
+        {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setRecoveredDraft(null)
+          setForm((f:any)=>({...blankForm(), runType:'in-process'}))
+          setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
+          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New In-Process QC</button>}
+        {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setRecoveredDraft(null)
+          setForm((f:any)=>({...blankForm(), runType:'final'}))
+          setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
+          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Output Bag QC</button>}
+        {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null)}}
+          style={{padding:'5px 12px',borderRadius:6,border:'1px solid #7c3aed',fontSize:11,cursor:'pointer',fontWeight:600,
+            background:showSpecEditor?'#7c3aed':'#faf5ff',color:showSpecEditor?'#fff':'#7c3aed'}}>
+          {showSpecEditor?'× Close Editor':'Edit Specs'}</button>}
+      </div>
+
       {/* Spec editor */}
       {showSpecEditor && <SievingSpecEditor product={activeProduct} specDef={specDef} customSpecs={activeSpecs} onSave={saveSpecs} onClose={()=>setShowSpecEditor(false)}/>}
 
@@ -1590,7 +1800,7 @@ export default function SievingPage() {
         <button onClick={()=>setShowSpecPanel(s=>!s)} style={{width:'100%',padding:'11px 16px',background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',fontFamily:'inherit'}}>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <span style={{fontSize:13,fontWeight:700,color:'#111827'}}>Specifications — {activeProduct}</span>
-            <span style={{fontSize:10,color:'#9ca3af'}}>ORG/RA-ORG/FT-ORG use &gt;10 mesh · CON/RA-CON/FT-CON use &gt;12 mesh · {Object.keys(activeSpecs).length} variants (Export / Export Blend / Domestic)</span>
+            <span style={{fontSize:10,color:'#9ca3af'}}>Organic/RA-Organic/FT-Organic use &gt;10 mesh · Conventional/RA-Conventional/FT-Conventional use &gt;12 mesh · {Object.keys(activeSpecs).length} variants (Export / Export Blend / Domestic)</span>
           </div>
           <span style={{fontSize:10,color:'#9ca3af',transform:showSpecPanel?'rotate(180deg)':'',transition:'.2s'}}>▼</span>
         </button>
@@ -1627,42 +1837,6 @@ export default function SievingPage() {
             </table>
           </div>
         )}
-      </div>
-
-      {/* Toolbar */}
-      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-        {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)}}
-          style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Run</button>}
-        {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null)}}
-          style={{padding:'5px 12px',borderRadius:6,border:'1px solid #7c3aed',fontSize:11,cursor:'pointer',fontWeight:600,
-            background:showSpecEditor?'#7c3aed':'#faf5ff',color:showSpecEditor?'#fff':'#7c3aed'}}>
-          {showSpecEditor?'× Close Editor':'Edit Specs'}</button>}
-        {[['all','All'],['in-process','In-Process'],['final','Final QC']].map(([k,l])=>(
-          <button key={k} onClick={()=>setFilter(k)}
-            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
-              background:filter===k?'#1f4e79':'#fff',color:filter===k?'#fff':'#374151',borderColor:filter===k?'#1f4e79':'#e5e7eb'}}>{l}</button>
-        ))}
-        <span style={{marginLeft:'auto',fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
-        <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
-        <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
-      </div>
-
-      {/* Period filter — Daily / Weekly / Monthly / 60 Days / All */}
-      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-        <span style={{fontSize:10,fontWeight:700,color:'#6b7280',textTransform:'uppercase'}}>Period:</span>
-        {([['today','Daily'],['week','Weekly'],['month','Monthly'],['60d','60 Days'],['all','All']] as const).map(([k,l])=>(
-          <button key={k} onClick={()=>setPeriod(k)}
-            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
-              background:period===k?'#166534':'#fff',color:period===k?'#fff':'#374151',borderColor:period===k?'#166534':'#e5e7eb'}}>{l}</button>
-        ))}
-        <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
-          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
-            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
-          {searchText && (
-            <button onClick={()=>setSearchText('')} title="Clear search"
-              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
-          )}
-        </div>
       </div>
 
       {/* New Run Form */}
@@ -1713,36 +1887,15 @@ export default function SievingPage() {
       {showForm && canWrite && (
         <div id="sieving-new-run-form" style={{background:'#f8fafc',border:'2px solid #1f4e79',borderRadius:12,padding:20,marginBottom:16}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
-            <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>⊕ New {activeProduct} Run</div>
-            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
+            <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>
+              ⊕ New {activeProduct} {form.runType==='final'?'Output Bag QC':'In-Process'} Run
+            </div>
+            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle');clearDraft(draftKey)}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
-
-          {/* Run Type — prominent tablet-friendly selector */}
-          <div style={{marginBottom:16}}>
-            <label style={{fontSize:10,fontWeight:700,color:errors.runType?'#dc2626':'#6b7280',display:'block',marginBottom:6,textTransform:'uppercase',letterSpacing:'0.05em'}}>Run Type *</label>
-            <div style={{display:'flex',gap:8}}>
-              {([['in-process','⚙ In-Process','#1f4e79'],['final','✓ Final QC (bag)','#166534']] as const).map(([val,label,col])=>(
-                <button key={val} type="button" onClick={()=>{
-                  // Switching run type always clears the serial/bag link. Without
-                  // this, the serial auto-filled for In-Process carried over into
-                  // Final QC — showing a populated "✓ from bag" serial while the
-                  // bag picker still read "0 pending / none selected", which is
-                  // exactly the contradiction that looked like a broken dropdown.
-                  setF('runType',val)
-                  setSelectedBagId('')
-                  setForm((f:any)=>({...f, runType: val, baggingId:'', serialNumber:''}))
-                  setLotMsg(''); setTagLookupState('idle')
-                }}
-                  style={{flex:1,padding:'13px 16px',borderRadius:8,border:`2px solid ${form.runType===val?col:'#d1d5db'}`,
-                    background:form.runType===val?col:'#fff',color:form.runType===val?'#fff':'#374151',
-                    fontSize:14,fontWeight:700,cursor:'pointer',transition:'all 0.15s',
-                    boxShadow:form.runType===val?`0 2px 8px ${col}44`:'none'}}>
-                  {label}{val==='final'&&tabPendingBags.length>0?` · ${tabPendingBags.length}`:''}
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* Run type is fixed by which toolbar button opened this form — see
+              "+ New In-Process QC" / "+ New Output Bag QC" above — so there's
+              no in-form picker to second-guess it. */}
 
           {/* Final QC — pick the bag production has made. Each bagging of Fine
               Leaf / Coarse Leaf is a pending QC; the bag carries its own serial,
@@ -1834,32 +1987,26 @@ export default function SievingPage() {
               <input value={form.lotNumber} onChange={e=>{const v=e.target.value;setF('lotNumber',v);const auto=lookupLot(v);setForm((f:any)=>({...f,lotNumber:v,...auto}))}} style={{...inputSt,borderColor:errors.lotNumber?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="lotNumber"/>
             </div>}
-            {/* Serial No. — never typed from scratch. On Final QC it comes from
-                the bag the QC picked above. On In-Process it is pre-filled with
-                the most recent bag production has made for this sieve, and can
-                be changed to any other bag of the same product via the list. */}
-            <div>
+            {/* Serial No. — Final QC only. It's a sample of one specific,
+                finished bag, so it comes from the bag picked in the queue
+                above. In-Process is a reading off the machine while a bag is
+                still filling, not a sample of one bag — there's no serial to
+                attach it to. */}
+            {form.runType==='final' && <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.serialNumber?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
-                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ {form.runType==='final'?'from bag':'latest bag'}</span>}
+                Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span>}
               </label>
-              <input value={form.serialNumber} list={form.runType==='in-process'?'new-run-serial-dl':undefined}
+              <input value={form.serialNumber}
                 onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
                 onBlur={e=>lookupBagTag(e.target.value)}
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
-                placeholder={form.runType==='in-process'?(bagSerialOptions.length?'Pick a bag':`No ${activeProduct} bags yet`):'Type or scan barcode'}
+                placeholder="Type or scan barcode"
                 style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
-              {form.runType==='in-process'&&(
-                <datalist id="new-run-serial-dl">
-                  {bagSerialOptions.map(b=>(
-                    <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
-                  ))}
-                </datalist>
-              )}
               {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
               {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
               {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
               <ErrMsg field="serialNumber"/>
-            </div>
+            </div>}
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.qcName?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
                 QC Controller * {myName&&form.qcName===myName&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ logged in</span>}
@@ -1988,7 +2135,7 @@ export default function SievingPage() {
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle')}}
+              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle');clearDraft(draftKey)}}
                 style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
               <button onClick={addRun} disabled={saving || (outlierWarnings.length>0 && !confirmAnomaly)}
                 style={{padding:'10px 26px',borderRadius:7,border:'none',background:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'default':'pointer'}}>
@@ -1999,15 +2146,23 @@ export default function SievingPage() {
         </div>
       )}
 
-      {/* This Week / This Month chart — mesh trend + outlier view. Bounded window, not full history. */}
+      {/* Mesh trend + outlier view — the By Hour/Week/Month navigator inside it
+          sets the window that also bounds the records table further down, so
+          the two always show the same slice of history. */}
       <div style={{marginBottom:8}}>
         <button onClick={()=>setShowOutlierChart(s=>!s)}
           style={{padding:'5px 12px',borderRadius:6,border:`1px solid ${showOutlierChart?'#1f4e79':'#e5e7eb'}`,fontSize:11,cursor:'pointer',fontWeight:600,background:showOutlierChart?'#eff6ff':'#fff',color:showOutlierChart?'#1f4e79':'#374151'}}>
           📈 {showOutlierChart?'Hide':'Show'} Chart
         </button>
       </div>
-      {showOutlierChart && productRuns.length>0 && (
-        <SievingOutlierChart runs={productRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
+      {/* Not gated on rangeRuns.length — the chart's own nav (By Hour/Week/Month
+          + prev/next) is the only way to move off an empty window, so it must
+          stay rendered even when the current window has zero runs; the chart
+          body already shows "no data for this range" internally. */}
+      {showOutlierChart && (
+        <SievingOutlierChart runs={rangeRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
+          rangeStart={rangeStart} rangeEnd={rangeEnd} minDate={threeMonthsAgoISO()} maxDate={isoDate(new Date())}
+          onRangeChange={(s,e)=>{setRangeStart(s);setRangeEnd(e)}}
           onPointClick={(runId)=>{
             setChartHighlightId(runId)
             const el = document.getElementById(`run-row-${runId}`)
@@ -2016,9 +2171,31 @@ export default function SievingPage() {
           }} />
       )}
 
+      {/* Toolbar B — filters for the records table, positioned right above it
+          so it reads as "these control the table below" rather than being
+          separated from it by the spec table and chart. */}
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+        {[['all','All'],['in-process','In-Process'],['final','Final QC']].map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)}
+            style={{padding:'5px 12px',borderRadius:6,border:'1px solid',fontSize:11,cursor:'pointer',fontWeight:600,
+              background:filter===k?'#1f4e79':'#fff',color:filter===k?'#fff':'#374151',borderColor:filter===k?'#1f4e79':'#e5e7eb'}}>{l}</button>
+        ))}
+        <span style={{fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
+        <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
+          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
+            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
+          {searchText && (
+            <button onClick={()=>setSearchText('')} title="Clear search"
+              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
+          )}
+        </div>
+        <button onClick={doExcelExport} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #166534',fontSize:11,cursor:'pointer',fontWeight:600,background:'#f0fdf4',color:'#166534'}}>⬇ Export Excel</button>
+        <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
+      </div>
+
       {/* Runs table */}
 
-      {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New Run"</div>}
+      {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New In-Process QC" or "+ New Output Bag QC"</div>}
       {!loading&&filteredRuns.length>0&&(
         <div style={{borderRadius:10,border:'1px solid #e5e7eb',background:'#fff',overflow:'hidden'}}>
           <button onClick={()=>setTableCollapsed(c=>!c)}
@@ -2050,7 +2227,7 @@ export default function SievingPage() {
                     {label}{sdSort.key===key?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                   </th>
                 ))}
-                {sdGetMesh(activeProduct,'CON').map(m=>(
+                {sdGetMesh(activeProduct,'Conventional').map(m=>(
                   <th key={m} onClick={()=>toggleSort(m)} style={{padding:'5px 6px',textAlign:'center',fontSize:9,cursor:'pointer',userSelect:'none'}} title="Click to sort">
                     {m.replace(' (%)','')}{sdSort.key===m?(sdSort.dir==='asc'?' ▲':' ▼'):''}
                   </th>
@@ -2099,7 +2276,7 @@ export default function SievingPage() {
                     {!specDef.noBulkDensity&&<td style={{padding:'3px 8px',textAlign:'center'}}>{row.bulkDensity||'—'}</td>}
                     {specDef.hasNeedleCount&&<td style={{padding:'3px 8px',textAlign:'center',color:parseFloat(row.needleCount)>15?'#dc2626':'inherit'}}>{row.needleCount||'—'}</td>}
                     {specDef.hasLeafShade&&<td style={{padding:'3px 8px',textAlign:'center'}}>{row.leafShade||'—'}</td>}
-                    {sdGetMesh(activeProduct,'CON').map(m=>{
+                    {sdGetMesh(activeProduct,'Conventional').map(m=>{
                       const spec=activeSpec[m]
                       const chk=sdChk(row[m],spec)
                       return <td key={m} style={{padding:'3px 5px',textAlign:'center',fontFamily:'monospace',fontSize:10,background:chk==='fail'?'#fef2f2':'',color:chk==='fail'?'#dc2626':chk==='pass'?'#166534':'inherit',fontWeight:chk!=='neutral'?700:400}}>{row[m]!=null&&row[m]!==''?row[m]+'%':'—'}</td>
