@@ -91,6 +91,17 @@ export function buildQcLabelZpl(d: QcLabelData): string {
   const badgeW = 264, badgeX0 = W - badgeW - 20, badgeY0 = 10, badgeH = 44
   const headerW = badgeX0 - 20 - 10
 
+  // Barcode geometry, computed once and reused both to draw the barcode
+  // itself and to size the Lot/Batch and Date fields that sit in its side
+  // margins — Code128 subset B's width is exact for a given character
+  // count, unlike a text glyph's, so this can be sized precisely rather than
+  // guessed.
+  const barcodeW  = (serial.length + 2) * 11 * 2.2
+  const barcodeX0 = Math.max(40, Math.round((W - barcodeW) / 2))
+  const barcodeX1 = Math.round(barcodeX0 + barcodeW)
+  const MIN_SIDE_W = 60
+  const sideW = Math.round(barcodeX0 - 20 - 10)
+
   // Vertical layout, laid out bottom-up from the footer so nothing can ever
   // overlap — ZPL doesn't auto-flow the way the browser build's flexbox does,
   // so each block's extent has to be derived from its neighbours' rather than
@@ -128,9 +139,6 @@ export function buildQcLabelZpl(d: QcLabelData): string {
     ].filter(Boolean).join('\n')
   }
 
-  // Footer thirds — Lot/Batch, Product, Date.
-  const footY0 = footerTop + GAP, footY1 = footY0 + 20, footColW = Math.floor(W / 3) - 30
-
   const lines: string[] = [
     '^XA',
     ...(FLIP_180 ? ['^POI'] : []),
@@ -156,8 +164,20 @@ export function buildQcLabelZpl(d: QcLabelData): string {
     // exists precisely because they aren't), so it's centred by computing it
     // rather than needing ^FB.
     ...(serial ? [
-      `^FO${Math.max(40, Math.round((W - (serial.length + 2) * 11 * 2.2) / 2))},92^BY2^BCN,64,N,N,N^FD${serial}^FS`,
+      `^FO${barcodeX0},92^BY2^BCN,64,N,N,N^FD${serial}^FS`,
       textField(20, 166, W - 40, 22, 22, 'C', serial),
+    ] : []),
+
+    // Lot/Batch and Date, in the margins left and right of the barcode —
+    // moved here from a bottom footer row (kept blank below, see gridY1/
+    // footerTop) so both read at a glance next to the serial they belong to.
+    // Skipped below MIN_SIDE_W: a long enough serial leaves no usable margin,
+    // and a squeezed-in field there is worse than the blank margin it'd cost.
+    ...(sideW >= MIN_SIDE_W ? [
+      textField(20, 96, sideW, 12, 12, 'L', 'LOT/BATCH'),
+      textField(20, 112, sideW, 20, 18, 'L', clean(d.lotNumber, 16).toUpperCase() || '-'),
+      textField(barcodeX1 + 10, 96, sideW, 12, 12, 'R', 'DATE'),
+      textField(barcodeX1 + 10, 112, sideW, 20, 18, 'R', dateFormatted),
     ] : []),
 
     // Metrics grid — outer box + crossing lines
@@ -172,13 +192,10 @@ export function buildQcLabelZpl(d: QcLabelData): string {
       textField(30, warnY0 + 8, W - 60, 18, 18, 'C', clean(warnText, 60), true),
     ] : []),
 
-    // Footer: Lot / Batch · Product · Date
-    textField(20, footY0, footColW, 14, 14, 'L', 'LOT/BATCH'),
-    textField(20, footY1, footColW, 20, 20, 'L', clean(d.lotNumber, 20).toUpperCase() || '-'),
-    textField(Math.round(W / 2) - 80, footY0, footColW, 14, 14, 'L', 'PRODUCT'),
-    textField(Math.round(W / 2) - 80, footY1, footColW, 20, 20, 'L', clean(d.product, 22).toUpperCase()),
-    textField(W - 200, footY0, 180, 14, 14, 'L', 'DATE'),
-    textField(W - 200, footY1, 180, 20, 20, 'L', dateFormatted),
+    // Bottom strip below the grid/warning band is intentionally left blank —
+    // it used to hold a Lot/Product/Date footer; Lot and Date moved up beside
+    // the barcode above, and Product was dropped as a duplicate of the
+    // product name already in the header.
 
     '^PQ1',
     '^XZ',
