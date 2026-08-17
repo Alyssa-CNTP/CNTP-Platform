@@ -79,22 +79,38 @@ export function buildQcLabelHtml(d: QcLabelData): string {
   ]
 
   return `<!DOCTYPE html>
-<html>
+<html data-feed="long">
 <head>
 <meta charset="UTF-8">
 <title>Final QC Label — ${esc(serial, 40)}</title>
+<!-- Rewritten by setFeed() to match how the printer feeds the label. -->
+<style id="page-rule">@page { size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm; margin: 0; }</style>
 <style>
-  @page { size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm; margin: 0; }
+  /* The @page rule is rewritten by setFeed() below — the page box has to match
+     how the printer actually feeds the label, which the print dialog's
+     Portrait/Landscape control cannot do on its own. See setFeed(). */
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: ${LABEL_W_MM}mm; height: ${LABEL_H_MM}mm;
-    /* Nothing may spill past the media, or the printer feeds a second blank label. */
-    overflow: hidden;
-    background: #fff; color: #000;
-  }
+  html, body { overflow: hidden; background: #fff; color: #000; }
   body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+
+  /* Long edge first: the page box is the label as designed. */
+  html[data-feed="long"], html[data-feed="long"] body {
+    width: ${LABEL_W_MM}mm; height: ${LABEL_H_MM}mm;
+  }
+  /* Short edge first: the printer images a ${LABEL_H_MM}mm x ${LABEL_W_MM}mm page,
+     so the page box is turned and the label rotated a quarter turn onto it.
+     Rotating about the top-left corner puts the label off the page to the left,
+     hence the translate back across the page width. */
+  html[data-feed="short"], html[data-feed="short"] body {
+    width: ${LABEL_H_MM}mm; height: ${LABEL_W_MM}mm;
+  }
+  html[data-feed="short"] .label {
+    transform: translateX(${LABEL_H_MM}mm) rotate(90deg);
+    transform-origin: top left;
+  }
+
   .label {
-    width: 100%; height: 100%;
+    width: ${LABEL_W_MM}mm; height: ${LABEL_H_MM}mm;
     padding: 1.2mm 2.2mm;
     display: flex; flex-direction: column;
     ${isFineLeaf ? 'border: 1.2px solid #000; outline: 1.2px solid #000; outline-offset: -2.2px;' : ''}
@@ -138,12 +154,20 @@ export function buildQcLabelHtml(d: QcLabelData): string {
   .f-label { font-size: 5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #666; }
   .f-value { font-size: 7.5pt; font-weight: 800; line-height: 1.15; text-transform: uppercase; }
   .foot > div:not(:first-child) { text-align: right; }
-  .print-btn {
-    position: fixed; bottom: 8px; right: 8px;
-    background: #166534; color: #fff; border: none; border-radius: 8px;
-    padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer; z-index: 99;
+  /* Screen-only controls, laid out clear of the label so they never sit on top
+     of it, and never printed. */
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 10px; background: #f3f4f6; border-top: 1px solid #d1d5db;
+    font: 12px -apple-system, 'Helvetica Neue', Arial, sans-serif; z-index: 99;
   }
-  /* The button is a screen-only affordance — it must never reach the label. */
+  .bar button {
+    border: 1px solid #d1d5db; border-radius: 7px; background: #fff;
+    padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .bar button.primary { background: #166534; border-color: #166534; color: #fff; }
+  .bar .hint { color: #4b5563; font-size: 11px; flex-basis: 100%; }
   @media print { .no-print { display: none !important; } }
 </style>
 </head>
@@ -186,7 +210,41 @@ export function buildQcLabelHtml(d: QcLabelData): string {
     </div>
   </div>
 
-  <button class="print-btn no-print" onclick="window.print()">Print Label</button>
+  <div class="bar no-print">
+    <button class="primary" onclick="window.print()">🖨 Print Label</button>
+    <button onclick="toggleFeed()">↻ Rotate (feed: <span id="feed-name">long edge</span>)</button>
+    <span class="hint">
+      If the label prints sideways or cut off, press Rotate and print again — the setting is
+      remembered. In the print dialog set Margins to <b>None</b> and Scale to <b>100%</b> (not
+      "Fit to page"), and turn Headers and footers off.
+    </span>
+  </div>
+
+<script>
+  // The print dialog's Portrait/Landscape control only rotates the drawing on a
+  // page whose size the browser has already fixed — it cannot change the page
+  // box. When the printer feeds this label short-edge first, the page box has to
+  // become ${LABEL_H_MM}mm x ${LABEL_W_MM}mm and the label be turned a quarter
+  // turn onto it, or the label images sideways and clipped. That is what this
+  // switches, and it is per-printer, so it is remembered.
+  var PAGE = {
+    long:  '@page { size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm; margin: 0; }',
+    short: '@page { size: ${LABEL_H_MM}mm ${LABEL_W_MM}mm; margin: 0; }'
+  }
+  function setFeed(mode) {
+    if (mode !== 'short') mode = 'long'
+    document.getElementById('page-rule').textContent = PAGE[mode]
+    document.documentElement.setAttribute('data-feed', mode)
+    document.getElementById('feed-name').textContent = mode === 'short' ? 'short edge' : 'long edge'
+    try { localStorage.setItem('cntp.qcLabelFeed', mode) } catch (e) { /* private mode */ }
+  }
+  function toggleFeed() {
+    setFeed(document.documentElement.getAttribute('data-feed') === 'short' ? 'long' : 'short')
+  }
+  var saved = 'long'
+  try { saved = localStorage.getItem('cntp.qcLabelFeed') || 'long' } catch (e) { /* private mode */ }
+  setFeed(saved)
+</script>
 </body>
 </html>`
 }
