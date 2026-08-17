@@ -10,16 +10,8 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
-import { SHIFT_LABEL, shiftValuesFor } from '@/lib/production/shifts'
+import { SHIFT_LABEL, shiftValuesFor, productionShiftNow } from '@/lib/production/shifts'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
-
-type Shift = 'morning' | 'afternoon' | 'night'
-
-// Two shifts: Morning 07h00–16h00, Afternoon/Night 16h00–01h00.
-function currentShift(): Shift {
-  const h = new Date().getHours()
-  return h >= 7 && h < 16 ? 'morning' : 'afternoon'
-}
 
 const STATUS_META: Record<string, { label: string; cls: string; icon: any }> = {
   none:      { label: 'Not started',    cls: 'bg-stone-100 text-stone-500',  icon: Play },
@@ -35,8 +27,9 @@ export default function CaptureLandingPage() {
   const isFloorOperator = role === 'floor_operator'
   const firstName = (displayName ?? '').split(' ')[0] || 'there'
 
-  const [shift]       = useState<Shift>(currentShift())
-  const date          = format(new Date(), 'yyyy-MM-dd')
+  // date and shift always agree on which production shift "now" belongs to —
+  // see productionShiftNow()'s comment for why that's not simply today+currentShift().
+  const [{ date, shift }] = useState(productionShiftNow())
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([])
   const [opMap, setOpMap] = useState<Record<string, string>>({})
   const [statusMap, setStatusMap] = useState<Record<string, string>>({})
