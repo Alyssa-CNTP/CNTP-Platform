@@ -78,11 +78,11 @@ export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {})
     ? encodeCode128(serial, { height: Math.round(getCode128Width(serial, mw) * 0.14), moduleWidth: mw })
     : ''
 
-  const metrics: Array<[string, unknown, string]> = [
-    ['Bulk Density', d.bulkDensity, 'cc/100g'],
-    ['Leaf Shade',   d.leafShade,   '1–11'],
-    ['PA Level',     d.paLevel,     ''],
-    ['Residue',      d.residue,     ''],
+  const metrics: Array<[string, unknown]> = [
+    ['Bulk Density', d.bulkDensity],
+    ['Leaf Shade',   d.leafShade],
+    ['PA Level',     d.paLevel],
+    ['Residue',      d.residue],
   ]
 
   return `<!DOCTYPE html>
@@ -123,8 +123,12 @@ export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {})
     ${isFineLeaf ? 'border: 1.2px solid #000; outline: 1.2px solid #000; outline-offset: -2.2px;' : ''}
   }
   .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 2mm; }
-  .product { font-size: 15pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; }
-  .qc-tag  { font-size: 6pt; font-weight: 700; letter-spacing: .1em; color: #333; margin-top: .5mm; text-transform: uppercase; }
+  /* min-width:0 lets this flex item actually shrink below its text's natural
+     width, which flex items don't do by default — without it the product
+     name/subtitle would push .head-right out rather than truncate. */
+  .head-left { flex: 1; min-width: 0; }
+  .product { font-size: 15pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qc-tag  { font-size: 6pt; font-weight: 700; letter-spacing: .1em; color: #333; margin-top: .5mm; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .head-right { display: flex; align-items: center; gap: 2mm; flex-shrink: 0; }
   .qc-flag { font-size: 13pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; white-space: nowrap; }
   .badge {
@@ -140,23 +144,25 @@ export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {})
   .serial { font-family: 'Courier New', monospace; font-size: 8pt; font-weight: 700; letter-spacing: .12em; margin-top: .4mm; }
   .side-field { flex-shrink: 0; max-width: 17mm; overflow: hidden; }
   .side-field.right { text-align: right; }
+  /* Sized to its own content, not stretched to fill whatever's left of the
+     label — with only a label+value per cell now (no unit line) a stretched
+     grid left each cell centred in far more height than its two lines need,
+     which read as a stray gap under PA Level/Residue in particular since
+     that row never had a third line to begin with. Leftover height now falls
+     below the grid instead, as blank label margin. */
   .metrics {
-    flex: 1; min-height: 0; margin-top: .8mm;
+    margin-top: .8mm;
     display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
     border: 1.2px solid #000;
   }
-  /* Type sizes are budgeted against the tightest case — warning band present,
-     which leaves each row ~9mm. overflow:hidden is the backstop so an
-     unexpected value can never spill across the grid lines. */
   .cell {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 0 1mm; min-height: 0; overflow: hidden;
+    padding: 1.4mm 1mm; overflow: hidden;
   }
   .cell:nth-child(2), .cell:nth-child(4) { border-left: 1px solid #000; }
   .cell:nth-child(3), .cell:nth-child(4) { border-top: 1px solid #000; }
   .m-label { font-size: 5pt; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #444; line-height: 1.2; }
-  .m-value { font-size: 12pt; font-weight: 800; line-height: 1.0; }
-  .m-unit  { font-size: 5pt; color: #444; line-height: 1.2; }
+  .m-value { font-size: 11pt; font-weight: 800; line-height: 1.0; margin-top: .3mm; }
   .warn {
     margin-top: .8mm; border: 1.2px solid #000; background: #000; color: #fff;
     font-size: 6pt; font-weight: 800; letter-spacing: .05em; text-align: center;
@@ -184,7 +190,7 @@ export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {})
 <body>
   <div class="label">
     <div class="head">
-      <div>
+      <div class="head-left">
         <div class="product">${esc(d.product, 22)}</div>
         <div class="qc-tag">Final QC${d.qcName ? ' · ' + esc(d.qcName, 28) : ''}</div>
       </div>
@@ -210,11 +216,10 @@ export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {})
     </div>
 
     <div class="metrics">
-      ${metrics.map(([label, value, unit]) => `
+      ${metrics.map(([label, value]) => `
       <div class="cell">
         <div class="m-label">${label}</div>
         <div class="m-value">${esc(value, 9)}</div>
-        ${unit ? `<div class="m-unit">${unit}</div>` : ''}
       </div>`).join('')}
     </div>
 
