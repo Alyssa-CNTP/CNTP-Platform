@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC label: printed sideways and cut off on the lab printer)
+
+**Files changed:** `lib/quality/qc-label-print.ts`
+
+Reported with a photo of the printed label: the label came out rotated a quarter turn on the stock and clipped, and choosing Portrait or Landscape in the print dialog changed nothing.
+
+Cause: the print dialog's Portrait/Landscape control only rotates the drawing on a page whose size the browser has already fixed from `@page` — it cannot change the page box. The label declared a 100mm × 50mm page, but the printer feeds this stock short edge first, so it images a 50mm × 100mm page. The label was therefore drawn across a page turned the other way and everything past 50mm was cut off. No dialog setting can reconcile that, which is why both options looked identical.
+
+- **The label now sets its own page box.** A Rotate button in the label window switches between feeding long edge first (100mm × 50mm page, label as designed) and short edge first (50mm × 100mm page, with the label turned a quarter turn onto it). Either way the printed label reads the right way up on the stock.
+- **Remembered per machine** in `localStorage`, so the lab sets it once rather than every print.
+- The window now carries the settings that otherwise clip a label even when the page box is right: Margins **None**, Scale **100%** (not "Fit to page"), headers and footers off.
+- Verified both directions in Chromium: the page box switches to match, and the label's box lands exactly on the page — 0–100mm × 0–50mm feeding long edge first, 0–50mm × 0–100mm short edge first — with nothing clipped in either.
+
 ## 2026-08-17 — Gustav (Sieving Final QC: the bag label printed the whole screen instead of the label)
 
 **Files changed:** `lib/quality/qc-label-print.ts` (new), `app/(app)/quality/sieving/page.tsx`
