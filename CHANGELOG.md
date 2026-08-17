@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Sieving Final QC label: squash the metrics grid, drop the cc/100g and 1-11 unit lines)
+
+**Files changed:** `lib/quality/qc-label-print.ts`, `lib/quality/qc-label-zpl.ts`
+
+Reported against the modal preview: the grid had a stray gap under PA Level/Residue, and asked to remove the Bulk Density/Leaf Shade unit lines and make the block smaller overall.
+
+- Both builders drop the unit line entirely (`cc/100g`, `1–11`) — Bulk Density and Leaf Shade become label+value only, matching PA Level/Residue, which never had one.
+- **The actual cause of the gap:** the grid used to stretch to fill whatever vertical space was left on the label (`flex:1`), so a row with a shorter third line still got the same forced height as one with a taller one, and the slack showed up as dead space under the shorter row. Sized to its own content instead — the leftover space now falls below the whole grid as a single margin, not distributed unevenly inside each cell.
+- **Caught while verifying that change, not reported by the user:** removing the forced-stretch also removed a safety net it had been quietly providing — for a long product name (e.g. "Coarse Leaf") competing with the new QC-LABEL tag for header width, the old flex:1 grid used to silently shrink to absorb any overflow. Without it, the header wrapped to two lines and pushed the out-of-spec warning band a few mm past the bottom of the label, clipped by the label's own `overflow: hidden`. Fixed by truncating the product name with an ellipsis instead of letting it wrap — the same behaviour the ZPL builder already had via `^FB`, just missing from the browser one — and re-measured in headless Chromium to confirm the warning band now sits with margin to spare rather than guessing from a screenshot.
+- ZPL grid cells re-centred within their own row height (previously anchored to the top with the unit line filling the rest) so leftover room splits evenly above and below, matching the browser layout's intent.
+
 ## 2026-08-17 — Gustav (Sieving Final QC: on-screen preview now shows the real label design; dropped the manual browser-print button)
 
 **Files changed:** `lib/quality/qc-label-print.ts`, `app/(app)/quality/sieving/page.tsx`

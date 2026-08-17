@@ -75,11 +75,11 @@ export function buildQcLabelZpl(d: QcLabelData): string {
     ? new Date(d.date + 'T00:00:00').toLocaleDateString('en-ZA', { day: '2-digit', month: '2-digit', year: 'numeric' })
     : '-'
 
-  const metrics: Array<[string, unknown, string]> = [
-    ['BULK DENSITY', d.bulkDensity, 'cc/100g'],
-    ['LEAF SHADE',   d.leafShade,   '1-11'],
-    ['PA LEVEL',     d.paLevel,     ''],
-    ['RESIDUE',      d.residue,     ''],
+  const metrics: Array<[string, unknown]> = [
+    ['BULK DENSITY', d.bulkDensity],
+    ['LEAF SHADE',   d.leafShade],
+    ['PA LEVEL',     d.paLevel],
+    ['RESIDUE',      d.residue],
   ]
 
   const warnText = outOfSpec
@@ -128,22 +128,22 @@ export function buildQcLabelZpl(d: QcLabelData): string {
   const cellW = gridMidX - gridX0
   const cellH = gridMidY - gridY0
 
-  // Two size presets, each verified by hand against its own cellH (74 dots
-  // with no warning band, 54 with one — see the comment above): label, then
-  // value, then — only when there's room — the unit, each stacked with GAP/2
-  // clearance and never exceeding cellH.
-  function metricCell(i: number, label: string, value: unknown, unit: string): string {
+  // Label + value only now (no third "unit" line) — centred within cellH
+  // (which still varies, 74 dots with no warning band vs 54 with one) rather
+  // than anchored to the top, so leftover room splits evenly above and below
+  // instead of landing as a single gap underneath, which is what a fixed
+  // top-anchor was doing to PA Level/Residue once they had one line less to
+  // fill than Bulk Density/Leaf Shade's old unit line gave them.
+  const CELL_CONTENT_H = 14 + 3 + 28   // label + gap + value, verified against both cellH values above
+  function metricCell(i: number, label: string, value: unknown): string {
     const cx0 = i % 2 === 0 ? gridX0 : gridMidX
     const cy0 = i < 2 ? gridY0 : gridMidY
-    const showUnit = !!unit && cellH >= 70
-    const labelY = cy0 + 4
+    const topPad = Math.max(4, Math.round((cellH - CELL_CONTENT_H) / 2))
+    const labelY = cy0 + topPad
     const valueY = labelY + 14 + 3
-    const valueH = showUnit ? 34 : 28
-    const unitY  = valueY + valueH + 3
     return [
       textField(cx0 + 10, labelY, cellW - 20, 14, 14, 'C', clean(label, 16)),
-      textField(cx0 + 10, valueY, cellW - 20, valueH, Math.round(valueH * 0.9), 'C', clean(value, 9) || '-'),
-      showUnit ? textField(cx0 + 10, unitY, cellW - 20, 12, 12, 'C', unit) : '',
+      textField(cx0 + 10, valueY, cellW - 20, 28, 25, 'C', clean(value, 9) || '-'),
     ].filter(Boolean).join('\n')
   }
 
@@ -193,7 +193,7 @@ export function buildQcLabelZpl(d: QcLabelData): string {
     `^FO${gridX0},${gridY0}^GB${gridX1 - gridX0},${gridY1 - gridY0},3^FS`,
     `^FO${gridMidX},${gridY0}^GB0,${gridY1 - gridY0},2^FS`,
     `^FO${gridX0},${gridMidY}^GB${gridX1 - gridX0},0,2^FS`,
-    ...metrics.map((m, i) => metricCell(i, m[0], m[1], m[2])),
+    ...metrics.map((m, i) => metricCell(i, m[0], m[1])),
 
     // Warning band — filled black bar, reversed white bold text
     ...(warnText ? [
