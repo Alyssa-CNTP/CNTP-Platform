@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Lab uploads: a batch number containing a backslash threw away the entire extraction)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported: uploading an Assurecloud micro report failed with *"AI returned invalid JSON — Bad escaped character in JSON at position 128"*. Nothing was extracted at all.
+
+Cause: that report prints `Batch No: 26291-CON\FL-SFCO` — a literal backslash in the batch. The model passes it through verbatim, so its reply contained `"batch_no": "26291-CON\FL-SFCO"`. `\F` is not a valid JSON escape, so `JSON.parse` threw and the whole response was discarded — every other correctly-extracted field with it. Position 128 lines up with `batch_no` being the fifth field. Not micro-specific: it would hit any tab, any workflow, for any value a report prints with a backslash in it.
+
+- `parseJSON` now retries once with a repair pass that doubles any backslash which doesn't begin a valid JSON escape, so it parses back to the character the report actually prints. The normal parse is attempted first and unchanged, so well-formed responses take exactly the same path as before.
+- The backslash is preserved rather than stripped, because the batch genuinely contains it — as with the rest of the extraction, correcting it stays the reviewer's call via the editable Batch No. field.
+- Verified against the real failing payload plus valid escapes (`\n`, `\"`, `\\`, `\uXXXX`), a legitimate double backslash followed by an invalid-escape character, plain JSON, and the array-wrapped form — valid sequences are consumed whole, so `\\` is left alone.
+
 ## 2026-08-14 — Gustav (Lab Results: extractions could file a result against the lab's reference instead of the batch number)
 
 **Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
