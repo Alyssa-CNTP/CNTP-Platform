@@ -1,7 +1,269 @@
 # Changelog
 
 All changes deployed to staging are logged here automatically.  
-Format: date · developer · files changed · description of code changes.
+
+## 2026-08-14 — Gustav (Lab Results: extractions could file a result against the lab's reference instead of the batch number)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+Reported: a PA record showed batch `347-2026-00051307` — the laboratory's own Sample Code, not a CNTP batch. The same PDF produced the correct `26135-ORG/RA-SG` on an earlier run, so it was picking differently run to run.
+
+Cause: only the `chlorate_perchlorate` and `residue_fp` prompts ever said *which* of a report's several codes is the batch. A Eurofins report prints three that look alike — `Report: AR-347-2026-00051307-01`, `Sample Code: 347-2026-00051307` and `Sample Code (Client): 26135-ORG/RA-SG` — and only the last is the batch. With no rule, the other prompts were free to pick any of them. A wrong batch is worse than a missing one: it never matches on a COA lookup, and it defeats the duplicate check, which keys on `batch_no` (which is how the same PA report saved twice without warning).
+
+- **The rule is now shared by every lab-results prompt:** batch_no must be the customer's own code (Sample Code (Client) / Your reference / Sample Details), never the lab's internal sample id or report number — those belong in `report_reference` — and it should be left empty rather than falling back to a lab code.
+- **Backed by a deterministic check:** the server flags a batch that carries no letters (every real batch here does — `26135-ORG/RA-SG`, `26136-CON-SFC`, `MAT-0379`) or that is part of the report reference. The review panel warns next to the editable Batch No. field so it can be corrected before saving, and the warning clears as soon as it is. Verified against every batch currently in `qms.lab_results` — no false positives.
+
+## 2026-08-14 — Gustav (Lab Results: a combined report could file one analysis's results under another's test type)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+Reported: the Glyphosate tab was showing Chlorate and Perchlorate rows. Confirmed in the database — `qms.lab_results` id 37 was saved as `test_type='glyphosate'` for batch 26135-ORG/RA-SG with analytes `["Chlorate","Perchlorate"]`.
+
+Cause: every per-type prompt was written assuming the PDF contains only that one analysis. Dropping the combined Eurofins report on the Glyphosate tab asked for glyphosate — but that section is entirely below the reporting limit (`< 0.01`), so the only numbers in the document with actual detections were the chlorate ones, and the model returned those instead. Nothing downstream questioned it, so it saved under the wrong test type. That matters beyond the tab: a wrong `test_type` is invisible once stored and feeds the COA.
+
+- **Prompt scoping (the fix):** every single-analysis prompt now carries explicit combined-report rules — extract only the requested analysis, treat below-reporting-limit values as valid results for it, and return empty rather than substituting another section's numbers when the requested analysis isn't in the report. Not applied to `pa_ta_analysis`/`residue`, the raw-material multi-sample formats whose own parsing rules it would contradict.
+- **Mismatch guard (the net under it):** the server now checks whether the extracted analytes unanimously belong to a *different* analysis, and the review panel turns red and says so before it can be saved. Only fires on unanimity — a single unrecognised analyte stays quiet, since crying wolf on good data just trains people to click through. Verified against the real failure plus correct-data and unknown-analyte cases.
+
+## 2026-08-14 — Gustav (Lab uploads: pdf-parse was being bundled, so every PDF fell back to Gemini vision and combined-report detection never ran)
+
+**Files changed:** `next.config.js`, `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+Reported: uploading the combined Eurofins report extracted Chlorate/Perchlorate correctly, but no "this report also contains…" suggestion appeared. The giveaway was the model line reading **`gemini-3.1-flash-lite-preview (vision)`**.
+
+- Root cause: `pdf-parse` was not in `serverExternalPackages`, so turbopack inlined it — and its bundled `pdfjs-dist` — into the route chunk. pdfjs resolves its own worker/module URLs at runtime and breaks when inlined, so text extraction threw on every upload and `route.ts` quietly fell back to Gemini vision. Vision still returns a usable answer, which is why nothing looked broken: the only symptoms were "(vision)" on the model name and an empty `text` — and since section detection scans that text, it could never find anything. Verified at the bundle level: before the change a server chunk contained `pdfjs-dist/legacy/build/pdf.mjs`; after it, zero, with the route instead tracing to `node_modules/pdf-parse/dist/pdf-parse/cjs/index.cjs` at runtime.
+- This also means the per-workflow text limits and the appendix strip added earlier today were never actually reached — every extraction was going through vision instead.
+- Made the fallback visible so it can't hide again: the API now reports whether the text layer was read, and when it wasn't, Lab Results says so plainly rather than leaving the space blank — an empty area looked identical to "this report only has one test", which is exactly how this went unnoticed.
+
+## 2026-08-14 — Gustav (Final Lab Results: test-type tabs were unreachable past the screen edge on mobile)
+
+**Files changed:** `app/(app)/quality/lab-results/page.tsx`
+
+Reported: on a phone the Micro / Residue / Heavy Metals tab row can't be moved to the right, so everything past Heavy Metals is unusable.
+
+Cause: the tab row is `width: fit-content` with `overflow: hidden` (there only to clip the first/last buttons to the rounded border), and both the app shell's `main` and `body` are `overflow-x: hidden`. The row is far wider than a phone viewport, so tabs past the edge were clipped with no scroller anywhere to reach them. Today's new Chlorate/Perchlorate tab made it a 9-tab row and pushed it further out of reach.
+
+- The row now sits inside its own `overflow-x: auto` container (with `-webkit-overflow-scrolling: touch`), and the buttons no longer shrink, so the tabs scroll properly on a phone. The inner row keeps its `overflow: hidden` for the rounded-corner clipping it was actually there for.
+- The selected tab now scrolls itself into view. That matters for the combined-report follow-ups added earlier today, which switch tabs for you — landing on a tab that's off-screen otherwise reads as nothing having happened.
+
+Checked the rest of the app for the same `fit-content` + `overflow: hidden` row pattern; this was the only instance. The records tables already have their own `overflow-x: auto`.
+
+## 2026-08-14 — Gustav (Sieving: the "bags awaiting QC" panel made the page unscrollable on a phone)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: can't scroll the Sieving page on mobile.
+
+Cause: the "📦 N bags awaiting QC" panel is `position:fixed` at `zIndex:5000`, up to 340px wide and `calc(100vh - 90px)` tall, and it starts expanded. On a phone (~375px wide) that is essentially the entire screen — and a fixed container swallows touches across its whole box, including the empty gaps between cards. Every scroll gesture went to that panel instead of the page, and with only a few bags in it there was nothing to scroll, so the page simply appeared frozen. It was worse the more bags were pending (10 on staging).
+
+- The container is now `pointerEvents:'none'` with the button and cards set back to `'auto'`, so only the actual controls take touches and everything around them scrolls the page normally.
+- Height capped to `min(60vh, calc(100vh - 90px))` so the panel can never own the whole viewport even fully expanded.
+- Starts collapsed on screens ≤640px (unchanged on desktop, where there's room for it).
+
+Checked the rest of the app for the same pattern: this was the only non-modal fixed panel: every other `position:fixed` element is a conditionally-rendered `inset:0` modal.
+
+## 2026-08-14 — Gustav (Quality: Chlorate/Perchlorate lab results + COA row, and combined lab reports no longer lose everything except the tab they landed on)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`, `app/(app)/quality/coa/page.tsx`
+
+Driven by two real Eurofins Dr. Specht reports: a Chlorate/Perchlorate-only certificate, and a 22-page combined report carrying pesticide screens + EtO + Glyphosate + Chlorate/Perchlorate + PA/TA for one sample.
+
+**New Chlorate/Perchlorate test type**
+- New "🧂 Chlorate/Perchlorate" tab in Final Lab Results, with its own Gemini prompt. No migration needed — `qms.lab_results.test_type` is free-form text with no CHECK constraint on either database (verified), and `coa_specs.specs` is jsonb.
+- The prompt is written against these reports' actual layout: `batch_no` comes from **"Sample Code (Client)"** (e.g. `26134-ORG/RA-SG`), explicitly *not* the lab's own "Sample Code" (`347-2026-00045039`) or the Report number, which are the obvious things to grab by mistake. Results keep their printed operator (`< 0.01`) with the `± uncertainty` split into its own field, so `0.062 ± 0.019` stores a comparable `0.062`.
+- **COA**: `coa_specs` already had a `chlorate_perchlorate` contaminant field with nothing able to fill it — that row now renders on the COA, driven by the customer spec when one matches, and appears in the data-source panel, the section toggles and the outstanding-data warning.
+
+**Combined reports — flag the other analyses instead of dropping them**
+- Dropping a PDF only ever extracted the tab it landed on; everything else in a combined report was silently lost. The server now reports which other analyses it can see in the same file, and the page offers each as a one-click follow-up that extracts it with *that* type's own prompt and opens it for review.
+- Detection is a deterministic keyword scan, not a second AI call — no tokens, no rate-limit cost, can't hallucinate a section, and it only ever advises. Verified against both PDFs: the combined report flags exactly its five analyses, the single-analyte one flags only Chlorate/Perchlorate, with no false positives.
+
+**Two extraction bugs found while testing this**
+- `pdf-parse` was upgraded to v2 at some point, which replaced the callable `require('pdf-parse')(buf)` export with a `PDFParse` class. The route still called it the v1 way, so text extraction threw on **every** upload and was swallowed by a `catch` that assumed "not installed" — silently sending every PDF down the Gemini vision path instead. Nothing surfaced because vision works, but it's slower, ignores the per-workflow text limits, and has no model fallback. Now handles both export shapes.
+- The per-workflow text limit slices from the top, and on the combined report the 35k-character "List of analysed substances" appendix (the screening panel — what was tested *for*, not what was found) pushed real results off the end: PA/TA's summary rows land at ~8.1–8.4k, just past `pa_final`'s 8k limit, so it would have seen every individual analyte and none of the totals it actually needs. The appendix is now stripped before the limit applies (47k → 12k on that report), and `pa_final`/`chlorate_perchlorate` get their own 16k limits. Verified every workflow now sees its required values.
+
+## 2026-08-14 — Gustav (Sieving: explicit By Hour/Day/Week/Month tabs for the mesh charts, decoupled from the From/To range)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Granularity was previously auto-inferred purely from how wide the From/To range was (single day → hour, ≤62 days → day, wider → week) — there was no way to pick a coarser or finer view of the same range, e.g. seeing a two-week range as one weekly average, or a whole quarter broken down by day.
+
+- Replaced that auto-detection with an explicit **By Hour / By Day / By Week / By Month** tab row, independent of the From/To range — the range still picks *what* history to look at, the tabs now pick *how* to slice it.
+- Added month bucketing (didn't exist before) and extended hour bucketing to work across a multi-day range (previously hour-view only worked for a single-day range) — capped at 14 days at a time so the chart doesn't try to plot hundreds of hour-points, with a message telling you to narrow the range or switch tabs if you go wider.
+- Removed the "View {date} by hour" shortcut button from the previous pass — the explicit By Hour tab supersedes it.
+- The Bulk Density/Leaf Shade panels' own per-day focus picker (from the previous change) is unaffected — it's independent of this granularity choice, same as it's independent of the From/To range.
+
+
+## 2026-08-14 — Gustav (Sieving: made the mesh charts' existing hourly view actually discoverable)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: hourly samples for the sieve-mesh charts didn't seem to exist. They already did — `bucketsForRange` switches the mesh trend charts from daily averages to hour-by-hour buckets whenever From and To are set to the same day — but nothing in the UI hinted at that, so setting both date fields to match wasn't something anyone would think to try.
+
+- Added a "🕐 View {date} by hour" button next to the From/To pickers, shown whenever the current range isn't already a single day. One click collapses the range to the current "To" date, which triggers the existing hour-bucket behaviour immediately.
+
+
+## 2026-08-14 — Gustav (Sieving: Bulk Density/Leaf Shade get their own per-day, by-hour view)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Plotting every Bulk Density/Leaf Shade sample across a multi-week From/To range squeezed them into unreadable clusters at one end of the chart.
+
+- Each of the two panels now has its own small date picker in its header, independent of the shared From/To range above (which keeps driving the sieve-mesh trend charts and the records table — unaffected by this). Leaving it blank keeps the existing behaviour: every sample in the shared range, one point per bag.
+- Picking a day switches that one panel to every sample captured on that day, plotted by hour (0–23h) instead of by date+time — the "hourly samples of a day" view. A ✕ button clears it back to the shared-range view.
+
+
+## 2026-08-14 — Gustav (Sieving: qms.sd_runs.run_timestamp was never actually written by the app)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: a run captured on staging still showed `run_timestamp` as NULL in the Supabase table editor. The column exists (`timestamptz`, no default) but `addRun()`'s insert never included it — nothing in the app ever wrote to it, on staging or otherwise.
+
+- `addRun()` now sets `run_timestamp: new Date().toISOString()` on every insert — a real UTC instant captured once, at save. The edit-run save path deliberately does NOT include this field, so no future edit can ever touch it (it survives independent of the now-locked `date`/`time_of_run` display fields).
+- Mapped it through `mapDbRow()` as `runTimestamp` alongside the existing `created_at → timestamp` mapping, so it's available wherever a run's data is used going forward.
+- Not backfilled: existing rows captured before this change stay NULL for this column (their `created_at` — already auto-set by the database on every insert regardless of app code — is the closest existing equivalent for historical rows).
+
+
+## 2026-08-14 — Gustav (Sieving: dropped the Outliers tab in favour of always-visible Bulk Density/Leaf Shade panels; locked Date/Time in the edit form)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+- Removed the Mesh Trend/Outliers toggle and its metric dropdown. Bulk Density and (where applicable) Leaf Shade now render as their own panels in the same grid as the sieve-fraction charts, always visible — no tab, no dropdown. Each is plotted per-run (one point per Final QC bag at its own date+time) rather than bucketed into the sieve-trend's day/week/month averages, since there's usually only one reading per bag.
+- The Edit-Run screen's Date and Time fields are now locked (read-only, greyed, "🔒 fixed at capture") — previously both were freely editable text/date inputs, letting anyone silently rewrite when a historical run was actually captured. A wrong date/time now has to be corrected directly in the database.
+- `nowHHMM()` (the time stamped on every new capture) now reads explicitly from the Africa/Johannesburg timezone via `Intl.DateTimeFormat`, instead of trusting whatever timezone the capturing device happens to be set to — same reasoning `sastDateStr()` already used for the date.
+
+
+## 2026-08-14 — Gustav (Quality: local-storage draft autosave/recovery across every capture form, matching production capture's offline safety net)
+
+**Files added:** `lib/hooks/useDraftAutosave.ts`, `components/shared/DraftRecoveryBanner.tsx`
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `granule/page.tsx`, `pasteuriser/page.tsx`, `raw-material/page.tsx`, `lab-results/page.tsx`, `customer-specs/page.tsx`, `coa/page.tsx`
+
+Requested: every quality capture form should survive a dropped connection or closed tab the same way production capture already does — autosave to localStorage every 15s while a form is open, recover it on next load, and delete the local copy once the data is actually confirmed saved to the database.
+
+- New shared hook `useDraftAutosave(key, data, opts)` (default 15s interval, plus an immediate save on tab-hide/pagehide) + `readDraft`/`clearDraft`, and a shared `DraftRecoveryBanner` component — no such reusable draft-autosave utility existed before this; production capture's own version is embedded directly in that page.
+- Wired into every genuine in-progress "typed multi-field capture" form across quality/: Sieving's New Run form; Granule's New Run/Add Sample/Add Tasting modals; Pasteuriser's New Batch and Add Sample modals; Raw Material's manual-entry (PA/TA, Residue, Glyphosate) modal; Lab Results' PDF-extraction review panel; Customer Specs' New Specification modal; CoA's editable model (header/line overrides) before Print/Export.
+- Deliberately left untouched: pages/forms that are single-field instant-save edits or read-only (Lab Manager, Maintenance QC, inline cell editors) — nothing there is at risk of losing meaningful in-progress work.
+- Recovery is banner-based, not silent auto-restore: on next load, a small amber banner offers Restore/Discard rather than reopening a form unprompted. The draft is deleted on a confirmed DB insert and on explicit Cancel/Close (deliberate abandonment), not just left to go stale.
+
+
+## 2026-08-14 — Gustav (Sieving: charts still overlapping on wide ranges + drop the now-redundant Run Type picker)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Two more fixes on top of the last sieving pass:
+
+- The tick-count cap from the previous fix wasn't enough on its own — week-bucket labels ("11 May – 17 May") are much wider than a day or hour label, so even ~10 of them still overlapped in a ~300px-wide mini chart. Tightened the target per granularity (hour 8 / day 6 / week 4) and angled the week/per-run labels at -35° so they no longer collide head-on; chart height and margin grow slightly to fit the rotated text.
+- Removed the "Run Type" picker inside the New Run form — now redundant since the two toolbar buttons ("+ New In-Process QC" / "+ New Output Bag QC") already fix the type before the form opens. The form's header names the type instead ("New Fine Leaf In-Process Run" / "…Output Bag QC Run").
+
+## 2026-08-14 — Gustav (Sieving: dedicated QC buttons, decluttered chart axes, From/To date range, per-run Bulk Density/Leaf Shade)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Follow-up feedback on today's sieving work — four changes:
+
+- **Toolbar**: replaced the single "+ New Run" button (which then made you pick In-Process vs Final QC inside the form) with two direct buttons — "+ New In-Process QC" and "+ New Output Bag QC" — that open the form with the run type already set.
+- **Chart x-axis**: a wide window (e.g. a full month) was drawing a label for every single day bucket, all overlapping. Both the Mesh Trend and Outliers charts now cap themselves to ~10 visible labels regardless of how many buckets are in the window.
+- **Date range**: replaced the By Hour/By Week/By Month click-navigator with plain From/To date inputs — pick any custom range instead of only paging by a fixed unit. Granularity (hour/day/week) still adapts automatically to how wide the range is; setting From = To gets the hourly view. Defaults to the last 7 days instead of just today.
+- **Bulk Density / Leaf Shade**: these used to get grouped into the same day/week/month buckets as the sieve-mesh trend, which stacked every bag QC'd in the same bucket on top of each other at one x position. They now always plot one point per run at its own date+time — effectively always "by hour" — since Weekly/Monthly bucketing never suited a once-per-bag reading anyway.
+
+## 2026-08-14 — Gustav (Sieving: fixed the chart/table going blank because the new shared date window defaulted to "today")
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: staging showed no chart at all and "No Fine Leaf runs yet" on a product with 439 total runs.
+
+- The By Hour/Week/Month navigator (restored earlier today) defaulted to `'day'` (today), and the chart+table now share that single window. Any product with no run logged on the exact current date came up completely empty on load.
+- Changed the default to `'week'` — much less likely to be empty, and matches what a developer actually wants to see by default.
+- Separately: the chart (and its nav buttons) was only rendered when the current window had at least one run in it (`rangeRuns.length>0`). That meant landing on a genuinely empty window left no way to click "By Week"/"◀" to get out of it — the only escape was reloading. Removed that gate; the chart's own empty-state message ("No … results for … yet") already handles zero runs, so the nav stays usable no matter what the window contains.
+
+## 2026-08-14 — Gustav (Sieving: dropped the dual-handle date-range slider, restored the clickable By Hour/Week/Month navigator)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Feedback on today's slicer (PR #652): it didn't look good and the developer asked for the old clickable By Hour/By Week/By Month navigator back instead of a drag slider.
+
+- Removed `SievingDateRangeSlider` (the dual `<input type="range">` widget).
+- Restored the original clickable nav — By Hour/By Week/By Month tabs, ◀/▶ step buttons, and a "Today" reset — now living in the Mesh Trend/Outliers chart's header as before.
+- Kept the one improvement from #652 worth keeping: the chart and the records table still share the exact same window (moving the nav also refilters the table), rather than reverting to two independent date controls. State (view + a separate offset per view, so switching tabs doesn't lose your place) now lives in the page component and is passed down as props instead of living inside the chart.
+
+
+## 2026-08-14 — Gustav (Sieving: fixed Edit Specs never actually saving; reworked layout; chart+table now share one date-range slicer; capped to last 3 months)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260814_001_fix_sieving_spec_overrides_schema.sql` (new, applied to production + staging)
+
+- **Edit Specs fix.** `qms.sieving_spec_overrides` had a completely different column shape (`product_type, variant, market, sieve_key, min_val, max_val`) than what the app's save/load code reads and writes (`product` + a JSONB `specs` blob). A schema mismatch like that comes back as `{error}`, not a thrown exception, and the save's `try/catch` only caught thrown exceptions — so a custom spec edit has never persisted past the current browser tab, on either database, since this screen shipped. Table was empty on both — nothing to migrate. Redefined the table to the shape the app already expects; `saveSpecs()` now also checks `{error}` explicitly and alerts if the save didn't reach the shared database, so a mismatch like this can't go silent again.
+- **Layout reordered**: "+ New Run" / "Edit Specs" now sit above the Specifications table (editing the spec a run gets checked against is right next to it), followed by the chart. The All/In-Process/Final QC filter pills, run count, search box, Export Excel and Refresh moved down to sit directly above the records table they act on, instead of being separated from it by the spec table and chart.
+- **Date-range slicer replaces the old Daily/Weekly/Monthly/60-Day/All period buttons** — a dual-handle slider (built from two overlaid native range inputs, no slider library in this codebase to reuse) that drives both the chart and the records table from the same `[rangeStart, rangeEnd]`, so narrowing or panning the window moves both together instead of the chart having its own separate By Hour/Week/Month navigator with prev/next arrows. The chart's bucket granularity now adapts to the selected span automatically: a single day buckets by hour (same-shift out-of-spec visibility, as before), up to ~9 weeks buckets by day, longer buckets by Monday-based week.
+- **Scoped to the last 3 months by default, at the query level** — `load()` now fetches `qms.sd_runs` with `.gte('date', <3 months ago>)` instead of the entire history (this table is thousands of rows deep). The slicer's own bounds match, so "last 3 months" is both the default view and what's actually loaded — going further back isn't available from this screen right now.
+- **Found and fixed in passing**: `TREND_SPEC_KEY` (the representative spec key the Mesh Trend chart's reference bands look up) was still `'Export|CON'` after yesterday's variant rename to full words — missed because it lives in the chart component, outside the block that rename touched. The spec bands had been silently returning no bounds since that deploy. Now `'Export|Conventional'`.
+
+## 2026-08-14 — Gustav (Sieving: variant is now spelled out in full everywhere — Conventional, Organic, RA-Conventional, RA-Organic, FT-Conventional, FT-Organic)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Follow-up to the earlier fix that normalized the "CON"/"Conventional" split down to short codes — the request now is to go the other way: make the full words the canonical spelling everywhere in Quality, matching how production already writes them.
+
+- **`SD_VARIANTS`** (the dropdown options, used on the new-run form, the inline row editor, and the spec editor) is now `['Conventional','Organic','RA-Organic','RA-Conventional','FT-Conventional','FT-Organic']` instead of the short codes.
+- **Every variant key in `SIEVING_SPECS_DB`** — all four products (Rooibos Blocks, Coarse Leaf, Fine Leaf, Indent Sticks) × 3 grades × 6 variants, 72 keys total — renamed from `'Export|CON'` etc. to `'Export|Conventional'` etc., so the Specifications tab and the pass/fail spec lookup both key on the same spelling as the dropdown and the stored data.
+- **`sdIsOrg()`** (decides which mesh columns/spec apply) now matches on `.includes('organic')` plus the old short forms, so it keeps working for both the new full words and any not-yet-normalized historical value.
+- **`normProdVariant()`** — the guard added for the previous variant-split bug, which copies a bag's variant from `production.prod_bagging`/`bag_tags` into the QC form — now maps everything (both production's full-word spellings and any legacy short code) to the new canonical full words, including production's own `'FT-ORG'` abbreviation (production's CHECK constraint never actually writes `'FT-Conventional'`, only `'FT-ORG'`).
+- Five remaining hard-coded `'CON'` defaults (the new-run form's default variant, the inline editor's default, and the three places that fetch a representative Conventional-side mesh list for table headers) updated to `'Conventional'`.
+- **Data migration**: every existing `qms.sd_runs.variant` value was rewritten from the old short code to the matching full word on both databases — 3,470 rows on production (2,965 `Conventional`, 397 `Organic`, 78 `RA-Conventional`, 33 `RA-Organic`), 1,869 rows on staging. No `FT-CON`/`FT-ORG` rows existed in either database's history. This was necessary, not cosmetic: leaving old rows on short codes while the new spec keys and dropdown use full words would have repeated the exact "half the table can't find its spec" bug from the last fix, just in the opposite direction.
+- **Found but not fixed, flagged separately**: `qms.sieving_spec_overrides` (the table the Specifications tab's "Edit Specs" save is supposed to persist custom spec ranges to) has a completely different column shape in both databases (`product_type, variant, market, sieve_key, min_val, max_val` — a normalized long-format table) than what the app code reads/writes (`.select('product,specs')` / `.upsert({product, specs})` — a `product` + JSONB `specs` shape). That mismatch means custom spec edits have never actually round-tripped through the database in either direction — the table is empty on both databases, so no data was at risk from today's change, but "Edit Specs" only ever affected the current browser session. Unrelated to variant naming; a separate fix.
+
+## 2026-08-14 — Gustav (Sieving: In-Process no longer carries a serial at all; fixed the "Conventional" vs "CON" variant split)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Two requests: stop In-Process auto-filling (and requiring) a serial number across all four sieves, and explain/fix the runs table showing two different-looking variant values ("CON" and "Conventional") for the same product/lot.
+
+- **In-Process serial removed entirely.** An In-Process reading samples the machine while a bag is still filling — it isn't a sample of one finished bag, so there was nothing for a serial to correctly identify; the earlier auto-fill just pointed every reading at whichever bag happened to be most recent, with no way to enter a different one either. The Serial No. field, its auto-fill effect, and its datalist are now only rendered for Final QC. Because this is product-agnostic (driven by `activeProduct`, not per-tab code), it applies uniformly to Coarse Leaf, Fine Leaf, Indent Sticks and Rooibos Blocks. **Belt-and-braces:** the save itself now hard-codes `serial_number: null` for any In-Process row, so a lot-number auto-fill pulling a serial from a previous run against the same lot can never attach a stale one behind the scenes, even though the field is gone from the screen.
+- **Root cause of the variant split**: `production.prod_bagging` / `production.bag_tags` spell variant out in full — `'Conventional'`, `'Organic'`, etc. (that table's own CHECK constraint) — while `qms.sd_runs` uses short codes (`SD_VARIANTS`: `CON`, `ORG`, `RA-CON`, `RA-ORG`, `FT-CON`, `FT-ORG`). Two places copied a bag's `variant` straight from production into the QC form without translating it: `applyBagToForm()` (picking a bag for Final QC) and `lookupBagTag()` (typing/scanning a serial and tabbing out). Either path stored the production spelling verbatim, so the same lot ended up with two different variant values in the table — and worse, spec lookups keyed on `${grade}|${variant}` silently missed for any row stored as `"Conventional"`, since that string isn't a key in `SIEVING_SPECS_DB`.
+- **Fix**: new `normProdVariant()` maps the production spellings to the `SD_VARIANTS` codes (case-insensitively; already-short values pass through unchanged), applied at both copy sites plus defensively in the lot-number auto-fill (so a historical bad row can't keep circulating forward when its lot is reused).
+- **Data correction**: 19 existing `qms.sd_runs` rows on production and 2 on staging had `variant = 'Conventional'` — updated to `'CON'` directly (no other full-word variants were present in either database).
+
+
+## 2026-08-14 — Alyssa (Production outage + fix: add `scripts/production-deploy.sh`, matching the existing staging one)
+
+**Files changed:** `scripts/production-deploy.sh` (new), `docs/environments-architecture.md`
+
+While manually promoting the Sieving Tower checks/VSD/AI-summary fix (PR #662) to production, the deploy command from `docs/environments-architecture.md` (`git pull; npm run build; pm2 restart`, plain `;`/newline-chained) got interrupted mid-build by VPS resource contention (the live server + a heavy build + concurrent SSH diagnostic sessions competing for a small box). Because the commands aren't `&&`-chained, `pm2 restart` ran anyway straight after the killed build, restarting `cntp-production` into a half-written `.next` directory — it crash-looped (513 restarts) on a missing `.next/prerender-manifest.json`, taking production down (504 → 502) for several minutes until a clean rebuild completed.
+
+`scripts/staging-deploy.sh` already exists specifically to prevent this exact failure mode (builds into a side `.next-build` dir, atomically swaps only once complete, HTTP-verifies, rolls back on failure) — it just never got a production counterpart. Added `scripts/production-deploy.sh`, an exact mirror pointed at `main`/`cntp-production`/the production URL, and updated the production deploy instructions to use it instead of the raw manual commands.
+
+## 2026-08-14 — Alyssa (Sieving Tower capture: checks now autosave, VSD logging gated to running/pre-submit, AI summary write verified — promoted to production)
+
+**Files changed:** `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: Sieving Tower checks get filled out but aren't saved; the hourly VSD reading isn't tracked properly; the AI summary isn't saved/readable for the life of the record.
+
+- **Checks not saved**: confirm/number/text/scale checks only ever reached the DB in one all-or-nothing write at PIN sign-off — held only in React state until then. If the operator never finished signing, or a supervisor approved the session before sign-off (which locks the panel for good), everything typed in was lost with no trace. Confirmed live on staging: sieving `check_records` for 2026-08-03, 08-04 and 08-13 are stuck `in_progress` with none of that shift's checks saved. `ChecksPanel` now autosaves each changed check continuously (debounced ~2.5s after a change, flushed on tab-hide/pagehide, and a 20s backstop interval) with `source:'auto'`, independent of whether `sign()` ever runs; `sign()` still writes its own `'sign'`-sourced confirmation of the final values on top, so the PIN-verified audit trail is unchanged.
+- **VSD reading not tracked properly**: the inline "Log reading" button inside the Checks tab had no running/submitted gating at all — unlike the existing page-level hourly popup (`HourlyVsdPrompt`), which already only nags while production is running and stops once the shift is submitted/approved. A reading could be logged before any material was captured, or any time after submission as long as the panel wasn't yet locked. The inline button now shares the same `running && active` gate, with a note explaining why it's hidden when unavailable.
+- **AI summary not durable**: `generateAiSummary`'s write to `check_records.ai_summary` never checked its own error response — a failed save could still flip the UI to "generated" for that page load and then silently vanish (unsaved) the next time anyone opened the record. The summary is now only shown once its write is confirmed to have succeeded; a failed save keeps the "not generated yet" + Generate retry control visible instead.
+- Hardened `checks-db.ts`'s `ensureCheckRecord`/`appendCheckEvent` to throw on a DB error instead of silently swallowing it — that silent-failure shape (mirrors the `qms.sieving_spec_overrides` bug fixed earlier today) is what let all three symptoms look like nothing was wrong until checked against the live data.
+
+## 2026-08-14 — Alyssa (Production: scan-first debagging on Refining/Pasteuriser/Blender/Granule — promoted to production)
+
+**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`, `GranuleCapture.tsx`
+
+Promotes the scan-first debagging work (staging #603/#613/#645) to production. Scanning a bag now looks it up automatically (no Enter/"Look up" tap) across all four debagging lines:
+
+- **Refining 1/2** — scan a bag → popup shows its `bag_tags` record (product, weight, variant, lot, where it was made) + a validity line → "Consume into Refining" registers it debagged-in. Pick-from-system / manual kept as side options. (Shared `BagScanIn` component: `ScanBox` + `BagScanModal`, powered by `validateBagScan`.)
+- **Pasteuriser** — same scan-first popup; one field auto-routes the bag (granule output → post-sieve stream, else main debagging) and shows the target before consuming.
+- **Blender** — its debagging modal now auto-fires the lookup on scan, so fields fill on their own once the ingredient is picked.
+- **Granule** — auto-fills on scan.
+
+Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
+
+## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: `STFL-130826-012` was captured as a Final QC and is in the database, but could not be found in the sieving runs table.
+
+- **What happened.** The run is in the table — it had sorted itself dozens of rows down. `applyBagToForm()` set the run's **Date** from `bag.bag_date` (when *production bagged* the bag) while the **Time** beside it is always stamped at the moment of capture. The bag was made on 13 Aug and sampled at 07:33 on the morning of the 14th, so the run was stored as `date = 2026-08-13, time = 07:33` — an instant that never happened. The table sorts on `date + time`, so instead of appearing at the top it filed itself near the *bottom* of the 13 August block, below every run from that day's shift.
+- **Fix.** A Final QC run's Date is now the date the QC was performed, matching the capture-stamped Time next to it. The bag's own bagging moment isn't lost — it stays attached to the bag through the serial / `bagging_id` link, and is now shown explicitly in the green confirmation line ("Bagged 2026-08-13 15:33") when a bag is picked. The Date field stays editable, so a night shift can still back-date a run deliberately.
+- **Also fixed a latent midnight bug in the same area:** `blankForm()` seeded the date with `new Date().toISOString().slice(0,10)` — raw UTC. Between 00:00 and 01:59 SAST that is still *yesterday*, so any run captured in that window was filed against the wrong day. Now uses the same `sastDateStr()` (Africa/Johannesburg) helper. One record on production (`16-07-18`, captured 00:37) shows exactly this signature.
+- **Note on the duplicate:** `STFL-130826-012` has **two** Final QC rows (07:33 and 07:35, both 340 / shade 5). The guard that blocks a second Final QC on one serial is merged to staging but is sitting in PR #641 awaiting approval for `main`, so it was not yet protecting the live site when these were captured.
+- Historical records were **not** bulk-rewritten: of 10 rows since 1 Aug where the stored date differs from the capture date, several are legitimate night-shift back-dating (time typed as 23:30, captured 00:12), which this change deliberately still allows.
 
 ## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
 

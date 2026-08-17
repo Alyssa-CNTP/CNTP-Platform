@@ -26,22 +26,30 @@ export interface CheckEventInput {
   recorded_at?: string
 }
 
-/** Get-or-create the checks record for a section/shift/date; returns its id. */
+/**
+ * Get-or-create the checks record for a section/shift/date; returns its id.
+ * Throws on failure — callers must not treat a swallowed DB error as success
+ * (that silent-failure shape is what let checks look "filled in" on screen
+ * while nothing actually reached the audit trail).
+ */
 export async function ensureCheckRecord(
   sectionId: string, date: string, shift: string, sessionId: string | null,
-): Promise<string | null> {
+): Promise<string> {
   const db = getDb()
-  const { data: existing } = await db.schema('production').from('check_records')
+  const { data: existing, error: selErr } = await db.schema('production').from('check_records')
     .select('id').eq('section_id', sectionId).eq('date', date).eq('shift', shift).maybeSingle()
+  if (selErr) throw new Error(`Could not load the checks record: ${selErr.message}`)
   if ((existing as any)?.id) return (existing as any).id
-  const { data } = await db.schema('production').from('check_records')
+  const { data, error } = await db.schema('production').from('check_records')
     .insert({ section_id: sectionId, date, shift, session_id: sessionId ?? null } as any)
     .select('id').single()
-  return (data as any)?.id ?? null
+  if (error) throw new Error(`Could not create the checks record: ${error.message}`)
+  return (data as any).id
 }
 
 export async function appendCheckEvent(recordId: string, e: CheckEventInput): Promise<void> {
-  await getDb().schema('production').from('check_events').insert({ record_id: recordId, ...e } as any)
+  const { error } = await getDb().schema('production').from('check_events').insert({ record_id: recordId, ...e } as any)
+  if (error) throw new Error(`Could not save "${e.check_label ?? e.check_key}": ${error.message}`)
 }
 
 /** Load the record header + its events (to restore the timeline and signed state). */

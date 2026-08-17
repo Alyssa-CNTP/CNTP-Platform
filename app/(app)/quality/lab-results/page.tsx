@@ -9,6 +9,8 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { isoDateTime } from '@/lib/utils/formatDate'
 import { exportTableXlsx } from '@/lib/utils/exportExcel'
+import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
+import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import { RefreshCw, History, AlertTriangle, X } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -22,6 +24,7 @@ const TEST_TYPES = [
   { key:'mosh_moah',   label:'🛢 MOSH/MOAH',       icon:'🛢', desc:'Mineral oil hydrocarbons' },
   { key:'pa_final',    label:'💊 PAs',             icon:'💊', desc:'PA/TA Final · EU limits · Scopolamine' },
   { key:'glyphosate',  label:'🧫 Glyphosate',      icon:'🧫', desc:'Glyphosate · AMPA · Glufosinate' },
+  { key:'chlorate_perchlorate', label:'🧂 Chlorate/Perchlorate', icon:'🧂', desc:'Chlorate · Perchlorate · EU MRLs' },
 ] as const
 
 type TestType = typeof TEST_TYPES[number]['key']
@@ -49,6 +52,7 @@ const COLS: Record<string, [string,string][]> = {
   mosh_moah: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
   pa_final:  [['analyte','PA/TA Analyte'],['result','Result (µg/kg)'],['unit','Unit'],['spec','EU Limit'],['status','Status']],
   glyphosate:[['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','Spec'],['status','Status']],
+  chlorate_perchlorate: [['analyte','Analyte'],['result','Result'],['unit','Unit'],['spec','MRL (mg/kg)'],['status','Status']],
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -136,7 +140,10 @@ function expandRecord(r: LabResult): any[] {
 
 interface QueueItem { id:string; file:File; status:'pending'|'processing'|'done'|'error'; message:string }
 
-function PdfDropZone({ testType, onExtracted }: { testType:TestType; onExtracted:(d:any)=>void }) {
+function PdfDropZone({ testType, onExtracted, onSectionsDetected }: {
+  testType:TestType; onExtracted:(d:any)=>void
+  onSectionsDetected?: (sections:{type:string;label:string}[], file:File, textLayerRead:boolean)=>void
+}) {
   const { session } = useAuth() // needed for upload auth
   // Upload goes to Next.js API route — no external service needed
   const [drag,  setDrag]  = useState(false)
@@ -161,8 +168,14 @@ function PdfDropZone({ testType, onExtracted }: { testType:TestType; onExtracted
       try {
         const data = await upload(item.file)
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'done',message:'Extracted'} : x))
-        if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'' })
+        if (data.extract_only && data.data) onExtracted({ ...data.data, _sourceFile:item.file.name, _model_used:data.model_used||'', _mismatch:data.analyte_mismatch??null, _batchWarning:data.batch_warning??null })
         else if (data.data) onExtracted({ ...data.data, _sourceFile:item.file.name })
+        // A combined report carries other analyses this tab didn't extract —
+        // hand them up so they can be offered as follow-ups rather than lost.
+        // Always fires (even with nothing found) so the page can distinguish
+        // "no other analyses in this report" from "couldn't read the text
+        // layer, so we never looked".
+        if (data.extract_only) onSectionsDetected?.(data.detected_sections ?? [], item.file, data.text_layer_read !== false)
       } catch (err:any) {
         setQueue(q => q.map(x => x.id===item.id ? {...x,status:'error',message:err.message} : x))
       }
@@ -224,6 +237,11 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
   const [pending, setPending] = useState({ ...data })
   const cols = COLS[testType] ?? []
 
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. This is
+  // where the person actually edits the PDF-extracted values, so it's what
+  // risks real lost work if the connection drops before "Confirm & Save".
+  useDraftAutosave(`lab_results_draft_${testType}`, pending, { enabled: true })
+
   const metaFields: [string,string][] = [
     ['batch_no','Batch No.'],['_lab','Lab'],['lab','Lab'],
     ['_date_issued','Date Issued'],['date_validated','Date Validated'],
@@ -231,12 +249,49 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
     ['po_number','PO Number'],['requested_by','Requested By'],['commodity','Commodity'],
   ].filter(([f]) => pending[f] !== undefined) as [string,string][]
 
+  const mismatch = pending._mismatch as { type:string; label:string } | null | undefined
+  // Only warn while the batch still looks wrong — editing the field below
+  // clears it, so the warning tracks what's actually about to be saved.
+  const batchWarning = (pending._batchWarning as string|null|undefined) &&
+    (!/[A-Za-z]/.test(String(pending.batch_no ?? '').trim()) || String(pending.batch_no ?? '').trim() === '')
+      ? pending._batchWarning as string : null
+
   return (
-    <div style={{ background:'#f0fdf4', border:'2px solid #86efac', borderRadius:10, padding:16, marginBottom:14 }}>
+    <div style={{ background: mismatch?'#fef2f2':'#f0fdf4', border:`2px solid ${mismatch?'#fca5a5':'#86efac'}`, borderRadius:10, padding:16, marginBottom:14 }}>
+      {/* The extracted results belong to a different analysis than this tab.
+          Saving would file them under the wrong test_type — invisible once
+          saved, and it would feed the COA — so it's called out before that
+          can happen rather than after. */}
+      {mismatch && (
+        <div style={{ background:'#fff', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', marginBottom:12 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#991b1b', marginBottom:4 }}>
+            ⚠ These results look like {mismatch.label}, not {TEST_TYPES.find(t=>t.key===testType)?.label.replace(/^[^ ]+ /,'')}
+          </div>
+          <div style={{ fontSize:11, color:'#7f1d1d' }}>
+            Every extracted analyte belongs to {mismatch.label}. This usually means the report has no
+            {' '}{TEST_TYPES.find(t=>t.key===testType)?.label.replace(/^[^ ]+ /,'')} section, and the wrong one was picked up.
+            Saving now would file them under the wrong test type. Discard and drop this PDF on the {mismatch.label} tab instead.
+          </div>
+        </div>
+      )}
+      {/* Wrong batch is a quiet failure: it never matches on a COA lookup and
+          it defeats the duplicate check, which keys on batch_no. Flagged here,
+          next to the editable Batch No. field, so it can be corrected before
+          saving rather than discovered later. */}
+      {batchWarning && (
+        <div style={{ background:'#fffbeb', border:'1px solid #fcd34d', borderRadius:8, padding:'10px 12px', marginBottom:12 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#92400e', marginBottom:4 }}>
+            ⚠ Check the batch number — “{String(pending.batch_no ?? '').trim() || '(empty)'}” doesn’t look right
+          </div>
+          <div style={{ fontSize:11, color:'#78350f' }}>
+            {batchWarning} Correct it in the Batch No. field below before saving.
+          </div>
+        </div>
+      )}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
         <div>
-          <div style={{ fontWeight:700, fontSize:12, color:'#166534' }}>
-            ✅ Review — {TEST_TYPES.find(t=>t.key===testType)?.label}
+          <div style={{ fontWeight:700, fontSize:12, color: mismatch?'#991b1b':'#166534' }}>
+            {mismatch?'⚠':'✅'} Review — {TEST_TYPES.find(t=>t.key===testType)?.label}
           </div>
           {pending._sourceFile && <div style={{ fontSize:9, color:'#9ca3af', marginTop:2 }}>📄 {pending._sourceFile}</div>}
         </div>
@@ -729,11 +784,42 @@ export default function LabResultsPage() {
   const db = getDb()
 
   const [activeTab,   setActiveTab]   = useState<TestType>('micro')
-  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[] })
+  const [records,     setRecords]     = useState<Record<TestType,LabResult[]>>({ micro:[],residue:[],heavy_metals:[],eto:[],aflatoxins:[],mosh_moah:[],pa_final:[],glyphosate:[],chlorate_perchlorate:[] })
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState('')
   const [pending,     setPending]     = useState<any|null>(null)
   const [dupWarn,     setDupWarn]     = useState<string|null>(null)
+
+  // ── Combined-report follow-ups ──
+  // One PDF from a lab like Eurofins often carries several analyses for the
+  // same sample. The drop zone extracts only the active tab's type; these hold
+  // the other sections the server spotted in that same file, plus the file
+  // itself, so each can be extracted into its own tab on demand instead of
+  // being silently dropped.
+  const [otherSections, setOtherSections] = useState<{type:string;label:string}[]>([])
+  const [sourceFile,    setSourceFile]    = useState<File|null>(null)
+  const [extractingType,setExtractingType]= useState<string|null>(null)
+  // false when the PDF had no readable text layer, so the scan for other
+  // analyses never ran. Distinct from "ran and found none".
+  const [sectionsScanned,setSectionsScanned]= useState(true)
+
+  // Keep the selected tab visible in the scroller. Matters most on a phone,
+  // where only ~2 tabs fit at a time and the combined-report follow-ups switch
+  // tabs for you — landing on a tab you can't see reads as nothing happening.
+  const tabBarRef = useRef<HTMLDivElement|null>(null)
+  useEffect(() => {
+    tabBarRef.current?.querySelector(`[data-tab="${activeTab}"]`)
+      ?.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'nearest' })
+  }, [activeTab])
+
+  // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Checks for
+  // a recovered draft whenever there's no review in progress, keyed per test
+  // type since each tab's extraction/review is independent.
+  const [recoveredDraft, setRecoveredDraft] = useState<{data:any;savedAt:string}|null>(null)
+  useEffect(() => {
+    if (pending) return
+    setRecoveredDraft(readDraft(`lab_results_draft_${activeTab}`))
+  }, [pending, activeTab])
   const [showHistory, setShowHistory] = useState(false)
   const [historyRecs, setHistoryRecs] = useState<any[]>([])
   const [searchText,  setSearchText]  = useState('')
@@ -761,6 +847,32 @@ export default function LabResultsPage() {
 
   useEffect(() => { if (showHistory) loadHistory() }, [showHistory, loadHistory])
 
+  // Re-run extraction on the SAME file for one of the other analyses found in
+  // it, then switch to that tab with the result loaded for review. Runs that
+  // type's own tuned prompt rather than reusing anything from the first pass,
+  // so each section is extracted exactly as it would be if dropped there
+  // directly. Saving still goes through the normal review panel.
+  async function extractSection(type: string, label: string) {
+    if (!sourceFile || extractingType) return
+    setExtractingType(type)
+    setError('')
+    try {
+      const fd = new FormData()
+      fd.append('pdf', sourceFile); fd.append('workcenter','pasteuriser'); fd.append('workflow', type)
+      const res  = await fetch('/api/upload', { method:'POST', body:fd })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Could not extract ${label}`)
+      setOtherSections(prev => prev.filter(s => s.type !== type))
+      setActiveTab(type as TestType)
+      setDupWarn(null)
+      setPending({ ...data.data, _sourceFile: sourceFile.name, _model_used: data.model_used||'', _mismatch: data.analyte_mismatch??null, _batchWarning: data.batch_warning??null })
+    } catch (e:any) {
+      setError(e.message || `Could not extract ${label}`)
+    } finally {
+      setExtractingType(null)
+    }
+  }
+
   async function saveRecord(data: any, force = false) {
     if (!force) {
       const { data:existing } = await db.schema('qms').from('lab_results').select('id')
@@ -780,6 +892,7 @@ export default function LabResultsPage() {
     }
     const { data:saved, error:err } = await db.schema('qms').from('lab_results').insert(body).select().single()
     if (err) { alert('Save failed: '+err.message); return }
+    clearDraft(`lab_results_draft_${activeTab}`)
     setRecords(p=>({...p,[activeTab]:[saved as LabResult,...p[activeTab]]}))
     setPending(null); setDupWarn(null)
   }
@@ -895,22 +1008,78 @@ export default function LabResultsPage() {
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display:'flex', border:'1px solid #e5e7eb', borderRadius:10, overflow:'hidden', width:'fit-content', marginBottom:16 }}>
-        {TEST_TYPES.map((t,i)=>(
-          <button key={t.key} onClick={()=>{setActiveTab(t.key);setPending(null);setDupWarn(null)}}
-            style={{ padding:'8px 16px', fontWeight:700, fontSize:12, cursor:'pointer', borderLeft:i>0?'1px solid #e5e7eb':'none',
-              background:activeTab===t.key?'#1f4e79':'#fff', color:activeTab===t.key?'#fff':'#6b7280', transition:'all .15s', whiteSpace:'nowrap' }}>
-            {t.label}
-            {records[t.key].length>0&&<span style={{ marginLeft:5, fontFamily:'monospace', fontSize:10, opacity:.6 }}>({records[t.key].length})</span>}
-          </button>
-        ))}
+      {/* Tab bar — needs its own horizontal scroller. The row is `fit-content`
+          and far wider than a phone viewport, while the app shell and body are
+          both overflow-x:hidden, so every tab past the screen edge (Heavy
+          Metals onward) was simply unreachable on mobile — no way to scroll to
+          it. The inner row keeps overflow:hidden purely to clip the first/last
+          buttons to the rounded border. */}
+      <div ref={tabBarRef}
+        style={{ overflowX:'auto', overflowY:'hidden', WebkitOverflowScrolling:'touch', marginBottom:16, paddingBottom:2 }}>
+        <div style={{ display:'flex', border:'1px solid #e5e7eb', borderRadius:10, overflow:'hidden', width:'fit-content' }}>
+          {TEST_TYPES.map((t,i)=>(
+            <button key={t.key} data-tab={t.key} onClick={()=>{setActiveTab(t.key);setPending(null);setDupWarn(null)}}
+              style={{ padding:'8px 16px', fontWeight:700, fontSize:12, cursor:'pointer', borderLeft:i>0?'1px solid #e5e7eb':'none', flexShrink:0,
+                background:activeTab===t.key?'#1f4e79':'#fff', color:activeTab===t.key?'#fff':'#6b7280', transition:'all .15s', whiteSpace:'nowrap' }}>
+              {t.label}
+              {records[t.key].length>0&&<span style={{ marginLeft:5, fontFamily:'monospace', fontSize:10, opacity:.6 }}>({records[t.key].length})</span>}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, fontSize:11, color:'#991b1b', padding:'8px 14px', background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8 }}>⚠ {error}</div>}
 
+      {/* Recovered draft — see lib/hooks/useDraftAutosave.ts. Only surfaces
+          when no review is currently open, so it never fights an in-progress edit. */}
+      {recoveredDraft && !pending && (
+        <DraftRecoveryBanner savedAt={recoveredDraft.savedAt}
+          onRestore={()=>{ setPending(recoveredDraft.data); setDupWarn(null); setRecoveredDraft(null) }}
+          onDiscard={()=>{ clearDraft(`lab_results_draft_${activeTab}`); setRecoveredDraft(null) }} />
+      )}
+
       {/* Upload zone */}
-      {canWrite && !pending && <PdfDropZone testType={activeTab} onExtracted={d=>{setPending(d);setDupWarn(null)}}/>}
+      {canWrite && !pending && (
+        <PdfDropZone testType={activeTab}
+          onExtracted={d=>{setPending(d);setDupWarn(null);setRecoveredDraft(null)}}
+          onSectionsDetected={(sections,file,textLayerRead)=>{ setOtherSections(sections); setSourceFile(file); setSectionsScanned(textLayerRead) }}/>
+      )}
+
+      {/* Couldn't scan for the report's other analyses at all. Called out
+          rather than left blank — an empty space here looks identical to
+          "this report only contains one test", which is how a real bug went
+          unnoticed for a release. */}
+      {canWrite && !sectionsScanned && otherSections.length === 0 && (
+        <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:10, padding:'8px 14px', marginBottom:14, fontSize:11, color:'#6b7280' }}>
+          ℹ This PDF had no readable text layer (it was read as a scan), so it couldn&apos;t be checked for other analyses.
+          If it&apos;s a combined report, open the other tabs and drop it there too.
+        </div>
+      )}
+
+      {/* Combined report — other analyses found in the same PDF. Without this
+          they'd be lost: the drop zone only extracts the tab it landed on. */}
+      {canWrite && otherSections.length > 0 && (
+        <div style={{ background:'#eff6ff', border:'1px solid #93c5fd', borderRadius:10, padding:'10px 14px', marginBottom:14 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+            <span style={{ fontSize:12, fontWeight:700, color:'#1e40af' }}>📎 This report also contains:</span>
+            {otherSections.map(s => (
+              <button key={s.type} onClick={()=>extractSection(s.type, s.label)} disabled={!!extractingType}
+                title={`Extract ${s.label} from this same PDF and review it under that tab`}
+                style={{ padding:'4px 12px', borderRadius:20, border:'1px solid #1d4ed8', fontSize:11, fontWeight:600,
+                  background: extractingType===s.type ? '#1d4ed8' : '#fff', color: extractingType===s.type ? '#fff' : '#1d4ed8',
+                  cursor: extractingType ? 'default' : 'pointer', opacity: extractingType && extractingType!==s.type ? 0.5 : 1 }}>
+                {extractingType===s.type ? 'Extracting…' : `+ ${s.label}`}
+              </button>
+            ))}
+            <button onClick={()=>{setOtherSections([]);setSourceFile(null)}} disabled={!!extractingType}
+              title="Dismiss — don't capture the other analyses in this report"
+              style={{ marginLeft:'auto', background:'none', border:'none', color:'#6b7280', cursor:'pointer', fontSize:14 }}>×</button>
+          </div>
+          <div style={{ fontSize:10, color:'#1e40af', marginTop:4, opacity:0.8 }}>
+            Each one is extracted separately with its own rules, then shown for review before saving.
+          </div>
+        </div>
+      )}
 
       {/* Duplicate warning */}
       {dupWarn && (
@@ -918,7 +1087,7 @@ export default function LabResultsPage() {
           <div style={{ fontWeight:600, fontSize:13, color:'#92400e', marginBottom:10 }}>⚠ Batch {dupWarn} already has a {TEST_TYPES.find(t=>t.key===activeTab)?.label} record</div>
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={()=>saveRecord(pending,true)} style={{ padding:'6px 14px', borderRadius:7, border:'none', background:'#dc2626', color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' }}>Overwrite</button>
-            <button onClick={()=>{setPending(null);setDupWarn(null)}} style={{ padding:'6px 14px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:12, cursor:'pointer' }}>Discard</button>
+            <button onClick={()=>{setPending(null);setDupWarn(null);clearDraft(`lab_results_draft_${activeTab}`)}} style={{ padding:'6px 14px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', fontSize:12, cursor:'pointer' }}>Discard</button>
           </div>
         </div>
       )}
@@ -927,7 +1096,7 @@ export default function LabResultsPage() {
       {pending && !dupWarn && (
         <ReviewPanel data={pending} testType={activeTab}
           onSave={saveRecord}
-          onDiscard={()=>{setPending(null);setDupWarn(null)}}/>
+          onDiscard={()=>{setPending(null);setDupWarn(null);clearDraft(`lab_results_draft_${activeTab}`)}}/>
       )}
 
       {/* Loading */}
