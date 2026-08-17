@@ -91,6 +91,14 @@ export function buildQcLabelZpl(d: QcLabelData): string {
   const badgeW = 264, badgeX0 = W - badgeW - 20, badgeY0 = 10, badgeH = 44
   const headerW = badgeX0 - 20 - 10
 
+  // "QC-LABEL" shares the product name's row and font size, right-justified
+  // against the same edge the badge lines up with. Carved out of headerW so
+  // the two ^FB fields never overlap — the product name's own field shrinks
+  // to what's left, same as elsewhere in this file, rather than the two
+  // sharing one width and risking one drawing over the other for a long name.
+  const qcTagW  = 200
+  const productW = headerW - qcTagW - 10
+
   // Barcode geometry, computed once and reused both to draw the barcode
   // itself and to size the Lot/Batch and Date fields that sit in its side
   // margins — Code128 subset B's width is exact for a given character
@@ -151,8 +159,9 @@ export function buildQcLabelZpl(d: QcLabelData): string {
     // production bag tag, since paper colour no longer carries the distinction.
     ...(isFineLeaf ? [`^FO4,4^GB${W - 8},${H - 8},3^FS`, `^FO12,12^GB${W - 24},${H - 24},2^FS`] : []),
 
-    // Header: product + "FINAL QC · <name>" left, grade/variant badge right
-    textField(20, 14, headerW, 32, 32, 'L', clean(d.product, 22).toUpperCase()),
+    // Header: product + "QC-LABEL" left, "FINAL QC · <name>" below, grade/variant badge right
+    textField(20, 14, productW, 32, 32, 'L', clean(d.product, 22).toUpperCase()),
+    textField(20 + productW + 10, 14, qcTagW, 32, 32, 'R', 'QC-LABEL'),
     textField(20, 52, headerW, 18, 18, 'L', clean(`FINAL QC${d.qcName ? ' - ' + clean(d.qcName, 22) : ''}`, 40)),
     ...(badgeText ? [
       `^FO${badgeX0},${badgeY0}^GB${badgeW},${badgeH},${badgeH}^FS`,
