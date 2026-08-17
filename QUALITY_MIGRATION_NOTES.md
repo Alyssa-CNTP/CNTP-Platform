@@ -163,8 +163,9 @@ Tables: `qms.past_sensorial_sessions` + `qms.past_sensorial_samples`
 Fields per sample: `aroma` (1–5), `flavour_profile` (1–5), `briskness` (1–5), `strength` (1–5), `cup_colour` (1–5), `cup_clarity` (1–5)
 
 ### Lab Results (`qms.lab_results`)
-Columns: `id`, `test_type`, `workcenter`, `batch_no`, `lab_name`, `overall_status`, `results` (JSONB), `comment`, `created_at`, `uploaded_by`  
-`test_type` values: `micro`, `residue`, `heavy_metals`, `eto`, `aflatoxins`, `mosh_moah`, `pa_final`, `glyphosate`
+Columns (verified against live schema): `id`, `batch_no`, `test_type`, `lab_name`, `order_no`, `date_issued`, `date_received`, `results` (JSONB), `overall_status`, `regulation`, `pdf_path`, `comment`, `created_by`, `created_at`.
+No `workcenter` or `uploaded_by` column despite an earlier version of this note; dates are `text`, not `date`. Only constraint is the primary key — `test_type` is free-form text with no CHECK, so a new type needs no migration.
+`test_type` values: `micro`, `residue`, `heavy_metals`, `eto`, `aflatoxins`, `mosh_moah`, `pa_final`, `glyphosate`, `chlorate_perchlorate`, `water_activity`
 
 ---
 

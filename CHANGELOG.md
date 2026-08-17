@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Lab Results: add Water Activity as a new test type)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`, `app/(app)/quality/coa/page.tsx`, `components/quality/CoaSpecsTab.tsx`, `QUALITY_MIGRATION_NOTES.md`
+
+Added off a sample report (Peter Johnson Laboratories, SANAS accredited, method PJL-M74) — a standalone "Test Report" for Water Activity @ 20°C, distinct in shape from every existing test type: no combined-report risk, no pass/fail printed on the report itself, and a "SAMPLE IDENTIFICATION" block that actually prints TYPE and GRADE alongside the batch number, where every other lab's reports bury type/grade in the customer/product description if at all.
+
+- **New `water_activity` test type**, wired through the same upload → extract → review → save pipeline as every other type (new prompt, `SCOPED`, `EXTRACT_ONLY`, `SECTION_PATTERNS`/`ANALYTE_OWNER` combined-report guards) — no schema change, since `qms.lab_results.test_type` is free-form text with no CHECK constraint.
+- **Type and Grade are now captured and shown**, not just batch number — a new Lab Results tab/column pair, and on the extraction review panel before saving. This exposed a real gap in the existing generic save path: `results: data.analytes ? {analytes:data.analytes} : data` discarded every other top-level field once an `analytes[]` array was present, silently dropping Type/Grade/Sample Description/Sample Date for this type (and Sample Description for every existing `analytes[]` type, unnoticed until now since nothing displayed it). Fixed by explicitly carrying those fields through.
+- **On the COA, Water Activity follows the Moisture/Bulk Density pattern** (an actual value to show — e.g. "0.628 Aw" — not a pass/fail "Complies" verdict), since the source report prints a measurement with no interpretation at all. Unlike the contaminant rows (Residue/PA/Heavy Metals/MOSH-MOAH/Chlorate), it isn't a toggleable "Include sections" checkbox — included whenever a result exists, same as Moisture/Bulk Density.
+- Added `water_activity` to `CoaSpecsTab`'s Other Fields, so a customer spec can optionally carry a limit for it (the source report itself prints none).
+- **Caught while wiring the COA export, not reported:** the jsPDF export's "Other Analysis" row filter was a second, separately-maintained copy of the on-screen filter (`otherRowVisible()`) that had already drifted out of sync — it was missing Chlorate/Perchlorate, so a toggled-off Chlorate row still printed in an exported PDF. Switched the export to call `otherRowVisible()` directly so this can't happen again for Water Activity or anything added after it.
+- `QUALITY_MIGRATION_NOTES.md`'s `qms.lab_results` column list was stale (missing `order_no`/`date_issued`/`date_received`/`regulation`/`created_by`, listing a `workcenter`/`uploaded_by` that don't exist) — corrected against the live schema while updating the `test_type` list.
+
 ## 2026-08-17 — Gustav (Sieving Final QC label: squash the metrics grid, drop the cc/100g and 1-11 unit lines)
 
 **Files changed:** `lib/quality/qc-label-print.ts`, `lib/quality/qc-label-zpl.ts`
