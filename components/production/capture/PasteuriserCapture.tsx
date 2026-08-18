@@ -196,6 +196,7 @@ function useSystemBagsForStream(stream: 'main' | 'postsieve', blendCode: string)
     let q = getDb().schema('production').from('bag_tags')
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at, acumatica_id')
       .eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false })
       .limit(80)
     q = stream === 'postsieve'

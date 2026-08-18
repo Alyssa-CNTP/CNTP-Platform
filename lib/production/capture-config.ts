@@ -121,6 +121,31 @@ export function massBalanceToleranceFor(sectionId: string): number {
   return sectionId === 'refining2' ? 100 : MASS_BALANCE_TOLERANCE_KG
 }
 
+// Standard full-bag weights, used to (a) prefill the weight field so the
+// operator only overrides for an end-of-shift half bag, and (b) sanity-check
+// a later top-up against what "full" looks like for this product. Matched on
+// the item description/name; null = no standard (operator types it in, no
+// soft-check applied beyond the flat fallback below).
+export function expectedBagWeightFor(label: string): number | null {
+  const s = label.toLowerCase()
+  if (/indent stick/.test(s)) return 252
+  if (/fine leaf/.test(s) || /coarse leaf/.test(s)) return 300
+  return null
+}
+
+// Absolute ceiling for any single bag (open or not) — always enforced, no
+// override past this. Below it, a bag whose weight looks unusually large for
+// its product (over the standard above, or this flat fallback when no
+// standard is known) should prompt the operator to confirm rather than
+// silently accept a typo.
+export const MAX_BAG_WEIGHT_KG = 500
+export const BAG_WEIGHT_SOFT_CHECK_FALLBACK_KG = 350
+export function isUnusuallyHeavyBag(label: string, totalKg: number): boolean {
+  const standard = expectedBagWeightFor(label)
+  const threshold = standard != null ? standard * 1.15 : BAG_WEIGHT_SOFT_CHECK_FALLBACK_KG
+  return totalKg > threshold
+}
+
 // Real printers are now wired up for every bagging section (see
 // SECTION_PRINTER below) — capture depends on a printer being reachable.
 // While this was false, the output picker read "Complete bag" (no print

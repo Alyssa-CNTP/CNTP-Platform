@@ -83,15 +83,30 @@ function VarianceDrillDown({ sectionId, sessionId, month }: { sectionId: string;
       .eq('section_id', sectionId)
       .eq('is_no_stock', false)
 
-    // Bag tags for this section in this month
-    const { data: bagData } = await db
+    // Weight bagged for this section in this month, from scan_events
+    // (bagging_out + topped_up) — not bag_tags.weight_kg by created_at, so a
+    // bag topped up this month only contributes the kg actually added this
+    // month. Joined back to lot_number via serial_number (scan_events doesn't
+    // carry lot_number itself).
+    const { data: weightEvents } = await db
       .schema('production')
-      .from('bag_tags')
-      .select('lot_number,weight_kg')
+      .from('scan_events')
+      .select('serial_number,weight_kg')
       .eq('section_id', sectionId)
-      .gte('created_at', dateFrom + 'T00:00:00Z')
-      .lte('created_at', dateTo   + 'T23:59:59Z')
-      .not('weight_kg', 'is', null)
+      .in('action', ['bagging_out', 'topped_up'])
+      .gte('scanned_at', dateFrom + 'T00:00:00Z')
+      .lte('scanned_at', dateTo   + 'T23:59:59Z')
+
+    const eventSerials = Array.from(new Set((weightEvents ?? []).map((e: any) => e.serial_number).filter(Boolean)))
+    let lotBySerial = new Map<string, string>()
+    if (eventSerials.length) {
+      const { data: serialLots } = await db
+        .schema('production')
+        .from('bag_tags')
+        .select('serial_number,lot_number')
+        .in('serial_number', eventSerials)
+      lotBySerial = new Map((serialLots ?? []).map((b: any) => [b.serial_number, b.lot_number]))
+    }
 
     // Aggregate monthly count by batch (avg sup+adm)
     const mcByBatch = new Map<string, { sup: number; adm: number }>()
@@ -103,11 +118,11 @@ function VarianceDrillDown({ sectionId, sessionId, month }: { sectionId: string;
       else                         rec.adm += e.kg ?? 0
     })
 
-    // Aggregate bag tags by lot
+    // Aggregate weight events by lot
     const bagByLot = new Map<string, number>()
-    ;(bagData ?? []).forEach((b: any) => {
-      const k = b.lot_number ?? '(no lot)'
-      bagByLot.set(k, (bagByLot.get(k) ?? 0) + (b.weight_kg ?? 0))
+    ;(weightEvents ?? []).forEach((e: any) => {
+      const k = lotBySerial.get(e.serial_number) ?? '(no lot)'
+      bagByLot.set(k, (bagByLot.get(k) ?? 0) + (e.weight_kg ?? 0))
     })
 
     const allKeys = new Set([...Array.from(mcByBatch.keys()), ...Array.from(bagByLot.keys())])
