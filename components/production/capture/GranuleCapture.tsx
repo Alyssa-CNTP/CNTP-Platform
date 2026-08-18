@@ -34,7 +34,7 @@ import {
 } from 'recharts'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED, isImplausibleWeight } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
@@ -356,7 +356,7 @@ function DustInputRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.serial])
 
-  const complete = !!row.serial.trim() && !!row.dustKey && n(row.weight) > 0
+  const complete = !!row.serial.trim() && !!row.dustKey && n(row.weight) > 0 && !isImplausibleWeight(n(row.weight))
 
   return (
     <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: blendCol + '40' }}>
@@ -401,6 +401,9 @@ function DustInputRow({
           <label className={LBL}>Weight (kg)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={row.weight} disabled={locked}
             onChange={e => onUpdate('weight', e.target.value)} className={INP} />
+          {isImplausibleWeight(n(row.weight)) && (
+            <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+          )}
         </div>
         <div className="space-y-1 col-span-2">
           <label className={LBL}>Variant</label>
@@ -415,11 +418,10 @@ function DustInputRow({
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
             <Check size={15} /> Done — lock this bag
           </button>
-          {!complete && (
-            <p className="text-[11px] text-stone-400 text-center">
-              {[!row.serial.trim() && 'serial', !row.dustKey && 'dust type', n(row.weight) <= 0 && 'weight'].filter(Boolean).join(', ')} still needed.
-            </p>
-          )}
+          {!complete && (() => {
+            const missing = [!row.serial.trim() && 'serial', !row.dustKey && 'dust type', n(row.weight) <= 0 && 'weight'].filter(Boolean).join(', ')
+            return missing ? <p className="text-[11px] text-stone-400 text-center">{missing} still needed.</p> : null
+          })()}
         </>
       )}
     </div>
@@ -446,7 +448,7 @@ function BlendCard({
   const [showSystemPick, setShowSystemPick] = useState(false)
   const col = blendColor(index)
 
-  const rowComplete = (r: GranuleInputRow) => !!r.serial.trim() && !!r.dustKey && n(r.weight) > 0
+  const rowComplete = (r: GranuleInputRow) => !!r.serial.trim() && !!r.dustKey && n(r.weight) > 0 && !isImplausibleWeight(n(r.weight))
   const lockCompleted = (rows: GranuleInputRow[]): GranuleInputRow[] => {
     const t = nowISO()
     return rows.map(r => (!r.secured && rowComplete(r)) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
@@ -675,7 +677,7 @@ export function GranuleCapture({
   const [lotConfirmed, setLotConfirmed] = useState(value.outputs.length > 0)
 
   async function addOutputBag() {
-    if (n(outWeight) <= 0 || adding) return
+    if (n(outWeight) <= 0 || isImplausibleWeight(n(outWeight)) || adding) return
     setAdding(true)
     const serial = await nextGranuleSerial(lot, value.outputs.map(o => o.serial), date)
     const now = nowISO()
@@ -995,13 +997,16 @@ export function GranuleCapture({
                       <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outWeight}
                         onChange={e => setOutWeight(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOutputBag() } }} className={INP} />
+                      {isImplausibleWeight(n(outWeight)) && (
+                        <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+                      )}
                     </div>
                   </div>
                   <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
                     <input type="checkbox" checked={outLeaveOpen} onChange={e => setOutLeaveOpen(e.target.checked)} className="rounded" />
                     Leave bag open — not full yet, will top up later (from Tags)
                   </label>
-                  <button onClick={addOutputBag} disabled={n(outWeight) <= 0 || adding}
+                  <button onClick={addOutputBag} disabled={n(outWeight) <= 0 || isImplausibleWeight(n(outWeight)) || adding}
                     className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors" style={{ background: BAG_COLOR }}>
                     <Plus size={15} /> {adding ? 'Adding…' : 'Add bag'}
                   </button>
@@ -1081,10 +1086,15 @@ export function GranuleCapture({
             </div>
             <div className="p-3 space-y-2">
               {value.waste.map(w => (
-                <div key={w.id} className="flex gap-2 items-center">
-                  <input type="text" value={w.wasteType} disabled={locked} placeholder="Waste type" onChange={e => updateWaste(w.id, 'wasteType', e.target.value)} className={INP + ' flex-1'} />
-                  <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={w.weight} disabled={locked} placeholder="kg" onChange={e => updateWaste(w.id, 'weight', e.target.value)} className={INP + ' w-24'} />
-                  {!locked && <button onClick={() => removeWaste(w.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
+                <div key={w.id}>
+                  <div className="flex gap-2 items-center">
+                    <input type="text" value={w.wasteType} disabled={locked} placeholder="Waste type" onChange={e => updateWaste(w.id, 'wasteType', e.target.value)} className={INP + ' flex-1'} />
+                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={w.weight} disabled={locked} placeholder="kg" onChange={e => updateWaste(w.id, 'weight', e.target.value)} className={INP + ' w-24'} />
+                    {!locked && <button onClick={() => removeWaste(w.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
+                  </div>
+                  {isImplausibleWeight(n(w.weight)) && (
+                    <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+                  )}
                 </div>
               ))}
               {!locked && <button onClick={addWaste} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-stone-200 text-[13px] font-medium text-stone-500 hover:border-stone-300"><Plus size={15} /> Add waste row</button>}
@@ -1135,10 +1145,16 @@ export function GranuleCapture({
               <div className="space-y-1 col-span-2">
                 <label className={LBL}>Dust from sieve &amp; drier not yet re-fed (D)</label>
                 <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.dustNotRefed} disabled={locked} onChange={e => patch({ dustNotRefed: e.target.value })} className={INP} placeholder="kg" />
+                {isImplausibleWeight(n(value.dustNotRefed)) && (
+                  <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+                )}
               </div>
               <div className="space-y-1 col-span-2">
                 <label className={LBL}>Coarse granules not yet fed to maize master (E)</label>
                 <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.coarseNotFed} disabled={locked} onChange={e => patch({ coarseNotFed: e.target.value })} className={INP} placeholder="kg" />
+                {isImplausibleWeight(n(value.coarseNotFed)) && (
+                  <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+                )}
               </div>
               <div className="space-y-1">
                 <label className={LBL}>Meter start (Y)</label>

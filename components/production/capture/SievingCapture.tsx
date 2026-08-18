@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort } from '@/lib/production/capture-config'
+import { variantToShort, isImplausibleWeight } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
@@ -186,7 +186,7 @@ export function SievingCapture({
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
   // Every field on a bulk bag is mandatory before it can be locked.
-  const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && isValidLot(r.lot) && n(r.nett) > 0
+  const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && isValidLot(r.lot) && n(r.nett) > 0 && !isImplausibleWeight(n(r.nett))
 
   // ── Auto-secure: completed bulk bags lock themselves (with a timestamp) as
   // the operator moves on — they never have to remember to tap "secure". Only a
@@ -325,6 +325,9 @@ export function SievingCapture({
         <label className={LBL}>Bucket elevator (kg)</label>
         <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={bucketRow.kg} disabled={locked}
           onChange={e => updateSpillage(bucketRow.id, e.target.value)} placeholder="0" className={INP} />
+        {isImplausibleWeight(n(bucketRow.kg)) && (
+          <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+        )}
       </div>
       {!locked && (
         <button onClick={() => patch({ bucketSecured: true })}
@@ -349,6 +352,9 @@ export function SievingCapture({
         <label className={LBL}>Machine spillage (kg)</label>
         <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={machineRow.kg} disabled={locked}
           onChange={e => updateSpillage(machineRow.id, e.target.value)} placeholder="0" className={INP} />
+        {isImplausibleWeight(n(machineRow.kg)) && (
+          <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+        )}
       </div>
     </div>
   )
@@ -434,7 +440,10 @@ export function SievingCapture({
                         <p className="text-[11px] text-err">Expected at least one dash separating letters/numbers (e.g. GS-0299 or GS26-MIX-A).</p>
                       )}</div>
                     <div className="space-y-1"><label className={LBL}>Nett (kg)</label>
-                      <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} /></div>
+                      <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={r.nett} disabled={locked} onChange={e => updateDebag(r.id, 'nett', e.target.value)} className={INP} />
+                      {isImplausibleWeight(n(r.nett)) && (
+                        <p className="text-[11px] text-err">That's over 999kg for one bulk bag — check for a typo.</p>
+                      )}</div>
                     <div className="space-y-1"><label className={LBL}>Local / export</label>
                       <select value={r.local_export} disabled={locked} onChange={e => updateDebag(r.id, 'local_export', e.target.value)} className={INP + ' cursor-pointer'}>
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>

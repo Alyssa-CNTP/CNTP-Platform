@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Capture screens: block implausible weight typos, e.g. 1000kg instead of 100kg — promoted to production)
+
+**Files changed:** `lib/production/capture-config.ts`, `components/production/capture/{OutputPicker,SievingCapture,RefiningCapture,GranuleCapture,BlenderCapture,PasteuriserCapture}.tsx`
+
+Reported: nothing stopped an operator from fat-fingering an extra zero into a weight field (e.g. `1000` instead of `100`), silently corrupting mass balance and reporting for that session. Added `isImplausibleWeight()`/`MAX_PLAUSIBLE_WEIGHT_KG` (999kg) to `capture-config.ts` — a flat, product-agnostic hard ceiling, deliberately simpler than the existing product-aware `isUnusuallyHeavyBag` soft-check used for bag top-ups, since these fields have no product context to be smarter about. No override: nothing on this floor is ever plausibly heavier than that in a single record.
+
+- Applied to every single-bag/single-row physical kg weight field across all 5 capture screens: debagging/input rows, output bagging rows (both the render-level "Done — lock" gate and the underlying `bag_tags`-writing function, so neither can be bypassed), and Pasteuriser's job-card weight-per-bag and scale-verification fields. Each shows an inline error and blocks the action (add/lock/save) that would persist the value.
+- Also applied more lightly (inline warning only, not blocking) to ancillary loss/residual figures that aren't gated by an explicit add/lock action: Sieving's bucket elevator & machine spillage, Granule's waste rows and dust-not-refed/coarse-not-fed mass-balance inputs.
+- Deliberately NOT applied to non-weight numeric fields: water volume (litres), meter start/stop readings, bag count/start-bag/end-bag numbers.
+- Along the way, fixed a latent bug in 3 files (Refining, Granule, Blender): each had a *second*, separate "is this row complete" function driving the auto-lock-on-next-row behaviour, distinct from the one gating the visible "Done" button — only the visible one had ever been kept in sync with new validation rules, so a row could silently auto-lock with an invalid value even while its own button correctly stayed disabled. Sieving didn't have this bug (both call sites already shared one function).
+- Also fixed a cosmetic bug in the same 3 files' "still needed" helper text: when the only remaining problem was an over-limit weight (not a missing field), the old code produced an empty "&nbsp;still needed." string instead of just showing nothing (the dedicated red error below the field already explains it).
+
 ## 2026-08-18 — Alyssa (Half-filled bag top-ups: track a bag left open across shift boundaries, forced reprint on every weight change — promoted to production)
 
 **Files changed:** `supabase/migrations/20260818_002_bag_weight_topup_tracking.sql` (new), `lib/production/scan-utils.ts`, `lib/production/capture-config.ts`, `components/production/capture/OutputPicker.tsx`, `components/production/capture/{SievingCapture,RefiningCapture,GranuleCapture,BlenderCapture,PasteuriserCapture}.tsx`, `app/(app)/tags/page.tsx`, `lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`, `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/count/monthly/{MonthlyBatchLedger,MonthlyReconciliation}.tsx`
