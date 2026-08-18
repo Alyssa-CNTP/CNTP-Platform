@@ -5,7 +5,7 @@ import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, Al
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
-import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { validateBagScan } from '@/lib/production/validate-scan'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -691,7 +691,14 @@ export function BlenderCapture({
     return true
   }
 
-  function removeOutputBag(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
+  // Removing a bag from this record must also void its bag_tags row — leaving
+  // it 'in_stock' would let it keep looking like real, available inventory
+  // to every other screen even though this record says it doesn't exist.
+  function removeOutputBag(id: string) {
+    const b = value.outputs.find(x => x.id === id)
+    patch({ outputs: value.outputs.filter(x => x.id !== id) })
+    if (b) voidBagTag(b.serial, operatorId)
+  }
   function setOutputSecured(id: string, val: boolean) { patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, secured: val } : b) }) }
 
   function setOutputTag(id: string, method: 'printed' | 'handwritten') {

@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Void the bag_tags row when an output bag is removed from a capture record)
+
+**Files changed:** `supabase/migrations/20260818_001_bag_tags_void_status.sql` (new), `lib/production/scan-utils.ts`, `components/production/capture/SievingCapture.tsx`, `GranuleCapture.tsx`, `BlenderCapture.tsx`, `RefiningCapture.tsx`
+
+Reported live on production: two bags removed from a reopened 2026-08-17 Sieving morning session (one intentionally, `STBD-170826-001`; one not, `STFL-170826-012`, restored by hand into that session's `draft_data`) stayed `status='in_stock'` in `bag_tags` after being deleted from the capture record — looking like real, available inventory to every other screen (Quality's pending-QC queue, Stock Control, Orders) even though the record they came from said they didn't exist.
+
+Every "remove output bag" button (Sieving, Granule, Blender, Refining) only ever filtered the bag out of local capture state — the `bag_tags` row, written immediately when the bag was added, was never touched. Added `voidBagTag()` (`lib/production/scan-utils.ts`), called from all four sections' remove functions: flips `bag_tags.status` to `'voided'` (new allowed value) and logs a `'void'` `scan_events` row. Never hard-deletes — `scan_events.serial_number` has an `ON DELETE CASCADE` FK to `bag_tags`, so deleting the row would silently erase its own audit trail. Every existing status-filtered "active" query elsewhere naturally excludes a voided bag without needing any changes there.
+
+Migration also widens `scan_events.action` to include `'qc_check'` — discovered mid-deploy that this value was already live on staging (`app/(app)/quality/sieving/page.tsx`) but missing from the original migration's constraint; included here without touching that Quality code at all, so as not to break it.
+
 ## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`

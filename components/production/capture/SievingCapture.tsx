@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
+import { voidBagTag } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
@@ -277,6 +278,14 @@ export function SievingCapture({
     })
   }
 
+  // Removing a bag from this record must also void its bag_tags row — leaving
+  // it 'in_stock' would let it keep looking like real, available inventory
+  // to every other screen even though this record says it doesn't exist.
+  function removeOutput(b: OutBag) {
+    patch({ outputs: value.outputs.filter(x => x.id !== b.id) })
+    voidBagTag(b.serial, operatorId)
+  }
+
   function setOutputTagMethod(id: string, method: 'printed' | 'handwritten') {
     patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, tagMethod: method, printed: method === 'printed' } : b) })
     const b = value.outputs.find(x => x.id === id)
@@ -528,7 +537,7 @@ export function SievingCapture({
                         ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
                         : <>
                             <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
-                            <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
+                            <button onClick={() => removeOutput(b)} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
                           </>
                       )}
                     </div>
