@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Alyssa (Camera scanner: iOS decoder failure was reported as a camera failure)
+
+**Files changed:** `components/shared/BarcodeScanner.tsx`
+
+Reported (Android worked, iOS showed "Could not open camera" despite the camera visibly already being open): the zxing-browser decode step — the fallback path only iOS Safari/Firefox take, since Chrome/Android use the native `BarcodeDetector` — shared one try/catch with the `getUserMedia` camera call, so a decoder-attach failure surfaced as a camera error even though the camera had genuinely started.
+
+- Split camera acquisition and decoder startup into separate try/catches. A decoder-only failure now keeps the live preview visible and shows an accurate "couldn't read barcodes automatically here" message with manual entry, instead of the misleading camera error.
+- Switched from `decodeFromVideoElement` to `decodeFromStream`, which owns attaching/playing the stream itself with its own timing handling, instead of racing this component's own `video.play()` — the likely source of the iOS-only failure.
+- Added a "Starting camera…" loading state on open, so the sheet no longer flashes the scan hint before anything has actually started (requested alongside the bug report).
+- Note: this and the original camera-scanner PR (#649) did not actually reach the live staging site until a separate CI fix (#653, deploy script was silently succeeding on failed builds) landed the same day — see that entry further down for why.
+
 ## 2026-08-17 — Gustav (Production capture: fix the night shift disappearing at midnight)
 
 **Files changed:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `app/(app)/quality/granule/page.tsx`
