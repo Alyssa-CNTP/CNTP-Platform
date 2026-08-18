@@ -812,12 +812,20 @@ function CaptureScreen() {
       .then(({ data }: any) => { if (data?.length) setTakenOver(true) }, () => {})
   }, [sessionId])
 
-  // Flip the block on at 16h00 while the session is still being captured.
+  // Flip the block on at 16h00 while the session is still being captured. The
+  // modal is a full-screen overlay that can land mid-gesture (typing a weight,
+  // tapping "Add"), so flush any pending change to the DB the instant it fires
+  // — a bag already in local state must not be left sitting on the 2.5s/20s
+  // autosave timer while the operator is stuck behind the PIN prompt.
   useEffect(() => {
     if (takenOver) { setChangeoverNeeded(false); return }
     const check = () => {
       const done = status === 'submitted' || status === 'approved'
-      setChangeoverNeeded(pastChangeover() && !done)
+      const needed = pastChangeover() && !done
+      setChangeoverNeeded(was => {
+        if (needed && !was) flushRef.current()
+        return needed
+      })
     }
     check()
     const t = setInterval(check, 30_000)
@@ -2007,6 +2015,7 @@ function CaptureScreen() {
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                        date={dateParam}
                       />
                   }
                   {!locked && (
