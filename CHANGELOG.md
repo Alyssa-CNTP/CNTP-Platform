@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Bag top-ups now require a named source bag — every top-up is a traceable transfer, not a loose number — promoted to production)
+
+**Files changed:** `supabase/migrations/20260818_004_bag_weight_transfer_provenance.sql` (new), `lib/production/scan-utils.ts`, `app/(app)/tags/page.tsx`, `lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`, `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/count/monthly/{MonthlyBatchLedger,MonthlyReconciliation}.tsx`
+
+Reported requirement: a top-up must always say which bag the weight is physically coming from, not just a typed number with no traceable origin. Reframes the earlier top-up feature as a proper bag-to-bag transfer, following the standard industrial pattern for this problem — `bag_tags` is the Physical Container (parent/state), `scan_events` is the Weight Increment Log (child/delta), reporting is event-sourced off the delta log, never re-derived from a container's current (possibly since-changed) state.
+
+- New `scan_events.related_serial_number` (FK to `bag_tags`) links the two sides of a transfer. Every top-up now writes a linked pair: `'topped_up'` on the receiving bag, new action `'drawn_down'` on the depleted one, each pointing at the other.
+- `addWeightToBag()` replaced with `transferBagWeight()` (`lib/production/scan-utils.ts`): takes both serials, hard-blocks drawing more than the source currently holds, reduces the source's weight (voiding it if fully drained — `bag_tags.weight_kg` has `CHECK(weight_kg > 0)`, and an emptied bag no longer exists as its own physical unit), and auto-flags a partially-drained source `is_open` so its remainder doesn't get forgotten.
+- `app/(app)/tags/page.tsx`'s Add-weight form now requires scanning/typing the source bag first — shows its current available weight, blocks drawing more than that, warns (soft) if source/target product types differ — before accepting an amount. On save, reprints the target's label, and the source's too if it wasn't fully drained (its old label is now wrong).
+- **Reporting correctness fix, driven by this change**: because every top-up now has a source, it is *never* new production — it's kg that was already counted the day its source bag was first bagged. Dashboard tiles, `OperationalTrends`, and the monthly ledgers were summing `'bagging_out' + 'topped_up'`; reverted to `'bagging_out'` only, or every top-up would have double-counted the same kg (once on the day it was produced, again on the day it moved between containers).
+- **Also fixes a real bug found in the process**: the previous migration's `scan_events.action` constraint update silently dropped `'qc_check'` (added by the void-status migration that landed just ahead of it) — the fix for that was made during a merge but never `git add`ed before the commit, so it didn't ship. Restored here.
+
 ## 2026-08-18 — Alyssa (Bag Tags: make "Add weight" + forced reprint available on any bag, not just ones flagged open — promoted to production)
 
 **Files changed:** `app/(app)/tags/page.tsx`

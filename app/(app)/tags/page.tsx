@@ -19,7 +19,7 @@ import {
   Loader2, Eye, Scan, TrendingUp, MapPin, History, Database, Calendar,
   FlaskConical, ExternalLink, PackageOpen, Plus,
 } from 'lucide-react'
-import { addWeightToBag } from '@/lib/production/scan-utils'
+import { transferBagWeight } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG } from '@/lib/production/capture-config'
 
@@ -255,19 +255,62 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
   const currentWeight = weightOverride ?? tag.weight_kg ?? 0
   const isOpenBag     = openOverride ?? tag.is_open
 
-  // ── Add-weight form (top up an open bag) ──────────────────────────────────
+  // ── Add-weight form (top up this bag from a named source bag) ─────────────
+  // Every top-up must name the bag the material physically came from — see
+  // transferBagWeight in lib/production/scan-utils.ts. There's no "loose kg"
+  // path: the operator always identifies both the bag receiving weight (this
+  // one) and the bag it's being drawn from.
   const [addingWeight, setAddingWeight] = useState(false)
-  const [delta,        setDelta]        = useState('')
+  const [sourceInput,  setSourceInput]  = useState('')
+  const [sourceBag,    setSourceBag]    = useState<BagTag | null | 'not_found' | 'loading'>(null)
+  const [amount,       setAmount]       = useState('')
   const [closeBag,     setCloseBag]     = useState(false)
   const [confirmHeavy, setConfirmHeavy] = useState(false)
   const [saving,       setSaving]       = useState(false)
   const [addError,     setAddError]     = useState<string | null>(null)
 
-  const deltaKg   = parseFloat(delta.replace(',', '.')) || 0
-  const newTotal  = currentWeight + deltaKg
+  const sourceFound   = sourceBag && sourceBag !== 'loading' && sourceBag !== 'not_found' ? sourceBag : null
+  const sourceKg      = sourceFound?.weight_kg ?? 0
+  const sourceVoided   = sourceFound ? (sourceFound as any).status === 'voided' : false
+  const sourceConsumed = Boolean(sourceFound?.consumed_at_section)
+  const amountKg  = parseFloat(amount.replace(',', '.')) || 0
+  const exceedsSource = !!sourceFound && amountKg > sourceKg
+  const newTotal  = currentWeight + amountKg
   const overCap   = newTotal > MAX_BAG_WEIGHT_KG
-  const unusual   = deltaKg > 0 && !overCap && isUnusuallyHeavyBag(tag.product_type, newTotal)
+  const unusual   = amountKg > 0 && !overCap && isUnusuallyHeavyBag(tag.product_type, newTotal)
   const standard  = expectedBagWeightFor(tag.product_type)
+  const productMismatch = !!sourceFound && sourceFound.product_type && tag.product_type
+    && sourceFound.product_type.toLowerCase() !== tag.product_type.toLowerCase()
+  const sourceRemaining = sourceFound ? sourceKg - amountKg : 0
+
+  const canSubmit = !!sourceFound && !sourceVoided && !sourceConsumed && amountKg > 0
+    && !exceedsSource && !overCap && !(unusual && !confirmHeavy)
+
+  // Look up the source bag as the operator scans/types its serial — same
+  // debounced pattern as the page's own quick-scan lookup, but always a
+  // fresh query (source availability is safety-critical, not something to
+  // serve from a possibly-stale local cache).
+  useEffect(() => {
+    const s = sourceInput.trim().toUpperCase()
+    if (!s) { setSourceBag(null); return }
+    if (s === tag.serial_number.toUpperCase()) { setSourceBag('not_found'); return }
+    setSourceBag('loading')
+    const t = setTimeout(async () => {
+      const { data } = await getDb().schema('production').from('bag_tags')
+        .select('*').eq('serial_number', s).limit(1).maybeSingle()
+      if (!data) { setSourceBag('not_found'); return }
+      setSourceBag({
+        ...(data as any),
+        id: (data as any).serial_number,
+        section_name: SECTION_DISPLAY[(data as any).section_id] ?? (data as any).section_id,
+        tag_date: ((data as any).created_at ?? '').slice(0, 10),
+        captured_at: (data as any).created_at,
+        prod_session_id: (data as any).session_id ?? '',
+        qr_payload: (data as any).serial_number,
+      } as BagTag)
+    }, 150)
+    return () => clearTimeout(t)
+  }, [sourceInput, tag.serial_number])
 
   function reloadEvents() {
     setLoadingEvts(true)
@@ -281,15 +324,20 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       })
   }
 
-  async function submitAddWeight() {
-    if (deltaKg <= 0 || overCap) return
-    if (unusual && !confirmHeavy) return // soft check awaiting confirmation
+  function resetAddWeightForm() {
+    setSourceInput(''); setSourceBag(null); setAmount('')
+    setCloseBag(false); setConfirmHeavy(false); setAddingWeight(false); setAddError(null)
+  }
+
+  async function submitTransfer() {
+    if (!canSubmit || !sourceFound) return
     setSaving(true)
     setAddError(null)
     try {
-      await addWeightToBag(
-        tag.serial_number, deltaKg, newTotal,
-        tag.section_id, tag.prod_session_id || null, operatorId, closeBag,
+      await transferBagWeight(
+        sourceFound.serial_number, sourceKg,
+        tag.serial_number, currentWeight,
+        amountKg, tag.section_id, tag.prod_session_id || null, operatorId, closeBag,
       )
       await printLabelAuto({
         id: tag.id, serial_number: tag.serial_number, product_type: tag.product_type,
@@ -298,9 +346,20 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
         section_name: tag.section_name, created_at: tag.captured_at, printed: true,
         acumaticaId: tag.acumatica_id ?? undefined,
       } as any)
+      // The source bag's own label is now wrong too (still shows its old
+      // weight) unless it was fully drained and voided out of circulation.
+      if (sourceRemaining > 0) {
+        await printLabelAuto({
+          id: sourceFound.id, serial_number: sourceFound.serial_number, product_type: sourceFound.product_type,
+          variant: sourceFound.variant || 'Conventional', grade: (sourceFound.destination as any) || 'A',
+          weight_kg: sourceRemaining, lot_number: sourceFound.lot_number || '', section_id: sourceFound.section_id,
+          section_name: sourceFound.section_name, created_at: sourceFound.captured_at, printed: true,
+          acumaticaId: sourceFound.acumatica_id ?? undefined,
+        } as any)
+      }
       setWeightOverride(newTotal)
       setOpenOverride(!closeBag)
-      setDelta(''); setCloseBag(false); setConfirmHeavy(false); setAddingWeight(false)
+      resetAddWeightForm()
       reloadEvents()
       onChanged()
     } catch (e) {
@@ -422,57 +481,117 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
 
         {addingWeight && (
           <div className="px-5 pt-4 pb-1 border-b border-stone-100 bg-sky-50/40 space-y-2.5">
-            <p className="text-[11px] font-semibold text-sky-800 uppercase tracking-wide">Add weight to this bag</p>
-            <div className="flex items-center gap-2">
-              <input
-                type="text" inputMode="decimal" pattern="[0-9.,]*" autoFocus
-                value={delta} onChange={e => { setDelta(e.target.value); setConfirmHeavy(false) }}
-                placeholder="Amount added (kg)"
-                className="flex-1 px-3 py-2 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-sky-500"
-              />
-              <span className="font-mono text-[12px] text-stone-500 shrink-0">
-                {currentWeight}kg + {deltaKg || 0}kg = <strong>{newTotal.toFixed(1)}kg</strong>
-              </span>
-            </div>
-            {standard != null && (
-              <p className="text-[10px] text-stone-400">Standard full bag for this product is ~{standard}kg.</p>
-            )}
-            {isOpenBag && (
-              <label className="flex items-center gap-1.5 text-[11px] text-stone-600">
-                <input type="checkbox" checked={closeBag} onChange={e => setCloseBag(e.target.checked)} className="rounded" />
-                This completes the bag — mark it no longer open
-              </label>
-            )}
+            <p className="text-[11px] font-semibold text-sky-800 uppercase tracking-wide">Add weight — draw from another bag</p>
 
-            {overCap && (
-              <p className="text-[11px] text-err flex items-center gap-1.5">
-                <AlertTriangle size={12} /> {newTotal.toFixed(1)}kg exceeds the {MAX_BAG_WEIGHT_KG}kg limit for a single bag — check the amount.
-              </p>
-            )}
-            {unusual && !overCap && (
-              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <AlertTriangle size={13} className="text-amber-500 shrink-0" />
-                <span className="text-[11px] text-amber-700 flex-1">
-                  {newTotal.toFixed(1)}kg is unusually heavy for {tag.product_type || 'this product'} — sure that's right?
-                </span>
-                <button onClick={() => setConfirmHeavy(true)} disabled={confirmHeavy}
-                  className="text-[11px] font-semibold text-amber-800 underline shrink-0 disabled:no-underline disabled:opacity-50">
-                  {confirmHeavy ? 'Confirmed' : 'Yes, continue'}
-                </button>
-              </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-wide">Source bag (scan or type serial) *</label>
+              <input
+                type="text" autoFocus autoCapitalize="characters" spellCheck={false}
+                value={sourceInput} onChange={e => { setSourceInput(e.target.value.toUpperCase()); setConfirmHeavy(false) }}
+                placeholder="Which bag is this weight coming from?"
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-[13px] font-mono outline-none focus:border-sky-500"
+              />
+              {sourceBag === 'loading' && (
+                <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><Loader2 size={11} className="animate-spin" /> Looking up…</p>
+              )}
+              {sourceBag === 'not_found' && sourceInput.trim().toUpperCase() === tag.serial_number.toUpperCase() && (
+                <p className="text-[11px] text-err">A bag can't be topped up from itself.</p>
+              )}
+              {sourceBag === 'not_found' && sourceInput.trim().toUpperCase() !== tag.serial_number.toUpperCase() && (
+                <p className="text-[11px] text-err">Serial not found in the system.</p>
+              )}
+              {sourceFound && sourceVoided && (
+                <p className="text-[11px] text-err">That bag has already been voided — nothing left to draw from it.</p>
+              )}
+              {sourceFound && sourceConsumed && !sourceVoided && (
+                <p className="text-[11px] text-err">That bag was already consumed downstream — nothing left to draw from it.</p>
+              )}
+              {sourceFound && !sourceVoided && !sourceConsumed && (
+                <div className="flex items-center gap-2 bg-stone-50 rounded-lg border border-stone-200 px-3 py-2">
+                  <div className={`w-2 h-2 rounded-full shrink-0 ${SECTION_DOT[sourceFound.section_id] ?? 'bg-stone-400'}`} />
+                  <span className="font-mono text-[12px] font-bold text-stone-800">{sourceFound.serial_number}</span>
+                  <span className="text-[11px] text-stone-600">{sourceFound.product_type}</span>
+                  <span className="font-mono text-[11px] text-stone-500 ml-auto">{sourceKg}kg available</span>
+                </div>
+              )}
+              {productMismatch && (
+                <p className="text-[11px] text-amber-600 flex items-center gap-1.5">
+                  <AlertTriangle size={12} /> Source is "{sourceFound!.product_type}", this bag is "{tag.product_type}" — different products.
+                </p>
+              )}
+            </div>
+
+            {sourceFound && !sourceVoided && !sourceConsumed && (
+              <>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-wide">Amount to draw (kg) *</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text" inputMode="decimal" pattern="[0-9.,]*"
+                      value={amount} onChange={e => { setAmount(e.target.value); setConfirmHeavy(false) }}
+                      placeholder={`Up to ${sourceKg}kg`}
+                      className="flex-1 px-3 py-2 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-sky-500"
+                    />
+                    <span className="font-mono text-[12px] text-stone-500 shrink-0">
+                      {currentWeight}kg + {amountKg || 0}kg = <strong>{newTotal.toFixed(1)}kg</strong>
+                    </span>
+                  </div>
+                  {standard != null && (
+                    <p className="text-[10px] text-stone-400">Standard full bag for this product is ~{standard}kg.</p>
+                  )}
+                </div>
+
+                {exceedsSource && (
+                  <p className="text-[11px] text-err flex items-center gap-1.5">
+                    <AlertTriangle size={12} /> Only {sourceKg}kg is available in {sourceFound.serial_number} — can't draw more than that.
+                  </p>
+                )}
+                {!exceedsSource && amountKg > 0 && (
+                  <p className="text-[10px] text-stone-400">
+                    {sourceRemaining > 0
+                      ? `${sourceFound.serial_number} will be left with ${sourceRemaining.toFixed(1)}kg (left open) and reprinted.`
+                      : `${sourceFound.serial_number} will be fully drained and voided.`}
+                  </p>
+                )}
+
+                {isOpenBag && (
+                  <label className="flex items-center gap-1.5 text-[11px] text-stone-600">
+                    <input type="checkbox" checked={closeBag} onChange={e => setCloseBag(e.target.checked)} className="rounded" />
+                    This completes the bag — mark it no longer open
+                  </label>
+                )}
+
+                {overCap && (
+                  <p className="text-[11px] text-err flex items-center gap-1.5">
+                    <AlertTriangle size={12} /> {newTotal.toFixed(1)}kg exceeds the {MAX_BAG_WEIGHT_KG}kg limit for a single bag — check the amount.
+                  </p>
+                )}
+                {unusual && !overCap && (
+                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    <AlertTriangle size={13} className="text-amber-500 shrink-0" />
+                    <span className="text-[11px] text-amber-700 flex-1">
+                      {newTotal.toFixed(1)}kg is unusually heavy for {tag.product_type || 'this product'} — sure that's right?
+                    </span>
+                    <button onClick={() => setConfirmHeavy(true)} disabled={confirmHeavy}
+                      className="text-[11px] font-semibold text-amber-800 underline shrink-0 disabled:no-underline disabled:opacity-50">
+                      {confirmHeavy ? 'Confirmed' : 'Yes, continue'}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
             {addError && <p className="text-[11px] text-err">{addError}</p>}
 
             <div className="flex items-center gap-2 pb-3">
               <button
-                onClick={submitAddWeight}
-                disabled={deltaKg <= 0 || overCap || saving || (unusual && !confirmHeavy)}
+                onClick={submitTransfer}
+                disabled={!canSubmit || saving}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-600 text-white text-[12px] font-semibold disabled:opacity-40 transition-opacity"
               >
                 {saving ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />}
-                {saving ? 'Saving…' : 'Save & print new label'}
+                {saving ? 'Saving…' : 'Save & print label(s)'}
               </button>
-              <button onClick={() => { setAddingWeight(false); setDelta(''); setCloseBag(false); setConfirmHeavy(false); setAddError(null) }}
+              <button onClick={resetAddWeightForm}
                 className="text-[12px] text-stone-500 hover:text-stone-700 px-2">
                 Cancel
               </button>
