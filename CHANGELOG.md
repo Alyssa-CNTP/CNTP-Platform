@@ -46,6 +46,17 @@ Reported (Android worked, iOS showed "Could not open camera" despite the camera 
 - Added a "Starting camera…" loading state on open, so the sheet no longer flashes the scan hint before anything has actually started (requested alongside the bug report).
 - Note: this and the original camera-scanner PR (#649) did not actually reach the live staging site until a separate CI fix (#653, deploy script was silently succeeding on failed builds) landed the same day — see that entry further down for why.
 
+## 2026-08-17 — Gustav (Sieving Final QC: remind (not block) when an earlier bag still needs its QC)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Requested: Final QC is linked to the bag's serial number, not its lot — so every serial output from Sieving production should eventually get exactly one Final QC result. Two of the three asks here were already built (both worth confirming rather than re-implementing): a hard block on a second Final QC against the same serial (`errors._dupSerial`, in both the new-run form and the inline row editor), and a serial-vs-tab mismatch check (`serialTabMismatch`) that already keeps Fine Leaf and Coarse Leaf's separate serial sequences (`STFL-`/`STCL-`) from being crossed.
+
+- **New: a soft reminder when picking a bag out of sequence.** Selecting (or typing/scanning) a serial for Final QC now checks whether any *earlier* bag of the same product — Fine Leaf and Coarse Leaf tracked completely separately, since each has its own daily sequence — is still sitting in the "awaiting QC" queue, and shows a non-blocking amber banner naming them if so. Saving is never prevented; a QC can legitimately pull a later bag for a spot-check while an earlier one is still queued.
+- New `serialOrderKey()` turns a bag's `ST{TYPE}-DDMMYY-NNN` serial into a key that sorts correctly across month and year boundaries (the raw `DDMMYY` on its own does not — lexicographic order puts day-of-month first). Legacy hand-typed serials that predate this format return `null` and are excluded rather than treated as a gap.
+- No new query: the reminder is computed entirely from `tabPendingBags`, the same per-product "not yet QC'd" list the picker dropdown already loads — every bag in it is, by construction, missing a Final QC, so ordering that list against the bag just picked is all this needed.
+- Verified the ordering logic in Node against same-day, cross-month, and cross-year cases, plus a legacy-serial and a self-selection case, before wiring it into the page. `npx tsc --noEmit` clean.
+
 ## 2026-08-17 — Gustav (Production capture: fix the night shift disappearing at midnight)
 
 **Files changed:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `app/(app)/quality/granule/page.tsx`
