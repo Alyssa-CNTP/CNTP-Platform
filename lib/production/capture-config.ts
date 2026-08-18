@@ -146,6 +146,19 @@ export function isUnusuallyHeavyBag(label: string, totalKg: number): boolean {
   return totalKg > threshold
 }
 
+// Hard ceiling for ANY single physical kg weight typed into a capture field —
+// one bag, one debagged row, one ingredient, one job-card per-bag figure.
+// Unlike isUnusuallyHeavyBag above (a soft, product-aware confirm-to-proceed
+// check for finished bags), this has no product context and no override: no
+// single row on this floor is ever plausibly this heavy, so it exists purely
+// to catch a typed extra zero (100 -> 1000) before it corrupts mass balance
+// and reporting. Deliberately NOT applied to non-weight numeric fields (water
+// volume in litres, meter start/stop readings, bag counts).
+export const MAX_PLAUSIBLE_WEIGHT_KG = 999
+export function isImplausibleWeight(kg: number): boolean {
+  return kg > MAX_PLAUSIBLE_WEIGHT_KG
+}
+
 // Real printers are now wired up for every bagging section (see
 // SECTION_PRINTER below) — capture depends on a printer being reachable.
 // While this was false, the output picker read "Complete bag" (no print
