@@ -628,7 +628,14 @@ export function GranuleCapture({
   const patch = (p: Partial<GranuleData>) => onChange({ ...value, ...p })
 
   const item = value.item || GRANULE_OUTPUT_ITEMS[0]
-  const lot = assignment?.lot_number ?? ''
+  // Trimmed at this single source — nextGranuleSerial already trims its own
+  // copy for the serial stem, but every bag_tags.lot_number write below used
+  // the raw value, so a stray leading/trailing space (e.g. a supervisor's typo
+  // on Assign, or older un-normalised data) made the stored lot silently
+  // mismatch the serial's lot stem and broke exact-match lookups (Batch
+  // Reconciliation, per-lot serial numbering). Trimming once here fixes every
+  // use downstream.
+  const lot = (assignment?.lot_number ?? '').trim()
   const dustType = dustForItem(item)
   const itemLocked = locked || value.outputs.length > 0 || value.blends.some(b => b.rows.length > 0)
 

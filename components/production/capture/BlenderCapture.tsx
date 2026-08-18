@@ -6,7 +6,8 @@ import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
-import { validateBagScan } from '@/lib/production/validate-scan'
+import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
+import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { loadAllInventory } from '@/lib/production/inventory'
 import { ItemPicker } from '@/components/production/capture/ItemPicker'
@@ -544,6 +545,15 @@ export function BlenderCapture({
   const [extraGroups, setExtraGroups] = useState<BlendIngredientGroup[]>([])
   const [addingOther, setAddingOther] = useState(false)
   const [items, setItems] = useState<InventoryItem[]>([])
+  // Scan-first debagging (see ScanBox / BagScanModal) — one field, no
+  // pre-picked ingredient. The scanned bag's own product type decides which
+  // ingredient group it belongs to (matched against the blend's declared
+  // groups, or a new "not in recipe" group is created for it, same as
+  // "Add Other"), so the operator just scans and confirms.
+  const [scanSerial, setScanSerial] = useState('')
+  const [scanBusy, setScanBusy] = useState(false)
+  const [scanModal, setScanModal] = useState<{ serial: string; result: ScanValidationResult } | null>(null)
+  const sectionLabel = SECTION_CONFIG[sectionId]?.name ?? 'this blend'
   // Bag sequence + run number for this blend's output serials — seeded once
   // from bag_tags (see genBlendSerial), then read from the ref rather than
   // `value` for the rest of this function call: `patch()` only takes effect
@@ -656,6 +666,58 @@ export function BlenderCapture({
   }
 
   function removeInput(id: string) { patch({ inputs: value.inputs.filter(r => r.id !== id) }) }
+
+  // ── Scan-first debagging handlers ────────────────────────────────────────────
+  const normaliseLabel = (s: string) => s.trim().toLowerCase()
+
+  async function runScan(raw: string) {
+    const serial = sanitizeSerial(raw).trim()
+    if (!serial) return
+    setScanBusy(true)
+    const result = await validateBagScan(serial, { sessionVariant: variantWord })
+    setScanBusy(false)
+    setScanModal({ serial, result })
+  }
+
+  // Pure lookup — matches a scanned bag's product type to an existing
+  // ingredient group, or describes the "not in recipe" group it would create.
+  // No side effects, so it's safe to call during render (for the popup's
+  // label) as well as before actually committing the bag.
+  function findGroupForTag(tag: NonNullable<ScanValidationResult['tag']>): BlendIngredientGroup {
+    const existing = allGroups.find(g => normaliseLabel(g.label) === normaliseLabel(tag.product_type))
+    if (existing) return existing
+    const key = tag.acumatica_id || tag.product_type
+    const already = allGroups.find(g => g.key === key)
+    if (already) return already
+    const label = tag.product_type || key
+    return { key, componentItemId: key, label, column: 'F', targetPct: 0,
+      hasLot: /fine leaf|coarse leaf/i.test(label) && !/cutter/i.test(label) }
+  }
+
+  function consumeScanned() {
+    const tag = scanModal?.result.tag
+    if (!tag) return
+    const group = findGroupForTag(tag)
+    // Only now (an event handler, not render) does a genuinely new "not in
+    // recipe" group get registered — same category the operator would land in
+    // via "Add Other", just decided from the scan instead of a manual search.
+    if (!allGroups.some(g => g.key === group.key)) setExtraGroups(gs => [...gs, group])
+    commitBagFromModal({
+      id: crypto.randomUUID(), itemKey: group.key, serial: tag.serial_number,
+      productType: tag.product_type || group.label, productCode: tag.acumatica_id || '',
+      variant: tag.variant || variantWord || '',
+      weight: tag.weight_kg != null ? String(tag.weight_kg) : '',
+      lot: (group.hasLot && tag.lot_number && tag.lot_number !== 'NOT TRACKED') ? tag.lot_number : '',
+      destination: parseGrade(group.label) ?? '', inputMode: 'scan', secured: true,
+      logged_at: nowISO(), notInSystem: false,
+    })
+    setScanModal(null); setScanSerial('')
+  }
+
+  function manualFromScan() {
+    setScanModal(null); setScanSerial('')
+    setBagModal({ editing: null })
+  }
 
   // ── Output bag helpers ─────────────────────────────────────────────────────
 
@@ -791,9 +853,19 @@ export function BlenderCapture({
           {tab === 'debag' && (
             <>
               <p className="text-[12px] text-stone-500 px-1">
-                Blend <strong className="font-mono">{bomId}</strong> — only its ingredients are shown below.
-                Each is colour-coded; tap "+ Add debagging bag" to scan, look up, or enter one.
+                Blend <strong className="font-mono">{bomId}</strong> — scan a bag and it's categorised by its own
+                product type below. Each ingredient is colour-coded.
               </p>
+
+              {!locked && (
+                <ScanBox serial={scanSerial} busy={scanBusy} color={DEBAG_COLOR}
+                  onChange={setScanSerial} onScan={runScan} />
+              )}
+              {scanModal && (
+                <BagScanModal serial={scanModal.serial} result={scanModal.result}
+                  sectionLabel={scanModal.result.tag ? findGroupForTag(scanModal.result.tag).label : sectionLabel}
+                  onConsume={consumeScanned} onManual={manualFromScan} onClose={() => setScanModal(null)} />
+              )}
 
               {allGroups.map((g, gi) => {
                 const rows = value.inputs.filter(r => r.itemKey === g.key)
