@@ -93,14 +93,37 @@ export default function MonthlyBatchLedger({ session }: { session: McSession }) 
       scEntries = data ?? []
     }
 
-    // 3. Bag tags for this month
+    // 3. Bag tags for this month — count of NEW bags (unaffected by later top-ups)
     const { data: bagData } = await db
       .schema('production')
       .from('bag_tags')
-      .select('lot_number,section_id,weight_kg')
+      .select('serial_number,lot_number,section_id')
       .gte('created_at', dateFrom + 'T00:00:00Z')
       .lte('created_at', dateTo   + 'T23:59:59Z')
       .not('lot_number', 'is', null)
+
+    // 3b. Weight added this month, from scan_events (bagging_out + topped_up) —
+    // not bag_tags.weight_kg by created_at, so a bag topped up this month only
+    // contributes the kg actually added this month, joined back to its lot via
+    // serial_number (scan_events doesn't carry lot_number itself).
+    const { data: weightEvents } = await db
+      .schema('production')
+      .from('scan_events')
+      .select('serial_number,weight_kg')
+      .in('action', ['bagging_out', 'topped_up'])
+      .gte('scanned_at', dateFrom + 'T00:00:00Z')
+      .lte('scanned_at', dateTo   + 'T23:59:59Z')
+
+    const eventSerials = Array.from(new Set((weightEvents ?? []).map((e: any) => e.serial_number).filter(Boolean)))
+    let lotBySerial = new Map<string, string>()
+    if (eventSerials.length) {
+      const { data: serialLots } = await db
+        .schema('production')
+        .from('bag_tags')
+        .select('serial_number,lot_number')
+        .in('serial_number', eventSerials)
+      lotBySerial = new Map((serialLots ?? []).map((b: any) => [b.serial_number, b.lot_number]))
+    }
 
     // 4. Quality check — just check for existence by lot number patterns
     //    We do a lightweight check: any pasteuriser or lab run this month
@@ -152,12 +175,19 @@ export default function MonthlyBatchLedger({ session }: { session: McSession }) 
       rec.sections.add(e.section_name ?? e.section_id)
     })
 
-    // Bag tags by lot number
+    // Bag tags by lot number — count of new bags this month, kg from weight
+    // events (bagging_out + topped_up) actually dated this month.
     const bagByLot = new Map<string, { count: number; kg: number }>()
     ;(bagData ?? []).forEach((b: any) => {
       const lot = b.lot_number as string
       const existing = bagByLot.get(lot) ?? { count: 0, kg: 0 }
-      bagByLot.set(lot, { count: existing.count + 1, kg: existing.kg + (b.weight_kg ?? 0) })
+      bagByLot.set(lot, { ...existing, count: existing.count + 1 })
+    })
+    ;(weightEvents ?? []).forEach((e: any) => {
+      const lot = lotBySerial.get(e.serial_number)
+      if (!lot) return
+      const existing = bagByLot.get(lot) ?? { count: 0, kg: 0 }
+      bagByLot.set(lot, { ...existing, kg: existing.kg + (e.weight_kg ?? 0) })
     })
 
     // Merge all batch numbers

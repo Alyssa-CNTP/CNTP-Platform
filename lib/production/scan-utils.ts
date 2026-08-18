@@ -133,6 +133,43 @@ export async function voidBagTag(
   }
 }
 
+// ── Standalone addWeightToBag — top up an open (partially-filled) bag ────────
+// Called when an operator scans/opens an is_open bag and adds more material to
+// it on a later shift or day, instead of hand-writing a corrected weight next
+// to the printed label while bag_tags silently stays wrong. bag_tags.weight_kg
+// is updated to the new total (every "current state" reader — stock on hand,
+// batch reconciliation, single-bag displays — keeps working unchanged, since
+// it always wants the live total). The scan_events row records only the delta
+// added, following the same convention as 'debagging_in' above — this is what
+// lets day/month reporting attribute each kg to the calendar date it was
+// actually added (this row's scanned_at), rather than to the bag's original
+// creation date, no matter how many times it's later re-summed.
+export async function addWeightToBag(
+  serialNumber: string,
+  deltaKg: number,
+  newTotalKg: number,
+  sectionId: string,
+  sessionId: string | null,
+  operatorId?: string | null,
+  closeBag = false,
+): Promise<void> {
+  if (!serialNumber || !(deltaKg > 0)) return
+  const now = new Date().toISOString()
+  const update: Record<string, unknown> = { weight_kg: newTotalKg }
+  if (closeBag) update.is_open = false
+  await getDb().schema('production').from('bag_tags').update(update as any).eq('serial_number', serialNumber)
+
+  await getDb().schema('production').from('scan_events').insert({
+    serial_number: serialNumber,
+    section_id:    sectionId,
+    session_id:    sessionId || null,
+    action:        'topped_up',
+    weight_kg:     deltaKg,
+    operator_id:   operatorId ?? null,
+    scanned_at:    now,
+  } as any)
+}
+
 // ── advanceToNextSerial — moves focus to next empty serial input after scan ──
 // Called after useSerialLookup fires. Finds the next input with
 // data-serial="true" that has no value and focuses it.

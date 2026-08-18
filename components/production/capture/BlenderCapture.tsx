@@ -203,6 +203,7 @@ function useSystemBagsForType(productType: string): SystemBag[] {
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at, acumatica_id')
       .eq('product_type', productType)
       .eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false })
       .limit(60)
       .then(({ data }: { data: SystemBag[] | null }) => setBags(data ?? []))
@@ -534,6 +535,7 @@ export function BlenderCapture({
   // editing/removing an existing one.
   const [bagModal, setBagModal] = useState<{ editing: BlenderInputBag | null } | null>(null)
   const [outputWeight, setOutputWeight] = useState('')
+  const [outputLeaveOpen, setOutputLeaveOpen] = useState(false)
   const [bagError, setBagError] = useState<string | null>(null)
   const [groups, setGroups] = useState<BlendIngredientGroup[]>([])
   // Materials the operator added that aren't part of the blend's declared recipe —
@@ -657,7 +659,7 @@ export function BlenderCapture({
 
   // ── Output bag helpers ─────────────────────────────────────────────────────
 
-  async function addOutputBag(weight: string): Promise<boolean> {
+  async function addOutputBag(weight: string, leaveOpen = false): Promise<boolean> {
     if (n(weight) <= 0) return false
     setBagError(null)
     const serial = await genBlendSerial()
@@ -673,6 +675,7 @@ export function BlenderCapture({
       product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantWord || null,
       weight_kg: n(weight), lot_number: lot,
       acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
+      is_open: leaveOpen,
     } as any, { onConflict: 'serial_number' })
     if (tagErr) {
       setBagError(`Could not save bag ${serial} to the system — check the connection and try again.`)
@@ -900,13 +903,17 @@ export function BlenderCapture({
                     <div className="space-y-1.5 pt-1">
                       <div className="flex gap-2">
                         <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outputWeight} onChange={e => setOutputWeight(e.target.value)}
-                          onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); if (await addOutputBag(outputWeight)) setOutputWeight('') } }}
+                          onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } } }}
                           placeholder="Weight (kg)" className={INP + ' flex-1'} />
-                        <button onClick={async () => { if (await addOutputBag(outputWeight)) setOutputWeight('') }} disabled={n(outputWeight) <= 0}
+                        <button onClick={async () => { if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } }} disabled={n(outputWeight) <= 0}
                           className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0" style={{ background: BAG_COLOR }}>
                           <Plus size={15} /> Add bag
                         </button>
                       </div>
+                      <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+                        <input type="checkbox" checked={outputLeaveOpen} onChange={e => setOutputLeaveOpen(e.target.checked)} className="rounded" />
+                        Leave bag open — not full yet, will top up later (from Tags)
+                      </label>
                       {bagError && (
                         <p className="text-[11px] text-err flex items-center gap-1.5"><AlertTriangle size={12} /> {bagError}</p>
                       )}

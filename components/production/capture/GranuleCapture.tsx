@@ -280,6 +280,7 @@ function SystemPickList({ onPick, onClose }: { onPick: (b: SystemBag) => void; o
     getDb().schema('production').from('bag_tags')
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at')
       .in('product_type', DUST_COLUMNS.map(c => c.productType)).eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false }).limit(80)
       .then(({ data }: { data: SystemBag[] | null }) => setBags(data ?? []))
   }, [])
@@ -673,6 +674,7 @@ export function GranuleCapture({
   // ── Granule output bags ───────────────────────────────────────────────────────
   const [outTarget, setOutTarget] = useState(DEFAULT_TARGET_KG)
   const [outWeight, setOutWeight] = useState('')
+  const [outLeaveOpen, setOutLeaveOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   // Supervisor sets the lot at assignment, but the operator is the one who can
   // actually see the physical batch on the floor — a typo or a wrong batch
@@ -692,6 +694,7 @@ export function GranuleCapture({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: item,
         variant: variantWord || null, weight_kg: n(outWeight), lot_number: lot || null,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
+        is_open: outLeaveOpen,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
         serial_number: serial, action: 'bagging_out', section_id: 'granule', weight_kg: n(outWeight), operator_id: operatorId ?? null,
@@ -702,7 +705,7 @@ export function GranuleCapture({
       weight: outWeight, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, tagMethod: null, secured: true, logged_at: now,
     }
     onChange({ ...value, outputs: [...value.outputs, bag] })
-    setOutWeight(''); setAdding(false)
+    setOutWeight(''); setOutLeaveOpen(false); setAdding(false)
   }
   // Removing a bag from this record must also void its bag_tags row — leaving
   // it 'in_stock' would let it keep looking like real, available inventory
@@ -1041,6 +1044,10 @@ export function GranuleCapture({
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOutputBag() } }} className={INP} />
                     </div>
                   </div>
+                  <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+                    <input type="checkbox" checked={outLeaveOpen} onChange={e => setOutLeaveOpen(e.target.checked)} className="rounded" />
+                    Leave bag open — not full yet, will top up later (from Tags)
+                  </label>
                   <button onClick={addOutputBag} disabled={n(outWeight) <= 0 || adding}
                     className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors" style={{ background: BAG_COLOR }}>
                     <Plus size={15} /> {adding ? 'Adding…' : 'Add bag'}

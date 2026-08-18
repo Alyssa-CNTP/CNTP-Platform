@@ -248,7 +248,7 @@ export function SievingCapture({
         serial_number: serial, section_id: 'sieving', session_id: null,
         product_type: p.productType, variant: variantWord || null, weight_kg: n(p.weight),
         lot_number: bag.lot_number || null, acumatica_id: p.code || null,
-        status: 'in_stock', consumed: false, printed_at: now,
+        status: 'in_stock', consumed: false, printed_at: now, is_open: !!p.leaveOpen,
       } as any, { onConflict: 'serial_number' })
       // Event tracking — log the bagging-out once, when the bag is created.
       await getDb().schema('production').from('scan_events').insert({
