@@ -5,7 +5,7 @@ import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Lock, Pencil, Ch
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, massBalanceToleranceFor } from '@/lib/production/capture-config'
-import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
@@ -719,11 +719,16 @@ export function RefiningCapture({
     }
   }
 
+  // Removing a bag from this record must also void its bag_tags row — leaving
+  // it 'in_stock' would let it keep looking like real, available inventory
+  // to every other screen even though this record says it doesn't exist.
   function removeBagFromGroup(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string) {
     const g = value[groupKey]
     if (!g) return
+    const removed = g.bags.find(b => b.id === bagId)
     const remaining = g.bags.filter(b => b.id !== bagId)
     patch({ [groupKey]: remaining.length ? { ...g, bags: remaining } : null })
+    if (removed) voidBagTag(removed.serial, operatorId)
   }
 
   function setGroupBagSecured(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string, val: boolean) {

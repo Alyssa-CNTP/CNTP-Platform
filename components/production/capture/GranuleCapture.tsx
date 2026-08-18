@@ -35,7 +35,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
-import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
+import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
@@ -704,7 +704,14 @@ export function GranuleCapture({
     onChange({ ...value, outputs: [...value.outputs, bag] })
     setOutWeight(''); setAdding(false)
   }
-  function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
+  // Removing a bag from this record must also void its bag_tags row — leaving
+  // it 'in_stock' would let it keep looking like real, available inventory
+  // to every other screen even though this record says it doesn't exist.
+  function removeOutput(id: string) {
+    const b = value.outputs.find(x => x.id === id)
+    patch({ outputs: value.outputs.filter(x => x.id !== id) })
+    if (b) voidBagTag(b.serial, operatorId)
+  }
 
   // Operator's Print label / Write on tag choice for a bag already added to
   // the output list — mirrors Blender/Pasteuriser's tagging pattern so every

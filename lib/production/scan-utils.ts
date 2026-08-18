@@ -103,6 +103,36 @@ export async function markBagConsumed(
   }
 }
 
+// ── Standalone voidBagTag — call when a bag is removed from a capture record ──
+// Every "remove output bag" button only ever removed the bag from the local
+// capture state (draft_data) — the bag_tags row, already written the moment
+// the bag was added, stayed 'in_stock' forever, looking like real available
+// inventory to Quality/Stock Control/Orders even though the record it came
+// from says it doesn't exist. Never hard-delete: scan_events.serial_number
+// has an ON DELETE CASCADE FK to bag_tags, so deleting the row would
+// silently erase its whole audit trail too. Flips status to 'voided'
+// instead — retained in the database, excluded from every status-filtered
+// "active" query elsewhere without needing to touch those screens.
+export async function voidBagTag(
+  serialNumber: string,
+  operatorId?: string | null,
+): Promise<void> {
+  if (!serialNumber) return
+  try {
+    const now = new Date().toISOString()
+    await getDb().schema('production').from('bag_tags').update({
+      status: 'voided', voided_at: now, voided_by: operatorId ?? null,
+    } as any).eq('serial_number', serialNumber)
+
+    await getDb().schema('production').from('scan_events').insert({
+      serial_number: serialNumber, action: 'void',
+      operator_id: operatorId ?? null, scanned_at: now,
+    } as any)
+  } catch (e) {
+    console.warn('voidBagTag failed for', serialNumber, e)
+  }
+}
+
 // ── advanceToNextSerial — moves focus to next empty serial input after scan ──
 // Called after useSerialLookup fires. Finds the next input with
 // data-serial="true" that has no value and focuses it.
