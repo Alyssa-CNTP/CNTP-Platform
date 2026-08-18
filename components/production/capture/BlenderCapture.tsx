@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle, Printer, PenLine, Shuffle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { printLabel } from '@/lib/production/label-print'
+import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan } from '@/lib/production/validate-scan'
@@ -701,7 +701,7 @@ export function BlenderCapture({
     if (method === 'printed') {
       const b = value.outputs.find(o => o.id === id)
       if (b) {
-        printLabel({
+        printLabelAuto({
           id: b.id, serial_number: b.serial, product_type: bomId ? `Blend ${bomId}` : 'Blended Batch',
           variant: variantShort, grade: 'A', weight_kg: n(b.weight), lot_number: b.lot ?? assignment?.lot_number ?? '',
           section_id: sectionId, section_name: SECTION_CONFIG[sectionId]?.name ?? sectionId,
