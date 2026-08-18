@@ -13,6 +13,16 @@ Reported: the bucket elevator holds material that physically carries across the 
 - `CaptureOverview`: `Production` gained an optional `shift` field so its debag-grouping can tell which physical direction a Sieving production's bucket-elevator figure is (this was the actual bug — the grouping function had no way to know). The page now tags each production with its shift when assembling the combined list for Overview. Debagging-in totals only include the *morning's* bucket figure; a new "Bucket elevator — left for tomorrow" line in the Bagging-out card carries the *afternoon's* figure as an output instead.
 - Migration needs applying to **production** Supabase before this is usable there (SQL Editor, `20260818_003_bucket_elevator_carryover.sql`) — already applied to staging.
 
+## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections — promoted to production)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+Follow-up to enabling label printing (PR #699): Sieving, Pasteuriser and Blender already gave the operator an explicit per-bag choice — Print label or Write on tag — with a status badge once tagged. Refining and Granule instead called `printLabelAuto()` silently the instant a bag was added, with no button, no write-on-tag fallback, and no on-screen sign that a label was ever attempted or reached the printer.
+
+- Both sections now start a bag untagged; the operator picks **Print label** (same `printLabelAuto` network-print-with-browser-fallback path as before) or **Write on tag** (records the choice, no print attempt), and the row shows a printed/handwritten badge afterward — identical pattern to Blender/Pasteuriser.
+- Also writes `tag_method` on the bag's `bag_tags` row when tagged, matching Blender/Pasteuriser's DB behaviour.
+- Out of scope: Granule's end-of-shift dust by-product bags — never wired to print at all, separate follow-up if that's wanted.
+
 ## 2026-08-18 — Alyssa (Sieving: stop serial reset across the midnight tail; flush pending capture before the 16h00 changeover blocks the screen — promoted to production)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
