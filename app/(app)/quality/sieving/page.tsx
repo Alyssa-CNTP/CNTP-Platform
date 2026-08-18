@@ -254,6 +254,20 @@ function serialTabMismatch(serial: string | null | undefined, activeProduct: str
     ? `${String(serial).trim()} is a ${p} bag — it can't be used on the ${activeProduct} tab. Switch to the ${p} tab, or pick a ${activeProduct} serial.`
     : null
 }
+// A sortable "when was this bag made" key for a production serial
+// (ST{TYPE}-DDMMYY-NNN), used only to order bags of ONE product against each
+// other — never compared across products, since each product's sequence
+// counts independently (see nextSievingSerial() in SievingCapture.tsx). The
+// DDMMYY on the serial reorders to YYMMDD so it sorts chronologically across
+// month/year boundaries, not just within one day. Returns null for anything
+// that doesn't match — legacy hand-typed serials predate this format and
+// can't be placed in a sequence, so they're excluded rather than guessed at.
+function serialOrderKey(serial: string | null | undefined): string | null {
+  const m = String(serial || '').trim().toUpperCase().match(/^ST[A-Z]{2}-(\d{2})(\d{2})(\d{2})-(\d{1,4})$/)
+  if (!m) return null
+  const [, dd, mm, yy, seq] = m
+  return `${yy}${mm}${dd}-${seq.padStart(6, '0')}`
+}
 function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []
   return sdIsOrg(variant) ? s.meshForORG : s.meshForCON
@@ -1675,6 +1689,24 @@ export default function SievingPage() {
   // a QC on the Fine Leaf tab could pick and sample a Coarse Leaf bag by mistake.
   const tabPendingBags = pendingBags.filter((b:any) => b.product === activeProduct)
 
+  // Bags of this product that come BEFORE the one currently in the Serial No.
+  // field and still have no Final QC of their own — a soft reminder, not a
+  // block, that QC is normally done in bagging order. tabPendingBags is
+  // already "not yet QC'd" (that's what makes it a pending bag), scoped to
+  // this product, so no extra query is needed: this only has to compare
+  // ordering within data already on screen. Works for both ways a serial gets
+  // into the field — picking from the dropdown above or typing/scanning it —
+  // since both just set form.serialNumber.
+  const targetOrderKey = form.runType === 'final' ? serialOrderKey(form.serialNumber) : null
+  const earlierPendingSerials = targetOrderKey
+    ? tabPendingBags
+        .filter((b: any) => {
+          const k = serialOrderKey(b.bag_serial_no)
+          return k !== null && k < targetOrderKey && String(b.bag_serial_no).trim().toUpperCase() !== form.serialNumber.trim().toUpperCase()
+        })
+        .map((b: any) => b.bag_serial_no)
+    : []
+
   // Re-print a bag label from the history table — after edits to that row, or
   // any time later. Looks the bag up fresh (not just the pending list, since a
   // sampled bag has already dropped off it) so the in-process spec banner is
@@ -1957,6 +1989,23 @@ export default function SievingPage() {
                       ))}
                     </ul>
                   )}
+                </div>
+              )}
+
+              {/* A reminder, not a block — QC is normally done in bagging
+                  order so results land against the batch's earliest bag
+                  first, but an earlier bag can legitimately still be waiting
+                  its turn (e.g. this one was pulled for a spot-check), so
+                  saving is never prevented here. */}
+              {earlierPendingSerials.length>0&&(
+                <div style={{marginTop:10,padding:'8px 10px',borderRadius:6,background:'#fffbeb',border:'1px solid #fcd34d'}}>
+                  <div style={{fontSize:10,fontWeight:700,color:'#92400e',marginBottom:2}}>
+                    ⚠ {earlierPendingSerials.length===1?'An earlier bag':`${earlierPendingSerials.length} earlier bags`} still {earlierPendingSerials.length===1?'needs':'need'} a Final QC
+                  </div>
+                  <div style={{fontSize:10,color:'#92400e'}}>
+                    {earlierPendingSerials.slice(0,8).join(', ')}{earlierPendingSerials.length>8?` +${earlierPendingSerials.length-8} more`:''}
+                    {' — QC is usually done in bagging order. You can still save this one.'}
+                  </div>
                 </div>
               )}
             </div>
