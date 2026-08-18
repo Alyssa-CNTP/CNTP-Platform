@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Sieving: stop serial reset across the midnight tail; flush pending capture before the 16h00 changeover blocks the screen — promoted to production)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: a production run spans one continuous shift-day (07h00-01h00 next morning), so bag serials should keep counting across the whole window; also a bag added near 4pm had a massive delay before showing up. Confirmed live on production: 9 Sieving Tower bags from the 2026-08-17 afternoon shift, all bagged 22:00-22:48 UTC (00:00-00:48 SAST, i.e. right at the midnight rollover), got stamped with the next day's date code and a sequence restarting at 001 — corrected by hand directly in `bag_tags`/`prod_bagging`/`scan_events` (an FK from `scan_events.serial_number` to `bag_tags.serial_number` meant this needed insert-new/repoint/delete-old rather than a plain rename); physical relabelling of those 9 bags still needs doing on-site.
+
+- `nextSievingSerial()` derived its daily date stem from `new Date()` instead of the session's own pinned date — invisible for most of the shift, but past midnight (still the same continuous afternoon/night shift) the wall clock rolls to tomorrow while the session/mass-balance/everything else stays on yesterday's date, silently resetting the per-type sequence. Fixed to take the session's `date`. (The identical bug in `nextGranuleSerial` had already been independently fixed on staging — confirmed via diff, no further change needed there.)
+- The 16h00 PIN-required `ChangeoverModal` is a full-screen overlay that can land mid-gesture any time in the 30s after 16:00:00 on a still-open morning session. It doesn't block the debounced autosave, but a bag just added to local state could still be sitting on the 2.5s/20s save timer when the modal suddenly covers the screen. The changeover check now flushes any pending save immediately the moment it decides to show the modal.
+
 ## 2026-08-17 — Gustav (Production capture: fix the night shift disappearing at midnight)
 
 **Files changed:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `app/(app)/quality/granule/page.tsx`
