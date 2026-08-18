@@ -402,14 +402,12 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-2">
-            {isOpenBag && (
-              <button
-                onClick={() => setAddingWeight(v => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
-              >
-                <Plus size={13} /> Add weight
-              </button>
-            )}
+            <button
+              onClick={() => setAddingWeight(v => !v)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
+            >
+              <Plus size={13} /> Add weight
+            </button>
             <button
               onClick={() => printTagLabel({ ...tag, weight_kg: currentWeight })}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
@@ -439,10 +437,12 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
             {standard != null && (
               <p className="text-[10px] text-stone-400">Standard full bag for this product is ~{standard}kg.</p>
             )}
-            <label className="flex items-center gap-1.5 text-[11px] text-stone-600">
-              <input type="checkbox" checked={closeBag} onChange={e => setCloseBag(e.target.checked)} className="rounded" />
-              This completes the bag — mark it no longer open
-            </label>
+            {isOpenBag && (
+              <label className="flex items-center gap-1.5 text-[11px] text-stone-600">
+                <input type="checkbox" checked={closeBag} onChange={e => setCloseBag(e.target.checked)} className="rounded" />
+                This completes the bag — mark it no longer open
+              </label>
+            )}
 
             {overCap && (
               <p className="text-[11px] text-err flex items-center gap-1.5">
