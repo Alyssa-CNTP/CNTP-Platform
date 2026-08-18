@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, Trash2, Printer, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
+import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { variantToShort, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
@@ -39,6 +39,7 @@ export interface RefiningOutputBag {
   description?: string
   weight: string
   printed: boolean
+  tagMethod: 'printed' | 'handwritten' | null
   secured: boolean
   logged_at?: string
 }
@@ -407,7 +408,7 @@ function SystemPickList({
 // ── Output weight group (predefined product type, weight-only entry) ───────────
 
 function OutputWeightGroup({
-  groupLabel, groupIndex, productType, group, locked, variantWord, onAdd, onRemoveBag, onSetSecured,
+  groupLabel, groupIndex, productType, group, locked, variantWord, onAdd, onRemoveBag, onSetSecured, onTag,
 }: {
   groupLabel: string
   groupIndex: number
@@ -418,6 +419,7 @@ function OutputWeightGroup({
   onAdd: (weight: string) => void
   onRemoveBag: (bagId: string) => void
   onSetSecured: (bagId: string, val: boolean) => void
+  onTag: (bagId: string, method: 'printed' | 'handwritten') => void
 }) {
   const [weight, setWeight] = useState('')
   const groupKg = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
@@ -452,11 +454,28 @@ function OutputWeightGroup({
                 Bag {i + 1} · {b.weight} kg
                 {b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}
               </div>
-              {LABEL_PRINTING_ENABLED
-                ? <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
-                : <div className="mt-1 inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
-                    {b.serial}<span className="text-[10px] font-sans font-normal text-stone-400 uppercase tracking-wide">write on bag</span>
-                  </div>}
+              <div className="mt-1 flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
+                  {b.serial}{b.code ? ` · ${b.code}` : ''}
+                </span>
+                {b.tagMethod && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                    {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
+                  </span>
+                )}
+              </div>
+              {!b.tagMethod && !locked && (
+                <div className="flex gap-1.5 mt-1.5">
+                  <button onClick={() => onTag(b.id, 'printed')}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                    <Printer size={12} /> Print label
+                  </button>
+                  <button onClick={() => onTag(b.id, 'handwritten')}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                    <PenLine size={12} /> Write on tag
+                  </button>
+                </div>
+              )}
             </div>
             {!locked && (b.secured
               ? <button onClick={() => onSetSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
@@ -666,7 +685,7 @@ export function RefiningCapture({
     const newBag: RefiningOutputBag = {
       id: bag.id, serial, productType, code: acCode?.inventoryId ?? null,
       description: acCode?.description, weight,
-      printed: true, secured: true, logged_at: now,
+      printed: true, tagMethod: null, secured: true, logged_at: now,
     }
     const labelMap: Record<string, string> = { outputA: 'A', outputB: 'B', outputC: 'C', outputD: 'D' }
     const existing = value[groupKey]
@@ -677,7 +696,27 @@ export function RefiningCapture({
         bags: [...(existing?.bags ?? []), newBag],
       } as RefiningOutputGroup,
     })
-    if (LABEL_PRINTING_ENABLED) printLabelAuto(bag)
+  }
+
+  // Operator's Print label / Write on tag choice for a bag already added to a
+  // group — mirrors Blender/Pasteuriser's tagging pattern so every section
+  // gives the same visible, chosen outcome instead of printing silently.
+  function tagOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string, method: 'printed' | 'handwritten') {
+    const g = value[groupKey]
+    const bag = g?.bags.find(b => b.id === bagId)
+    if (!g || !bag) return
+    patch({ [groupKey]: { ...g, bags: g.bags.map(b => b.id === bagId ? { ...b, tagMethod: method } : b) } as RefiningOutputGroup })
+    getDb().schema('production').from('bag_tags').update({ tag_method: method } as any)
+      .eq('serial_number', bag.serial).then(() => {})
+    if (method === 'printed') {
+      printLabelAuto({
+        id: bag.id, serial_number: bag.serial, product_type: bag.productType,
+        variant: variantShort, grade: 'A', weight_kg: n(bag.weight), lot_number: '',
+        section_id: sectionId, section_name: SECTION_CONFIG[sectionId]?.name ?? sectionId,
+        created_at: bag.logged_at ?? nowISO(), printed: true,
+        acumaticaId: bag.code ?? undefined, acumaticaDesc: bag.description,
+      } as OutputBag)
+    }
   }
 
   function removeBagFromGroup(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string) {
@@ -862,6 +901,7 @@ export function RefiningCapture({
                 onAdd={weight => addOutputBag(key, productType, weight)}
                 onRemoveBag={bagId => removeBagFromGroup(key, bagId)}
                 onSetSecured={(bagId, v) => setGroupBagSecured(key, bagId, v)}
+                onTag={(bagId, method) => tagOutputBag(key, bagId, method)}
               />
             )
           })}
