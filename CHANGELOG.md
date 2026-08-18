@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Bag Tags: make "Add weight" + forced reprint available on any bag, not just ones flagged open)
+
+**Files changed:** `app/(app)/tags/page.tsx`
+
+The Add-weight/forced-reprint flow (from the earlier half-bag top-up feature) only ever showed up on a bag already flagged `is_open` — if an operator forgot to check "Leave bag open" when it was first bagged, or a "finished" bag later turns out to need a correction, there was no way back into that flow at all.
+
+- The "Add weight" button in the bag detail modal (`app/(app)/tags/page.tsx`) now shows for every bag, open or not — scan any bag, add weight, get forced back to a fresh printed label, same as before.
+- The "This completes the bag — mark it no longer open" checkbox still only shows when the bag is currently open (nothing to "complete" on an already-closed bag); adjusting a closed bag leaves its open/closed state untouched.
+
 ## 2026-08-18 — Alyssa (Sieving bucket elevator: track carry-over as a real ledger, stop double-counting shifts on Overview)
 
 **Files changed:** `supabase/migrations/20260818_003_bucket_elevator_carryover.sql` (new), `lib/production/bucket-elevator.ts` (new), `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
