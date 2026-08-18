@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Sieving bucket elevator: track carry-over as a real ledger, stop double-counting shifts on Overview)
+
+**Files changed:** `supabase/migrations/20260818_003_bucket_elevator_carryover.sql` (new), `lib/production/bucket-elevator.ts` (new), `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: the bucket elevator holds material that physically carries across the production day — the afternoon shift leaves it in the elevator for tomorrow (an output), and the following morning shift consumes it (an input). Two problems: (1) the Overview screen showed today's morning consumption and today's afternoon carry-over added together into one "Debagging — in" figure, when they're two different physical quantities a day apart; (2) there was no actual link between what one shift left and what the next consumed — just a free-typed kg on each shift's own screen.
+
+- New append-only `production.bucket_elevator_log` (mirrors the existing Granule dust-carryover ledger): a `'generated'` row when the afternoon shift locks its figure, a `'consumed'` row when the following morning shift locks its own. Outstanding balance = generated − consumed, tracked per **variant family** (conventional or organic — RA-Conventional shares Conventional's pool, RA-Organic shares Organic's, the two families never mix), via `variantFamily()`/`isOrganicVariant()`.
+- `SievingCapture`: the morning shift's bucket-elevator field now prefills with the outstanding balance for its own variant family (still fully editable) and shows an info line explaining the figure — or, if the *other* family has an outstanding balance instead, explains that it's sitting there unusable for this shift. Both existing lock paths (the explicit "Done — lock" button and the auto-lock when leaving the Debagging tab) route through one `bucketLockPatch()` that writes the ledger entry exactly once per session, so re-opening/editing an already-locked figure never double-writes it.
+- `CaptureOverview`: `Production` gained an optional `shift` field so its debag-grouping can tell which physical direction a Sieving production's bucket-elevator figure is (this was the actual bug — the grouping function had no way to know). The page now tags each production with its shift when assembling the combined list for Overview. Debagging-in totals only include the *morning's* bucket figure; a new "Bucket elevator — left for tomorrow" line in the Bagging-out card carries the *afternoon's* figure as an output instead.
+- Migration needs applying to **staging** Supabase before this ships (SQL Editor, `20260818_003_bucket_elevator_carryover.sql`), same as any other new-table migration in this repo.
+
 ## 2026-08-18 — Alyssa (Capture screens: block implausible weight typos, e.g. 1000kg instead of 100kg)
 
 **Files changed:** `lib/production/capture-config.ts`, `components/production/capture/{OutputPicker,SievingCapture,RefiningCapture,GranuleCapture,BlenderCapture,PasteuriserCapture}.tsx`

@@ -2016,6 +2016,8 @@ function CaptureScreen() {
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
                         date={dateParam}
+                        sectionId={sectionId}
+                        sessionId={sessionId}
                       />
                   }
                   {!locked && (
@@ -2062,7 +2064,16 @@ function CaptureScreen() {
                 <span>{runId ? 'Totals are combined across the whole production run (all shifts), grouped by product, variant and grade.' : 'Totals are grouped and combined across both shifts where variant and grade match.'} Copy or print for Acumatica data entry.</span>
               </div>
               <CaptureOverview
-                productions={[...productions, ...siblingProductions, ...otherShiftProductions]}
+                productions={[
+                  // Tagged with which shift each batch belongs to — Sieving's
+                  // bucket-elevator figure means opposite things on the two
+                  // shifts (morning consumes last night's carry-over, afternoon
+                  // leaves a new one for tomorrow) and must never be summed as
+                  // if it were one figure. See CaptureOverview's debag grouping.
+                  ...productions.map(p => ({ ...p, shift: shiftBal })),
+                  ...siblingProductions.map(p => ({ ...p, shift: shiftBal })),
+                  ...otherShiftProductions.map(p => ({ ...p, shift: otherShiftBal })),
+                ]}
                 sectionId={sectionId}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
