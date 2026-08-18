@@ -11,6 +11,7 @@ import { OutputPicker, type PickedOutput } from '@/components/production/capture
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
+import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 
 // ── Sieving output serial ─────────────────────────────────────────────────────
 // Format: ST{TYPE}-DDMMYY-NNN  (e.g. Fine Leaf → STFL-120826-003).
@@ -71,6 +72,9 @@ export interface SievingData {
   debag:    DebagRow[]
   outputs:  OutBag[]
   bucketSecured?: boolean      // bucket-elevator spillage locked once finished (per grade)
+  bucketLedgerLogged?: boolean // this session's bucket-elevator figure already written to
+                                // production.bucket_elevator_log — set once, on first lock, so
+                                // re-locking after an Edit never double-writes the carry-over ledger
 }
 
 export function emptySievingData(): SievingData {
@@ -159,6 +163,7 @@ const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 
 export function SievingCapture({
   assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId, date,
+  sectionId = 'sieving', sessionId,
 }: {
   assignment: ShiftAssignment
   variantWord: string
@@ -170,6 +175,8 @@ export function SievingCapture({
   genSerial: () => string
   operatorId?: string | null
   date: string   // session's dateParam (YYYY-MM-DD) — see nextSievingSerial
+  sectionId?: string
+  sessionId?: string | null
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
@@ -218,7 +225,7 @@ export function SievingCapture({
   // too; on the AFTERNOON shift it's an end-of-day output captured on the Bagging
   // tab, so it must stay open when the operator moves across.
   function goToTab(next: 'debag' | 'bag') {
-    if (next === 'bag') patch({ debag: lockCompleted(value.debag), ...(shift === 'morning' ? { bucketSecured: true } : {}) })
+    if (next === 'bag') patch({ debag: lockCompleted(value.debag), ...(shift === 'morning' ? bucketLockPatch() : {}) })
     setTab(next)
   }
   const bucketKg   = n(value.spillage?.[0]?.kg)                                   // elevator carryover (shown in the locked summary)
@@ -230,6 +237,51 @@ export function SievingCapture({
   const bucketDir  = bucketIsOutput
     ? { title: 'Bucket elevator — end of day',   badge: 'counts as output', hint: 'left in the tower for tomorrow' }
     : { title: 'Bucket elevator — start of day', badge: 'counts as input',  hint: 'from yesterday · consumed this morning' }
+
+  // ── Bucket-elevator carry-over ledger (production.bucket_elevator_log) ──────
+  // RA-Conventional shares a physical carry-over pool with Conventional (same
+  // for RA-Organic/Organic) — never with the other family — see
+  // lib/production/bucket-elevator.ts. familyBalance is what THIS shift can
+  // actually draw on; otherFamilyBalance is shown only to explain why a
+  // mismatched shift sees nothing to consume.
+  const family = variantFamily(variantWord)
+  const [familyBalance, setFamilyBalance] = useState(0)
+  const [otherFamilyBalance, setOtherFamilyBalance] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    outstandingBucketElevator(sectionId, family).then(kg => { if (!cancelled) setFamilyBalance(kg) })
+    outstandingBucketElevator(sectionId, family === 'organic' ? 'conventional' : 'organic')
+      .then(kg => { if (!cancelled) setOtherFamilyBalance(kg) })
+    return () => { cancelled = true }
+  }, [sectionId, family, value.bucketLedgerLogged])
+
+  // The morning shift's job is to consume exactly what last night's matching-
+  // variant shift left in the elevator — prefill (never force) the field with
+  // that balance so the operator confirms a real figure instead of re-typing
+  // one off a handover note. Only fires while the field is still untouched.
+  useEffect(() => {
+    if (shift !== 'morning' || locked || value.bucketSecured) return
+    const row = value.spillage?.[0]
+    if (!row || row.kg.trim() !== '' || familyBalance <= 0) return
+    updateSpillage(row.id, familyBalance.toFixed(1))
+  }, [familyBalance, shift, locked, value.bucketSecured])
+
+  // Single source of truth for "lock the bucket elevator": writes the ledger
+  // entry at most once per session (bucketLedgerLogged), whichever direction
+  // — generated (afternoon, left for tomorrow) or consumed (morning, drawn
+  // from last night's balance) — this shift's figure represents. Returns a
+  // patch delta rather than patching directly so goToTab can merge it into
+  // the same patch() call as the debag lock (two separate patch() calls in a
+  // row would race on the stale `value` closure and silently undo each other).
+  function bucketLockPatch(): Partial<SievingData> {
+    const kg = n(value.spillage?.[0]?.kg ?? '')
+    const shouldLog = !value.bucketLedgerLogged && kg > 0
+    if (shouldLog) {
+      logBucketElevator(bucketIsOutput ? 'generated' : 'consumed',
+        { sectionId, variantFamily: family, kg, date, shift, sessionId })
+    }
+    return { bucketSecured: true, ...(shouldLog ? { bucketLedgerLogged: true } : {}) }
+  }
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
@@ -330,6 +382,18 @@ export function SievingCapture({
         <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${bucketIsOutput ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>{bucketDir.badge}</span>
         <span className="text-[11px] text-stone-500">{bucketDir.hint}</span>
       </div>
+      {/* Carry-over context — morning shift only. familyBalance is what last
+          night's matching-variant shift actually left (already prefilled into
+          the field below); otherFamilyBalance explains an empty prefill when
+          the elevator holds the OTHER family's material, which this shift
+          can't touch. */}
+      {!bucketIsOutput && (
+        familyBalance > 0
+          ? <p className="text-[11px] text-blue-700">{familyBalance.toFixed(1)} kg left in the elevator overnight ({family}) — prefilled below, confirm or correct it.</p>
+          : otherFamilyBalance > 0
+            ? <p className="text-[11px] text-amber-700">{otherFamilyBalance.toFixed(1)} kg of {family === 'organic' ? 'conventional' : 'organic'} bucket elevator is waiting in the tower — not usable on this {family} shift.</p>
+            : null
+      )}
       <div className="max-w-[52%]">
         <label className={LBL}>Bucket elevator (kg)</label>
         <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={bucketRow.kg} disabled={locked}
@@ -339,7 +403,7 @@ export function SievingCapture({
         )}
       </div>
       {!locked && (
-        <button onClick={() => patch({ bucketSecured: true })}
+        <button onClick={() => patch(bucketLockPatch())}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] hover:bg-ok/20 transition-colors">
           <Check size={15} /> Done — lock bucket elevator
         </button>
