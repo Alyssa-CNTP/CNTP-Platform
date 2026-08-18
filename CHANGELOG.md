@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Refining 1/2 overview: group debagging inputs by product type, not lot — promoted to production)
+
+**Files changed:** `components/production/capture/CaptureOverview.tsx`
+
+Reported: on the Refining 1/2 Overview step, the "Debagging — in" list showed one row per bag (each labelled with whatever date/lot happened to be on that bag's tag, e.g. `12-08-05`, `14-08-26`) instead of a collapsible summary — the grouping key was lot/serial, but Refining's input bags each carry a unique lot (often just the delivery date), so every group ended up with exactly one bag and the collapsing was pointless. Sieving's tower groups meaningfully because its bags actually share a lot. Fixed by grouping Refining's debag inputs by `productType` (Coarse Leaf, Fine Leaf, Sticks, etc.) instead — the same key the Capture tab already groups by — so the Overview now shows one collapsible card per input type with its bags' serials, weights, and original lot/delivery date nested underneath.
+
 ## 2026-08-18 — Alyssa (Bag top-ups now require a named source bag — every top-up is a traceable transfer, not a loose number — promoted to production)
 
 **Files changed:** `supabase/migrations/20260818_004_bag_weight_transfer_provenance.sql` (new), `lib/production/scan-utils.ts`, `app/(app)/tags/page.tsx`, `lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`, `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/count/monthly/{MonthlyBatchLedger,MonthlyReconciliation}.tsx`

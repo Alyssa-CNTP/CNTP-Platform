@@ -33,7 +33,7 @@ const BAG_ORANGE  = '#d97706'
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
-interface DebagRow { bagNo: string; kg: number; variant: string; loggedAt?: string }
+interface DebagRow { bagNo: string; kg: number; variant: string; loggedAt?: string; note?: string }
 interface DebagLotGroup { lot: string; rows: DebagRow[]; totalKg: number }
 
 interface FlatBag {
@@ -77,20 +77,21 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
       })
     } else if ('inputs' in d) {
-      // RefiningData: group by batch/lot number when one was captured (e.g.
-      // Refining 2's Coarse Leaf, which requires it), falling back to serial,
-      // then a positional placeholder. Merging (not overwriting) matters here:
-      // manual-entry rows without a serial all fall back to the same
-      // "Input bag N" key, and productions from both shifts are passed in
-      // together — an unconditional `map.set` would let a later shift's
-      // fallback-keyed row silently discard an earlier one's kg.
+      // RefiningData: group by input product type (Coarse Leaf, Fine Leaf,
+      // Sticks, …) — the same grouping the Capture tab already uses, and the
+      // only one that actually consolidates anything: each bag's lot/serial
+      // is its own value (often just the date on the tag), so grouping by
+      // lot produced one group per bag instead of a real rollup.
       ;(d.inputs ?? []).forEach((r: any, i: number) => {
         if (num(r.weight) === 0) return
-        const lot = (r.lot || r.serial || `Input bag ${i + 1}`).trim()
-        const row: DebagRow = { bagNo: r.serial || `Input bag ${i + 1}`, kg: num(r.weight), variant: r.variant || p.variant, loggedAt: r.logged_at }
-        const g = map.get(lot)
+        const type = (r.productType || 'Other').trim()
+        const row: DebagRow = {
+          bagNo: r.serial || `Input bag ${i + 1}`, kg: num(r.weight), variant: r.variant || p.variant,
+          loggedAt: r.logged_at, note: r.deliveryDate || r.lot || undefined,
+        }
+        const g = map.get(type)
         if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
-        else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
+        else map.set(type, { lot: type, rows: [row], totalKg: num(r.weight) })
       })
     } else if ('blends' in d) {
       // GranuleData: group dust inputs by dust type — the plant reads dust totals first.
@@ -430,7 +431,7 @@ export function CaptureOverview({
                             {g.rows.map((r, ri) => (
                               <div key={ri} className="flex items-center gap-2 py-1 text-[12px]">
                                 <span className="font-mono text-[11px] font-medium text-stone-600 bg-stone-100 border border-stone-200 rounded-md px-1.5 py-0.5 shrink-0">{r.bagNo}</span>
-                                <span className="text-stone-400 truncate flex-1">{r.variant}</span>
+                                <span className="text-stone-400 truncate flex-1">{[r.variant, r.note].filter(Boolean).join(' · ')}</span>
                                 {r.loggedAt && <span className="text-[10px] text-stone-400 shrink-0">{fmtTime(r.loggedAt)}</span>}
                                 <span className="font-mono text-stone-700 shrink-0 w-16 text-right">{r.kg.toFixed(1)} kg</span>
                               </div>
