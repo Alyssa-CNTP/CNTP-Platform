@@ -27,7 +27,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X,
-  AlertTriangle, Droplets, Layers, CheckCircle2,
+  AlertTriangle, Droplets, Layers, CheckCircle2, Printer, PenLine,
 } from 'lucide-react'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -113,6 +113,7 @@ export interface GranuleOutBag {
   weight: string         // actual total weight
   code: string | null
   printed: boolean
+  tagMethod: 'printed' | 'handwritten' | null
   secured: boolean
   logged_at?: string
 }
@@ -698,20 +699,32 @@ export function GranuleCapture({
     } catch { /* session save retries */ }
     const bag: GranuleOutBag = {
       id: crypto.randomUUID(), serial, item, lot, time: clockNow(), targetWeight: outTarget,
-      weight: outWeight, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, secured: true, logged_at: now,
+      weight: outWeight, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, tagMethod: null, secured: true, logged_at: now,
     }
     onChange({ ...value, outputs: [...value.outputs, bag] })
     setOutWeight(''); setAdding(false)
-    if (LABEL_PRINTING_ENABLED) {
+  }
+  function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
+
+  // Operator's Print label / Write on tag choice for a bag already added to
+  // the output list — mirrors Blender/Pasteuriser's tagging pattern so every
+  // section gives the same visible, chosen outcome instead of printing silently.
+  function tagOutput(id: string, method: 'printed' | 'handwritten') {
+    const bag = value.outputs.find(b => b.id === id)
+    if (!bag) return
+    patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, tagMethod: method } : b) })
+    getDb().schema('production').from('bag_tags').update({ tag_method: method } as any)
+      .eq('serial_number', bag.serial).then(() => {})
+    if (method === 'printed') {
+      const acCode = getAcumaticaCode(bag.item, variantShort, 'A')
       printLabelAuto({
-        id: bag.id, serial_number: serial, product_type: item, variant: variantShort, grade: 'A',
-        weight_kg: n(outWeight), lot_number: lot, section_id: 'granule',
-        section_name: SECTION_CONFIG['granule']?.name ?? 'Granule Line', created_at: now, printed: true,
-        acumaticaId: acCode?.inventoryId ?? undefined, acumaticaDesc: acCode?.description,
+        id: bag.id, serial_number: bag.serial, product_type: bag.item, variant: variantShort, grade: 'A',
+        weight_kg: n(bag.weight), lot_number: bag.lot, section_id: 'granule',
+        section_name: SECTION_CONFIG['granule']?.name ?? 'Granule Line', created_at: bag.logged_at ?? nowISO(), printed: true,
+        acumaticaId: bag.code ?? acCode?.inventoryId ?? undefined, acumaticaDesc: acCode?.description,
       } as OutputBag)
     }
   }
-  function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
 
   // ── Dust by-product (end of shift) ─────────────────────────────────────────────
   // Weight is no longer typed in by the operator — it's the plant's own mass
@@ -964,9 +977,28 @@ export function GranuleCapture({
                       {n(b.targetWeight) > 0 && <span className="text-stone-400 font-normal"> / {n(b.targetWeight).toFixed(0)} target</span>}
                       {b.time ? <span className="font-normal text-text-muted"> · {b.time}</span> : null}
                     </div>
-                    {LABEL_PRINTING_ENABLED
-                      ? <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
-                      : <div className="mt-1 inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">{b.serial}<span className="text-[10px] font-sans font-normal text-stone-400 uppercase tracking-wide">write on bag</span></div>}
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
+                        {b.serial}{b.code ? ` · ${b.code}` : ''}
+                      </span>
+                      {b.tagMethod && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                          {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
+                        </span>
+                      )}
+                    </div>
+                    {!b.tagMethod && !locked && (
+                      <div className="flex gap-1.5 mt-1.5">
+                        <button onClick={() => tagOutput(b.id, 'printed')}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                          <Printer size={12} /> Print label
+                        </button>
+                        <button onClick={() => tagOutput(b.id, 'handwritten')}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                          <PenLine size={12} /> Write on tag
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {!locked && <button onClick={() => removeOutput(b.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
                 </div>
