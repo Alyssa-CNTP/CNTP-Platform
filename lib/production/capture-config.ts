@@ -155,22 +155,23 @@ export interface KnownPrinter {
 // with `Test-NetConnection <ip> -Port 9100` (= True) from a same-subnet machine
 // before relying on it.
 export const KNOWN_PRINTERS: KnownPrinter[] = [
-  { id: '26E55064', label: 'Argox CP-2140EX PRO — 26E55064 (Sieving)', ip: '192.168.0.115', lang: 'pplb' },
+  { id: '26E55064', label: 'Argox CP-2140EX PRO — 26E55064 (Sieving / Refining 2)', ip: '192.168.0.115', lang: 'pplb' },
   { id: 'argox-pasteuriser', label: 'Argox CP-2140EX — Pasteuriser', ip: '192.168.0.55', lang: 'pplb' },
+  { id: '26E55087', label: 'Argox CP-2140EX — 26E55087 (Prod 2 — Refining 1 / Blender)', ip: '192.168.0.124', lang: 'pplb' },
+  { id: '26E55088', label: 'Argox CP-2140EX — 26E55088 (Prod 3 — Granule)', ip: '192.168.0.126', lang: 'pplb' },
 ]
 
 // Section → printer. Each section points at a printer + language. These are the
 // fallback/seed defaults used until the Printers module saves rows to
-// production.printers. All Argox/PPLB now; only the Pasteuriser unit's IP is
-// confirmed — set the other sections' real IPs in Stock Control → Printers as
-// each new Argox is given a static IP on port 9100.
+// production.printers. All Argox/PPLB, all confirmed — several sections
+// deliberately share one physical printer.
 export const SECTION_PRINTER: Record<string, PrinterConfig> = {
-  pasteuriser: { ip: '192.168.0.55', lang: 'pplb' },  // Argox CP-2140EX (confirmed)
-  sieving:     { ip: '192.168.0.115', lang: 'pplb' }, // Argox CP-2140EX PRO — 26E55064 (confirmed)
-  refining1:   { ip: '', lang: 'pplb' },
-  refining2:   { ip: '', lang: 'pplb' },
-  granule:     { ip: '', lang: 'pplb' },
-  blender:     { ip: '', lang: 'pplb' },
+  pasteuriser: { ip: '192.168.0.55', lang: 'pplb' },  // Argox CP-2140EX
+  sieving:     { ip: '192.168.0.115', lang: 'pplb' }, // Argox CP-2140EX PRO — 26E55064
+  refining2:   { ip: '192.168.0.115', lang: 'pplb' }, // shares Sieving's printer — 26E55064
+  refining1:   { ip: '192.168.0.124', lang: 'pplb' }, // Prod 2 — 26E55087, shares with Blender
+  blender:     { ip: '192.168.0.124', lang: 'pplb' }, // Prod 2 — 26E55087, shares with Refining 1
+  granule:     { ip: '192.168.0.126', lang: 'pplb' }, // Prod 3 — 26E55088
   // Not a production bagging section — the Sieving Final QC lab's own label
   // printer, keyed separately from `sieving` above (which is the tower's bag
   // tag printer, a different physical unit). Configured for ZSim (Zebra ZPL
