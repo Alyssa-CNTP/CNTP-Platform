@@ -41,6 +41,13 @@ Follow-up to enabling label printing (PR #699): Sieving, Pasteuriser and Blender
 - Also writes `tag_method` on the bag's `bag_tags` row when tagged, matching Blender/Pasteuriser's DB behaviour.
 - Out of scope: Granule's end-of-shift dust by-product bags — never wired to print at all, separate follow-up if that's wanted.
 
+## 2026-08-18 — Alyssa (Granule: fix trailing-space lot mismatch; Blender: scan-to-categorise debagging)
+
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
+
+- **Granule — fix immediately requested:** the shift's lot number (`assignment.lot_number`) was used raw everywhere except the serial generator, which trimmed its own copy. A stray leading/trailing space on the assignment (a supervisor typo, or older un-normalised data) meant `bag_tags.lot_number` was silently saved with the space while the serial's lot stem was clean — an exact-match mismatch between what's stored and what's embedded in the serial, breaking anything comparing them literally (Batch Reconciliation's `.eq('lot_number', ...)`, per-lot serial numbering). Fixed at the single source: `const lot = (assignment?.lot_number ?? '').trim()`, so every downstream use (serial, all three `bag_tags` writes, on-screen confirm) is guaranteed clean regardless of what's in the assignment record.
+- **Blender — scan-to-categorise debagging:** added the same top-level **"Scan a bag to debag"** box used on Refining/Pasteuriser. Previously the operator had to pick an ingredient group *first*, then scan into it (and the scan only validated a match) — if you scanned before picking a group, or the field wasn't inside the modal, nothing happened. Now scanning alone is enough — the bag's own product type decides which ingredient group it belongs to: matched against the blend's declared ingredients, or a new "not in recipe" group is created automatically for it (the same mechanism as the existing "Add Other" search, just driven by the scan instead of a manual Master Inventory search). The confirmation popup shows the bag's record and which group it will land in before consuming. Picking a group manually (via "+ Add debagging bag") and "Add Other" both remain available.
+
 ## 2026-08-14 — Alyssa (Camera scanner: iOS decoder failure was reported as a camera failure)
 
 **Files changed:** `components/shared/BarcodeScanner.tsx`
