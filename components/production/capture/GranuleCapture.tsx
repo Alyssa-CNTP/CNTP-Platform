@@ -33,7 +33,7 @@ import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { getDb } from '@/lib/supabase/db'
-import { printLabel } from '@/lib/production/label-print'
+import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
@@ -695,7 +695,7 @@ export function GranuleCapture({
     onChange({ ...value, outputs: [...value.outputs, bag] })
     setOutWeight(''); setAdding(false)
     if (LABEL_PRINTING_ENABLED) {
-      printLabel({
+      printLabelAuto({
         id: bag.id, serial_number: serial, product_type: item, variant: variantShort, grade: 'A',
         weight_kg: n(outWeight), lot_number: lot, section_id: 'granule',
         section_name: SECTION_CONFIG['granule']?.name ?? 'Granule Line', created_at: now, printed: true,

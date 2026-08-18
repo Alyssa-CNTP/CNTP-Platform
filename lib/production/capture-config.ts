@@ -121,11 +121,13 @@ export function massBalanceToleranceFor(sectionId: string): number {
   return sectionId === 'refining2' ? 100 : MASS_BALANCE_TOLERANCE_KG
 }
 
-// Label printing is not available on the floor yet (no printer). While this is
-// false, capture does NOT depend on a printer: the output picker reads
-// "Complete bag" (no print round-trip) and each bag shows its serial prominently
-// so it can be hand-written. Flip to true the day a printer is wired up.
-export const LABEL_PRINTING_ENABLED = false
+// Real printers are now wired up for every bagging section (see
+// SECTION_PRINTER below) — capture depends on a printer being reachable.
+// While this was false, the output picker read "Complete bag" (no print
+// round-trip) with the serial shown for hand-writing; that fallback path is
+// still exercised automatically if a section's printer is unreachable (see
+// printLabelAuto in lib/production/label-print.ts).
+export const LABEL_PRINTING_ENABLED = true
 
 // ── Label printers ─────────────────────────────────────────────────────────
 // Label command language per printer. Zebra = ZPL, Argox CP = PPLB. The app
