@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections)
+
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
+
+Follow-up to enabling label printing (PR #699): Sieving, Pasteuriser and Blender already gave the operator an explicit per-bag choice — Print label or Write on tag — with a status badge once tagged. Refining and Granule instead called `printLabelAuto()` silently the instant a bag was added, with no button, no write-on-tag fallback, and no on-screen sign that a label was ever attempted or reached the printer.
+
+- Both sections now start a bag untagged; the operator picks **Print label** (same `printLabelAuto` network-print-with-browser-fallback path as before) or **Write on tag** (records the choice, no print attempt), and the row shows a printed/handwritten badge afterward — identical pattern to Blender/Pasteuriser.
+- Also writes `tag_method` on the bag's `bag_tags` row when tagged, matching Blender/Pasteuriser's DB behaviour.
+- Out of scope: Granule's end-of-shift dust by-product bags — never wired to print at all, separate follow-up if that's wanted.
+
 ## 2026-08-14 — Alyssa (Camera scanner: iOS decoder failure was reported as a camera failure)
 
 **Files changed:** `components/shared/BarcodeScanner.tsx`
