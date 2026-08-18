@@ -34,16 +34,13 @@ function sievingAbbr(productType: string): string {
   const letters = (productType || '').replace(/[^A-Za-z]/g, '').toUpperCase()
   return letters.slice(0, 2) || 'XX'
 }
-// dateStr is the shift assignment's own date (YYYY-MM-DD), not a fresh
-// `new Date()` — a session spanning midnight (the afternoon/night shift runs
-// 16h00–01h00) must keep stamping bags under the date the shift is filed
-// under, or a bag bagged just after midnight gets today's date while the
-// session, mass balance and everything else stays on yesterday's, and the
-// per-day sequence restarts at 001 mid-shift against a prefix nothing else
-// in the session recognises.
-async function nextSievingSerial(productType: string, localSerials: string[], dateStr: string): Promise<string> {
-  const [y, m, d] = dateStr.split('-')
-  const ddmmyy = `${d}${m}${y.slice(-2)}`
+// date is the session's own dateParam (YYYY-MM-DD), NOT wall-clock "now" — the
+// afternoon/night shift runs past midnight, and using the device's live date
+// would roll the daily stem over to tomorrow mid-shift, resetting the sequence
+// even though it's the same continuous production run (07h00-01h00).
+async function nextSievingSerial(productType: string, localSerials: string[], date: string): Promise<string> {
+  const dp = date.split('-')
+  const ddmmyy = dp.length === 3 ? `${dp[2]}${dp[1]}${dp[0].slice(2)}` : '000000'
   const prefix = `ST${sievingAbbr(productType)}-${ddmmyy}-`
   const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
   // Seed the per-type sequence from bags already tagged under this exact prefix
@@ -160,7 +157,7 @@ const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 
 export function SievingCapture({
-  assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId,
+  assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId, date,
 }: {
   assignment: ShiftAssignment
   variantWord: string
@@ -171,6 +168,7 @@ export function SievingCapture({
   onChange: (d: SievingData) => void
   genSerial: () => string
   operatorId?: string | null
+  date: string   // session's dateParam (YYYY-MM-DD) — see nextSievingSerial
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
@@ -234,7 +232,7 @@ export function SievingCapture({
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
-    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial), assignment.date)
+    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial), date)
     const grade  = gradeLetter || 'A'
     const now    = new Date().toISOString()
     const bag: OutputBag = {
