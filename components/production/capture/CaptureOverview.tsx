@@ -18,7 +18,14 @@ import { type PasteuriserData } from '@/components/production/capture/Pasteurise
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 
-interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
+interface Production {
+  id: string; variant: string; grade: string; lot: string
+  data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData
+  // Which shift this batch belongs to — only meaningful for Sieving's bucket
+  // elevator, which means opposite things on the two shifts (see
+  // buildDebagLotGroups below). Undefined for callers that don't pass it.
+  shift?: string
+}
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
@@ -47,9 +54,10 @@ export interface BlenderRatioGroup {
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
-function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketKg: number; machineKg: number } {
+function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number } {
   const map = new Map<string, DebagLotGroup>()
-  let bucketKg = 0
+  let bucketInKg = 0
+  let bucketOutKg = 0
   let machineKg = 0
   prods.forEach(p => {
     const d = p.data as any
@@ -109,12 +117,19 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
       })
     } else {
-      // SievingData: debag + spillage
+      // SievingData: debag + spillage. The bucket elevator (spillage[0]) means
+      // opposite things depending on which shift this production belongs to —
+      // the morning shift CONSUMES what last night's afternoon shift left
+      // behind (an input), the afternoon shift LEAVES a new figure for
+      // tomorrow (an output). These are two different physical quantities a
+      // day apart, not one number to sum, even though the Overview may be
+      // showing both shifts' productions side by side. p.shift is missing for
+      // callers that never pass it (treated as morning/input, the historical
+      // default) — see the Production interface's own comment.
       ;(d.spillage ?? []).forEach((r: any, i: number) => {
-        if (num(r.kg) > 0) {
-          if (i === 0) bucketKg += num(r.kg)
-          else         machineKg += num(r.kg)
-        }
+        if (num(r.kg) === 0) return
+        if (i === 0) { if (p.shift === 'afternoon') bucketOutKg += num(r.kg); else bucketInKg += num(r.kg) }
+        else         machineKg += num(r.kg)
       })
       ;(d.debag ?? []).forEach((r: any, i: number) => {
         if (num(r.nett) === 0) return
@@ -126,7 +141,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
       })
     }
   })
-  return { groups: Array.from(map.values()), bucketKg, machineKg }
+  return { groups: Array.from(map.values()), bucketInKg, bucketOutKg, machineKg }
 }
 
 function buildProductGroups(prods: Production[]): ProductGroup[] {
@@ -235,12 +250,13 @@ export function CaptureOverview({
   const [filterGrade,   setFilterGrade]   = useState('')
   const [showFilters,   setShowFilters]   = useState(false)
 
-  const { groups: debagGroups, bucketKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
+  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
   const productGroups = useMemo(() => buildProductGroups(productions), [productions])
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
-  const totalIncl     = debagOnlyKg + bucketKg + machineKg
-  const totalOut      = productGroups.reduce((s, g) => s + g.totalKg, 0)
+  const totalIncl     = debagOnlyKg + bucketInKg + machineKg
+  const baggedOnlyKg  = productGroups.reduce((s, g) => s + g.totalKg, 0)
+  const totalOut      = baggedOnlyKg + bucketOutKg
   const totalBags     = productGroups.reduce((s, g) => s + g.totalCount, 0)
   const variance      = totalOut - totalIncl
   const balanceTolKg  = massBalanceToleranceFor(sectionId ?? '')
@@ -271,9 +287,9 @@ export function CaptureOverview({
       g.rows.forEach(r => lines.push(`${g.lot}\t${r.bagNo}\t${r.variant}\t${r.kg.toFixed(1)}`))
       if (g.rows.length > 1) lines.push(`Subtotal ${g.lot}\t\t\t${g.totalKg.toFixed(1)}`)
     })
-    if (bucketKg > 0 || machineKg > 0) {
+    if (bucketInKg > 0 || machineKg > 0) {
       lines.push(`Total debagging (excl. spillage)\t\t\t${debagOnlyKg.toFixed(1)}`)
-      if (bucketKg > 0) lines.push(`Bucket elevator spillage\t\t\t${bucketKg.toFixed(1)}`)
+      if (bucketInKg > 0) lines.push(`Bucket elevator (from yesterday)\t\t\t${bucketInKg.toFixed(1)}`)
       if (machineKg > 0) lines.push(`Machine spillage\t\t\t${machineKg.toFixed(1)}`)
     }
     lines.push(`Total incl. spillage\t\t\t${totalIncl.toFixed(1)}`)
@@ -282,6 +298,7 @@ export function CaptureOverview({
       g.lots.forEach(l => lines.push(`${g.product}\t${l.lot}\t${l.variant}\t${l.grade}\t${l.count}\t${l.kg.toFixed(1)}`))
       if (g.lots.length > 1) lines.push(`Total ${g.product}\t\t\t\t${g.totalCount}\t${g.totalKg.toFixed(1)}`)
     })
+    if (bucketOutKg > 0) lines.push(`Bucket elevator (left for tomorrow)\t\t\t\t\t${bucketOutKg.toFixed(1)}`)
     lines.push('', `Total out\t\t\t\t${totalBags}\t${totalOut.toFixed(1)}`)
     lines.push(`Balance (out − in)\t\t\t\t\t${variance > 0 ? '+' : ''}${variance.toFixed(1)}`)
     navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
@@ -385,7 +402,7 @@ export function CaptureOverview({
                 serial as its own chip, isolated from the surrounding text, so
                 wrapping it in a link to Bag Tracking later is a one-line change
                 once barcodes drive that lookup, not a layout rework. */}
-            {(debagGroups.length > 0 || bucketKg > 0) && (
+            {(debagGroups.length > 0 || bucketInKg > 0) && (
               <div className="rounded-xl border-2 overflow-hidden" style={{ borderColor: DEBAG_BLUE + '40' }}>
                 <div className="flex items-center justify-between px-3 py-2" style={{ background: DEBAG_BLUE + '12' }}>
                   <span className="inline-flex items-center gap-1.5 text-[12px] font-bold" style={{ color: DEBAG_BLUE }}>
@@ -427,16 +444,16 @@ export function CaptureOverview({
 
                 {/* Totals + spillage — plain summary rows, not part of the lot list */}
                 <div className="border-t-2 border-stone-200 divide-y divide-stone-100">
-                  {(bucketKg > 0 || machineKg > 0) && debagGroups.length > 0 && (
+                  {(bucketInKg > 0 || machineKg > 0) && debagGroups.length > 0 && (
                     <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
                       <span>Total debagging (excl. spillage)</span>
                       <span className="font-mono font-bold text-stone-800 normal-case">{debagOnlyKg.toFixed(1)} kg</span>
                     </div>
                   )}
-                  {bucketKg > 0 && (
+                  {bucketInKg > 0 && (
                     <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b0d' }}>
-                      <span className="flex items-center gap-1.5"><Scale size={12} className="text-amber-500" /> Bucket elevator spillage</span>
-                      <span className="font-mono">{bucketKg.toFixed(1)} kg</span>
+                      <span className="flex items-center gap-1.5"><Scale size={12} className="text-amber-500" /> Bucket elevator — from yesterday</span>
+                      <span className="font-mono">{bucketInKg.toFixed(1)} kg</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b08' }}>
@@ -475,7 +492,7 @@ export function CaptureOverview({
             ))}
 
             {/* ── Bagging — out ───────────────────────────────────────────────── */}
-            {productGroups.length > 0 && (
+            {(productGroups.length > 0 || bucketOutKg > 0) && (
               <div className="rounded-xl border-2 overflow-hidden" style={{ borderColor: BAG_ORANGE + '40' }}>
                 <div className="flex items-center justify-between px-3 py-2" style={{ background: BAG_ORANGE + '12' }}>
                   <span className="inline-flex items-center gap-1.5 text-[12px] font-bold" style={{ color: BAG_ORANGE }}>
@@ -556,13 +573,31 @@ export function CaptureOverview({
                   })}
                 </div>
 
-                {/* Grand total */}
-                <div className="flex items-center justify-between px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide border-t-2 border-stone-300" style={{ background: BAG_ORANGE + '08' }}>
-                  <span>Total bagged out</span>
-                  <span className="flex items-center gap-3 normal-case">
-                    <span className="font-mono font-bold text-stone-900">{totalBags} bags</span>
-                    <span className="font-mono font-bold text-[14px] text-stone-900">{totalOut.toFixed(1)} kg</span>
-                  </span>
+                {/* Totals + bucket-elevator carry-over — mirrors the debagging
+                    card's own totals block: bagged weight, then the elevator
+                    figure this AFTERNOON shift is leaving for tomorrow morning
+                    (a different physical quantity from bucketInKg above), then
+                    the grand total. */}
+                <div className="border-t-2 border-stone-300 divide-y divide-stone-100">
+                  {bucketOutKg > 0 && productGroups.length > 0 && (
+                    <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
+                      <span>Total bagged out</span>
+                      <span className="font-mono font-bold text-stone-800 normal-case">{totalBags} bags · {baggedOnlyKg.toFixed(1)} kg</span>
+                    </div>
+                  )}
+                  {bucketOutKg > 0 && (
+                    <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b0d' }}>
+                      <span className="flex items-center gap-1.5"><Scale size={12} className="text-amber-500" /> Bucket elevator — left for tomorrow</span>
+                      <span className="font-mono">{bucketOutKg.toFixed(1)} kg</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide" style={{ background: BAG_ORANGE + '08' }}>
+                    <span>Total out</span>
+                    <span className="flex items-center gap-3 normal-case">
+                      <span className="font-mono font-bold text-stone-900">{totalBags} bags</span>
+                      <span className="font-mono font-bold text-[14px] text-stone-900">{totalOut.toFixed(1)} kg</span>
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
