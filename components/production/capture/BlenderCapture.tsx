@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle, Printer, PenLine, Shuffle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { validateBagScan } from '@/lib/production/validate-scan'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
@@ -362,7 +362,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
   // Fine/Coarse Leaf batch numbers are always a Sieving Tower lot — letter/
   // number prefix + dash + more letters/numbers. Catches a dropped digit or
   // missing dash before it locks in.
-  const complete = !!group && !!serial.trim() && n(weight) > 0 && (!group.hasLot || isValidLot(lot))
+  const complete = !!group && !!serial.trim() && n(weight) > 0 && !isImplausibleWeight(n(weight)) && (!group.hasLot || isValidLot(lot))
 
   function submit() {
     if (!complete || !group) return
@@ -424,6 +424,9 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
                 <label className={LBL}>Weight (kg)</label>
                 <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight}
                   onChange={e => setWeight(e.target.value)} className={INP} />
+                {isImplausibleWeight(n(weight)) && (
+                  <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+                )}
               </div>
 
               {group?.hasLot && (
@@ -442,11 +445,10 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
 
         {!browsing && (
           <div className="p-5 pt-0 space-y-2 shrink-0">
-            {!complete && (
-              <p className="text-[11px] text-stone-400 text-center">
-                {[!serial.trim() && 'serial', n(weight) <= 0 && 'weight', group?.hasLot && !isValidLot(lot) && (lot.trim() ? 'a valid batch format' : 'batch number')].filter(Boolean).join(', ')} still needed.
-              </p>
-            )}
+            {!complete && (() => {
+              const missing = [!serial.trim() && 'serial', n(weight) <= 0 && 'weight', group?.hasLot && !isValidLot(lot) && (lot.trim() ? 'a valid batch format' : 'batch number')].filter(Boolean).join(', ')
+              return missing ? <p className="text-[11px] text-stone-400 text-center">{missing} still needed.</p> : null
+            })()}
             <div className="flex gap-2">
               {editingRow && onDelete && (
                 <button onClick={onDelete} className="px-4 py-2.5 rounded-xl border border-stone-200 text-err text-[13px] font-medium hover:bg-err/5">
@@ -660,7 +662,7 @@ export function BlenderCapture({
   // ── Output bag helpers ─────────────────────────────────────────────────────
 
   async function addOutputBag(weight: string, leaveOpen = false): Promise<boolean> {
-    if (n(weight) <= 0) return false
+    if (n(weight) <= 0 || isImplausibleWeight(n(weight))) return false
     setBagError(null)
     const serial = await genBlendSerial()
     const lot = assignment?.lot_number || autoLot(date, runNoRef.current ?? 1)
@@ -818,7 +820,7 @@ export function BlenderCapture({
                     {rows.length === 0 ? (
                       <p className="text-[11px] text-stone-400 px-1 italic">No bags logged yet.</p>
                     ) : rows.map((r, i) => {
-                      const incomplete = !r.serial.trim() || n(r.weight) <= 0 || (g.hasLot && !isValidLot(r.lot))
+                      const incomplete = !r.serial.trim() || n(r.weight) <= 0 || isImplausibleWeight(n(r.weight)) || (g.hasLot && !isValidLot(r.lot))
                       return (
                         <button key={r.id} onClick={() => !locked && setBagModal({ editing: r })}
                           className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 border text-left transition-opacity hover:opacity-90"
@@ -905,11 +907,14 @@ export function BlenderCapture({
                         <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outputWeight} onChange={e => setOutputWeight(e.target.value)}
                           onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } } }}
                           placeholder="Weight (kg)" className={INP + ' flex-1'} />
-                        <button onClick={async () => { if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } }} disabled={n(outputWeight) <= 0}
+                        <button onClick={async () => { if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } }} disabled={n(outputWeight) <= 0 || isImplausibleWeight(n(outputWeight))}
                           className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0" style={{ background: BAG_COLOR }}>
                           <Plus size={15} /> Add bag
                         </button>
                       </div>
+                      {isImplausibleWeight(n(outputWeight)) && (
+                        <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+                      )}
                       <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
                         <input type="checkbox" checked={outputLeaveOpen} onChange={e => setOutputLeaveOpen(e.target.checked)} className="rounded" />
                         Leave bag open — not full yet, will top up later (from Tags)
