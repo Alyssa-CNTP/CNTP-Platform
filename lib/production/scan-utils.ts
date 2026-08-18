@@ -133,41 +133,70 @@ export async function voidBagTag(
   }
 }
 
-// ── Standalone addWeightToBag — top up an open (partially-filled) bag ────────
-// Called when an operator scans/opens an is_open bag and adds more material to
-// it on a later shift or day, instead of hand-writing a corrected weight next
-// to the printed label while bag_tags silently stays wrong. bag_tags.weight_kg
-// is updated to the new total (every "current state" reader — stock on hand,
-// batch reconciliation, single-bag displays — keeps working unchanged, since
-// it always wants the live total). The scan_events row records only the delta
-// added, following the same convention as 'debagging_in' above — this is what
-// lets day/month reporting attribute each kg to the calendar date it was
-// actually added (this row's scanned_at), rather than to the bag's original
-// creation date, no matter how many times it's later re-summed.
-export async function addWeightToBag(
-  serialNumber: string,
-  deltaKg: number,
-  newTotalKg: number,
+// ── Standalone transferBagWeight — move weight from a source bag into a ──────
+// target bag (a "top-up"). Every top-up must name the bag the material
+// physically came from — there's no such thing as loose weight added to an
+// existing tagged bag with no traceable origin, so this always takes both
+// serials and moves a bounded amount between them, instead of just bumping
+// a number on one bag.
+//
+// The source bag's weight_kg drops by the amount drawn — voided instead of
+// ever reaching zero (bag_tags.weight_kg has CHECK(weight_kg > 0), and a
+// fully-drained bag no longer exists as its own physical unit anyway); a
+// partially-drained source is left is_open so its remainder doesn't get
+// forgotten on the floor. The target's weight_kg rises by the same amount.
+//
+// Both sides are logged as a linked pair in scan_events — 'topped_up' on
+// the receiving bag, 'drawn_down' on the depleted one, each pointing at the
+// other via related_serial_number. A top-up is therefore never new
+// production (see the 20260818_004 migration): it's kg that was already
+// counted on the day the source bag was first bagged, just moved between
+// containers — production/reporting sums must keep counting 'bagging_out'
+// only, never 'topped_up', or the same kg gets counted twice.
+export async function transferBagWeight(
+  sourceSerial: string,
+  sourceCurrentWeight: number,
+  targetSerial: string,
+  targetCurrentWeight: number,
+  amountKg: number,
   sectionId: string,
   sessionId: string | null,
   operatorId?: string | null,
-  closeBag = false,
+  closeTargetBag = false,
 ): Promise<void> {
-  if (!serialNumber || !(deltaKg > 0)) return
+  if (!sourceSerial || !targetSerial || sourceSerial === targetSerial) return
+  if (!(amountKg > 0) || amountKg > sourceCurrentWeight) return
   const now = new Date().toISOString()
-  const update: Record<string, unknown> = { weight_kg: newTotalKg }
-  if (closeBag) update.is_open = false
-  await getDb().schema('production').from('bag_tags').update(update as any).eq('serial_number', serialNumber)
 
-  await getDb().schema('production').from('scan_events').insert({
-    serial_number: serialNumber,
-    section_id:    sectionId,
-    session_id:    sessionId || null,
-    action:        'topped_up',
-    weight_kg:     deltaKg,
-    operator_id:   operatorId ?? null,
-    scanned_at:    now,
-  } as any)
+  const remaining = sourceCurrentWeight - amountKg
+  if (remaining <= 0) {
+    await getDb().schema('production').from('bag_tags').update({
+      status: 'voided', voided_at: now, voided_by: operatorId ?? null,
+    } as any).eq('serial_number', sourceSerial)
+  } else {
+    await getDb().schema('production').from('bag_tags').update({
+      weight_kg: remaining, is_open: true,
+    } as any).eq('serial_number', sourceSerial)
+  }
+
+  const targetUpdate: Record<string, unknown> = { weight_kg: targetCurrentWeight + amountKg }
+  if (closeTargetBag) targetUpdate.is_open = false
+  await getDb().schema('production').from('bag_tags').update(targetUpdate as any).eq('serial_number', targetSerial)
+
+  await getDb().schema('production').from('scan_events').insert([
+    {
+      serial_number: targetSerial, related_serial_number: sourceSerial,
+      section_id: sectionId, session_id: sessionId || null,
+      action: 'topped_up', weight_kg: amountKg,
+      operator_id: operatorId ?? null, scanned_at: now,
+    },
+    {
+      serial_number: sourceSerial, related_serial_number: targetSerial,
+      section_id: sectionId, session_id: sessionId || null,
+      action: 'drawn_down', weight_kg: amountKg,
+      operator_id: operatorId ?? null, scanned_at: now,
+    },
+  ] as any)
 }
 
 // ── advanceToNextSerial — moves focus to next empty serial input after scan ──

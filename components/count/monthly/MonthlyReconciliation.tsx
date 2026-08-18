@@ -84,16 +84,18 @@ function VarianceDrillDown({ sectionId, sessionId, month }: { sectionId: string;
       .eq('is_no_stock', false)
 
     // Weight bagged for this section in this month, from scan_events
-    // (bagging_out + topped_up) — not bag_tags.weight_kg by created_at, so a
-    // bag topped up this month only contributes the kg actually added this
-    // month. Joined back to lot_number via serial_number (scan_events doesn't
-    // carry lot_number itself).
+    // (bagging_out only) — not bag_tags.weight_kg by created_at, so a bag's
+    // weight_kg changing later (topped up, or drawn from as a source bag)
+    // doesn't retroactively change this month's total. 'topped_up'/
+    // 'drawn_down' are excluded: a top-up is never new production, it's kg
+    // already counted the month its source bag was bagged. Joined back to
+    // lot_number via serial_number (scan_events doesn't carry lot_number).
     const { data: weightEvents } = await db
       .schema('production')
       .from('scan_events')
       .select('serial_number,weight_kg')
       .eq('section_id', sectionId)
-      .in('action', ['bagging_out', 'topped_up'])
+      .eq('action', 'bagging_out')
       .gte('scanned_at', dateFrom + 'T00:00:00Z')
       .lte('scanned_at', dateTo   + 'T23:59:59Z')
 

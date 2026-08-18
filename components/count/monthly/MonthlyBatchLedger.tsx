@@ -102,15 +102,18 @@ export default function MonthlyBatchLedger({ session }: { session: McSession }) 
       .lte('created_at', dateTo   + 'T23:59:59Z')
       .not('lot_number', 'is', null)
 
-    // 3b. Weight added this month, from scan_events (bagging_out + topped_up) —
-    // not bag_tags.weight_kg by created_at, so a bag topped up this month only
-    // contributes the kg actually added this month, joined back to its lot via
-    // serial_number (scan_events doesn't carry lot_number itself).
+    // 3b. Weight bagged this month, from scan_events (bagging_out only) —
+    // not bag_tags.weight_kg by created_at, so a bag's weight_kg changing
+    // later (topped up, or drawn from as a source bag) doesn't retroactively
+    // change this month's total. 'topped_up'/'drawn_down' are excluded: a
+    // top-up is never new production, it's kg already counted the month
+    // its source bag was bagged. Joined back to lot via serial_number
+    // (scan_events doesn't carry lot_number itself).
     const { data: weightEvents } = await db
       .schema('production')
       .from('scan_events')
       .select('serial_number,weight_kg')
-      .in('action', ['bagging_out', 'topped_up'])
+      .eq('action', 'bagging_out')
       .gte('scanned_at', dateFrom + 'T00:00:00Z')
       .lte('scanned_at', dateTo   + 'T23:59:59Z')
 
@@ -175,8 +178,8 @@ export default function MonthlyBatchLedger({ session }: { session: McSession }) 
       rec.sections.add(e.section_name ?? e.section_id)
     })
 
-    // Bag tags by lot number — count of new bags this month, kg from weight
-    // events (bagging_out + topped_up) actually dated this month.
+    // Bag tags by lot number — count of new bags this month, kg from
+    // bagging_out weight events actually dated this month.
     const bagByLot = new Map<string, { count: number; kg: number }>()
     ;(bagData ?? []).forEach((b: any) => {
       const lot = b.lot_number as string
