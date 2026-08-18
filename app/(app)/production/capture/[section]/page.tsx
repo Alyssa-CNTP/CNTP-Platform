@@ -50,6 +50,7 @@ import { LineChat } from '@/components/production/capture/LineChat'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
+import { productionShiftNow } from '@/lib/production/shifts'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
 // Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
@@ -150,13 +151,20 @@ function CaptureScreen() {
   // finished-product item code (30FP…) picked from the job card, not chosen as a
   // separate A/B/C dropdown.
   const gradeless = sectionId.startsWith('refining') || sectionId === 'granule' || isBlenderSection(sectionId) || isPasteuriser(sectionId)
-  const shift     = sp.get('shift') ?? 'morning'
+  // Reached with ?date=&shift= from the capture landing page in the normal
+  // flow — this fallback only matters for a stale bookmark/reload/PWA
+  // shortcut that dropped the query params. It used to hardcode shift to
+  // 'morning' and date to today regardless of the actual time, which is
+  // wrong for exactly the reason productionShiftNow() exists: after midnight
+  // the still-running night shift's rows are filed under yesterday's date.
+  const nowFallback = productionShiftNow()
+  const shift     = sp.get('shift') ?? nowFallback.shift
   const sessionParam = sp.get('session')   // edit a specific record opened from Production Orders
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
   // otherwise input), and the opposite shift whose capture we merge for the run.
   const shiftBal: Shift   = shift === 'afternoon' ? 'afternoon' : 'morning'
   const otherShiftBal: Shift = shiftBal === 'morning' ? 'afternoon' : 'morning'
-  const dateParam = sp.get('date')  ?? format(new Date(), 'yyyy-MM-dd')
+  const dateParam = sp.get('date')  ?? nowFallback.date
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
 

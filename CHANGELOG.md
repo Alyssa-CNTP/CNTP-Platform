@@ -2,6 +2,110 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-17 — Gustav (Production capture: fix the night shift disappearing at midnight)
+
+**Files changed:** `lib/production/shifts.ts`, `app/(app)/production/capture/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `app/(app)/quality/granule/page.tsx`
+
+Reported: operators struggle to capture inputs and outputs around 00:00. Root cause found by deep-diving every date/shift computation in the capture flow, plus every scheduled job that could plausibly contend with it — the scheduled-job angle turned out to be a dead end (nothing fires at 00:00 SAST; the two jobs bracketing midnight each do one small write to an unrelated table).
+
+**The real cause:** the Afternoon/Night shift runs 16:00–01:00, crossing a calendar-date rollover, but the capture landing page computed "today's date" and "current shift" independently — `format(new Date(),'yyyy-MM-dd')` rolls to the new day at the stroke of midnight, while a separate `currentShift()` still (correctly) says the shift is `afternoon`. Every capture query is keyed on `(date, shift)`, and the night shift's `shift_assignments`/`prod_sessions` rows are filed under the date the shift *started* — so from 00:00 SAST the app queries `(today, afternoon)`, finds nothing, and shows "No sections assigned for this shift yet" / "No assignment for this section", even though last night's shift is still running and its session is still open. This is not the classic SAST-vs-UTC bug (that one's still real and separately fixed below) — it reproduces on a correctly-configured device, at the true local midnight.
+
+- **New `productionShiftNow()`** in `lib/production/shifts.ts` — the one place that now decides which (date, shift) "right now" belongs to: 00:00–06:59 resolves to *yesterday's* afternoon/night shift (the one still running, or just wrapping up), 07:00–15:59 to today's morning, 16:00–23:59 to today's afternoon/night just having started.
+- Replaced three independent, subtly different copies of this logic — the capture landing page's `currentShift()` + raw date, the section capture page's hardcoded `shift ?? 'morning'` fallback, and the assign page's own `getHours()` check — with the one shared, correct function.
+- **A related bug this exposed, not separately reported:** Sieving and Granule generate each bag's serial number from a *live* `new Date()` rather than the session's own pinned date. A session open across midnight would stamp a bag bagged at 00:05 with today's date while the session, mass balance, and everything else stayed filed under yesterday's — and the per-day sequence would restart at 001 mid-shift against a prefix nothing else in the session recognised. Both now use the session's own date.
+- **The classic SAST-vs-UTC bug, found separately while auditing every date default in the capture-adjacent code:** three spots in Quality's Granule page (`production_date`/`sample_date` defaults) used `new Date().toISOString().split('T')[0]` — the raw UTC date, which is a calendar day behind for the two hours after every true SAST midnight (South Africa is UTC+2 with no DST). Fixed to use SAST (or, where a sibling field is already device-local, kept internally consistent with it rather than mixing conventions).
+- No scheduled job fires at 00:00 SAST — checked every GitHub Actions cron, VPS crontab, and confirmed there's no `pg_cron` or Supabase Edge Function schedule either. Ruled out as a contributing factor.
+
+## 2026-08-17 — Gustav (COA sign-off: fix the customer field never actually being sent)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+`postSignoff()` read `model.matchedDoc?.customer` — but `matchedDoc` is just the applied spec's `doc_no` (a string), which never had a `.customer` property, so this always sent `undefined` and the sign-off row's `customer` column was always null. Caught by `tsc`, not reported as a functional bug.
+
+- Now sends the pasteuriser batch's own `customer` field (from `sources.past.customer`, the actual source `header.destination` itself falls back to), with `header.destination` as the fallback for a reopened historical COA where `sources` is null.
+
+## 2026-08-17 — Gustav (Lab Results: add Water Activity as a new test type)
+
+**Files changed:** `app/api/upload/route.ts`, `app/(app)/quality/lab-results/page.tsx`, `app/(app)/quality/coa/page.tsx`, `components/quality/CoaSpecsTab.tsx`, `QUALITY_MIGRATION_NOTES.md`
+
+Added off a sample report (Peter Johnson Laboratories, SANAS accredited, method PJL-M74) — a standalone "Test Report" for Water Activity @ 20°C, distinct in shape from every existing test type: no combined-report risk, no pass/fail printed on the report itself, and a "SAMPLE IDENTIFICATION" block that actually prints TYPE and GRADE alongside the batch number, where every other lab's reports bury type/grade in the customer/product description if at all.
+
+- **New `water_activity` test type**, wired through the same upload → extract → review → save pipeline as every other type (new prompt, `SCOPED`, `EXTRACT_ONLY`, `SECTION_PATTERNS`/`ANALYTE_OWNER` combined-report guards) — no schema change, since `qms.lab_results.test_type` is free-form text with no CHECK constraint.
+- **Type and Grade are now captured and shown**, not just batch number — a new Lab Results tab/column pair, and on the extraction review panel before saving. This exposed a real gap in the existing generic save path: `results: data.analytes ? {analytes:data.analytes} : data` discarded every other top-level field once an `analytes[]` array was present, silently dropping Type/Grade/Sample Description/Sample Date for this type (and Sample Description for every existing `analytes[]` type, unnoticed until now since nothing displayed it). Fixed by explicitly carrying those fields through.
+- **On the COA, Water Activity follows the Moisture/Bulk Density pattern** (an actual value to show — e.g. "0.628 Aw" — not a pass/fail "Complies" verdict), since the source report prints a measurement with no interpretation at all. Unlike the contaminant rows (Residue/PA/Heavy Metals/MOSH-MOAH/Chlorate), it isn't a toggleable "Include sections" checkbox — included whenever a result exists, same as Moisture/Bulk Density.
+- Added `water_activity` to `CoaSpecsTab`'s Other Fields, so a customer spec can optionally carry a limit for it (the source report itself prints none).
+- **Caught while wiring the COA export, not reported:** the jsPDF export's "Other Analysis" row filter was a second, separately-maintained copy of the on-screen filter (`otherRowVisible()`) that had already drifted out of sync — it was missing Chlorate/Perchlorate, so a toggled-off Chlorate row still printed in an exported PDF. Switched the export to call `otherRowVisible()` directly so this can't happen again for Water Activity or anything added after it.
+- `QUALITY_MIGRATION_NOTES.md`'s `qms.lab_results` column list was stale (missing `order_no`/`date_issued`/`date_received`/`regulation`/`created_by`, listing a `workcenter`/`uploaded_by` that don't exist) — corrected against the live schema while updating the `test_type` list.
+
+## 2026-08-17 — Gustav (Sieving Final QC label: squash the metrics grid, drop the cc/100g and 1-11 unit lines)
+
+**Files changed:** `lib/quality/qc-label-print.ts`, `lib/quality/qc-label-zpl.ts`
+
+Reported against the modal preview: the grid had a stray gap under PA Level/Residue, and asked to remove the Bulk Density/Leaf Shade unit lines and make the block smaller overall.
+
+- Both builders drop the unit line entirely (`cc/100g`, `1–11`) — Bulk Density and Leaf Shade become label+value only, matching PA Level/Residue, which never had one.
+- **The actual cause of the gap:** the grid used to stretch to fill whatever vertical space was left on the label (`flex:1`), so a row with a shorter third line still got the same forced height as one with a taller one, and the slack showed up as dead space under the shorter row. Sized to its own content instead — the leftover space now falls below the whole grid as a single margin, not distributed unevenly inside each cell.
+- **Caught while verifying that change, not reported by the user:** removing the forced-stretch also removed a safety net it had been quietly providing — for a long product name (e.g. "Coarse Leaf") competing with the new QC-LABEL tag for header width, the old flex:1 grid used to silently shrink to absorb any overflow. Without it, the header wrapped to two lines and pushed the out-of-spec warning band a few mm past the bottom of the label, clipped by the label's own `overflow: hidden`. Fixed by truncating the product name with an ellipsis instead of letting it wrap — the same behaviour the ZPL builder already had via `^FB`, just missing from the browser one — and re-measured in headless Chromium to confirm the warning band now sits with margin to spare rather than guessing from a screenshot.
+- ZPL grid cells re-centred within their own row height (previously anchored to the top with the unit line filling the rest) so leftover room splits evenly above and below, matching the browser layout's intent.
+
+## 2026-08-17 — Gustav (Sieving Final QC: on-screen preview now shows the real label design; dropped the manual browser-print button)
+
+**Files changed:** `lib/quality/qc-label-print.ts`, `app/(app)/quality/sieving/page.tsx`
+
+Reported: the modal shown right after saving a Final QC did not reflect any of the recent label changes (QC-LABEL tag, Lot/Batch and Date beside the barcode, no Product line) — it was a plain SERIAL/PRODUCT/LOT summary plus a hand-built metrics grid, a completely separate piece of markup from the label that actually gets printed, so the two had already drifted apart.
+
+- **The modal now renders the actual label design**, not a lookalike: `buildQcLabelHtml()` (`lib/quality/qc-label-print.ts`) is shown inline in an iframe sized to the label's real 100×50mm proportions, so what the operator sees after saving a QC is what comes out of the printer — one builder, not two.
+- **`buildQcLabelHtml()` gained an `embed` option** for this — it drops the print/rotate control bar and its script (which target a print pop-up window, not an inline preview) without touching the label markup itself.
+- **The browser-rendered label's own layout was brought in line with the direct-ZPL one** (`lib/quality/qc-label-zpl.ts`, the last few entries): a big "QC-LABEL" tag next to the product name, Lot/Batch and Date moved beside the barcode instead of a footer row. It had been left on the old layout since only the ZPL builder feeds the physical printer — now both agree, so the preview doesn't show something the printer wouldn't actually produce.
+- **Removed the "Print via browser instead" button** — the escape hatch is no longer offered since the preview now shows the same design either path would print; the automatic fallback (if the direct print to the Intermec fails) still opens that browser print window unchanged.
+- Verified by rendering both builders in headless Chromium — a typical case and an all-fields-long worst case (long product name, long QC name, out-of-spec warning band) — at the iframe's exact embedded size, confirming no clipped or overlapping fields and no console/page errors from the `embed` mode's stripped script.
+
+## 2026-08-17 — Gustav (Sieving Final QC label: add a big "QC-LABEL" tag next to the product name)
+
+**Files changed:** `lib/quality/qc-label-zpl.ts`
+
+- "QC-LABEL" now prints in the same big font as the product name, right-justified on that same top row (e.g. "FINE LEAF ... QC-LABEL"), so the label reads unambiguously as a QC label at a glance.
+- The product name's own field width shrinks to make room, rather than sharing one width with the new field — the two `^FB` boxes don't overlap even for a longer product name (verified with a 25-character one).
+- Re-verified programmatically across the same five cases as before (typical, worst-case, the previously-photographed data, empty, plus a long-product-name case) for position/box-overflow/field-balance/integer-coordinate correctness.
+
+## 2026-08-17 — Gustav (Sieving Final QC label: relocate Lot/Batch and Date next to the barcode, drop the duplicate Product line)
+
+**Files changed:** `lib/quality/qc-label-zpl.ts`
+
+First physical print off the new direct-ZPL path (previous entry) confirmed the printer itself is fine — correct content, no rotation issue, ZSim is behaving. This is a pure layout follow-up from marked-up feedback on that print.
+
+- Lot/Batch and Date moved from the bottom footer row up into the blank margins to the left and right of the barcode, so both read at a glance next to the serial they belong to.
+- The footer's Product line was dropped — it duplicated the product name already shown in the header — and that whole bottom strip is now left blank rather than backfilled with something else.
+- The margins beside the barcode shrink as the serial gets longer; below a minimum usable width the Lot/Batch and Date fields are skipped outright rather than squeezed in unreadably (an all-fields-long case with a 32-character serial was added to the verification below to exercise exactly that).
+- Caught in verification, not on a physical print: the barcode's right-margin field position was a non-integer dot coordinate (from an unrounded barcode-width estimate), which ZPL coordinates can't be — rounded before this went anywhere near the printer.
+- Re-verified programmatically (position/box-overflow/field-balance/integer-coordinate checks) across a typical run, an all-fields-long worst case, the exact data from the marked-up print, an empty case, and the new extra-long-serial case.
+
+## 2026-08-17 — Gustav (Sieving Final QC label: print straight to the lab's printer, bypassing the browser)
+
+**Files changed:** `lib/quality/qc-label-zpl.ts` (new), `app/api/print/qc-label/route.ts` (new), `lib/quality/qc-label-print.ts`, `lib/production/capture-config.ts`, `app/(app)/quality/sieving/page.tsx`
+
+Reported after the previous browser-orientation fix: the label was still printing rotated and cut off, on an Intermec PD (SN 175C1950042, 192.168.0.26) in the lab — a different physical printer from the sieving tower's own Argox. The dialog's Portrait/Landscape control was never going to fix this class of problem (see the previous entry) — it can rotate the drawing, not change the page's physical feed direction — so the browser print path is no longer the primary route for this label at all.
+
+- **Print label now sends raw ZPL straight to the printer** (it's configured for ZSim — Zebra ZPL emulation), the same way production's own bag tags already do: `app/api/print/label/route.ts`'s relay/direct split (`lib/production/print-queue.ts`, `lib/production/print-socket.ts`) is reused rather than duplicated, so this automatically works the same way in whichever mode (relay on the VPS, direct on the factory LAN) the deployment is already running in.
+- **New `lib/quality/qc-label-zpl.ts`** lays out the same content as the browser label — product, grade/variant badge, Code 128 serial, Bulk Density/Leaf Shade/PA Level/Residue, out-of-spec/failed warning band, Lot/Product/Date footer — in ZPL II at 800×400 dots (100×50mm @ 203dpi), added to `SECTION_PRINTER` as a new `quality_lab` entry, distinct from the tower's own `sieving` entry since they're two different physical printers.
+- **The browser label is kept as an automatic fallback** if the printer is unreachable, plus a manual "Print via browser instead" escape hatch — same 100×50mm standalone window as before, not `window.print()` of the app screen.
+- ZPL has no auto-wrap or ellipsis — unlike the browser build's CSS, text that doesn't fit a box is simply drawn past its edge, not clipped or shrunk. Every text field is bounded with `^FB` (ZPL's field-block command) rather than hand-computed character widths, so a long grade/variant, lot number or QC name is dropped at the box edge instead of overlapping its neighbour.
+- Caught during layout verification, not on a physical print (this printer is on the factory LAN, unreachable from where this was built): the grid's bottom edge and the out-of-spec warning band were both pinned to fixed positions that only agreed with the footer when the other was absent — with the warning band showing, both landed on top of the footer, and the shrunk cell had no room left for the third (unit) line stacked beneath label and value. The vertical layout is now derived bottom-up from the footer with an explicit minimum gap between every pair of blocks, and the unit line is dropped rather than overflowing when a cell is too short for it.
+- Verified programmatically for a typical run, an all-fields-long worst case (long serial/grade/QC name, out-of-spec warning present), a failed-but-in-spec case, and an empty one: every `^FO` position and `^GB` box stays within the 800×400 label, `^FB` widths are all positive and on-label, and `^FO`/`^FS` pairs balance. Genuine end-to-end confirmation on the physical Intermec — including which rotation, if any, it needs — is still outstanding; a single `FLIP_180` constant in `qc-label-zpl.ts` is the one-line fix if it prints upside down; a sideways print points at the stock's feed direction on the printer, not the code.
+
+## 2026-08-17 — Gustav (Sieving Final QC label: printed sideways and cut off on the lab printer)
+
+**Files changed:** `lib/quality/qc-label-print.ts`
+
+Reported with a photo of the printed label: the label came out rotated a quarter turn on the stock and clipped, and choosing Portrait or Landscape in the print dialog changed nothing.
+
+Cause: the print dialog's Portrait/Landscape control only rotates the drawing on a page whose size the browser has already fixed from `@page` — it cannot change the page box. The label declared a 100mm × 50mm page, but the printer feeds this stock short edge first, so it images a 50mm × 100mm page. The label was therefore drawn across a page turned the other way and everything past 50mm was cut off. No dialog setting can reconcile that, which is why both options looked identical.
+
+- **The label now sets its own page box.** A Rotate button in the label window switches between feeding long edge first (100mm × 50mm page, label as designed) and short edge first (50mm × 100mm page, with the label turned a quarter turn onto it). Either way the printed label reads the right way up on the stock.
+- **Remembered per machine** in `localStorage`, so the lab sets it once rather than every print.
+- The window now carries the settings that otherwise clip a label even when the page box is right: Margins **None**, Scale **100%** (not "Fit to page"), headers and footers off.
+- Verified both directions in Chromium: the page box switches to match, and the label's box lands exactly on the page — 0–100mm × 0–50mm feeding long edge first, 0–50mm × 0–100mm short edge first — with nothing clipped in either.
+
 ## 2026-08-17 — Gustav (Sieving Final QC: the bag label printed the whole screen instead of the label)
 
 **Files changed:** `lib/quality/qc-label-print.ts` (new), `app/(app)/quality/sieving/page.tsx`

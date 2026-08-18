@@ -126,7 +126,7 @@ const CUT_LENGTH_ROWS: { key: string; label: string }[] = [
 interface CoaLine { label: string; spec: string; result: string }
 interface CoaModel {
   batch: string
-  found: { pasteuriser: boolean; micro: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean; chloratePerchlorate: boolean; sieving: boolean }
+  found: { pasteuriser: boolean; micro: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean; chloratePerchlorate: boolean; waterActivity: boolean; sieving: boolean }
   header: Record<string, string>
   isOrganic: boolean
   micro: CoaLine[]
@@ -285,7 +285,12 @@ export default function CoaGeneratorPage() {
     try {
       const res = await fetch('/api/quality/coa-signoff', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_no: model.batch, customer: model.matchedDoc?.customer, grade: model.header?.grade, ...payload }),
+        // matchedDoc is just the applied spec's doc_no (a string) — never had
+        // a .customer property, so this always sent undefined. The pasteuriser
+        // batch's own customer field is the accurate source; header.destination
+        // (which can be overridden by a saved logistics order) is the fallback
+        // for a reopened historical COA, where sources is null.
+        body: JSON.stringify({ batch_no: model.batch, customer: sources?.past?.customer || model.header?.destination || '', grade: model.header?.grade, ...payload }),
       })
       const d = await res.json()
       if (!res.ok) {
@@ -373,6 +378,7 @@ export default function CoaGeneratorPage() {
     const hmRec     = labFor('heavy_metals')
     const moshRec   = labFor('mosh_moah')
     const clRec     = labFor('chlorate_perchlorate')
+    const waRec     = labFor('water_activity')
     const microData = microRec ? (microRec.results || microRec) : {}
 
     const customer = past?.customer || ''
@@ -389,11 +395,12 @@ export default function CoaGeneratorPage() {
 
     const src = {
       batch, past, microData, moistureAvg, bdAvg, cutResults, hasSieve,
-      found: { pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec, chloratePerchlorate: !!clRec, sieving: hasSieve },
+      found: { pasteuriser: !!past, micro: !!microRec, residue: !!residueRec, pa: !!paRec, heavyMetals: !!hmRec, moshMoah: !!moshRec, chloratePerchlorate: !!clRec, waterActivity: !!waRec, sieving: hasSieve },
       results: {
         residue: residueRec ? coaComplies(residueRec) : '', pa: paRec ? coaComplies(paRec) : '',
         hm: hmRec ? coaComplies(hmRec) : '', mosh: moshRec ? coaComplies(moshRec) : '',
         chlorate: clRec ? coaComplies(clRec) : '',
+        waterActivity: waRec ? waterActivityValue(waRec) : '',
       },
       isOrganic: !!(past?.is_organic) || /org/i.test(past?.variant || '') || /organic|org/i.test(key),
       header: {
@@ -435,7 +442,11 @@ export default function CoaGeneratorPage() {
       batch: h.batch_no || s.header.batch_number || '',
       // mirror the included sections so the data-source panel / outstanding
       // banner don't flag a historical COA that was already complete.
-      found: { pasteuriser: true, micro: !!sections.micro, sieving: !!sections.cutLength, residue: !!sections.residue, pa: !!sections.pa, heavyMetals: !!sections.heavyMetals, moshMoah: !!sections.moshMoah, chloratePerchlorate: !!sections.chloratePerchlorate },
+      // Water Activity isn't a toggleable section (like Moisture/Bulk
+      // Density, it's included whenever the value exists rather than gated
+      // by a checkbox) — the saved "other" lines already carry it if it was
+      // included, so this is just hardcoded true the same way pasteuriser is.
+      found: { pasteuriser: true, micro: !!sections.micro, sieving: !!sections.cutLength, residue: !!sections.residue, pa: !!sections.pa, heavyMetals: !!sections.heavyMetals, moshMoah: !!sections.moshMoah, chloratePerchlorate: !!sections.chloratePerchlorate, waterActivity: true },
       isOrganic: !!s.isOrganic,
       header: s.header,
       micro: s.micro || [],
@@ -671,7 +682,7 @@ export default function CoaGeneratorPage() {
           <div className="mb-4 grid grid-cols-2 gap-3 no-print">
             <div className="border border-gray-200 rounded-lg p-3">
               <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">Data sources</div>
-              {([['pasteuriser','Pasteuriser'],['micro','Microbiology'],['sieving','Sieving / cut-length'],['residue','Residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH'],['chloratePerchlorate','Chlorate/Perchlorate']] as const).map(([k,l]) => (
+              {([['pasteuriser','Pasteuriser'],['micro','Microbiology'],['sieving','Sieving / cut-length'],['residue','Residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH'],['chloratePerchlorate','Chlorate/Perchlorate'],['waterActivity','Water Activity']] as const).map(([k,l]) => (
                 <div key={k} className="flex items-center justify-between text-[12px] py-0.5">
                   <span>{l}</span>
                   <span className={(model.found as any)[k] ? 'text-green-700 font-semibold' : 'text-gray-400'}>
@@ -885,6 +896,11 @@ function buildModel(src: any, spec: any): CoaModel {
   const other: CoaLine[] = []
   if (src.moistureAvg != null) other.push({ label: 'Moisture', spec: spec ? moistSpec(spec.moisture_max) || '<10%' : '<10%', result: `${src.moistureAvg.toFixed(1).replace('.', ',')}%` })
   if (src.bdAvg != null) other.push({ label: 'Bulk Density', spec: spec ? (bdSpec(spec.bd_min, spec.bd_max) || '280 – 340cc/100g') : '280 – 340cc/100g', result: `${Math.round(src.bdAvg)}cc/100g` })
+  // Like Moisture/Bulk Density above (a measurement to show, not a
+  // pass/fail contaminant toggle) — included whenever a result exists rather
+  // than gated by sections/wantX, so there's no "Include sections" checkbox
+  // for it either.
+  if (src.results.waterActivity) other.push({ label: 'Water Activity', spec: (spec && req(sp.other?.water_activity)) ? String(sp.other.water_activity) : '', result: src.results.waterActivity })
   other.push({ label: 'Foreign Material', spec: (spec && req(sp.other?.foreign_material)) ? String(sp.other.foreign_material) : '<1%', result: '0.0%' })
   const wantResidue = spec ? req(sp.other?.residue_reg) : src.found.residue
   const wantPa      = spec ? req(sp.contaminants?.pyrrolizidine_alkaloids) : src.found.pa
@@ -975,6 +991,18 @@ function otherRowVisible(l: CoaLine, sections: CoaModel['sections']): boolean {
     case 'Chlorate/Perchlorate':      return sections.chloratePerchlorate
     default:                          return true
   }
+}
+
+// Water Activity is a measurement people want to see on the COA (like
+// Moisture/Bulk Density), not a pass/fail verdict like the contaminant rows —
+// coaComplies() would collapse it to "Complies"/"Does not comply" and lose
+// the actual Aw value, so this reads the number straight out of the one
+// analyte the water_activity prompt extracts.
+function waterActivityValue(rec: any): string {
+  const d = rec.results || rec
+  const a = Array.isArray(d.analytes) ? d.analytes[0] : null
+  if (!a || a.result == null || a.result === '') return ''
+  return `${a.result}${a.unit ? ' ' + a.unit : ''}`
 }
 
 function coaComplies(rec: any): string {
@@ -1105,13 +1133,13 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
 
   if (model.sections.micro) drawTable('Microbiological Analyses', ['Organism', "Spec (cfu's/g)", "Result (cfu's/g)"], model.micro)
   if (model.sections.cutLength) drawTable('Cut Length Guidelines', ['Sieve Size', 'Specification', 'Result'], model.cutLength)
-  drawTable('Other Analysis', ['Description', 'Specification', 'Result'], model.other.filter(l => {
-    if (l.label === 'Pesticide residue') return model.sections.residue
-    if (l.label === 'Pyrrolizidine Alkaloids') return model.sections.pa
-    if (l.label === 'Heavy Metals') return model.sections.heavyMetals
-    if (l.label === 'MOSH/MOAH') return model.sections.moshMoah
-    return true
-  }))
+  // Was a separate inline filter that had drifted out of sync with the
+  // screen/print path's otherRowVisible() — it was already missing
+  // Chlorate/Perchlorate, which meant a toggled-off row still made it into
+  // the exported PDF. Sharing the one function keeps exported PDFs and every
+  // future "Other Analysis" row (like Water Activity) consistent by
+  // construction instead of by remembering to update two places.
+  drawTable('Other Analysis', ['Description', 'Specification', 'Result'], model.other.filter(l => otherRowVisible(l, model.sections)))
 
   // Signatures — two blocks with the drawn signature above a ruled line
   y += 50

@@ -52,7 +52,14 @@ function esc(v: unknown, max = 24): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function buildQcLabelHtml(d: QcLabelData): string {
+/**
+ * `embed: true` drops the print/rotate control bar and its script — for
+ * showing the label inline (e.g. an iframe preview) rather than in its own
+ * print window, where there's no print button to click and no per-printer
+ * feed orientation to remember.
+ */
+export function buildQcLabelHtml(d: QcLabelData, opts: { embed?: boolean } = {}): string {
+  const embed = !!opts.embed
   const serial     = (d.serialNumber || '').trim()
   const isFineLeaf = d.product === 'Fine Leaf'
   const outOfSpec  = !!d.bag?.inprocess_out_of_spec
@@ -71,122 +78,190 @@ export function buildQcLabelHtml(d: QcLabelData): string {
     ? encodeCode128(serial, { height: Math.round(getCode128Width(serial, mw) * 0.14), moduleWidth: mw })
     : ''
 
-  const metrics: Array<[string, unknown, string]> = [
-    ['Bulk Density', d.bulkDensity, 'cc/100g'],
-    ['Leaf Shade',   d.leafShade,   '1–11'],
-    ['PA Level',     d.paLevel,     ''],
-    ['Residue',      d.residue,     ''],
+  const metrics: Array<[string, unknown]> = [
+    ['Bulk Density', d.bulkDensity],
+    ['Leaf Shade',   d.leafShade],
+    ['PA Level',     d.paLevel],
+    ['Residue',      d.residue],
   ]
 
   return `<!DOCTYPE html>
-<html>
+<html data-feed="long">
 <head>
 <meta charset="UTF-8">
 <title>Final QC Label — ${esc(serial, 40)}</title>
+<!-- Rewritten by setFeed() to match how the printer feeds the label. -->
+<style id="page-rule">@page { size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm; margin: 0; }</style>
 <style>
-  @page { size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm; margin: 0; }
+  /* The @page rule is rewritten by setFeed() below — the page box has to match
+     how the printer actually feeds the label, which the print dialog's
+     Portrait/Landscape control cannot do on its own. See setFeed(). */
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: ${LABEL_W_MM}mm; height: ${LABEL_H_MM}mm;
-    /* Nothing may spill past the media, or the printer feeds a second blank label. */
-    overflow: hidden;
-    background: #fff; color: #000;
-  }
+  html, body { overflow: hidden; background: #fff; color: #000; }
   body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+
+  /* Long edge first: the page box is the label as designed. */
+  html[data-feed="long"], html[data-feed="long"] body {
+    width: ${LABEL_W_MM}mm; height: ${LABEL_H_MM}mm;
+  }
+  /* Short edge first: the printer images a ${LABEL_H_MM}mm x ${LABEL_W_MM}mm page,
+     so the page box is turned and the label rotated a quarter turn onto it.
+     Rotating about the top-left corner puts the label off the page to the left,
+     hence the translate back across the page width. */
+  html[data-feed="short"], html[data-feed="short"] body {
+    width: ${LABEL_H_MM}mm; height: ${LABEL_W_MM}mm;
+  }
+  html[data-feed="short"] .label {
+    transform: translateX(${LABEL_H_MM}mm) rotate(90deg);
+    transform-origin: top left;
+  }
+
   .label {
-    width: 100%; height: 100%;
+    width: ${LABEL_W_MM}mm; height: ${LABEL_H_MM}mm;
     padding: 1.2mm 2.2mm;
     display: flex; flex-direction: column;
     ${isFineLeaf ? 'border: 1.2px solid #000; outline: 1.2px solid #000; outline-offset: -2.2px;' : ''}
   }
   .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 2mm; }
-  .product { font-size: 15pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; }
-  .qc-tag  { font-size: 6pt; font-weight: 700; letter-spacing: .1em; color: #333; margin-top: .5mm; text-transform: uppercase; }
+  /* min-width:0 lets this flex item actually shrink below its text's natural
+     width, which flex items don't do by default — without it the product
+     name/subtitle would push .head-right out rather than truncate. */
+  .head-left { flex: 1; min-width: 0; }
+  .product { font-size: 15pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qc-tag  { font-size: 6pt; font-weight: 700; letter-spacing: .1em; color: #333; margin-top: .5mm; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .head-right { display: flex; align-items: center; gap: 2mm; flex-shrink: 0; }
+  .qc-flag { font-size: 13pt; font-weight: 900; line-height: 1.0; text-transform: uppercase; white-space: nowrap; }
   .badge {
     background: #000; color: #fff; padding: 1mm 2mm; flex-shrink: 0;
     font-size: 6.5pt; font-weight: 700; white-space: nowrap; text-transform: uppercase;
   }
-  .idrow { display: flex; flex-direction: column; align-items: center; margin-top: .8mm; }
-  .idrow svg { display: block; height: 6mm; width: auto; max-width: 62mm; }
+  /* Barcode centred, Lot/Batch and Date in the margins either side of it —
+     same arrangement as the printed label (qc-label-zpl.ts), instead of a
+     separate footer row below the grid. */
+  .idrow { display: flex; align-items: center; justify-content: space-between; gap: 1.5mm; margin-top: .8mm; }
+  .idrow svg { display: block; height: 6mm; width: auto; max-width: 52mm; }
+  .barcode-col { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0; }
   .serial { font-family: 'Courier New', monospace; font-size: 8pt; font-weight: 700; letter-spacing: .12em; margin-top: .4mm; }
+  .side-field { flex-shrink: 0; max-width: 17mm; overflow: hidden; }
+  .side-field.right { text-align: right; }
+  /* Sized to its own content, not stretched to fill whatever's left of the
+     label — with only a label+value per cell now (no unit line) a stretched
+     grid left each cell centred in far more height than its two lines need,
+     which read as a stray gap under PA Level/Residue in particular since
+     that row never had a third line to begin with. Leftover height now falls
+     below the grid instead, as blank label margin. */
   .metrics {
-    flex: 1; min-height: 0; margin-top: .8mm;
+    margin-top: .8mm;
     display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
     border: 1.2px solid #000;
   }
-  /* Type sizes are budgeted against the tightest case — warning band present,
-     which leaves each row ~9mm. overflow:hidden is the backstop so an
-     unexpected value can never spill across the grid lines. */
   .cell {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 0 1mm; min-height: 0; overflow: hidden;
+    padding: 1.4mm 1mm; overflow: hidden;
   }
   .cell:nth-child(2), .cell:nth-child(4) { border-left: 1px solid #000; }
   .cell:nth-child(3), .cell:nth-child(4) { border-top: 1px solid #000; }
   .m-label { font-size: 5pt; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #444; line-height: 1.2; }
-  .m-value { font-size: 12pt; font-weight: 800; line-height: 1.0; }
-  .m-unit  { font-size: 5pt; color: #444; line-height: 1.2; }
+  .m-value { font-size: 11pt; font-weight: 800; line-height: 1.0; margin-top: .3mm; }
   .warn {
     margin-top: .8mm; border: 1.2px solid #000; background: #000; color: #fff;
     font-size: 6pt; font-weight: 800; letter-spacing: .05em; text-align: center;
     padding: .7mm 1mm; text-transform: uppercase;
   }
-  .foot {
-    display: grid; grid-template-columns: 1fr auto auto; gap: 2mm;
-    margin-top: .8mm; align-items: end;
-  }
   .f-label { font-size: 5pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #666; }
   .f-value { font-size: 7.5pt; font-weight: 800; line-height: 1.15; text-transform: uppercase; }
-  .foot > div:not(:first-child) { text-align: right; }
-  .print-btn {
-    position: fixed; bottom: 8px; right: 8px;
-    background: #166534; color: #fff; border: none; border-radius: 8px;
-    padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer; z-index: 99;
+  /* Screen-only controls, laid out clear of the label so they never sit on top
+     of it, and never printed. */
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 10px; background: #f3f4f6; border-top: 1px solid #d1d5db;
+    font: 12px -apple-system, 'Helvetica Neue', Arial, sans-serif; z-index: 99;
   }
-  /* The button is a screen-only affordance — it must never reach the label. */
+  .bar button {
+    border: 1px solid #d1d5db; border-radius: 7px; background: #fff;
+    padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .bar button.primary { background: #166534; border-color: #166534; color: #fff; }
+  .bar .hint { color: #4b5563; font-size: 11px; flex-basis: 100%; }
   @media print { .no-print { display: none !important; } }
 </style>
 </head>
 <body>
   <div class="label">
     <div class="head">
-      <div>
+      <div class="head-left">
         <div class="product">${esc(d.product, 22)}</div>
         <div class="qc-tag">Final QC${d.qcName ? ' · ' + esc(d.qcName, 28) : ''}</div>
       </div>
-      ${badge ? `<div class="badge">${esc(badge, 26)}</div>` : ''}
+      <div class="head-right">
+        <span class="qc-flag">QC-Label</span>
+        ${badge ? `<span class="badge">${esc(badge, 26)}</span>` : ''}
+      </div>
     </div>
 
     <div class="idrow">
-      ${barcode}
-      <div class="serial">${esc(serial, 30)}</div>
+      <div class="side-field">
+        <div class="f-label">Lot / Batch</div>
+        <div class="f-value">${esc(d.lotNumber, 16)}</div>
+      </div>
+      <div class="barcode-col">
+        ${barcode}
+        <div class="serial">${esc(serial, 30)}</div>
+      </div>
+      <div class="side-field right">
+        <div class="f-label">Date</div>
+        <div class="f-value">${dateFormatted}</div>
+      </div>
     </div>
 
     <div class="metrics">
-      ${metrics.map(([label, value, unit]) => `
+      ${metrics.map(([label, value]) => `
       <div class="cell">
         <div class="m-label">${label}</div>
         <div class="m-value">${esc(value, 9)}</div>
-        ${unit ? `<div class="m-unit">${unit}</div>` : ''}
       </div>`).join('')}
     </div>
 
     ${outOfSpec ? '<div class="warn">⚠ In-process sieve out of spec — review before release</div>' : ''}
     ${failed && !outOfSpec ? '<div class="warn">⚠ Final QC failed — do not release</div>' : ''}
-
-    <div class="foot">
-      <div>
-        <div class="f-label">Lot / Batch</div>
-        <div class="f-value">${esc(d.lotNumber, 20)}</div>
-      </div>
-      <div>
-        <div class="f-label">Date</div>
-        <div class="f-value">${dateFormatted}</div>
-      </div>
-    </div>
+  </div>
+${embed ? '' : `
+  <div class="bar no-print">
+    <button class="primary" onclick="window.print()">🖨 Print Label</button>
+    <button onclick="toggleFeed()">↻ Rotate (feed: <span id="feed-name">long edge</span>)</button>
+    <span class="hint">
+      If the label prints sideways or cut off, press Rotate and print again — the setting is
+      remembered. In the print dialog set Margins to <b>None</b> and Scale to <b>100%</b> (not
+      "Fit to page"), and turn Headers and footers off.
+    </span>
   </div>
 
-  <button class="print-btn no-print" onclick="window.print()">Print Label</button>
+<script>
+  // The print dialog's Portrait/Landscape control only rotates the drawing on a
+  // page whose size the browser has already fixed — it cannot change the page
+  // box. When the printer feeds this label short-edge first, the page box has to
+  // become ${LABEL_H_MM}mm x ${LABEL_W_MM}mm and the label be turned a quarter
+  // turn onto it, or the label images sideways and clipped. That is what this
+  // switches, and it is per-printer, so it is remembered.
+  var PAGE = {
+    long:  '@page { size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm; margin: 0; }',
+    short: '@page { size: ${LABEL_H_MM}mm ${LABEL_W_MM}mm; margin: 0; }'
+  }
+  function setFeed(mode) {
+    if (mode !== 'short') mode = 'long'
+    document.getElementById('page-rule').textContent = PAGE[mode]
+    document.documentElement.setAttribute('data-feed', mode)
+    document.getElementById('feed-name').textContent = mode === 'short' ? 'short edge' : 'long edge'
+    try { localStorage.setItem('cntp.qcLabelFeed', mode) } catch (e) { /* private mode */ }
+  }
+  function toggleFeed() {
+    setFeed(document.documentElement.getAttribute('data-feed') === 'short' ? 'long' : 'short')
+  }
+  var saved = 'long'
+  try { saved = localStorage.getItem('cntp.qcLabelFeed') || 'long' } catch (e) { /* private mode */ }
+  setFeed(saved)
+</script>`}
 </body>
 </html>`
 }
@@ -205,4 +280,33 @@ export function printQcLabel(data: QcLabelData): void {
   win.focus()
   // Short delay lets the barcode render before the print dialog opens.
   setTimeout(() => win.print(), 600)
+}
+
+async function printQcLabelDirect(data: QcLabelData): Promise<void> {
+  const res = await fetch('/api/print/qc-label', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ data }),
+  })
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: 'Unknown error' }))
+    throw new Error(error)
+  }
+}
+
+/**
+ * Print straight to the lab's networked Intermec (bypassing the browser's
+ * print dialog, whose Portrait/Landscape control turned out unable to fix the
+ * sideways/clipped output this label was getting there — the printer's own
+ * feed direction, not the dialog, decides the page box). Falls back to the
+ * browser print window if the printer is unreachable.
+ */
+export async function printQcLabelAuto(data: QcLabelData): Promise<void> {
+  try {
+    await printQcLabelDirect(data)
+    return
+  } catch (err) {
+    console.warn('[printQcLabelAuto] Direct print failed, falling back to browser:', err)
+  }
+  printQcLabel(data)
 }
