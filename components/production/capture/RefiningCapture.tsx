@@ -163,6 +163,7 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at')
       .in('product_type', expanded)
       .eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false })
       .limit(60)
       .then(({ data }: { data: SystemBag[] | null }) => setBags(data ?? []))
@@ -416,19 +417,21 @@ function OutputWeightGroup({
   group: RefiningOutputGroup | null
   locked: boolean
   variantWord: string
-  onAdd: (weight: string) => void
+  onAdd: (weight: string, leaveOpen: boolean) => void
   onRemoveBag: (bagId: string) => void
   onSetSecured: (bagId: string, val: boolean) => void
   onTag: (bagId: string, method: 'printed' | 'handwritten') => void
 }) {
   const [weight, setWeight] = useState('')
+  const [leaveOpen, setLeaveOpen] = useState(false)
   const groupKg = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
   const col = groupColor(groupIndex)
 
   function handleAdd() {
     if (n(weight) <= 0) return
-    onAdd(weight)
+    onAdd(weight, leaveOpen)
     setWeight('')
+    setLeaveOpen(false)
   }
 
   return (
@@ -486,19 +489,25 @@ function OutputWeightGroup({
 
         {/* Inline weight entry */}
         {!locked && (
-          <div className="flex gap-2 pt-1">
-            <input
-              type="text" inputMode="decimal" pattern="[0-9.,]*"
-              value={weight} onChange={e => setWeight(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd() } }}
-              placeholder="Weight (kg)"
-              className={INP + ' flex-1'}
-            />
-            <button onClick={handleAdd} disabled={n(weight) <= 0}
-              className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0"
-              style={{ background: col }}>
-              <Plus size={15} /> Add bag
-            </button>
+          <div className="space-y-1.5 pt-1">
+            <div className="flex gap-2">
+              <input
+                type="text" inputMode="decimal" pattern="[0-9.,]*"
+                value={weight} onChange={e => setWeight(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd() } }}
+                placeholder="Weight (kg)"
+                className={INP + ' flex-1'}
+              />
+              <button onClick={handleAdd} disabled={n(weight) <= 0}
+                className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0"
+                style={{ background: col }}>
+                <Plus size={15} /> Add bag
+              </button>
+            </div>
+            <label className="flex items-center gap-1.5 text-[11px] text-stone-500 pl-0.5">
+              <input type="checkbox" checked={leaveOpen} onChange={e => setLeaveOpen(e.target.checked)} className="rounded" />
+              Leave bag open — not full yet, will top up later (from Tags)
+            </label>
           </div>
         )}
 
@@ -656,7 +665,7 @@ export function RefiningCapture({
 
   // ── Output group helpers ───────────────────────────────────────────────────
 
-  async function addOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', productType: string, weight: string) {
+  async function addOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', productType: string, weight: string, leaveOpen = false) {
     if (n(weight) <= 0) return
     const serial = genSerial()
     const now = nowISO()
@@ -673,7 +682,7 @@ export function RefiningCapture({
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: sectionId, session_id: null,
         product_type: productType, variant: variantWord || null,
-        weight_kg: n(weight), lot_number: null,
+        weight_kg: n(weight), lot_number: null, is_open: leaveOpen,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
@@ -898,7 +907,7 @@ export function RefiningCapture({
                 group={group}
                 locked={locked}
                 variantWord={variantWord}
-                onAdd={weight => addOutputBag(key, productType, weight)}
+                onAdd={(weight, leaveOpen) => addOutputBag(key, productType, weight, leaveOpen)}
                 onRemoveBag={bagId => removeBagFromGroup(key, bagId)}
                 onSetSecured={(bagId, v) => setGroupBagSecured(key, bagId, v)}
                 onTag={(bagId, method) => tagOutputBag(key, bagId, method)}

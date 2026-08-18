@@ -17,9 +17,12 @@ import {
   Search, X, Package, Printer, ArrowRight, Clock, ChevronRight,
   Filter, Activity, BarChart3, Layers, AlertTriangle, CheckCircle2,
   Loader2, Eye, Scan, TrendingUp, MapPin, History, Database, Calendar,
-  FlaskConical, ExternalLink,
+  FlaskConical, ExternalLink, PackageOpen, Plus,
 } from 'lucide-react'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
+import { addWeightToBag } from '@/lib/production/scan-utils'
+import { printLabelAuto } from '@/lib/production/label-print'
+import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG } from '@/lib/production/capture-config'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface BagTag {
@@ -40,6 +43,7 @@ interface BagTag {
   consumed_weight_kg:   number | null
   captured_at:          string
   qr_payload:           string | null
+  is_open:              boolean
 }
 
 interface ScanEvent {
@@ -232,10 +236,12 @@ function printTagLabel(tag: BagTag) {
 interface TagDetailProps {
   tag: BagTag
   allTags: BagTag[]
+  operatorId: string | null
   onClose: () => void
+  onChanged: () => void
 }
 
-function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
+function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailProps) {
   const [events,       setEvents]       = useState<ScanEvent[]>([])
   const [inputBags,    setInputBags]    = useState<BagTag[]>([])
   const [quality,      setQuality]      = useState<QualityRow[]>([])
@@ -243,8 +249,28 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
   const [loadingGene,  setLoadingGene]  = useState(true)
   const [loadingQual,  setLoadingQual]  = useState(true)
 
-  // Load scan events for this serial
-  useEffect(() => {
+  // Local override so the modal reflects a top-up immediately without waiting
+  // for the parent list's next refresh.
+  const [weightOverride, setWeightOverride] = useState<number | null>(null)
+  const [openOverride,   setOpenOverride]   = useState<boolean | null>(null)
+  const currentWeight = weightOverride ?? tag.weight_kg ?? 0
+  const isOpenBag     = openOverride ?? tag.is_open
+
+  // ── Add-weight form (top up an open bag) ──────────────────────────────────
+  const [addingWeight, setAddingWeight] = useState(false)
+  const [delta,        setDelta]        = useState('')
+  const [closeBag,     setCloseBag]     = useState(false)
+  const [confirmHeavy, setConfirmHeavy] = useState(false)
+  const [saving,       setSaving]       = useState(false)
+  const [addError,     setAddError]     = useState<string | null>(null)
+
+  const deltaKg   = parseFloat(delta.replace(',', '.')) || 0
+  const newTotal  = currentWeight + deltaKg
+  const overCap   = newTotal > MAX_BAG_WEIGHT_KG
+  const unusual   = deltaKg > 0 && !overCap && isUnusuallyHeavyBag(tag.product_type, newTotal)
+  const standard  = expectedBagWeightFor(tag.product_type)
+
+  function reloadEvents() {
     setLoadingEvts(true)
     getDb().schema('production').from('scan_events')
       .select('*')
@@ -254,6 +280,41 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
         setEvents((data as ScanEvent[]) || [])
         setLoadingEvts(false)
       })
+  }
+
+  async function submitAddWeight() {
+    if (deltaKg <= 0 || overCap) return
+    if (unusual && !confirmHeavy) return // soft check awaiting confirmation
+    setSaving(true)
+    setAddError(null)
+    try {
+      await addWeightToBag(
+        tag.serial_number, deltaKg, newTotal,
+        tag.section_id, tag.prod_session_id || null, operatorId, closeBag,
+      )
+      await printLabelAuto({
+        id: tag.id, serial_number: tag.serial_number, product_type: tag.product_type,
+        variant: tag.variant || 'Conventional', grade: (tag.destination as any) || 'A',
+        weight_kg: newTotal, lot_number: tag.lot_number || '', section_id: tag.section_id,
+        section_name: tag.section_name, created_at: tag.captured_at, printed: true,
+        acumaticaId: tag.acumatica_id ?? undefined,
+      } as any)
+      setWeightOverride(newTotal)
+      setOpenOverride(!closeBag)
+      setDelta(''); setCloseBag(false); setConfirmHeavy(false); setAddingWeight(false)
+      reloadEvents()
+      onChanged()
+    } catch (e) {
+      setAddError('Could not save the top-up — check the connection and try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Load scan events for this serial
+  useEffect(() => {
+    reloadEvents()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tag.serial_number])
 
   // Load genealogy: what bags were consumed to produce this bag
@@ -309,6 +370,11 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
   }, [tag.lot_number])
 
   const isConsumed = Boolean(tag.consumed_at_section)
+  const statusBadge = isOpenBag
+    ? { label: `Open — ${currentWeight || 0}kg, still filling`, cls: 'bg-sky-50 text-sky-700 border-sky-200', dot: 'bg-sky-500' }
+    : isConsumed
+    ? { label: 'Consumed', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' }
+    : { label: 'On floor', cls: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-400' }
 
   return (
     <div
@@ -322,7 +388,7 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
         {/* ── Modal header ── */}
         <div className="sticky top-0 bg-white z-10 flex items-start justify-between px-5 pt-5 pb-4 border-b border-stone-100">
           <div className="flex items-start gap-3">
-            <div className={`w-3 h-3 rounded-full mt-1.5 shrink-0 ${isConsumed ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+            <div className={`w-3 h-3 rounded-full mt-1.5 shrink-0 ${statusBadge.dot}`} />
             <div>
               <h2 className="font-mono font-bold text-[18px] text-stone-900 tracking-wider leading-none mb-1.5">
                 {tag.serial_number}
@@ -330,15 +396,23 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
               <div className="flex items-center gap-2 flex-wrap">
                 <SectionPill sectionId={tag.section_id} label={tag.section_name} />
                 <VariantPill variant={tag.variant} />
-                <span className={`inline-flex font-mono text-[9px] font-bold px-2 py-0.5 rounded-full border ${isConsumed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                  {isConsumed ? 'Consumed' : 'On floor'}
+                <span className={`inline-flex font-mono text-[9px] font-bold px-2 py-0.5 rounded-full border ${statusBadge.cls}`}>
+                  {statusBadge.label}
                 </span>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-2">
+            {isOpenBag && (
+              <button
+                onClick={() => setAddingWeight(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
+              >
+                <Plus size={13} /> Add weight
+              </button>
+            )}
             <button
-              onClick={() => printTagLabel(tag)}
+              onClick={() => printTagLabel({ ...tag, weight_kg: currentWeight })}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
             >
               <Printer size={13} /> Print
@@ -348,6 +422,64 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
             </button>
           </div>
         </div>
+
+        {addingWeight && (
+          <div className="px-5 pt-4 pb-1 border-b border-stone-100 bg-sky-50/40 space-y-2.5">
+            <p className="text-[11px] font-semibold text-sky-800 uppercase tracking-wide">Add weight to this bag</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="text" inputMode="decimal" pattern="[0-9.,]*" autoFocus
+                value={delta} onChange={e => { setDelta(e.target.value); setConfirmHeavy(false) }}
+                placeholder="Amount added (kg)"
+                className="flex-1 px-3 py-2 rounded-lg border border-stone-200 text-[13px] outline-none focus:border-sky-500"
+              />
+              <span className="font-mono text-[12px] text-stone-500 shrink-0">
+                {currentWeight}kg + {deltaKg || 0}kg = <strong>{newTotal.toFixed(1)}kg</strong>
+              </span>
+            </div>
+            {standard != null && (
+              <p className="text-[10px] text-stone-400">Standard full bag for this product is ~{standard}kg.</p>
+            )}
+            <label className="flex items-center gap-1.5 text-[11px] text-stone-600">
+              <input type="checkbox" checked={closeBag} onChange={e => setCloseBag(e.target.checked)} className="rounded" />
+              This completes the bag — mark it no longer open
+            </label>
+
+            {overCap && (
+              <p className="text-[11px] text-err flex items-center gap-1.5">
+                <AlertTriangle size={12} /> {newTotal.toFixed(1)}kg exceeds the {MAX_BAG_WEIGHT_KG}kg limit for a single bag — check the amount.
+              </p>
+            )}
+            {unusual && !overCap && (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <AlertTriangle size={13} className="text-amber-500 shrink-0" />
+                <span className="text-[11px] text-amber-700 flex-1">
+                  {newTotal.toFixed(1)}kg is unusually heavy for {tag.product_type || 'this product'} — sure that's right?
+                </span>
+                <button onClick={() => setConfirmHeavy(true)} disabled={confirmHeavy}
+                  className="text-[11px] font-semibold text-amber-800 underline shrink-0 disabled:no-underline disabled:opacity-50">
+                  {confirmHeavy ? 'Confirmed' : 'Yes, continue'}
+                </button>
+              </div>
+            )}
+            {addError && <p className="text-[11px] text-err">{addError}</p>}
+
+            <div className="flex items-center gap-2 pb-3">
+              <button
+                onClick={submitAddWeight}
+                disabled={deltaKg <= 0 || overCap || saving || (unusual && !confirmHeavy)}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-600 text-white text-[12px] font-semibold disabled:opacity-40 transition-opacity"
+              >
+                {saving ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />}
+                {saving ? 'Saving…' : 'Save & print new label'}
+              </button>
+              <button onClick={() => { setAddingWeight(false); setDelta(''); setCloseBag(false); setConfirmHeavy(false); setAddError(null) }}
+                className="text-[12px] text-stone-500 hover:text-stone-700 px-2">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="px-5 py-4 space-y-5">
 
@@ -363,7 +495,7 @@ function TagDetail({ tag, allTags, onClose }: TagDetailProps) {
               {([
                 ['Product type',    tag.product_type],
                 ['Lot / Batch',     tag.lot_number],
-                ['Weight',          tag.weight_kg ? `${tag.weight_kg} kg` : '—'],
+                ['Weight',          currentWeight ? `${currentWeight} kg` : '—'],
                 ['Variant',         tag.variant || '—'],
                 ['Tag date',        tag.tag_date ? format(parseISO(tag.tag_date + 'T00:00:00'), 'dd MMM yyyy') : '—'],
                 ['Acumatica ID',    tag.acumatica_id || '—'],
@@ -659,9 +791,9 @@ function SerialLookup({ allTags, onSelect }: { allTags: BagTag[]; onSelect: (tag
 // ── Stats bar (interactive — tiles filter the list) ───────────────────────────
 function StatsBar({ tags, activeTab, activeVariant, onTab, onVariant }: {
   tags: BagTag[]
-  activeTab: 'all' | 'on_floor' | 'consumed'
+  activeTab: 'all' | 'on_floor' | 'open' | 'consumed'
   activeVariant: string
-  onTab: (t: 'all' | 'on_floor' | 'consumed') => void
+  onTab: (t: 'all' | 'on_floor' | 'open' | 'consumed') => void
   onVariant: (v: string) => void
 }) {
   const total    = tags.length
@@ -727,13 +859,14 @@ function StatsBar({ tags, activeTab, activeVariant, onTab, onVariant }: {
 // ── Bag row ───────────────────────────────────────────────────────────────────
 function BagRow({ tag, onClick }: { tag: BagTag; onClick: () => void }) {
   const isConsumed = Boolean(tag.consumed_at_section)
+  const dotCls = tag.is_open ? 'bg-sky-500' : isConsumed ? 'bg-emerald-400' : 'bg-amber-400'
   return (
     <button
       onClick={onClick}
       className="w-full bg-white border border-stone-200 rounded-xl px-4 py-3 flex items-center gap-3 hover:border-stone-400 hover:shadow-sm transition-all text-left"
     >
       {/* Status dot */}
-      <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isConsumed ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+      <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotCls}`} />
 
       {/* Main info */}
       <div className="flex-1 min-w-0">
@@ -761,8 +894,8 @@ function BagRow({ tag, onClick }: { tag: BagTag; onClick: () => void }) {
 
       {/* Status + arrow */}
       <div className="flex flex-col items-end gap-1 shrink-0">
-        <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full font-bold border ${isConsumed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-          {isConsumed ? `→ ${tag.consumed_at_section}` : 'On floor'}
+        <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full font-bold border ${tag.is_open ? 'bg-sky-50 text-sky-700 border-sky-200' : isConsumed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+          {tag.is_open ? 'Open' : isConsumed ? `→ ${tag.consumed_at_section}` : 'On floor'}
         </span>
         <ChevronRight size={12} className="text-stone-300" />
       </div>
@@ -845,6 +978,52 @@ function OnFloorView({ tags, onSelect }: { tags: BagTag[]; onSelect: (t: BagTag)
             <div className="flex-1 h-px bg-stone-100" />
             <span className="font-mono text-[11px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
               {bySection[sec].length} on floor
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {bySection[sec].map(tag => (
+              <BagRow key={tag.id} tag={tag} onClick={() => onSelect(tag)} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── View: Open (still filling, grouped by section) ───────────────────────────
+function OpenBagsView({ tags, onSelect }: { tags: BagTag[]; onSelect: (t: BagTag) => void }) {
+  const bySection = useMemo(() => {
+    const g: Record<string, BagTag[]> = {}
+    tags.filter(t => t.is_open).forEach(t => {
+      if (!g[t.section_id]) g[t.section_id] = []
+      g[t.section_id].push(t)
+    })
+    return g
+  }, [tags])
+
+  const sections = SECTIONS_LIST.filter(s => bySection[s]?.length)
+
+  if (sections.length === 0) return (
+    <EmptyState
+      icon={<PackageOpen size={36} className="text-stone-200" />}
+      title="No open bags"
+      subtitle="Bags left open for a later top-up (end-of-shift half bags) will appear here."
+    />
+  )
+
+  return (
+    <div className="space-y-6">
+      {sections.map(sec => (
+        <div key={sec}>
+          <div className="flex items-center gap-3 mb-2.5">
+            <div className={`w-2.5 h-2.5 rounded-full ${SECTION_DOT[sec] ?? 'bg-stone-400'}`} />
+            <span className="font-semibold text-[13px] text-stone-800">
+              {SECTION_DISPLAY[sec] ?? sec}
+            </span>
+            <div className="flex-1 h-px bg-stone-100" />
+            <span className="font-mono text-[11px] font-bold text-sky-600 bg-sky-50 border border-sky-200 rounded px-2 py-0.5">
+              {bySection[sec].length} open
             </span>
           </div>
           <div className="space-y-1.5">
@@ -979,17 +1158,18 @@ function FiltersStrip({
 }
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type Tab = 'all' | 'on_floor' | 'consumed'
+type Tab = 'all' | 'on_floor' | 'open' | 'consumed'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'all',      label: 'All bags',  icon: <Database  size={13} /> },
   { id: 'on_floor', label: 'On floor',  icon: <MapPin    size={13} /> },
+  { id: 'open',     label: 'Open',      icon: <PackageOpen size={13} /> },
   { id: 'consumed', label: 'Consumed',  icon: <CheckCircle2 size={13} /> },
 ]
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function TagsPage() {
-  const { role, sectionId } = useAuth()
+  const { role, sectionId, userId } = useAuth()
   const isOperator = role === 'section_operator'
 
   const [tags,     setTags]     = useState<BagTag[]>([])
@@ -1066,7 +1246,8 @@ export default function TagsPage() {
 
   useEffect(() => { load() }, [load])
 
-  // Sync tab → status filter for convenience
+  // Sync tab → status filter for convenience ('open' is its own client-side
+  // filter on is_open, independent of the consumed/on-floor status filter)
   useEffect(() => {
     if (tab === 'on_floor')  patchFilters({ status: 'on_floor' })
     else if (tab === 'consumed') patchFilters({ status: 'consumed' })
@@ -1075,6 +1256,7 @@ export default function TagsPage() {
 
   // Counts for tab badges
   const onFloorCount  = useMemo(() => tags.filter(t => !t.consumed_at_section).length, [tags])
+  const openCount     = useMemo(() => tags.filter(t => t.is_open).length, [tags])
   const consumedCount = useMemo(() => tags.filter(t =>  t.consumed_at_section).length, [tags])
 
   return (
@@ -1139,7 +1321,7 @@ export default function TagsPage() {
       {/* ── Tab bar ── */}
       <div className="flex gap-1 bg-stone-100 rounded-xl p-1">
         {TABS.map(t => {
-          const count = t.id === 'on_floor' ? onFloorCount : t.id === 'consumed' ? consumedCount : tags.length
+          const count = t.id === 'on_floor' ? onFloorCount : t.id === 'open' ? openCount : t.id === 'consumed' ? consumedCount : tags.length
           return (
             <button
               key={t.id}
@@ -1174,6 +1356,7 @@ export default function TagsPage() {
         <>
           {tab === 'all'      && <AllBagsView  tags={tags} onSelect={setSelected} />}
           {tab === 'on_floor' && <OnFloorView  tags={tags} onSelect={setSelected} />}
+          {tab === 'open'      && <OpenBagsView tags={tags} onSelect={setSelected} />}
           {tab === 'consumed' && <ConsumedView tags={tags} onSelect={setSelected} />}
         </>
       )}
@@ -1183,7 +1366,9 @@ export default function TagsPage() {
         <TagDetail
           tag={selected}
           allTags={tags}
+          operatorId={userId}
           onClose={() => setSelected(null)}
+          onChanged={load}
         />
       )}
     </div>
