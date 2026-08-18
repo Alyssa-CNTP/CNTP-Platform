@@ -36,7 +36,7 @@ import {
   AlertTriangle, Printer, PenLine, FileText, Boxes, Tag, Gauge,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { printLabel } from '@/lib/production/label-print'
+import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
@@ -722,7 +722,7 @@ export function PasteuriserCapture({
     patch({ outputs: value.outputs.map(l => l.id === id ? { ...l, tagMethod: method } : l) })
     const line = value.outputs.find(l => l.id === id)
     if (method === 'printed' && line) {
-      printLabel({
+      printLabelAuto({
         id: line.id, serial_number: line.serial,
         product_type: line.item || value.item || 'Rooibos Final Product',
         variant: variantShort, grade: 'A',

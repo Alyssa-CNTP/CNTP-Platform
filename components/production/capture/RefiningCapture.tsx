@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { printLabel } from '@/lib/production/label-print'
+import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
@@ -677,7 +677,7 @@ export function RefiningCapture({
         bags: [...(existing?.bags ?? []), newBag],
       } as RefiningOutputGroup,
     })
-    if (LABEL_PRINTING_ENABLED) printLabel(bag)
+    if (LABEL_PRINTING_ENABLED) printLabelAuto(bag)
   }
 
   function removeBagFromGroup(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string) {
