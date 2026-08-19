@@ -45,6 +45,21 @@ curl -s -X PUT -H "Authorization: token $TOKEN" \
   -d "{\"merge_method\":\"squash\"}"
 ```
 
+### 4a. Any PR opened against `main` — tag Alyssa immediately
+`main` is production and its branch protection requires approval from someone
+other than the last pusher — Claude cannot self-approve or bypass this (no
+admin rights on the token). So every time a PR is opened with `base: main`
+(a promotion PR), post a comment tagging her right after opening it, so she
+gets a GitHub notification/email without being asked each time:
+```bash
+TOKEN=$(cat ~/.claude_github_token)
+curl -s -X POST -H "Authorization: token $TOKEN" \
+  -H "Content-Type: application/json" \
+  "https://api.github.com/repos/Alyssa-CNTP/CNTP-Platform/issues/$PR/comments" \
+  -d '{"body":"@Alyssa-CNTP this is ready for production — please review/approve when you get a chance."}'
+```
+Do this for every `main` PR, not just ones the developer explicitly flags.
+
 ### 5. Deploy to VPS
 ```bash
 ssh -p 2022 -o StrictHostKeyChecking=no cntpdev@154.65.97.200 '
