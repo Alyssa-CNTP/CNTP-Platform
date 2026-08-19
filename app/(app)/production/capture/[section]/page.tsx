@@ -1190,6 +1190,33 @@ function CaptureScreen() {
     if (bagNoSerial.length)   await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
     if (bagWithSerial.length) await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
 
+    // ── Self-heal bag_tags ─────────────────────────────────────────────────────
+    // Every output bag is registered in bag_tags by its own atomic write the
+    // instant it's added — but that single write can fail silently (a network
+    // blip; the failure is swallowed in the capture components' addOutput) and
+    // was NEVER recovered, leaving a genuinely-captured bag missing from the
+    // ledger that Quality's QC queue and the Orders report read from. Seen live
+    // on 2026-08-19: 7 of 24 Sieving bags absent from bag_tags while draft_data
+    // and prod_bagging had all 24. persist() runs every few seconds, so backfill
+    // here any output serial not yet in bag_tags. INSERT-only (ON CONFLICT DO
+    // NOTHING) — an existing bag's QC/consumed/status/location is never touched;
+    // only the missing rows are created, so the ledger self-heals within a tick.
+    // Pasteuriser writes its own range-expanded bag_tags below, so skip it here.
+    if (!isPasteuriser(sectionId) && bagWithSerial.length) {
+      const tagRows = bagWithSerial.map((r: any) => ({
+        serial_number: r.bag_serial_no, section_id: sectionId, session_id: sid,
+        product_type: r.product_type, variant: r.variant || null, weight_kg: r.kg,
+        lot_number: r.lot_number || null, acumatica_id: r.acumatica_id || null,
+        status: 'in_stock', consumed: false,
+        printed_at: r.bagging_time || new Date().toISOString(),
+        tag_method: 'printed', batch_id: r.batch_id ?? null,
+      }))
+      try {
+        await db.schema('production').from('bag_tags')
+          .upsert(tagRows as any, { onConflict: 'serial_number', ignoreDuplicates: true })
+      } catch { /* best-effort — the next save retries the backfill */ }
+    }
+
     // ── Pasteuriser finished-product bags ──────────────────────────────────────
     // Every other section registers each output bag in bag_tags at bagging time,
     // so it can be scanned/tracked downstream. Pasteuriser output is captured as

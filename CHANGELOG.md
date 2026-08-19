@@ -24,6 +24,16 @@ Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the c
 - `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
 - Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
 
+## 2026-08-19 — Alyssa (Capture: self-heal bag_tags so a captured bag can't stay missing from the ledger/UI — promoted to production)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Live incident 2026-08-19: today's Sieving morning shift bagged 24 output bags — all present in `draft_data` and `prod_bagging` — but only 17 were in `bag_tags`. The 7 early-morning bags (STFL-190826-001–004, STCL-190826-001–003) were never in the ledger that Quality's QC queue and the Orders report read, so they didn't show on any monitoring screen even though they were on the operators' tablet. (Those 7 were backfilled by hand to restore today's data.)
+
+Root cause: each output bag is registered in `bag_tags` by its own atomic write at bag-add time, but that single write can fail silently (a network blip — the failure is swallowed in the capture components' `addOutput`) and was **never** recovered. `persist()` rebuilds `prod_bagging` from `draft_data` on every save but never touched `bag_tags`, so a bag whose atomic write failed stayed missing from the ledger forever.
+
+Fix: `persist()` now **self-heals `bag_tags`** — on every save it backfills any output serial that isn't in `bag_tags` yet. INSERT-only (`ON CONFLICT DO NOTHING`), so an existing bag's QC / consumed / status / location is never overwritten; only the missing rows are created. Since `persist()` runs every few seconds, a failed atomic write now self-corrects within a tick, and the ledger (and the already-live Orders detail that reads it) can no longer fall behind what the operators actually captured. Pasteuriser keeps its own range-expanded `bag_tags` write.
+
 ## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners — promoted to production)
 
 **Files changed:** `components/shared/BarcodeScanner.tsx` (new), `components/shared/ScanCameraButton.tsx` (new), `components/production/capture/BagScanIn.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/live/ScanInput.tsx`, `components/logistics/ScanInput.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx`, `app/(app)/tags/page.tsx`, `package.json`
