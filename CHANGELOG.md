@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: clicking "Sample now →" on a pending Fine Leaf/Coarse Leaf bag card (e.g. STFL-190826-004) alerted "was already sampled — nothing to do", even though the runs table showed no Final QC for that serial and the DB confirmed the bag was genuinely still pending (`qms.v_pending_bag_qc` had it, `qc_done: false`).
+
+Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the clicked card's `bagging_id` only. `production.prod_bagging` is a mirror row rewritten by `persist()` on every save (see migration `20260813_007`'s comment), so its `id` — our `bagging_id` — is not guaranteed to stay the same between when a card renders and when it's clicked. If the bag's mirror row got rewritten in between, the old id no longer matched anything in the fresh list, and the code treated "not found by that id" as "already sampled" instead of checking the bag's permanent serial number.
+
+- `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
+- Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
+
 ## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners — promoted to production)
 
 **Files changed:** `components/shared/BarcodeScanner.tsx` (new), `components/shared/ScanCameraButton.tsx` (new), `components/production/capture/BagScanIn.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/live/ScanInput.tsx`, `components/logistics/ScanInput.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx`, `app/(app)/tags/page.tsx`, `package.json`
