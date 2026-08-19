@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+Requested off a screenshot of the COA generator: Glyphosate was missing from both "Data sources" and "Include sections" — the Lab Results tab and its `qms.lab_results` test type already existed, and the customer-spec editor (`CoaSpecsTab.tsx`) already had a `contaminants.glyphosate` field, but nothing on the COA side ever read it. Wired through exactly the same way Chlorate/Perchlorate was previously: `found`/`sections` on `CoaModel`, the `lookup()` fetch, the Data sources / Include sections lists, `buildModel()`, and `otherRowVisible()` (shared by the on-screen table, the print view and the PDF export, so all three agree automatically).
+
+- **Business rule, not just wiring:** "the spec for Glyphosate is none detected for all organic batches" — so unlike every other contaminant row here, Glyphosate is included on an Organic batch's COA regardless of which customer spec matched, or whether one matched at all, with **"None Detected"** as the default Specification text. A customer spec can still require it on a Conventional batch (as before), or override the spec text on an Organic one.
+- Verified the resulting inclusion/spec-text logic in Node across 7 cases: organic with no matched spec, organic with a spec that doesn't mention glyphosate, organic with a spec that overrides the text, conventional with no spec/no result, conventional with a found lab result, conventional with a spec that requires it, and conventional with a spec explicitly marked "NOT REQUIRED" — all came out as expected, including that "NOT REQUIRED" is honoured on a Conventional batch but does not suppress the row on an Organic one.
+- `npx tsc --noEmit` clean. No migration — no schema changes.
+
 ## 2026-08-19 — Gustav (Sieving: In-Process run silently refused to save on Fine Leaf / Coarse Leaf)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
