@@ -107,8 +107,21 @@ export default function ProductionOrderDetailPage() {
   const lot = shifts.map(s => s.session.lot_number).find(Boolean) ?? null
   const variant = shifts.map(s => s.session.variant).find(Boolean) ?? null
   const pos = Array.from(new Set(shifts.flatMap(s => s.session.production_orders ?? [])))
-  const totalOutput = mb ? num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg) : bagsOutputKg
-  const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / mb.total_input_kg) * 1000) / 10 : null
+
+  // The bucket elevator is WIP that carries across the day: the afternoon/night
+  // shift LEAVES it in the tower for tomorrow, so it's an OUTPUT (carry-over),
+  // not a bagged product and not an input. It's captured as a debag row, so
+  // pull it out of the inputs and state it on the output side — that 's exactly
+  // the gap between the bagged-bag total and the mass-balance output total.
+  const isBucketCarryOut = (d: OrderDebagRow) =>
+    /bucket elevator/i.test(d.product_type || '') && (d.shift === 'afternoon' || d.shift === 'night')
+  const inputRows = debags.filter(d => !isBucketCarryOut(d))
+  const bucketCarryOverKg = debags.filter(isBucketCarryOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
+  // Total output = physical bagged product (the reliable ledger) + the bucket
+  // elevator carried over. Derived from the ledger, so it always agrees with
+  // the Bagging section below instead of the race-prone mass-balance snapshot.
+  const totalOutput = bagsOutputKg + bucketCarryOverKg
+  const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / num(mb.total_input_kg)) * 1000) / 10 : null
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -155,8 +168,10 @@ export default function ProductionOrderDetailPage() {
           <PanelBody>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <Field label="Total input"  value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
+              <Field label="Bagged output" value={`${bagsOutputKg.toFixed(1)} kg`} />
+              {bucketCarryOverKg > 0 && <Field label="Bucket elevator (carried over)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
               <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />
-              <Field label="Balance"      value={`${num(mb.balance_kg).toFixed(1)} kg`} />
+              <Field label="Balance"      value={`${(num(mb.total_input_kg) - totalOutput).toFixed(1)} kg`} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
           </PanelBody>
@@ -165,11 +180,11 @@ export default function ProductionOrderDetailPage() {
 
       {/* Debagging (inputs) — grouped by type with per-type totals */}
       <Panel>
-        <PanelHead title="Debagging — inputs" meta={`${debags.length} row${debags.length === 1 ? '' : 's'}`} />
+        <PanelHead title="Debagging — inputs" meta={`${inputRows.length} row${inputRows.length === 1 ? '' : 's'}`} />
         <PanelBody>
-          {debags.length === 0 ? <Empty>No inputs recorded.</Empty> : (
+          {inputRows.length === 0 ? <Empty>No inputs recorded.</Empty> : (
             <div className="space-y-4">
-              {groupBy(debags, inputType).map(g => (
+              {groupBy(inputRows, inputType).map(g => (
                 <InputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
             </div>
@@ -182,11 +197,23 @@ export default function ProductionOrderDetailPage() {
         <PanelHead title="Bagging — outputs"
           meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
         <PanelBody>
-          {bags.length === 0 ? <Empty>No output bags recorded.</Empty> : (
+          {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">
               {groupBy(bags, b => b.product_type || 'Other').map(g => (
                 <OutputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
+              {bucketCarryOverKg > 0 && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
+                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged)</span></span>
+                  <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
+                </div>
+              )}
+              {bucketCarryOverKg > 0 && (
+                <div className="flex items-center justify-between gap-2 px-3 pt-1 text-[13px] font-semibold border-t border-surface-rule/60">
+                  <span className="text-text pt-2">Total output</span>
+                  <span className="font-mono text-text tabular-nums pt-2">{bags.length} bags bagged + {bucketCarryOverKg.toFixed(0)} kg carry-over = {totalOutput.toFixed(1)} kg</span>
+                </div>
+              )}
             </div>
           )}
         </PanelBody>
