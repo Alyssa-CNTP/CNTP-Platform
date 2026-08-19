@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Gustav (Sieving: In-Process run silently refused to save on Fine Leaf / Coarse Leaf)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: on the Fine Leaf and Coarse Leaf tabs, a QC fills in an In-Process run, taps **Save Run**, and nothing happens — no error, no saved row. Reproduced and traced to a hidden field failing validation.
+
+**Cause.** Fine Leaf and Coarse Leaf carry `qcFieldsFinalOnly`, which hides the Bulk Density and Leaf Shade inputs on In-Process runs (they are Final-QC measurements for those two products). But `lookupLot()` still auto-filled `leafShade` from the raw-material shade the moment the QC typed a lot number. `validate()` then range-checked that value — `parseInt(leafShade)` must be 1–11 — against an input that wasn't on screen, so a raw-material shade of **0** (recorded as "not assessed"), anything above 11, or a non-numeric value set `errors.leafShade`, and `addRun()` returned early. Because the Leaf Shade field and its inline error message are both inside the hidden block, the message rendered nowhere: the save just died with no feedback. Shade `0` is the most likely trigger in practice — `String(0)` is `"0"`, which is truthy, so it passed the "has a value" guard and then failed the range check.
+
+- **Hidden fields no longer validate.** New `fieldShown()` is the single source of truth for whether Bulk Density / Leaf Shade / Needle Count are actually on screen for a given product + run type, and it mirrors the render conditions on those three inputs so the two cannot drift apart again. The leaf-shade range check and the two negative-value checks now only apply when the field is visible.
+- **Hidden fields no longer auto-fill either.** `lookupLot()` only writes `leafShade` into the form when that input is shown — storing a shade nobody measured on that sample was the other half of the same defect. The raw-material shade is still surfaced in the lot-lookup message as context, so no information is lost to the QC.
+- **A blocked save can never be invisible again.** A summary banner now renders directly above the Save button listing every reason the save was refused, whatever the field. This is the backstop for the whole class of bug: it also covers `errors.runType`, which `validate()` can set but which has had no inline renderer at all since the in-form Run Type picker was removed (#661), and it helps when the offending field is simply scrolled off screen.
+- Final QC is deliberately unchanged and still strict — verified that an invalid or missing leaf shade, and a missing or negative bulk density, all still block a Final QC save (those fields *are* visible there), and that missing lot number / QC name / incomplete mesh / negative needle count all still block an In-Process save. The inline row editor needed no change: it reports every rejection through `alert()`, so it was never silent.
+- Verified by simulating the real `validate()` + render-gating logic across both affected products, all four products' In-Process paths, five leaf-shade values (including 0, 12 and non-numeric), and six Final-QC cases. `npx tsc --noEmit` clean.
+
 ## 2026-08-18 — Alyssa (Sieving: stop serial reset across the midnight tail; flush pending capture before the 16h00 changeover blocks the screen — promoted to production)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
