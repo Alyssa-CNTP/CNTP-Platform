@@ -27,18 +27,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X,
-  AlertTriangle, Droplets, Layers, CheckCircle2,
+  AlertTriangle, Droplets, Layers, CheckCircle2, Printer, PenLine,
 } from 'lucide-react'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED, isImplausibleWeight } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
 import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
 import { itemFromCode } from '@/lib/production/bom'
@@ -112,6 +113,7 @@ export interface GranuleOutBag {
   weight: string         // actual total weight
   code: string | null
   printed: boolean
+  tagMethod: 'printed' | 'handwritten' | null
   secured: boolean
   logged_at?: string
 }
@@ -278,6 +280,7 @@ function SystemPickList({ onPick, onClose }: { onPick: (b: SystemBag) => void; o
     getDb().schema('production').from('bag_tags')
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at')
       .in('product_type', DUST_COLUMNS.map(c => c.productType)).eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false }).limit(80)
       .then(({ data }: { data: SystemBag[] | null }) => setBags(data ?? []))
   }, [])
@@ -355,7 +358,7 @@ function DustInputRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.serial])
 
-  const complete = !!row.serial.trim() && !!row.dustKey && n(row.weight) > 0
+  const complete = !!row.serial.trim() && !!row.dustKey && n(row.weight) > 0 && !isImplausibleWeight(n(row.weight))
 
   return (
     <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: blendCol + '40' }}>
@@ -380,6 +383,13 @@ function DustInputRow({
               {looking ? '…' : 'Look up'}
             </button>
           )}
+          {!locked && (
+            <ScanCameraButton
+              title="Scan bag barcode"
+              hint="Point the camera at the bag's barcode…"
+              onScan={code => onUpdate('serial', sanitizeSerial(code))}
+            />
+          )}
         </div>
         {(row.notInSystem === true || row.notInSystem === 'true') && row.inputMode !== 'manual' && (
           <p className="text-[11px] text-amber-600 flex items-center gap-1.5"><AlertTriangle size={12} /> Not found in system — fill in the details below.</p>
@@ -400,6 +410,9 @@ function DustInputRow({
           <label className={LBL}>Weight (kg)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={row.weight} disabled={locked}
             onChange={e => onUpdate('weight', e.target.value)} className={INP} />
+          {isImplausibleWeight(n(row.weight)) && (
+            <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+          )}
         </div>
         <div className="space-y-1 col-span-2">
           <label className={LBL}>Variant</label>
@@ -414,11 +427,10 @@ function DustInputRow({
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
             <Check size={15} /> Done — lock this bag
           </button>
-          {!complete && (
-            <p className="text-[11px] text-stone-400 text-center">
-              {[!row.serial.trim() && 'serial', !row.dustKey && 'dust type', n(row.weight) <= 0 && 'weight'].filter(Boolean).join(', ')} still needed.
-            </p>
-          )}
+          {!complete && (() => {
+            const missing = [!row.serial.trim() && 'serial', !row.dustKey && 'dust type', n(row.weight) <= 0 && 'weight'].filter(Boolean).join(', ')
+            return missing ? <p className="text-[11px] text-stone-400 text-center">{missing} still needed.</p> : null
+          })()}
         </>
       )}
     </div>
@@ -445,7 +457,7 @@ function BlendCard({
   const [showSystemPick, setShowSystemPick] = useState(false)
   const col = blendColor(index)
 
-  const rowComplete = (r: GranuleInputRow) => !!r.serial.trim() && !!r.dustKey && n(r.weight) > 0
+  const rowComplete = (r: GranuleInputRow) => !!r.serial.trim() && !!r.dustKey && n(r.weight) > 0 && !isImplausibleWeight(n(r.weight))
   const lockCompleted = (rows: GranuleInputRow[]): GranuleInputRow[] => {
     const t = nowISO()
     return rows.map(r => (!r.secured && rowComplete(r)) ? { ...r, secured: true, logged_at: r.logged_at ?? t } : r)
@@ -664,6 +676,7 @@ export function GranuleCapture({
   // ── Granule output bags ───────────────────────────────────────────────────────
   const [outTarget, setOutTarget] = useState(DEFAULT_TARGET_KG)
   const [outWeight, setOutWeight] = useState('')
+  const [outLeaveOpen, setOutLeaveOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   // Supervisor sets the lot at assignment, but the operator is the one who can
   // actually see the physical batch on the floor — a typo or a wrong batch
@@ -673,7 +686,7 @@ export function GranuleCapture({
   const [lotConfirmed, setLotConfirmed] = useState(value.outputs.length > 0)
 
   async function addOutputBag() {
-    if (n(outWeight) <= 0 || adding) return
+    if (n(outWeight) <= 0 || isImplausibleWeight(n(outWeight)) || adding) return
     setAdding(true)
     const serial = await nextGranuleSerial(lot, value.outputs.map(o => o.serial), date)
     const now = nowISO()
@@ -683,6 +696,7 @@ export function GranuleCapture({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: item,
         variant: variantWord || null, weight_kg: n(outWeight), lot_number: lot || null,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
+        is_open: outLeaveOpen,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
         serial_number: serial, action: 'bagging_out', section_id: 'granule', weight_kg: n(outWeight), operator_id: operatorId ?? null,
@@ -690,20 +704,32 @@ export function GranuleCapture({
     } catch { /* session save retries */ }
     const bag: GranuleOutBag = {
       id: crypto.randomUUID(), serial, item, lot, time: clockNow(), targetWeight: outTarget,
-      weight: outWeight, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, secured: true, logged_at: now,
+      weight: outWeight, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, tagMethod: null, secured: true, logged_at: now,
     }
     onChange({ ...value, outputs: [...value.outputs, bag] })
-    setOutWeight(''); setAdding(false)
-    if (LABEL_PRINTING_ENABLED) {
+    setOutWeight(''); setOutLeaveOpen(false); setAdding(false)
+  }
+  function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
+
+  // Operator's Print label / Write on tag choice for a bag already added to
+  // the output list — mirrors Blender/Pasteuriser's tagging pattern so every
+  // section gives the same visible, chosen outcome instead of printing silently.
+  function tagOutput(id: string, method: 'printed' | 'handwritten') {
+    const bag = value.outputs.find(b => b.id === id)
+    if (!bag) return
+    patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, tagMethod: method } : b) })
+    getDb().schema('production').from('bag_tags').update({ tag_method: method } as any)
+      .eq('serial_number', bag.serial).then(() => {})
+    if (method === 'printed') {
+      const acCode = getAcumaticaCode(bag.item, variantShort, 'A')
       printLabelAuto({
-        id: bag.id, serial_number: serial, product_type: item, variant: variantShort, grade: 'A',
-        weight_kg: n(outWeight), lot_number: lot, section_id: 'granule',
-        section_name: SECTION_CONFIG['granule']?.name ?? 'Granule Line', created_at: now, printed: true,
-        acumaticaId: acCode?.inventoryId ?? undefined, acumaticaDesc: acCode?.description,
+        id: bag.id, serial_number: bag.serial, product_type: bag.item, variant: variantShort, grade: 'A',
+        weight_kg: n(bag.weight), lot_number: bag.lot, section_id: 'granule',
+        section_name: SECTION_CONFIG['granule']?.name ?? 'Granule Line', created_at: bag.logged_at ?? nowISO(), printed: true,
+        acumaticaId: bag.code ?? acCode?.inventoryId ?? undefined, acumaticaDesc: acCode?.description,
       } as OutputBag)
     }
   }
-  function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
 
   // ── Dust by-product (end of shift) ─────────────────────────────────────────────
   // Weight is no longer typed in by the operator — it's the plant's own mass
@@ -956,9 +982,28 @@ export function GranuleCapture({
                       {n(b.targetWeight) > 0 && <span className="text-stone-400 font-normal"> / {n(b.targetWeight).toFixed(0)} target</span>}
                       {b.time ? <span className="font-normal text-text-muted"> · {b.time}</span> : null}
                     </div>
-                    {LABEL_PRINTING_ENABLED
-                      ? <div className="font-mono text-[11px] text-text-muted">{b.serial}{b.code ? ` · ${b.code}` : ''}</div>
-                      : <div className="mt-1 inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">{b.serial}<span className="text-[10px] font-sans font-normal text-stone-400 uppercase tracking-wide">write on bag</span></div>}
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
+                        {b.serial}{b.code ? ` · ${b.code}` : ''}
+                      </span>
+                      {b.tagMethod && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                          {b.tagMethod === 'printed' ? <Printer size={11} /> : <PenLine size={11} />} {b.tagMethod}
+                        </span>
+                      )}
+                    </div>
+                    {!b.tagMethod && !locked && (
+                      <div className="flex gap-1.5 mt-1.5">
+                        <button onClick={() => tagOutput(b.id, 'printed')}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                          <Printer size={12} /> Print label
+                        </button>
+                        <button onClick={() => tagOutput(b.id, 'handwritten')}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                          <PenLine size={12} /> Write on tag
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {!locked && <button onClick={() => removeOutput(b.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
                 </div>
@@ -992,9 +1037,16 @@ export function GranuleCapture({
                       <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outWeight}
                         onChange={e => setOutWeight(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOutputBag() } }} className={INP} />
+                      {isImplausibleWeight(n(outWeight)) && (
+                        <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+                      )}
                     </div>
                   </div>
-                  <button onClick={addOutputBag} disabled={n(outWeight) <= 0 || adding}
+                  <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+                    <input type="checkbox" checked={outLeaveOpen} onChange={e => setOutLeaveOpen(e.target.checked)} className="rounded" />
+                    Leave bag open — not full yet, will top up later (from Tags)
+                  </label>
+                  <button onClick={addOutputBag} disabled={n(outWeight) <= 0 || isImplausibleWeight(n(outWeight)) || adding}
                     className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors" style={{ background: BAG_COLOR }}>
                     <Plus size={15} /> {adding ? 'Adding…' : 'Add bag'}
                   </button>
@@ -1074,10 +1126,15 @@ export function GranuleCapture({
             </div>
             <div className="p-3 space-y-2">
               {value.waste.map(w => (
-                <div key={w.id} className="flex gap-2 items-center">
-                  <input type="text" value={w.wasteType} disabled={locked} placeholder="Waste type" onChange={e => updateWaste(w.id, 'wasteType', e.target.value)} className={INP + ' flex-1'} />
-                  <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={w.weight} disabled={locked} placeholder="kg" onChange={e => updateWaste(w.id, 'weight', e.target.value)} className={INP + ' w-24'} />
-                  {!locked && <button onClick={() => removeWaste(w.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
+                <div key={w.id}>
+                  <div className="flex gap-2 items-center">
+                    <input type="text" value={w.wasteType} disabled={locked} placeholder="Waste type" onChange={e => updateWaste(w.id, 'wasteType', e.target.value)} className={INP + ' flex-1'} />
+                    <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={w.weight} disabled={locked} placeholder="kg" onChange={e => updateWaste(w.id, 'weight', e.target.value)} className={INP + ' w-24'} />
+                    {!locked && <button onClick={() => removeWaste(w.id)} className="text-stone-300 hover:text-red-500 p-1"><Trash2 size={14} /></button>}
+                  </div>
+                  {isImplausibleWeight(n(w.weight)) && (
+                    <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+                  )}
                 </div>
               ))}
               {!locked && <button onClick={addWaste} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-stone-200 text-[13px] font-medium text-stone-500 hover:border-stone-300"><Plus size={15} /> Add waste row</button>}
@@ -1128,10 +1185,16 @@ export function GranuleCapture({
               <div className="space-y-1 col-span-2">
                 <label className={LBL}>Dust from sieve &amp; drier not yet re-fed (D)</label>
                 <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.dustNotRefed} disabled={locked} onChange={e => patch({ dustNotRefed: e.target.value })} className={INP} placeholder="kg" />
+                {isImplausibleWeight(n(value.dustNotRefed)) && (
+                  <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+                )}
               </div>
               <div className="space-y-1 col-span-2">
                 <label className={LBL}>Coarse granules not yet fed to maize master (E)</label>
                 <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.coarseNotFed} disabled={locked} onChange={e => patch({ coarseNotFed: e.target.value })} className={INP} placeholder="kg" />
+                {isImplausibleWeight(n(value.coarseNotFed)) && (
+                  <p className="text-[11px] text-err">That's over 999kg — check for a typo.</p>
+                )}
               </div>
               <div className="space-y-1">
                 <label className={LBL}>Meter start (Y)</label>

@@ -103,6 +103,72 @@ export async function markBagConsumed(
   }
 }
 
+// ── Standalone transferBagWeight — move weight from a source bag into a ──────
+// target bag (a "top-up"). Every top-up must name the bag the material
+// physically came from — there's no such thing as loose weight added to an
+// existing tagged bag with no traceable origin, so this always takes both
+// serials and moves a bounded amount between them, instead of just bumping
+// a number on one bag.
+//
+// The source bag's weight_kg drops by the amount drawn — voided instead of
+// ever reaching zero (bag_tags.weight_kg has CHECK(weight_kg > 0), and a
+// fully-drained bag no longer exists as its own physical unit anyway); a
+// partially-drained source is left is_open so its remainder doesn't get
+// forgotten on the floor. The target's weight_kg rises by the same amount.
+//
+// Both sides are logged as a linked pair in scan_events — 'topped_up' on
+// the receiving bag, 'drawn_down' on the depleted one, each pointing at the
+// other via related_serial_number. A top-up is therefore never new
+// production (see the 20260818_004 migration): it's kg that was already
+// counted on the day the source bag was first bagged, just moved between
+// containers — production/reporting sums must keep counting 'bagging_out'
+// only, never 'topped_up', or the same kg gets counted twice.
+export async function transferBagWeight(
+  sourceSerial: string,
+  sourceCurrentWeight: number,
+  targetSerial: string,
+  targetCurrentWeight: number,
+  amountKg: number,
+  sectionId: string,
+  sessionId: string | null,
+  operatorId?: string | null,
+  closeTargetBag = false,
+): Promise<void> {
+  if (!sourceSerial || !targetSerial || sourceSerial === targetSerial) return
+  if (!(amountKg > 0) || amountKg > sourceCurrentWeight) return
+  const now = new Date().toISOString()
+
+  const remaining = sourceCurrentWeight - amountKg
+  if (remaining <= 0) {
+    await getDb().schema('production').from('bag_tags').update({
+      status: 'voided', voided_at: now, voided_by: operatorId ?? null,
+    } as any).eq('serial_number', sourceSerial)
+  } else {
+    await getDb().schema('production').from('bag_tags').update({
+      weight_kg: remaining, is_open: true,
+    } as any).eq('serial_number', sourceSerial)
+  }
+
+  const targetUpdate: Record<string, unknown> = { weight_kg: targetCurrentWeight + amountKg }
+  if (closeTargetBag) targetUpdate.is_open = false
+  await getDb().schema('production').from('bag_tags').update(targetUpdate as any).eq('serial_number', targetSerial)
+
+  await getDb().schema('production').from('scan_events').insert([
+    {
+      serial_number: targetSerial, related_serial_number: sourceSerial,
+      section_id: sectionId, session_id: sessionId || null,
+      action: 'topped_up', weight_kg: amountKg,
+      operator_id: operatorId ?? null, scanned_at: now,
+    },
+    {
+      serial_number: sourceSerial, related_serial_number: targetSerial,
+      section_id: sectionId, session_id: sessionId || null,
+      action: 'drawn_down', weight_kg: amountKg,
+      operator_id: operatorId ?? null, scanned_at: now,
+    },
+  ] as any)
+}
+
 // ── advanceToNextSerial — moves focus to next empty serial input after scan ──
 // Called after useSerialLookup fires. Finds the next input with
 // data-serial="true" that has no value and focuses it.
