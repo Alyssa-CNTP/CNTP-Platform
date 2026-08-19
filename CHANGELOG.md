@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Alyssa (Production Orders: independent live per-order detail + reliable bag counts from the bag_tags ledger — promoted to production)
+
+**Files changed:** `lib/production/order-detail.ts` (new), `app/(app)/production/orders/[id]/page.tsx` (new), `app/(app)/production/orders/page.tsx`
+
+Promotes the Production Order detail view (staging #551) to production **together with** the live-ledger read fix (#717), so the reporting side is correct from the moment it lands. Code-only: `prod_bagging.bagging_time` is already `timestamptz` on production and `bag_tags`/`prod_bagging` are already realtime-enabled — no migration.
+
+Reported: output bags that were genuinely bagged (and show in Quality) were missing from Production Orders — the 17th's Fine Leaf bag 12, the 18th's bag 9 — throwing reported numbers off. Root cause: `bag_tags` is written atomically, one row per physical bag; `prod_bagging`/`draft_data` are rewritten wholesale by `persist()` on every save, so a save racing a rapid bag-add intermittently drops bags (measured live: Blender 11 bags → 1 row; Sieving 24 → 2). This mirrors the same union `qms.v_bag_events` uses (prod_bagging + bag_tags fallback) — the ledger Quality reads — so Orders and bag tracking now reflect the same bags.
+
+- **New order detail** reads output bags as the union of `bag_tags` (active, non-voided — authoritative) and `prod_bagging` (enrich only); nothing bagged is ever missing, voided bags excluded, Pasteuriser/by-product rows still covered. Independent **live** read (realtime subscription on this order's rows + 20s poll), so a floor bagging appears within a tick **without opening the capture page**. Output bags grouped per product type with their own count + weight ("14 bags of Fine Leaf · 4,200 kg") — also mobile-friendly.
+- **Orders list** counts + output weight now come from the same reliable ledger union (not `prod_bagging`/`prod_mass_balance`), auto-refreshing every 30s; and the list now surfaces who signed off + a link to the full record (staging #550/#551).
+
 ## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections — promoted to production)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
