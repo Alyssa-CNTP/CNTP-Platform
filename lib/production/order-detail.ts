@@ -1,11 +1,14 @@
 // lib/production/order-detail.ts
-// Assembles EVERYTHING for one production order (production.prod_sessions
-// row) in one call — core identifiers, mass balance, the full bag/debag
-// list (not just counts), both sign-off signatures (from session_signatures,
-// not just the denormalized name on prod_sessions), and reopen history.
-// Shared by the detail page and its PDF export so both always show the same data.
+// Assembles EVERYTHING for one PRODUCTION DAY (all shift sessions that share a
+// section_id + date — morning 07h00–16h00 and afternoon/night 16h00–01h00 roll
+// up into one production order) in a single call: the per-shift blocks (each
+// with its own mass balance, sign-off signatures, AI check summary and reopen
+// history), the whole-run output-bag list (from the reliable bag_tags ledger),
+// the combined debagging inputs, and the summed mass balance. Shared by the
+// detail page so the report always shows the same data.
 
 import { getDb } from '@/lib/supabase/db'
+import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 
 export interface OrderSession {
   id: string
@@ -54,6 +57,8 @@ export interface OrderBagRow {
   variant: string | null
   kg: number
   bagging_time: string | null
+  session_id: string        // which shift-session produced this bag
+  shift: string             // 'morning' | 'afternoon' | 'night'
 }
 
 export interface OrderDebagRow {
@@ -70,6 +75,8 @@ export interface OrderDebagRow {
   org_or_conv: string | null
   is_spillage: boolean
   notes: string | null
+  session_id: string
+  shift: string
 }
 
 export interface OrderSignature {
@@ -90,30 +97,79 @@ export interface OrderReopenRequest {
   created_at: string
 }
 
-export interface OrderDetail {
+// One shift within the production day — its own capture record, sign-off,
+// mass balance and AI check summary.
+export interface OrderShiftBlock {
   session: OrderSession
   massBalance: OrderMassBalance | null
-  bags: OrderBagRow[]
-  bagsOutputKg: number      // reliable output total = Σ of the bags below (bag_tags-sourced)
-  debags: OrderDebagRow[]
   signatures: OrderSignature[]
   reopenRequests: OrderReopenRequest[]
+  aiSummary: string | null       // Gemini machine-checks summary for this shift
+  checksStatus: string | null    // in_progress | operator_signed | supervisor_verified
+  bagCount: number               // this shift's own output bags (Σ its rows in the day list)
+  bagsOutputKg: number
+}
+
+export interface OrderDay {
+  section_id: string
+  date: string
+  representativeSessionId: string   // earliest non-archived session — list links here
+  status: string                    // aggregate day status
+  shifts: OrderShiftBlock[]         // morning first
+  bags: OrderBagRow[]               // merged across ALL shifts, continuous 1..N, shift-tagged
+  bagsOutputKg: number
+  debags: OrderDebagRow[]           // all shifts, morning first
+  massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
+  reopenRequests: OrderReopenRequest[]   // union across shifts
+}
+
+// morning → 0, afternoon/night → 1; created_at breaks ties.
+function shiftRank(shift: string): number { return shift === 'morning' ? 0 : 1 }
+
+// Aggregate a day's status from its shifts. Only shifts that actually captured
+// something count, so an abandoned empty afternoon draft never drags a
+// signed-off morning back to "In progress".
+export function aggregateDayStatus(shifts: OrderShiftBlock[]): string {
+  const withData = shifts.filter(b => b.bagCount > 0 || b.massBalance || b.session.status !== 'draft')
+  const rel = withData.length ? withData : shifts
+  if (rel.length && rel.every(b => b.session.status === 'approved')) return 'approved'
+  if (rel.some(b => b.session.status === 'draft' || b.session.status === 'new')) return 'draft'
+  return 'submitted'
+}
+
+// Whole-run mass balance = honest SUM of each shift's own balance (each shift
+// already booked its own bucket-elevator direction, so the day total doesn't
+// re-net the elevator).
+function sumMassBalance(shifts: OrderShiftBlock[], sectionId: string): OrderMassBalance | null {
+  const mbs = shifts.map(s => s.massBalance).filter(Boolean) as OrderMassBalance[]
+  if (!mbs.length) return null
+  const sum = (f: keyof OrderMassBalance) => mbs.reduce((t, m) => t + (Number(m[f]) || 0), 0)
+  const total_input_kg = sum('total_input_kg')
+  const a = sum('total_output_a_kg'), b = sum('total_output_b_kg'), c = sum('total_output_c_kg'), d = sum('total_output_d_kg')
+  return {
+    total_input_kg,
+    total_output_a_kg: a, total_output_b_kg: b, total_output_c_kg: c, total_output_d_kg: d,
+    balance_kg: total_input_kg - (a + b + c + d),
+    tolerance_kg: massBalanceToleranceFor(sectionId),
+    water_kg: sum('water_kg'), dust_extraction_kg: sum('dust_extraction_kg'), floor_waste_kg: sum('floor_waste_kg'),
+  }
 }
 
 // Merge the authoritative per-bag ledger (bag_tags) with the structured
-// prod_bagging rows into one reliable output-bag list.
+// prod_bagging rows into one reliable output-bag list, across the WHOLE day.
 //
-// bag_tags is written ATOMICALLY, one row per physical bag, the moment the
-// bag is tagged — it never loses a bag to the prod_bagging delete+reinsert
-// race that intermittently drops bags on a save that collides with a rapid
-// bag-add (seen live: 11 real bags, 1 in prod_bagging). It's the same ledger
-// Quality's QC queue reads, so the Orders record and Quality can never
-// disagree about which bags exist. prod_bagging is used only to ENRICH each
-// bag with its output group + recorded bagging time where a serial matches.
+// bag_tags is written ATOMICALLY, one row per physical bag, the moment the bag
+// is tagged — it never loses a bag to the prod_bagging delete+reinsert race
+// that intermittently drops bags (seen live: 11 real bags, 1 in prod_bagging).
+// It's the same ledger Quality's QC queue reads, so the order and Quality can
+// never disagree about which bags exist. prod_bagging only ENRICHES with the
+// output group + recorded time. Serials are unique across the whole production
+// day, so feeding both shifts' rows in one pass yields a correct day-wide
+// voided-set and a continuous 1..N. Each row is tagged with its session_id so
+// the caller can attribute it to a shift.
 //
 // - active bag_tags rows  → the spine (authoritative existence + weight/type)
-// - prod_bagging-only rows (no-serial by-products, Pasteuriser range rows,
-//   or a serial with no bag_tags row) → still included, so no section regresses
+// - prod_bagging-only rows (no-serial by-products, Pasteuriser range rows) → kept
 // - voided bag_tags serials → excluded everywhere (even if prod_bagging lags)
 function mergeOutputBags(tags: any[], bagging: any[]): OrderBagRow[] {
   const voided = new Set(tags.filter(t => t.status === 'voided').map(t => t.serial_number))
@@ -127,45 +183,40 @@ function mergeOutputBags(tags: any[], bagging: any[]): OrderBagRow[] {
   }
 
   const rows: OrderBagRow[] = []
+  const base = { bag_no: 0, shift: '' }
 
   for (const t of active) {
     const pb = pbBySerial.get(t.serial_number)
     pbBySerial.delete(t.serial_number)
     rows.push({
-      id: t.serial_number,
-      bag_no: 0,
+      ...base, id: t.serial_number,
       output_group: pb?.output_group ?? null,
       bag_serial_no: t.serial_number,
       product_type: t.product_type ?? pb?.product_type ?? null,
       variant: t.variant ?? pb?.variant ?? null,
       kg: Number(t.weight_kg) || 0,
       bagging_time: pb?.bagging_time ?? t.printed_at ?? null,
+      session_id: t.session_id,
     })
   }
-
-  // prod_bagging rows left over (serial present but no active bag_tags row).
-  // Skip anything explicitly voided; keep the rest (a section whose output
-  // lives only in prod_bagging, e.g. Pasteuriser).
   for (const pb of pbBySerial.values()) {
     if (voided.has(pb.bag_serial_no)) continue
     rows.push({
-      id: pb.id, bag_no: 0, output_group: pb.output_group ?? null,
+      ...base, id: pb.id, output_group: pb.output_group ?? null,
       bag_serial_no: pb.bag_serial_no, product_type: pb.product_type ?? null,
       variant: pb.variant ?? null, kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
+      session_id: pb.session_id,
     })
   }
-  // No-serial by-product rows (identity is bag_no, no bag_tags equivalent).
   for (const pb of pbNoSerial) {
     rows.push({
-      id: pb.id, bag_no: 0, output_group: pb.output_group ?? null,
+      ...base, id: pb.id, output_group: pb.output_group ?? null,
       bag_serial_no: null, product_type: pb.product_type ?? null,
       variant: pb.variant ?? null, kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
+      session_id: pb.session_id,
     })
   }
 
-  // Order by real bagging time (nulls last), then stamp a stable 1..N display
-  // number — the stored prod_bagging.bag_no is itself derived from the
-  // race-prone snapshot, so it isn't trusted for identity here.
   rows.sort((a, b) => {
     const ta = a.bagging_time ? Date.parse(a.bagging_time) : Infinity
     const tb = b.bagging_time ? Date.parse(b.bagging_time) : Infinity
@@ -175,31 +226,82 @@ function mergeOutputBags(tags: any[], bagging: any[]): OrderBagRow[] {
   return rows
 }
 
-export async function loadOrderDetail(sessionId: string): Promise<OrderDetail | null> {
+function group<T>(rows: T[], key: (r: T) => string): Map<string, T[]> {
+  const m = new Map<string, T[]>()
+  for (const r of rows) { const k = key(r); (m.get(k) ?? m.set(k, []).get(k)!).push(r) }
+  return m
+}
+
+// Load the whole production day that `sessionId` belongs to.
+export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> {
   const db = getDb().schema('production')
 
-  const { data: session } = await db.from('prod_sessions').select('*').eq('id', sessionId).maybeSingle()
-  if (!session) return null
+  const { data: clicked } = await db.from('prod_sessions').select('section_id,date').eq('id', sessionId).maybeSingle()
+  if (!clicked) return null
+  const section_id = (clicked as any).section_id as string
+  const date = (clicked as any).date as string
 
-  const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes] = await Promise.all([
-    db.from('prod_mass_balance').select('*').eq('session_id', sessionId).maybeSingle(),
-    db.from('bag_tags').select('serial_number,product_type,variant,weight_kg,printed_at,status').eq('session_id', sessionId),
-    db.from('prod_bagging').select('*').eq('session_id', sessionId).order('bag_no'),
-    db.from('prod_debagging').select('*').eq('session_id', sessionId).order('bag_no'),
-    db.from('session_signatures').select('*').eq('session_id', sessionId).order('signed_at'),
-    db.from('po_reopen_requests').select('*').eq('session_id', sessionId).order('created_at', { ascending: false }),
+  const { data: sessRaw } = await db.from('prod_sessions').select('*')
+    .eq('section_id', section_id).eq('date', date)
+  const sessions = ((sessRaw as any[]) ?? []).sort(
+    (a, b) => shiftRank(a.shift) - shiftRank(b.shift) || String(a.created_at).localeCompare(String(b.created_at)),
+  )
+  if (!sessions.length) return null
+
+  const ids = sessions.map(s => s.id)
+  const shiftBySession = new Map<string, string>(sessions.map(s => [s.id, s.shift]))
+
+  const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, checksRes] = await Promise.all([
+    db.from('prod_mass_balance').select('*').in('session_id', ids),
+    db.from('bag_tags').select('session_id,serial_number,product_type,variant,weight_kg,printed_at,status').in('session_id', ids),
+    db.from('prod_bagging').select('*').in('session_id', ids),
+    db.from('prod_debagging').select('*').in('session_id', ids).order('bag_no'),
+    db.from('session_signatures').select('*').in('session_id', ids),
+    db.from('po_reopen_requests').select('*').in('session_id', ids).order('created_at', { ascending: false }),
+    // AI check summary is keyed by (section_id, date, shift), not session_id.
+    db.from('check_records').select('shift,ai_summary,status').eq('section_id', section_id).eq('date', date),
   ])
 
+  const mbBySession = new Map<string, OrderMassBalance>(((mbRes.data as any[]) ?? []).map(m => [m.session_id, m]))
+  const sigBySession = group<any>((sigRes.data as any[]) ?? [], (s: any) => s.session_id) as Map<string, OrderSignature[]>
+  const reopenBySession = group<any>((reopenRes.data as any[]) ?? [], (r: any) => r.session_id) as Map<string, OrderReopenRequest[]>
+  const checkByShift = new Map<string, any>(((checksRes.data as any[]) ?? []).map(c => [c.shift, c]))
+
+  // Whole-day output bags, then attribute each to its shift.
   const bags = mergeOutputBags((tagsRes.data as any[]) ?? [], (bagsRes.data as any[]) ?? [])
-  const bagsOutputKg = bags.reduce((s, b) => s + (b.kg || 0), 0)
+  bags.forEach(b => { b.shift = shiftBySession.get(b.session_id) ?? '' })
+
+  // Debag inputs across the day (already ordered per session by bag_no), tagged with shift.
+  const debags: OrderDebagRow[] = ((debagsRes.data as any[]) ?? []).map(d => ({
+    ...d, shift: shiftBySession.get(d.session_id) ?? '',
+  }))
+
+  const shifts: OrderShiftBlock[] = sessions.map(s => {
+    const own = bags.filter(b => b.session_id === s.id)
+    const chk = checkByShift.get(s.shift)
+    return {
+      session: s as OrderSession,
+      massBalance: mbBySession.get(s.id) ?? null,
+      signatures: sigBySession.get(s.id) ?? [],
+      reopenRequests: reopenBySession.get(s.id) ?? [],
+      aiSummary: chk?.ai_summary ?? null,
+      checksStatus: chk?.status ?? null,
+      bagCount: own.length,
+      bagsOutputKg: own.reduce((t, b) => t + (b.kg || 0), 0),
+    }
+  })
+
+  const representative = sessions.find(s => !s.deleted_at) ?? sessions[0]
 
   return {
-    session: session as OrderSession,
-    massBalance: (mbRes.data as OrderMassBalance) ?? null,
+    section_id, date,
+    representativeSessionId: representative.id,
+    status: aggregateDayStatus(shifts),
+    shifts,
     bags,
-    bagsOutputKg,
-    debags: (debagsRes.data as OrderDebagRow[]) ?? [],
-    signatures: (sigRes.data as OrderSignature[]) ?? [],
-    reopenRequests: (reopenRes.data as OrderReopenRequest[]) ?? [],
+    bagsOutputKg: bags.reduce((t, b) => t + (b.kg || 0), 0),
+    debags,
+    massBalance: sumMassBalance(shifts, section_id),
+    reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],
   }
 }
