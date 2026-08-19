@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners — promoted to production)
+
+**Files changed:** `components/shared/BarcodeScanner.tsx` (new), `components/shared/ScanCameraButton.tsx` (new), `components/production/capture/BagScanIn.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/live/ScanInput.tsx`, `components/logistics/ScanInput.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx`, `app/(app)/tags/page.tsx`, `package.json`
+
+Until now, bag scanning only worked with a hardware USB/Bluetooth keyboard-wedge scanner — a phone or tablet with no such scanner attached had no way to scan a bag at all (the only real camera-decoder in the app, `PartScanner.tsx`, is scoped to spare parts and only supports Chrome/Android's native `BarcodeDetector`, so it silently does nothing on iOS Safari anyway).
+
+- New **`BarcodeScanner`** modal: native `BarcodeDetector` on Chrome/Android/Edge, lazy-loaded **`@zxing/browser`** decoder as a fallback on iOS Safari/Firefox (no native API there), and a manual type-in fallback if the camera itself fails to start. Chrome/Android users never download the zxing bundle since it's only imported when the native API is absent.
+- New **`ScanCameraButton`**: a small feature-detected trigger (renders nothing if `getUserMedia` doesn't exist) that opens the modal and returns the decoded code via a callback — a one-line drop-in next to any existing scan input.
+- Wired in **additively** everywhere a bag is scanned today — the existing hardware-scanner text inputs are untouched, this just adds a camera option beside them: Refining + Pasteuriser debagging (shared `ScanBox` in `BagScanIn.tsx`), Granule dust-input rows, Blender's add-bag modal, the `production/live` capture scan input, the logistics scan input (dispatch, warehouse units), receive-from-production, and the `/tags` quick lookup.
+- Not wired into GRN receiving (`logistics/receiving/[id]/page.tsx`) — that screen picks a location from a dropdown rather than scanning a barcode, so there's no text input to sit alongside.
+- iOS decoder-attach failures are reported separately from camera-acquisition failures (fixed same day — the camera can open fine while only the zxing fallback fails to start), so a decoder problem doesn't show a misleading "could not start the camera" message; the live preview stays up with a manual-entry fallback.
+
 ## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections — promoted to production)
 
 **Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
