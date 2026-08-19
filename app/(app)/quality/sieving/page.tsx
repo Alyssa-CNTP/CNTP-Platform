@@ -1704,7 +1704,14 @@ export default function SievingPage() {
   async function openBagAlert(bagAlert: any) {
     setActiveProduct(bagAlert.product)
     const fresh = await loadPendingBags()
+    // prod_bagging is a mirror row rewritten by persist() on every save (see
+    // 20260813_007), so its id — our bagging_id — is not guaranteed stable
+    // between the card rendering with a stale id and this click. The serial
+    // number is permanent, so fall back to it before concluding the bag is
+    // done: matching on bagging_id alone here previously produced a false
+    // "already sampled" for a bag that was, in fact, still pending.
     const bag = fresh.find((b:any) => String(b.bagging_id) === String(bagAlert.bagging_id))
+      || (bagAlert.bag_serial_no && fresh.find((b:any) => String(b.bag_serial_no).toUpperCase() === String(bagAlert.bag_serial_no).toUpperCase()))
     if (!bag) { alert(`${bagAlert.bag_serial_no || 'That bag'} was already sampled — nothing to do.`); return }
     setShowForm(true)
     setEditRunId(null)
