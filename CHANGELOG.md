@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Alyssa (Production Orders reads output bags live from the bag_tags ledger, so nothing captured on the floor goes missing)
+
+**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/orders/page.tsx`
+
+Reported: output bags that were genuinely bagged (and show correctly in Quality) were missing from Production Orders — the 17th's Fine Leaf bag 12, the 18th's Fine Leaf bag 9 — throwing the reported numbers off. Quality reads `bag_tags` (present); Orders read `prod_bagging`/`draft_data` (missing).
+
+Root cause: `bag_tags` is written atomically — one row per physical bag, the instant it's tagged — and is the ledger Quality's QC queue reads. `prod_bagging` and the session `draft_data` snapshot are instead rewritten wholesale on every save (`persist()` delete + reinsert-all), so a save that races a rapid bag-add intermittently drops bags. Measured live on production: a Blender session with 11 real bags had **1** row in `prod_bagging`; a Sieving session with 24 had **2**. In every session checked, `bag_tags` was complete.
+
+- **Order detail** (`order-detail.ts` / `[id]/page.tsx`) now builds the output-bag list as the union of `bag_tags` (active, non-voided — the authoritative spine) and `prod_bagging` (used only to enrich each bag with its output group / recorded time). A bag in `prod_bagging` but not `bag_tags` (no-serial by-products, Pasteuriser range rows) is still included; voided bags are excluded everywhere. Verified against the real broken sessions: Blender 1→11, Sieving 2→24, and the reported missing bags now present.
+- The detail view is now an **independent live read** — it reloads straight from the database via a realtime subscription on this order's bag/bagging/session rows (20s poll backstop), so a bag captured on the floor appears within a tick **without opening the capture page**. Output bags are grouped per product type with their own count + weight ("14 bags of Fine Leaf · 4,200 kg"), which also reads far better on a phone than the old wide flat table.
+- **Orders list** counts + output weight now come from the same reliable ledger union (not `prod_bagging`/`prod_mass_balance`), and the list auto-refreshes every 30s so it stays live during a shift.
+- No schema change — `bag_tags`/`prod_bagging` are already realtime-enabled. (`persist()`'s own write race is a separate, deeper fix; this makes the reporting side correct and resilient regardless.)
+
 ## 2026-08-18 — Alyssa (Bag top-ups now require a named source bag — every top-up is a traceable transfer, not a loose number)
 
 **Files changed:** `supabase/migrations/20260818_004_bag_weight_transfer_provenance.sql` (new), `lib/production/scan-utils.ts`, `app/(app)/tags/page.tsx`, `lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`, `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/count/monthly/{MonthlyBatchLedger,MonthlyReconciliation}.tsx`

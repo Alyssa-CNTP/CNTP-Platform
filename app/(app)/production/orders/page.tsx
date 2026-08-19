@@ -218,11 +218,40 @@ function OrdersInner() {
       const mbMap = new Map<string, any>()
       ;(mb ?? []).forEach((r: any) => mbMap.set(r.session_id, r))
 
-      const { data: bags }  = await db.schema('production').from('prod_bagging').select('session_id').in('session_id', ids)
-      const { data: debags } = await db.schema('production').from('prod_debagging').select('session_id').in('session_id', ids)
-      const bagCount   = new Map<string, number>()
+      // Output bag count + weight come from the bag_tags ledger (one atomic row
+      // per physical bag, the same source Quality reads), NOT prod_bagging —
+      // prod_bagging's delete+reinsert-all save intermittently drops bags, so a
+      // session with 18 real bags could show "1" here. prod_bagging is unioned
+      // in only to cover any bag it has that bag_tags doesn't (no-serial
+      // by-products, Pasteuriser range rows); voided bags are excluded.
+      const [{ data: tags }, { data: bags }, { data: debags }] = await Promise.all([
+        db.schema('production').from('bag_tags').select('session_id,serial_number,weight_kg,status').in('session_id', ids),
+        db.schema('production').from('prod_bagging').select('session_id,bag_serial_no,kg').in('session_id', ids),
+        db.schema('production').from('prod_debagging').select('session_id').in('session_id', ids),
+      ])
+      // Per session: build the reliable output set keyed by serial.
+      const perSession = new Map<string, { serials: Set<string>; kg: number; noSerial: number; voided: Set<string> }>()
+      const bucket = (sid: string) => {
+        let b = perSession.get(sid)
+        if (!b) { b = { serials: new Set(), kg: 0, noSerial: 0, voided: new Set() }; perSession.set(sid, b) }
+        return b
+      }
+      ;(tags ?? []).forEach((t: any) => {
+        const b = bucket(t.session_id)
+        if (t.status === 'voided') { b.voided.add(t.serial_number); return }
+        if (!b.serials.has(t.serial_number)) { b.serials.add(t.serial_number); b.kg += Number(t.weight_kg) || 0 }
+      })
+      ;(bags ?? []).forEach((r: any) => {
+        const b = bucket(r.session_id)
+        if (!r.bag_serial_no) { b.noSerial += 1; b.kg += Number(r.kg) || 0; return }
+        if (b.voided.has(r.bag_serial_no) || b.serials.has(r.bag_serial_no)) return
+        b.serials.add(r.bag_serial_no); b.kg += Number(r.kg) || 0
+      })
+      const bagCount    = new Map<string, number>()
+      const outputKgMap = new Map<string, number>()
+      for (const [sid, b] of perSession) { bagCount.set(sid, b.serials.size + b.noSerial); outputKgMap.set(sid, b.kg) }
+
       const debagCount = new Map<string, number>()
-      ;(bags  ?? []).forEach((r: any) => bagCount.set(r.session_id,   (bagCount.get(r.session_id)   ?? 0) + 1))
       ;(debags ?? []).forEach((r: any) => debagCount.set(r.session_id, (debagCount.get(r.session_id) ?? 0) + 1))
 
       if (!alive) return
@@ -235,10 +264,11 @@ function OrdersInner() {
           deleted_at: x.deleted_at ?? null,
           edited_at:  x.edited_at ?? null,
           total_input_kg: m ? parseFloat(m.total_input_kg) : 0,
-          total_output_kg: m
-            ? (parseFloat(m.total_output_b_kg) || 0)
-              + (parseFloat(m.total_output_c_kg) || 0) + (parseFloat(m.total_output_d_kg) || 0)
-            : 0,
+          // Reliable output weight = Σ of the actual bags (bag_tags ledger),
+          // not the prod_mass_balance snapshot which can lag when a save races
+          // a bag-add. Keeps the list's output figure in step with the bags
+          // the order detail now shows.
+          total_output_kg: outputKgMap.get(s.id) ?? 0,
           balance_kg: m ? parseFloat(m.balance_kg) : null,
           debag_count: debagCount.get(s.id) ?? 0,
           bag_count:   bagCount.get(s.id)   ?? 0,
@@ -250,6 +280,15 @@ function OrdersInner() {
     load()
     return () => { alive = false }
   }, [dateFrom, dateTo, refreshKey])
+
+  // Keep the list live while it's open — reporting is watched during a running
+  // shift, so a bag captured on the floor should surface here on its own,
+  // without a manual refresh or reopening the capture page. A 30s poll is
+  // enough for a list view (the per-order detail is realtime-instant).
+  useEffect(() => {
+    const t = setInterval(() => setRefreshKey(k => k + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
 
   const filtered = useMemo(() => sessions.filter(s => {
     // Hide stray empty drafts — a draft/new session with no debagging, no bagging
