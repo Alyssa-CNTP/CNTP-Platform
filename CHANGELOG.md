@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
+
+**Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
+
+Requested: raw-material leaf shade (from `qms.leaf_shade_predictions`, graded at intake) and the QC's own leaf shade at Sieving can legitimately differ for the same lot — the sieve run is the final truth, the raw-material figure is only a suggestion. Until now that suggestion was written straight into `sd_runs.leaf_shade` as the pre-filled value, so a saved run couldn't tell "the QC typed this" apart from "the QC left the suggestion unchanged" — losing the comparison the moment it was saved. Also flagged: a lot of raw material intake has no shade prediction on record yet, so the suggestion is often simply absent — expected, not a bug.
+
+- New nullable `qms.sd_runs.raw_material_leaf_shade` column, independent of `leaf_shade`.
+- Every place the raw-material shade gets suggested into the form (`lookupLot()` on typing a lot number, and `applyBagToForm()` on "Sample now") now also stamps this new column on save — capturing the suggestion whether or not the QC changed it, and even on In-Process runs where Leaf Shade has no visible input at all (Fine Leaf/Coarse Leaf).
+- `leaf_shade` keeps meaning exactly what it always has: the QC's own final entry. Nothing about validation or the save flow changed.
+- The edit-run save path is untouched, so editing a run never overwrites the raw-material snapshot captured at creation.
+
 ## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
