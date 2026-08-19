@@ -97,8 +97,26 @@ export interface OrderReopenRequest {
   created_at: string
 }
 
+export interface OrderTimesheet {
+  operator_name: string
+  shift: string
+  shift_start: string | null
+  shift_end: string | null
+  worked_minutes: number | null
+  breaks: { type?: string; start?: string; end?: string }[]
+  confirmed: boolean
+}
+
+export interface OrderTakeover {
+  from_shift: string
+  to_shift: string
+  operator_name: string
+  rostered: boolean
+  taken_over_at: string
+}
+
 // One shift within the production day — its own capture record, sign-off,
-// mass balance and AI check summary.
+// mass balance, AI check summary, timesheet and handover note.
 export interface OrderShiftBlock {
   session: OrderSession
   massBalance: OrderMassBalance | null
@@ -106,6 +124,7 @@ export interface OrderShiftBlock {
   reopenRequests: OrderReopenRequest[]
   aiSummary: string | null       // Gemini machine-checks summary for this shift
   checksStatus: string | null    // in_progress | operator_signed | supervisor_verified
+  timesheets: OrderTimesheet[]   // hours worked, per operator on this shift
   bagCount: number               // this shift's own output bags (Σ its rows in the day list)
   bagsOutputKg: number
 }
@@ -121,6 +140,8 @@ export interface OrderDay {
   debags: OrderDebagRow[]           // all shifts, morning first
   massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
   reopenRequests: OrderReopenRequest[]   // union across shifts
+  timesheets: OrderTimesheet[]      // all operators across the day, shift-tagged
+  takeovers: OrderTakeover[]        // shift hand-over records (16h00 changeover)
 }
 
 // morning → 0, afternoon/night → 1; created_at breaks ties.
@@ -251,7 +272,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   const ids = sessions.map(s => s.id)
   const shiftBySession = new Map<string, string>(sessions.map(s => [s.id, s.shift]))
 
-  const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, checksRes] = await Promise.all([
+  const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, checksRes, tsRes, takeoverRes] = await Promise.all([
     db.from('prod_mass_balance').select('*').in('session_id', ids),
     db.from('bag_tags').select('session_id,serial_number,product_type,variant,weight_kg,printed_at,status').in('session_id', ids),
     db.from('prod_bagging').select('*').in('session_id', ids),
@@ -260,12 +281,24 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     db.from('po_reopen_requests').select('*').in('session_id', ids).order('created_at', { ascending: false }),
     // AI check summary is keyed by (section_id, date, shift), not session_id.
     db.from('check_records').select('shift,ai_summary,status').eq('section_id', section_id).eq('date', date),
+    db.from('prod_timesheets').select('*').in('session_id', ids),
+    db.from('shift_takeovers').select('*').in('session_id', ids).order('taken_over_at'),
   ])
 
   const mbBySession = new Map<string, OrderMassBalance>(((mbRes.data as any[]) ?? []).map(m => [m.session_id, m]))
   const sigBySession = group<any>((sigRes.data as any[]) ?? [], (s: any) => s.session_id) as Map<string, OrderSignature[]>
   const reopenBySession = group<any>((reopenRes.data as any[]) ?? [], (r: any) => r.session_id) as Map<string, OrderReopenRequest[]>
   const checkByShift = new Map<string, any>(((checksRes.data as any[]) ?? []).map(c => [c.shift, c]))
+  const tsBySession = group<any>((tsRes.data as any[]) ?? [], (t: any) => t.session_id)
+  const timesheets: OrderTimesheet[] = ((tsRes.data as any[]) ?? []).map(t => ({
+    operator_name: t.operator_name, shift: shiftBySession.get(t.session_id) ?? '',
+    shift_start: t.shift_start, shift_end: t.shift_end, worked_minutes: t.worked_minutes,
+    breaks: Array.isArray(t.breaks) ? t.breaks : [], confirmed: !!t.confirmed,
+  }))
+  const takeovers: OrderTakeover[] = ((takeoverRes.data as any[]) ?? []).map(t => ({
+    from_shift: t.from_shift, to_shift: t.to_shift, operator_name: t.operator_name,
+    rostered: !!t.rostered, taken_over_at: t.taken_over_at,
+  }))
 
   // Whole-day output bags, then attribute each to its shift.
   const bags = mergeOutputBags((tagsRes.data as any[]) ?? [], (bagsRes.data as any[]) ?? [])
@@ -286,6 +319,11 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
       reopenRequests: reopenBySession.get(s.id) ?? [],
       aiSummary: chk?.ai_summary ?? null,
       checksStatus: chk?.status ?? null,
+      timesheets: (tsBySession.get(s.id) ?? []).map((t: any) => ({
+        operator_name: t.operator_name, shift: s.shift,
+        shift_start: t.shift_start, shift_end: t.shift_end, worked_minutes: t.worked_minutes,
+        breaks: Array.isArray(t.breaks) ? t.breaks : [], confirmed: !!t.confirmed,
+      })),
       bagCount: own.length,
       bagsOutputKg: own.reduce((t, b) => t + (b.kg || 0), 0),
     }
@@ -303,5 +341,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     debags,
     massBalance: sumMassBalance(shifts, section_id),
     reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],
+    timesheets,
+    takeovers,
   }
 }

@@ -14,14 +14,20 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
-import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles } from 'lucide-react'
-import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance } from '@/lib/production/order-detail'
+import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
+import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
 
 const fmtBagTime = (ts: string | null) =>
   ts ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(ts)) : '—'
+
+const fmtHrs = (min: number | null) => {
+  if (min == null) return '—'
+  const h = Math.floor(min / 60), m = Math.round(min % 60)
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`
+}
 
 const SHIFT_LABEL: Record<string, string> = { morning: 'Morning', afternoon: 'Afternoon', night: 'Night' }
 
@@ -94,7 +100,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, shifts, bags, bagsOutputKg, debags, massBalance: mb } = day
+  const { section_id, date, status, shifts, bags, bagsOutputKg, debags, massBalance: mb, timesheets, takeovers } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -190,6 +196,78 @@ export default function ProductionOrderDetailPage() {
       {shifts.map(block => (
         <ShiftBlock key={block.session.id} block={block} />
       ))}
+
+      {/* ── Later pages: handover notes + timesheet ── */}
+      {(shifts.some(s => s.session.comments) || takeovers.length > 0) && (
+        <div className="print-page-break">
+          <Panel>
+            <PanelHead title="Handover & operator notes" />
+            <PanelBody>
+              <div className="space-y-3">
+                {takeovers.map((t, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[12.5px] text-text">
+                    <ArrowRightLeft size={14} className="text-text-faint shrink-0 mt-0.5" />
+                    <span>
+                      <span className="capitalize">{t.from_shift}</span> → <span className="capitalize">{t.to_shift}</span> handed over to <span className="font-medium">{t.operator_name}</span>
+                      {!t.rostered && <span className="text-warn"> (not rostered)</span>}
+                      <span className="text-text-faint"> · {format(new Date(t.taken_over_at), 'd MMM HH:mm')}</span>
+                    </span>
+                  </div>
+                ))}
+                {shifts.filter(s => s.session.comments).map(s => (
+                  <div key={s.session.id} className="flex items-start gap-2">
+                    <MessageSquare size={14} className="text-text-faint shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-text-faint">{SHIFT_LABEL[s.session.shift] ?? s.session.shift}</span>
+                      <p className="text-[12.5px] text-text whitespace-pre-wrap leading-relaxed">{s.session.comments}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </PanelBody>
+          </Panel>
+        </div>
+      )}
+
+      {timesheets.length > 0 && (
+        <div className="print-page-break">
+          <Panel>
+            <PanelHead title="Timesheet — hours worked" meta={`${timesheets.length} operator${timesheets.length === 1 ? '' : 's'}`} />
+            <PanelBody>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[520px]">
+                  <thead>
+                    <tr>
+                      {['Operator', 'Shift', 'Start', 'End', 'Breaks', 'Worked', ''].map((h, i) => (
+                        <th key={i} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${h === 'Worked' ? 'text-right' : ''}`}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule/60">
+                    {timesheets.map((t, i) => {
+                      const brk = (t.breaks ?? []).reduce((m, b) => {
+                        if (b.start && b.end) return m + Math.max(0, (Date.parse(b.end) - Date.parse(b.start)) / 60000)
+                        return m
+                      }, 0)
+                      return (
+                        <tr key={i}>
+                          <td className="px-3 py-1.5 text-[12.5px] text-text">{t.operator_name}</td>
+                          <td className="px-3 py-1.5 text-[11px] text-text-muted capitalize">{t.shift}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted">{fmtBagTime(t.shift_start)}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted">{fmtBagTime(t.shift_end)}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint">{brk > 0 ? fmtHrs(brk) : '—'}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12.5px] text-text text-right tabular-nums">{fmtHrs(t.worked_minutes)}</td>
+                          <td className="px-3 py-1.5">{t.confirmed ? <CheckCircle2 size={13} className="text-ok" /> : <span className="text-[10px] text-text-faint">unconfirmed</span>}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </PanelBody>
+          </Panel>
+        </div>
+      )}
     </div>
   )
 }
