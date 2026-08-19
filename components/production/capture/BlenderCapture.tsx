@@ -13,6 +13,7 @@ import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { BlendCodePicker } from '@/components/production/capture/BlendCodePicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import { isValidLot } from '@/components/production/capture/SievingCapture'
+import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
@@ -405,6 +406,11 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
                     className="px-3 rounded-xl border border-stone-200 text-stone-500 hover:border-brand hover:text-brand text-[12px] font-medium disabled:opacity-40 shrink-0">
                     {looking ? '…' : 'Look up'}
                   </button>
+                  <ScanCameraButton
+                    title="Scan bag barcode"
+                    hint="Point the camera at the bag's barcode…"
+                    onScan={code => { setSerial(sanitizeSerial(code)); setScanMsg(null) }}
+                  />
                 </div>
                 {scanMsg && (
                   <p className={`text-[11px] flex items-center gap-1.5 ${scanMsg.kind === 'ok' ? 'text-ok' : 'text-amber-600'}`}>
