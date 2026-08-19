@@ -12,12 +12,13 @@
 // un-collapsed by default (no Collapse behind a click — "show everything"
 // was the actual ask), so Print produces the same full report you see here.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
-import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play } from 'lucide-react'
-import { loadOrderDetail, type OrderDetail } from '@/lib/production/order-detail'
+import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio } from 'lucide-react'
+import { loadOrderDetail, type OrderDetail, type OrderBagRow } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
+import { getDb } from '@/lib/supabase/db'
 
 // bagging_time is a timestamptz (the bag's real creation instant) — show it as
 // SAST wall-clock time. Falls back to em-dash for bags with no recorded time.
@@ -40,19 +41,44 @@ export default function ProductionOrderDetailPage() {
   const [detail, setDetail] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [live, setLive] = useState(false)
 
+  // Live, independent read: this page reloads straight from the database
+  // (bag_tags is the source of truth for output bags — see order-detail.ts),
+  // and re-fetches whenever a bag / bagging row / the session itself changes
+  // for this order, so a bag captured on the floor appears here within a tick
+  // without anyone opening the capture page or refreshing. Realtime is a live
+  // convenience on top of a correct read — a 20s poll backstops it so the
+  // record stays current even if the socket drops.
+  const loadedOnceRef = useRef(false)
   useEffect(() => {
     let alive = true
-    loadOrderDetail(id)
-      .then(d => { if (alive) { setDetail(d); setLoading(false) } })
-      .catch(() => { if (alive) { setError('Could not load this production order'); setLoading(false) } })
-    return () => { alive = false }
+    const reload = () =>
+      loadOrderDetail(id)
+        .then(d => { if (alive) { setDetail(d); loadedOnceRef.current = true; setLoading(false) } })
+        // Only surface an error on the FIRST load — a transient failure on a
+        // later realtime/poll refresh must not blank out the record already
+        // on screen.
+        .catch(() => { if (alive && !loadedOnceRef.current) { setError('Could not load this production order'); setLoading(false) } })
+    reload()
+
+    const db = getDb()
+    const bump = () => { reload() }
+    const channel = db.channel(`order-detail-${id}`)
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'bag_tags',    filter: `session_id=eq.${id}` }, bump)
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_bagging', filter: `session_id=eq.${id}` }, bump)
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_sessions', filter: `id=eq.${id}` }, bump)
+      .subscribe((s: string) => { if (alive) setLive(s === 'SUBSCRIBED') })
+    const poll = setInterval(reload, 20_000)
+
+    return () => { alive = false; clearInterval(poll); db.removeChannel(channel) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !detail) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { session: s, massBalance: mb, bags, debags, signatures, reopenRequests } = detail
+  const { session: s, massBalance: mb, bags, bagsOutputKg, debags, signatures, reopenRequests } = detail
   const meta = sectionMeta(s.section_id)
   const st = STATUS[s.status] ?? STATUS.new
   const opSig  = signatures.find(x => x.signer_role === 'operator')
@@ -66,10 +92,17 @@ export default function ProductionOrderDetailPage() {
         <button onClick={() => router.back()} className="inline-flex items-center gap-1 text-sm text-text-muted hover:text-text">
           <ArrowLeft size={16} /> Back
         </button>
-        <button onClick={() => window.print()}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:opacity-90">
-          <Printer size={14} /> Print
-        </button>
+        <div className="flex items-center gap-3">
+          {live && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-ok" title="Reading live from the database — updates as bags are captured">
+              <Radio size={12} className="animate-pulse" /> Live
+            </span>
+          )}
+          <button onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:opacity-90">
+            <Printer size={14} /> Print
+          </button>
+        </div>
       </div>
 
       {/* Header */}
@@ -140,24 +173,19 @@ export default function ProductionOrderDetailPage() {
         </PanelBody>
       </Panel>
 
-      {/* Bagging (outputs) */}
+      {/* Bagging (outputs) — grouped by product type, each type counted on its
+          own ("14 bags of Fine Leaf"), read live from the bag_tags ledger so
+          nothing the floor bagged is ever missing here. */}
       <Panel>
-        <PanelHead title="Bagging — output bags" meta={String(bags.length)} />
+        <PanelHead title="Bagging — output bags"
+          meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
         <PanelBody>
           {bags.length === 0 ? <Empty>No output bags recorded.</Empty> : (
-            <Table head={['Bag #', 'Group', 'Serial', 'Product', 'Variant', 'kg', 'Time']} align={[5]}>
-              {bags.map(b => (
-                <Tr key={b.id}>
-                  <Td mono>{b.bag_no}</Td>
-                  <Td>{b.output_group || '—'}</Td>
-                  <Td mono>{b.bag_serial_no || '—'}</Td>
-                  <Td>{b.product_type || '—'}</Td>
-                  <Td>{b.variant || '—'}</Td>
-                  <Td right mono>{b.kg.toFixed(1)}</Td>
-                  <Td>{fmtBagTime(b.bagging_time)}</Td>
-                </Tr>
+            <div className="space-y-4">
+              {groupByType(bags).map(g => (
+                <BagTypeGroup key={g.type} type={g.type} rows={g.rows} />
               ))}
-            </Table>
+            </div>
           )}
         </PanelBody>
       </Panel>
@@ -201,6 +229,47 @@ export default function ProductionOrderDetailPage() {
           </PanelBody>
         </Panel>
       )}
+    </div>
+  )
+}
+
+// Group the merged bag list by product type, preserving first-seen order, so
+// each output type reads as its own tally ("14 bags of Fine Leaf · 4,200 kg")
+// — the same per-type mental model as the capture screen.
+function groupByType(bags: OrderBagRow[]): { type: string; rows: OrderBagRow[] }[] {
+  const order: string[] = []
+  const map = new Map<string, OrderBagRow[]>()
+  for (const b of bags) {
+    const t = b.product_type || 'Other'
+    if (!map.has(t)) { map.set(t, []); order.push(t) }
+    map.get(t)!.push(b)
+  }
+  return order.map(type => ({ type, rows: map.get(type)! }))
+}
+
+// One product type's bags. Compact per-bag lines (not a wide table) so it stays
+// readable on a phone — the whole reason the flat 7-column table was cramped.
+function BagTypeGroup({ type, rows }: { type: string; rows: OrderBagRow[] }) {
+  const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+  return (
+    <div className="rounded-xl border border-surface-rule overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
+        <span className="text-[12.5px] font-semibold text-text">{type}</span>
+        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
+        </span>
+      </div>
+      <ul className="divide-y divide-surface-rule/60">
+        {rows.map((b, i) => (
+          <li key={b.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
+            <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
+            <span className="font-mono text-text flex-1 min-w-0 truncate">{b.bag_serial_no || '—'}</span>
+            {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
+            <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
+            <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(b.bagging_time)}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
