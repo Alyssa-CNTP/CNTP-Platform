@@ -16,6 +16,7 @@ import {
   type NotebookDocWithLines, type DocType,
   COMPANY, DOC_TYPE_LABELS, DOC_TYPE_AF, PARTY_LABEL, CERT_ROWS,
   SIGN_BLOCK_LABELS, SIGN_BLOCK_DECLARATION, hasAnyCert, totalQty, totalWeightKg,
+  FIELD_NAME_LABEL, PLANT_YEAR_LABEL,
   type SignBlock,
 } from '@/lib/notebooks/types'
 
@@ -137,9 +138,12 @@ export default function NotePaper({ doc, signatures, minRows = 8 }: Props) {
         <Field label={PARTY_LABEL[type]} value={doc.party_name} />
         <Field label="Name of store goods delivered at" value={doc.delivered_at_store} />
         <Field label="Our purchase order no." value={doc.purchase_order_no} />
-        <Field label="Weighbridge no." value={doc.weighbridge_no} />
         <div style={{ display: 'flex', gap: 14 }}>
-          <div style={{ flex: 1 }}><Field label="Date" value={fmtDate(doc.doc_date)} /></div>
+          <div style={{ flex: 1 }}><Field label="Weighbridge no." value={doc.weighbridge_no} /></div>
+          <div style={{ flex: 1 }}><Field label="Weight (weighbridge)" value={fmtNum(doc.weighbridge_weight_kg, ' kg')} /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <div style={{ flex: 1 }}><Field label="Date received" value={fmtDate(doc.doc_date)} /></div>
           <div style={{ flex: 1 }}><Field label="Vehicle reg." value={doc.vehicle_reg} /></div>
         </div>
         {(doc.lot_no || doc.batch_no || doc.producer_lot_no || doc.farmer_name || doc.season_year) && (
@@ -151,8 +155,8 @@ export default function NotePaper({ doc, signatures, minRows = 8 }: Props) {
         )}
         {(doc.farmer_name || doc.season_year) && (
           <div style={{ display: 'flex', gap: 14 }}>
-            <div style={{ flex: 1 }}><Field label="Farmer / tea court" value={doc.farmer_name} /></div>
-            <div style={{ flex: 1 }}><Field label="Season" value={doc.season_year ? String(doc.season_year) : null} /></div>
+            <div style={{ flex: 1 }}><Field label={FIELD_NAME_LABEL} value={doc.farmer_name} /></div>
+            <div style={{ flex: 1 }}><Field label={PLANT_YEAR_LABEL} value={doc.season_year ? String(doc.season_year) : null} /></div>
           </div>
         )}
       </div>

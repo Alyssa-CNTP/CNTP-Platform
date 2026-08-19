@@ -2,7 +2,7 @@
 // Server-only data access for the GRN / Delivery Note books.
 //
 // Everything goes through the service-role client against the public.notebook_*
-// views (see the header of 20260813_010_notebooks_grn_dn.sql for why the tables
+// views (see the header of 20260819_001_notebooks_grn_dn.sql for why the tables
 // sit in their own `notebooks` schema but are reached through public views).
 // Permission checks live in the API routes that call these functions — this
 // module deliberately holds no opinion about who is allowed to do what.
@@ -22,9 +22,14 @@ const PLACES = 'notebook_locations'
 // (status / issued_at / voided_by / …) is set here, never by the client — the
 // DB enforces the same rule in notebooks.protect_doc_identity(), this is just
 // the earlier, friendlier boundary.
+//
+// doc_date is deliberately NOT in this list: "date received" is automated —
+// stamped once by the DB default (today, Africa/Johannesburg) the moment the
+// note is created, and fixed after that. Nobody, including a later edit,
+// backdates or postdates a receipt.
 const EDITABLE_HEADER_FIELDS = [
-  'doc_date',
-  'party_name', 'party_address', 'delivered_at_store', 'purchase_order_no', 'weighbridge_no',
+  'party_name', 'party_address', 'delivered_at_store', 'purchase_order_no',
+  'weighbridge_no', 'weighbridge_weight_kg',
   'lot_no', 'batch_no', 'producer_lot_no', 'season_year', 'farmer_name',
   'vehicle_reg', 'transporter_company', 'driver_name',
   'cert_organic_nop', 'cert_organic_jas', 'cert_organic_eu',

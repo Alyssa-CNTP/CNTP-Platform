@@ -1,6 +1,7 @@
 // lib/notebooks/types.ts
 // Shapes + labels for the GRN / Delivery Note books (see
-// supabase/migrations/20260813_010_notebooks_grn_dn.sql).
+// supabase/migrations/20260819_001_notebooks_grn_dn.sql and
+// supabase/migrations/20260819_002_notebooks_weighbridge_weight.sql).
 //
 // A "book" is one (site, doc type) pair — Graafwater Depot's GRN book is a
 // different book from its DN book, and both are different from Blackheath's.
@@ -78,6 +79,7 @@ export interface NotebookDoc {
   delivered_at_store: string | null
   purchase_order_no:  string | null
   weighbridge_no:     string | null
+  weighbridge_weight_kg: number | null
 
   lot_no:          string | null
   batch_no:        string | null
@@ -142,6 +144,15 @@ export function hasAnyCert(doc: Pick<NotebookDoc, CertKey>): boolean {
   return CERT_KEYS.some(k => doc[k])
 }
 
+// ─── Field labels shared by the capture form and the printed note ───────────
+// "farmer_name" / "season_year" are the DB/column names (chosen when the
+// traceability fields were first added); these are what the person filling
+// in the form actually reads on the page — "field name" and "plant year" —
+// matching the wording used at the gate.
+
+export const FIELD_NAME_LABEL = 'Field name'
+export const PLANT_YEAR_LABEL = 'Plant year'
+
 // ─── Company block — the letterhead printed on every note ────────────────────
 // Same details as the paper book and the COA (app/(app)/quality/coa/page.tsx).
 
@@ -190,9 +201,15 @@ export type SignBlock = 'received' | 'transporter'
 
 export const SIGN_BLOCKS: SignBlock[] = ['received', 'transporter']
 
+// Same two physical blocks on every note, but which one is "the person who
+// brought the goods" and which is "the person who took them in" flips with
+// doc_type — a GRN is signed at OUR gate (deliverer drops off, we receive), a
+// DN is signed at THEIRS (we deliver, they receive). Naming both "Deliverer"
+// and "Receiver" throughout, rather than book-specific wording, keeps the
+// signing UI identical for either book — only the declaration text differs.
 export const SIGN_BLOCK_LABELS: Record<DocType, Record<SignBlock, string>> = {
-  GRN: { received: 'Received by',  transporter: 'Transporter' },
-  DN:  { received: 'Delivered by', transporter: 'Received by (recipient)' },
+  GRN: { received: 'Receiver',  transporter: 'Deliverer' },
+  DN:  { received: 'Deliverer', transporter: 'Receiver' },
 }
 
 export const SIGN_BLOCK_DECLARATION: Record<DocType, Record<SignBlock, string>> = {

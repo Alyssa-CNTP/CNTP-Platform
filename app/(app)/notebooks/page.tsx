@@ -7,24 +7,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { Plus, BookOpen, Search, Loader2, Leaf, ArrowRight } from 'lucide-react'
+import { Plus, BookOpen, Search, Loader2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
-import StatusBadge from '@/components/notebooks/StatusBadge'
+import NotesTable, { type NoteRow } from '@/components/notebooks/NotesTable'
 import {
-  type DocType, type DocStatus, type NotebookDoc, type NotebookLocation,
-  DOC_TYPE_LABELS, STATUS_LABELS, CERT_KEYS,
+  type DocType, type DocStatus, type NotebookLocation,
+  DOC_TYPE_LABELS, STATUS_LABELS,
 } from '@/lib/notebooks/types'
 
-type Row = NotebookDoc & { line_count: number; total_qty: number; total_weight_kg: number }
-
 export default function NoteBooksPage() {
-  const router = useRouter()
   const { p } = useAuth()
   const canCreate = p('can_create_notebook_doc')
 
   const [locations, setLocations] = useState<NotebookLocation[]>([])
-  const [rows, setRows]     = useState<Row[]>([])
+  const [rows, setRows]     = useState<NoteRow[]>([])
   const [total, setTotal]   = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError]   = useState<string | null>(null)
@@ -85,10 +81,10 @@ export default function NoteBooksPage() {
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
         <div>
-          <h1 className="text-2xl font-semibold text-text">Note Books</h1>
+          <h1 className="text-2xl font-semibold text-text">All Sites</h1>
           <p className="text-sm text-text-muted mt-1">
-            Goods Received Notes and Delivery Notes. Every site keeps its own pair of books, and every
-            note carries the next number in the book it was written in.
+            Every GRN and Delivery Note, across every site — for looking something up when you don&apos;t
+            know which book it&apos;s in. To write a note, use its site&apos;s own tab under Warehousing to the left.
           </p>
         </div>
         {canCreate && (
@@ -156,50 +152,7 @@ export default function NoteBooksPage() {
             </div>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-surface text-[11px] uppercase tracking-wider text-text-muted">
-                <tr>
-                  <th className="text-left px-4 py-2.5">Note no.</th>
-                  <th className="text-left px-4 py-2.5">Date</th>
-                  <th className="text-left px-4 py-2.5">Book</th>
-                  <th className="text-left px-4 py-2.5">Supplier / recipient</th>
-                  <th className="text-left px-4 py-2.5">PO</th>
-                  <th className="text-left px-4 py-2.5">Weighbridge</th>
-                  <th className="text-right px-4 py-2.5">Qty</th>
-                  <th className="text-right px-4 py-2.5">Kg</th>
-                  <th className="text-left px-4 py-2.5">Cert</th>
-                  <th className="text-left px-4 py-2.5">Status</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(r => (
-                  <tr
-                    key={r.id}
-                    className="border-t border-surface-rule hover:bg-surface/50 cursor-pointer"
-                    onClick={() => router.push(`/notebooks/${r.id}`)}
-                  >
-                    <td className="px-4 py-3 font-mono font-medium text-text whitespace-nowrap">{r.doc_no}</td>
-                    <td className="px-4 py-3 text-text-muted whitespace-nowrap">{r.doc_date}</td>
-                    <td className="px-4 py-3 text-text-muted whitespace-nowrap">{r.doc_type === 'GRN' ? 'Goods Received' : 'Delivery'}</td>
-                    <td className="px-4 py-3 text-text-muted">{r.party_name || '—'}</td>
-                    <td className="px-4 py-3 text-text-muted font-mono text-[12px]">{r.purchase_order_no || '—'}</td>
-                    <td className="px-4 py-3 text-text-muted font-mono text-[12px]">{r.weighbridge_no || '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{r.total_qty || '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{r.total_weight_kg ? r.total_weight_kg.toLocaleString('en-ZA') : '—'}</td>
-                    <td className="px-4 py-3">
-                      {CERT_KEYS.some(k => r[k])
-                        ? <span title="Certification stamped on this note"><Leaf className="w-3.5 h-3.5 text-ok" /></span>
-                        : <span className="text-text-faint">—</span>}
-                    </td>
-                    <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
-                    <td className="px-4 py-3 text-right"><ArrowRight className="w-4 h-4 text-text-muted inline" /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <NotesTable rows={rows} />
         )}
       </div>
 

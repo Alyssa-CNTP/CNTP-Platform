@@ -20,11 +20,15 @@ export interface LineDraft {
 }
 
 export interface NoteHeaderDraft {
+  // Display only — "date received" is automated server-side and is never
+  // sent back in toHeaderPayload. Populated from doc.doc_date when editing an
+  // existing note, or today's date (SAST) as a preview while writing a new one.
   doc_date:           string
   party_name:         string
   delivered_at_store: string
   purchase_order_no:  string
   weighbridge_no:     string
+  weighbridge_weight_kg: string
   lot_no:             string
   batch_no:           string
   producer_lot_no:    string
@@ -56,7 +60,8 @@ function todayInSAST(): string {
 export function emptyHeader(): NoteHeaderDraft {
   return {
     doc_date: todayInSAST(),
-    party_name: '', delivered_at_store: '', purchase_order_no: '', weighbridge_no: '',
+    party_name: '', delivered_at_store: '', purchase_order_no: '',
+    weighbridge_no: '', weighbridge_weight_kg: '',
     lot_no: '', batch_no: '', producer_lot_no: '', season_year: '', farmer_name: '',
     vehicle_reg: '', transporter_company: '', driver_name: '',
     cert_organic_nop: false, cert_organic_jas: false, cert_organic_eu: false,
@@ -75,6 +80,7 @@ export function headerFromDoc(doc: NotebookDocWithLines): NoteHeaderDraft {
     delivered_at_store: s(doc.delivered_at_store),
     purchase_order_no:  s(doc.purchase_order_no),
     weighbridge_no:     s(doc.weighbridge_no),
+    weighbridge_weight_kg: s(doc.weighbridge_weight_kg),
     lot_no:             s(doc.lot_no),
     batch_no:           s(doc.batch_no),
     producer_lot_no:    s(doc.producer_lot_no),
@@ -120,12 +126,15 @@ const txt = (v: string) => {
 }
 
 export function toHeaderPayload(h: NoteHeaderDraft): Record<string, unknown> {
+  // doc_date is intentionally absent — the server stamps "date received"
+  // itself and ignores this field even if sent (see EDITABLE_HEADER_FIELDS in
+  // lib/notebooks/server.ts).
   return {
-    doc_date:           h.doc_date || null,
     party_name:         txt(h.party_name),
     delivered_at_store: txt(h.delivered_at_store),
     purchase_order_no:  txt(h.purchase_order_no),
     weighbridge_no:     txt(h.weighbridge_no),
+    weighbridge_weight_kg: num(h.weighbridge_weight_kg),
     lot_no:             txt(h.lot_no),
     batch_no:           txt(h.batch_no),
     producer_lot_no:    txt(h.producer_lot_no),

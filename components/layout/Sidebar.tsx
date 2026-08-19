@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2,
   CalendarCheck, CalendarRange, Activity, ClipboardCheck,
-  FileSpreadsheet, GraduationCap, Printer,
+  FileSpreadsheet, GraduationCap, Printer, Warehouse,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -51,7 +51,16 @@ export const NAV: NavItem[] = [
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'], permission: 'can_access_bag_tracking', orPermission: true },
   { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'] },
-  { href: '/notebooks',                 label: 'Note Books (GRN / DN)',      icon: BookOpen,        group: 'Operations', permission: 'can_access_notebooks' },
+
+  // ── Warehousing — GRN / Delivery Note books, one tab per receiving site.
+  // More sites (and, per-site, more areas like tea courts vs depots) get added
+  // here as they come online; for now it's these five, each its own book pair.
+  { href: '/notebooks',                 label: 'All Sites',                  icon: BookOpen,        group: 'Warehousing', permission: 'can_access_notebooks' },
+  { href: '/notebooks/site/BH',         label: 'Blackheath',                 icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
+  { href: '/notebooks/site/GD',         label: 'Graafwater Depot',           icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
+  { href: '/notebooks/site/GT',         label: 'Graafwater Tea Court',       icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
+  { href: '/notebooks/site/VD',         label: 'Vanrhynsdorp Depot',         icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
+  { href: '/notebooks/site/VT',         label: 'Vanrhynsdorp Tea Court',     icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
 
   // ── HR — just two doors in. Staff Directory is people + how they sign in
   // (gated — it's OTHER people's data); Training is the whole qualification
@@ -326,7 +335,7 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
                 const isActive =
                   pathname === href ||
                   (href === '/axis' && pathname.startsWith('/axis/projects')) ||
-                  (href !== '/management' && href !== '/sales' && href !== '/dashboard' && href !== '/axis' && href !== '/intelligence' && href !== '/production' && href !== '/maintenance' && pathname.startsWith(href + '/')) ||
+                  (href !== '/management' && href !== '/sales' && href !== '/dashboard' && href !== '/axis' && href !== '/intelligence' && href !== '/production' && href !== '/maintenance' && href !== '/notebooks' && pathname.startsWith(href + '/')) ||
                   (href === '/production/live' && pathname.startsWith('/production/live')) ||
                   (href === '/production/capture' && pathname.startsWith('/production/capture')) ||
                   (href === '/management'   && pathname === '/management') ||
