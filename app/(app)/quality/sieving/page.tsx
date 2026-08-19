@@ -1310,6 +1310,12 @@ export default function SievingPage() {
     const allRuns = Object.values(runs).flat()
     const matches = allRuns.filter((r:any) => (r.lotNumber||'').trim().toUpperCase()===key)
       .sort((a:any,b:any)=>new Date(b.timestamp||0).getTime()-new Date(a.timestamp||0).getTime())
+    // Only auto-fill Leaf Shade into the form when that input is actually on
+    // screen for this product + run type. Writing it into a hidden field stored
+    // a shade nobody measured on this sample (Fine/Coarse Leaf In-Process), and
+    // a raw shade outside 1–11 then blocked the save with an error the QC could
+    // not see. The value is still surfaced as raw-material context below.
+    const shadeShown = fieldShown(form, 'leafShade')
     const fields: any = {}
     if (matches.length) {
       const latest: any = matches[0]
@@ -1319,16 +1325,19 @@ export default function SievingPage() {
       // the source, and copying one forward here would keep it circulating.
       if (latest.variant)      fields.variant = normProdVariant(latest.variant) || latest.variant
       if (latest.serialNumber) fields.serialNumber = latest.serialNumber
-      if (latest.leafShade)    fields.leafShade = latest.leafShade
+      if (latest.leafShade && shadeShown) fields.leafShade = latest.leafShade
     }
     if (paFromLookup) fields.paLevel = paFromLookup
     const normKey = key.replace(/\s*-\s*/g, '-')
     const leafShadeFromRaw = leafShadeLookup[normKey] ?? leafShadeLookup[key]
-    if (leafShadeFromRaw != null && !fields.leafShade) fields.leafShade = String(leafShadeFromRaw)
+    if (leafShadeFromRaw != null && !fields.leafShade && shadeShown) fields.leafShade = String(leafShadeFromRaw)
     const extras = [
       paFromLookup ? `PA: ${paFromLookup}` : '',
       rFromLookup  ? `R: ${rFromLookup}`  : '',
-      leafShadeFromRaw != null && !matches.length ? `Shade: ${leafShadeFromRaw}` : '',
+      // Also surfaced when the Leaf Shade input is hidden for this run type, so
+      // the QC still sees the raw-material shade as context even though it is
+      // no longer written into the form.
+      leafShadeFromRaw != null && (!matches.length || !shadeShown) ? `Shade: ${leafShadeFromRaw}` : '',
     ].filter(Boolean).join(' · ')
     const runMsg = matches.length ? `✓ Auto-filled from previous run — ${fields.grade} · ${fields.variant}${fields.leafShade ? ` · Shade ${fields.leafShade}` : ''}` : ''
     const rawMsg = extras ? `📋 Raw material: ${extras}` : ''
@@ -1386,6 +1395,25 @@ export default function SievingPage() {
     return warns
   })()
 
+  // Whether the form is actually SHOWING an optional QC field for this product
+  // + run type. Mirrors the render conditions on the Bulk Density / Leaf Shade /
+  // Needle Count inputs further down, and is the single source of truth for both
+  // (so they cannot drift apart again).
+  //
+  // This exists because a value the QC cannot see must never be able to block
+  // the save. Fine Leaf and Coarse Leaf hide Leaf Shade on In-Process runs
+  // (qcFieldsFinalOnly — it is a Final-QC measurement for those products), yet
+  // lookupLot() auto-fills leafShade from the raw-material shade the moment a
+  // lot number is typed. A raw shade of 0 — or anything outside 1–11 — then
+  // failed the range check below against an input that wasn't on screen, so its
+  // error message rendered nowhere and "Save Run" silently did nothing.
+  function fieldShown(f: any, field: 'bulkDensity' | 'leafShade' | 'needleCount'): boolean {
+    const qcFieldsShown = !specDef.qcFieldsFinalOnly || f.runType === 'final'
+    if (field === 'bulkDensity') return !specDef.noBulkDensity && qcFieldsShown
+    if (field === 'leafShade')   return !!specDef.hasLeafShade && qcFieldsShown
+    return !!specDef.hasNeedleCount && f.runType !== 'final'
+  }
+
   function validate(f: any, retest = false) {
     const errs: Record<string,string> = {}
     if (!specDef.noLotNumber&&!f.lotNumber.trim()) errs.lotNumber='Lot number is required'
@@ -1431,11 +1459,14 @@ export default function SievingPage() {
       if (!specDef.noBulkDensity&&(f.bulkDensity===''||f.bulkDensity==null)) errs.bulkDensity='Bulk density is required'
       if (specDef.hasLeafShade&&!f.leafShade) errs.leafShade='Leaf shade is required (1–11)'
     }
-    if (f.leafShade) { const ls=parseInt(f.leafShade,10); if (isNaN(ls)||ls<1||ls>11) errs.leafShade='Leaf shade must be 1–11' }
+    // Each of these three only applies when the field is actually on screen —
+    // see fieldShown() above for why validating a hidden value silently broke
+    // saving an In-Process run on Fine Leaf / Coarse Leaf.
+    if (fieldShown(f,'leafShade') && f.leafShade) { const ls=parseInt(f.leafShade,10); if (isNaN(ls)||ls<1||ls>11) errs.leafShade='Leaf shade must be 1–11' }
     // No captured value may be negative.
     if (!errs._mesh && Object.keys(gramValues).some(k=>isNegative(gramValues[k]))) errs._mesh='Sieve grams cannot be negative'
-    if (isNegative(f.bulkDensity)) errs.bulkDensity='Bulk density cannot be negative'
-    if (isNegative(f.needleCount)) errs.needleCount='Needle count cannot be negative'
+    if (fieldShown(f,'bulkDensity') && isNegative(f.bulkDensity)) errs.bulkDensity='Bulk density cannot be negative'
+    if (fieldShown(f,'needleCount') && isNegative(f.needleCount)) errs.needleCount='Needle count cannot be negative'
     return errs
   }
 
@@ -2183,6 +2214,24 @@ export default function SievingPage() {
           {form.runType==='final'&&<div style={{padding:'10px 14px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:7,marginBottom:14,fontSize:11,color:'#166534'}}>
             ✓ Final QC — no sieve fractions required. Enter bulk density and leaf shade above.
           </div>}
+
+          {/* Why the save was refused, always rendered right above the button.
+              Every field also shows its own inline message, but those only
+              appear where that field is on screen — an error on a field this
+              product/run type hides (or on one with no inline renderer at all,
+              like runType) used to make "Save Run" a silent no-op with nothing
+              to tell the QC why. This is the backstop that makes that
+              impossible, whatever the failing field turns out to be. */}
+          {Object.keys(errors).length>0&&(
+            <div style={{padding:'10px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:8,marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:11,color:'#991b1b',marginBottom:4}}>
+                ⚠ Not saved — please fix {Object.keys(errors).length===1?'this':`these ${Object.keys(errors).length}`} first
+              </div>
+              <ul style={{margin:'0 0 0 18px',padding:0}}>
+                {Object.values(errors).map((m,i)=><li key={i} style={{fontSize:11,color:'#991b1b'}}>{m}</li>)}
+              </ul>
+            </div>
+          )}
 
           {/* Retest + save */}
           <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
