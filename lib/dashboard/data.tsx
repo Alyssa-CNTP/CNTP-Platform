@@ -108,9 +108,17 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
         .eq('date', today)
         .is('deleted_at', null)
         .order('submitted_at', { ascending: false }),
-      db.from('bag_tags')
+      // Sums weight_kg from scan_events (bagging_out only), not
+      // bag_tags.weight_kg — a bag's weight_kg can change later (topped up
+      // or drawn from as a source for someone else's top-up), so it can't
+      // drive a same-day total by created_at. 'topped_up'/'drawn_down' are
+      // excluded deliberately: a top-up is never new production, it's kg
+      // already counted the day its source bag was bagged — counting it
+      // again here would double-count the same kg.
+      db.schema('production').from('scan_events')
         .select('weight_kg')
-        .eq('tag_date', today),
+        .eq('action', 'bagging_out')
+        .gte('scanned_at', today),
     ])
 
     const sessions = (sessRes.data as ScSession[]) ?? []

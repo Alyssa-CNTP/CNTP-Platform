@@ -37,7 +37,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, MASS_BALANCE_TOLERANCE_KG } from '@/lib/production/capture-config'
+import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -196,6 +196,7 @@ function useSystemBagsForStream(stream: 'main' | 'postsieve', blendCode: string)
     let q = getDb().schema('production').from('bag_tags')
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at, acumatica_id')
       .eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false })
       .limit(80)
     q = stream === 'postsieve'
@@ -342,7 +343,7 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
     setScanMsg(null)
   }
 
-  const complete = !!serial.trim() && n(weight) > 0
+  const complete = !!serial.trim() && n(weight) > 0 && !isImplausibleWeight(n(weight))
 
   function submit() {
     if (!complete) return
@@ -404,6 +405,9 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
                   <label className={LBL}>Weight (kg)</label>
                   <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight}
                     onChange={e => setWeight(e.target.value)} className={INP} />
+                  {isImplausibleWeight(n(weight)) && (
+                    <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <label className={LBL}>Lot number</label>
@@ -473,7 +477,7 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
       {rows.length === 0
         ? <p className="text-[11px] text-stone-400 px-1 italic">No bags logged yet.</p>
         : rows.map((r, i) => {
-          const incomplete = !r.serial.trim() || n(r.weight) <= 0
+          const incomplete = !r.serial.trim() || n(r.weight) <= 0 || isImplausibleWeight(n(r.weight))
           return (
             <button key={r.id} onClick={() => !locked && onEdit(r)}
               className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 border text-left transition-opacity hover:opacity-90"
@@ -806,6 +810,9 @@ export function PasteuriserCapture({
             <label className={LBL}>Weight per bag (kg)</label>
             <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={value.weightPerBag} disabled={locked || jobCardLocked}
               onChange={e => patch({ weightPerBag: e.target.value })} className={INP} />
+            {isImplausibleWeight(n(value.weightPerBag)) && (
+              <p className="text-[11px] text-err">That's over 999kg per bag — check for a typo.</p>
+            )}
           </div>
           <div className="space-y-1">
             <label className={LBL}>Packaging</label>
@@ -969,14 +976,17 @@ export function PasteuriserCapture({
               <div className="space-y-1">
                 <label className={LBL}>Std weight kg</label>
                 <input type="text" inputMode="decimal" value={value.scaleStd} disabled={locked} onChange={e => patch({ scaleStd: e.target.value })} className={INP} />
+                {isImplausibleWeight(n(value.scaleStd)) && <p className="text-[11px] text-err">Over 999kg — typo?</p>}
               </div>
               <div className="space-y-1">
                 <label className={LBL}>Actual weight kg</label>
                 <input type="text" inputMode="decimal" value={value.scaleActual} disabled={locked} onChange={e => patch({ scaleActual: e.target.value })} className={INP} />
+                {isImplausibleWeight(n(value.scaleActual)) && <p className="text-[11px] text-err">Over 999kg — typo?</p>}
               </div>
               <div className="space-y-1">
                 <label className={LBL}>Floor waste kg (C)</label>
                 <input type="text" inputMode="decimal" value={value.floorWaste} disabled={locked} onChange={e => patch({ floorWaste: e.target.value })} className={INP} />
+                {isImplausibleWeight(n(value.floorWaste)) && <p className="text-[11px] text-err">Over 999kg — typo?</p>}
               </div>
             </div>
           </div>
@@ -1034,7 +1044,7 @@ function OutputLineModal({ line, items, defaultItem, defaultCode, perBag, onClos
   const [picking, setPicking] = useState(false)
   const set = (p: Partial<PastOutputLine>) => setDraft(d => ({ ...d, ...p }))
   const total = n(draft.bagCount) * (n(draft.bagWeight) || n(perBag))
-  const complete = n(draft.bagCount) > 0 && n(draft.bagWeight || perBag) > 0
+  const complete = n(draft.bagCount) > 0 && n(draft.bagWeight || perBag) > 0 && !isImplausibleWeight(n(draft.bagWeight) || n(perBag))
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9997, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 16 }}>
@@ -1070,7 +1080,10 @@ function OutputLineModal({ line, items, defaultItem, defaultCode, perBag, onClos
             <div className="space-y-1"><label className={LBL}>No. of bags</label><input type="text" inputMode="numeric" value={draft.bagCount} onChange={e => set({ bagCount: e.target.value })} className={INP} /></div>
             <div className="space-y-1"><label className={LBL}>Start bag no.</label><input type="text" inputMode="numeric" value={draft.startBag} onChange={e => set({ startBag: e.target.value })} className={INP} /></div>
             <div className="space-y-1"><label className={LBL}>End bag no.</label><input type="text" inputMode="numeric" value={draft.endBag} onChange={e => set({ endBag: e.target.value })} className={INP} /></div>
-            <div className="space-y-1"><label className={LBL}>Weight per bag kg</label><input type="text" inputMode="decimal" value={draft.bagWeight} onChange={e => set({ bagWeight: e.target.value })} className={INP} /></div>
+            <div className="space-y-1"><label className={LBL}>Weight per bag kg</label><input type="text" inputMode="decimal" value={draft.bagWeight} onChange={e => set({ bagWeight: e.target.value })} className={INP} />
+              {isImplausibleWeight(n(draft.bagWeight) || n(perBag)) && (
+                <p className="text-[11px] text-err">Over 999kg per bag — check for a typo.</p>
+              )}</div>
             <div className="space-y-1"><label className={LBL}>Line total kg</label><div className={INP + ' bg-stone-50 font-mono flex items-center'}>{total.toFixed(0)}</div></div>
           </div>
         </div>

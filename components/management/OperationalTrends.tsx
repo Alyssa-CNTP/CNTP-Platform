@@ -175,11 +175,18 @@ function YieldAnalytics({ dateFrom }: { dateFrom: string }) {
 
   async function load() {
     setLoading(true)
+    // Sourced from scan_events (bagging_out only), not bag_tags.weight_kg by
+    // created_at — a bag's weight_kg can change later (topped up or drawn
+    // from as a source), so it can't drive a month total by created_at.
+    // 'topped_up'/'drawn_down' are excluded: a top-up is never new
+    // production, it's kg already counted the month its source bag was
+    // bagged — counting it again here would double-count the same kg.
     const { data } = await db
       .schema('production')
-      .from('bag_tags')
-      .select('section_id, weight_kg, created_at')
-      .gte('created_at', dateFrom)
+      .from('scan_events')
+      .select('section_id, weight_kg, scanned_at')
+      .eq('action', 'bagging_out')
+      .gte('scanned_at', dateFrom)
       .not('weight_kg', 'is', null)
     setRows(data ?? [])
     setLoading(false)
@@ -192,7 +199,7 @@ function YieldAnalytics({ dateFrom }: { dateFrom: string }) {
 
     const agg: Record<string, Record<string, number>> = {}
     for (const r of rows) {
-      const month = (r.created_at as string).slice(0, 7)
+      const month = (r.scanned_at as string).slice(0, 7)
       const sid = r.section_id as string
       if (!agg[sid]) agg[sid] = {}
       agg[sid][month] = (agg[sid][month] ?? 0) + (r.weight_kg ?? 0)

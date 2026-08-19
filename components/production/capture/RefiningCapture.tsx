@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Plus, Trash2, Printer, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED, massBalanceToleranceFor, isImplausibleWeight } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
@@ -162,6 +162,7 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
       .select('serial_number, product_type, variant, weight_kg, lot_number, created_at')
       .in('product_type', expanded)
       .eq('status', 'in_stock')
+      .eq('is_open', false) // still-filling bags aren't finished — not available to consume yet
       .order('created_at', { ascending: false })
       .limit(60)
       .then(({ data }: { data: SystemBag[] | null }) => setBags(data ?? []))
@@ -251,7 +252,7 @@ function ScanRow({
   }, [row.serial])
 
   const needsLot = row.productType === 'Coarse Leaf'
-  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && (!needsLot || !!row.lot.trim())
+  const complete = !!row.serial.trim() && !!row.productType && n(row.weight) > 0 && !isImplausibleWeight(n(row.weight)) && (!needsLot || !!row.lot.trim())
 
   return (
     <div className="bg-white border rounded-2xl p-4 space-y-3" style={{ borderColor: DEBAG_COLOR + '40' }}>
@@ -321,6 +322,9 @@ function ScanRow({
           <label className={LBL}>Weight (kg)</label>
           <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={row.weight} disabled={locked}
             onChange={e => onUpdate('weight', e.target.value)} className={INP} />
+          {isImplausibleWeight(n(row.weight)) && (
+            <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+          )}
         </div>
         {needsLot && (
           <div className="space-y-1 col-span-2">
@@ -338,11 +342,10 @@ function ScanRow({
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-ok/10 text-ok font-medium text-[13px] disabled:opacity-40 hover:bg-ok/20 transition-colors">
             <Check size={15} /> Done — lock this bag
           </button>
-          {!complete && (
-            <p className="text-[11px] text-stone-400 text-center">
-              {[!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight', needsLot && !row.lot.trim() && 'batch number'].filter(Boolean).join(', ')} still needed.
-            </p>
-          )}
+          {!complete && (() => {
+            const missing = [!row.serial.trim() && 'serial', !row.productType && 'product type', n(row.weight) <= 0 && 'weight', needsLot && !row.lot.trim() && 'batch number'].filter(Boolean).join(', ')
+            return missing ? <p className="text-[11px] text-stone-400 text-center">{missing} still needed.</p> : null
+          })()}
         </>
       )}
     </div>
@@ -415,18 +418,20 @@ function OutputWeightGroup({
   group: RefiningOutputGroup | null
   locked: boolean
   variantWord: string
-  onAdd: (weight: string) => void
+  onAdd: (weight: string, leaveOpen: boolean) => void
   onRemoveBag: (bagId: string) => void
   onSetSecured: (bagId: string, val: boolean) => void
 }) {
   const [weight, setWeight] = useState('')
+  const [leaveOpen, setLeaveOpen] = useState(false)
   const groupKg = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
   const col = groupColor(groupIndex)
 
   function handleAdd() {
-    if (n(weight) <= 0) return
-    onAdd(weight)
+    if (n(weight) <= 0 || isImplausibleWeight(n(weight))) return
+    onAdd(weight, leaveOpen)
     setWeight('')
+    setLeaveOpen(false)
   }
 
   return (
@@ -467,19 +472,28 @@ function OutputWeightGroup({
 
         {/* Inline weight entry */}
         {!locked && (
-          <div className="flex gap-2 pt-1">
-            <input
-              type="text" inputMode="decimal" pattern="[0-9.,]*"
-              value={weight} onChange={e => setWeight(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd() } }}
-              placeholder="Weight (kg)"
-              className={INP + ' flex-1'}
-            />
-            <button onClick={handleAdd} disabled={n(weight) <= 0}
-              className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0"
-              style={{ background: col }}>
-              <Plus size={15} /> Add bag
-            </button>
+          <div className="space-y-1.5 pt-1">
+            <div className="flex gap-2">
+              <input
+                type="text" inputMode="decimal" pattern="[0-9.,]*"
+                value={weight} onChange={e => setWeight(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd() } }}
+                placeholder="Weight (kg)"
+                className={INP + ' flex-1'}
+              />
+              <button onClick={handleAdd} disabled={n(weight) <= 0 || isImplausibleWeight(n(weight))}
+                className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0"
+                style={{ background: col }}>
+                <Plus size={15} /> Add bag
+              </button>
+            </div>
+            {isImplausibleWeight(n(weight)) && (
+              <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+            )}
+            <label className="flex items-center gap-1.5 text-[11px] text-stone-500 pl-0.5">
+              <input type="checkbox" checked={leaveOpen} onChange={e => setLeaveOpen(e.target.checked)} className="rounded" />
+              Leave bag open — not full yet, will top up later (from Tags)
+            </label>
           </div>
         )}
 
@@ -524,7 +538,7 @@ export function RefiningCapture({
   // ── Input bag helpers ──────────────────────────────────────────────────────
 
   const inputComplete = (r: RefiningInputBag) =>
-    !!r.serial.trim() && !!r.productType && n(r.weight) > 0
+    !!r.serial.trim() && !!r.productType && n(r.weight) > 0 && !isImplausibleWeight(n(r.weight))
 
   const lockCompleted = (rows: RefiningInputBag[]): RefiningInputBag[] => {
     const t = nowISO()
@@ -637,8 +651,8 @@ export function RefiningCapture({
 
   // ── Output group helpers ───────────────────────────────────────────────────
 
-  async function addOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', productType: string, weight: string) {
-    if (n(weight) <= 0) return
+  async function addOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', productType: string, weight: string, leaveOpen = false) {
+    if (n(weight) <= 0 || isImplausibleWeight(n(weight))) return
     const serial = genSerial()
     const now = nowISO()
     const acCode = getAcumaticaCode(productType, variantShort, 'A')
@@ -654,7 +668,7 @@ export function RefiningCapture({
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: sectionId, session_id: null,
         product_type: productType, variant: variantWord || null,
-        weight_kg: n(weight), lot_number: null,
+        weight_kg: n(weight), lot_number: null, is_open: leaveOpen,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
@@ -859,7 +873,7 @@ export function RefiningCapture({
                 group={group}
                 locked={locked}
                 variantWord={variantWord}
-                onAdd={weight => addOutputBag(key, productType, weight)}
+                onAdd={(weight, leaveOpen) => addOutputBag(key, productType, weight, leaveOpen)}
                 onRemoveBag={bagId => removeBagFromGroup(key, bagId)}
                 onSetSecured={(bagId, v) => setGroupBagSecured(key, bagId, v)}
               />

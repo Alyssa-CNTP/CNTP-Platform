@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
-import { LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { LABEL_PRINTING_ENABLED, expectedBagWeightFor, isImplausibleWeight } from '@/lib/production/capture-config'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -13,17 +13,15 @@ export interface PickedOutput {
   description: string
   weight: string
   batch: string
+  leaveOpen?: boolean
 }
 
 const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
+// Operators on SA devices type the decimal as a comma (1200,5) — normalise before parsing.
+const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
-// Standard full-bag weights so the operator only overrides for end-of-shift
-// half bags. Matched on the item description/name; '' = no standard (type it in).
 function standardWeight(label: string): string {
-  const s = label.toLowerCase()
-  if (/indent stick/.test(s)) return '252'
-  if (/fine leaf/.test(s) || /coarse leaf/.test(s)) return '300'
-  return ''
+  return String(expectedBagWeightFor(label) ?? '')
 }
 
 /**
@@ -58,6 +56,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; batchTracked: boolean } | null>(null)
   const [weight, setWeight]   = useState('')
   const [batch, setBatch]     = useState(defaultBatch)
+  const [leaveOpen, setLeaveOpen] = useState(false)
 
   // Load the master list once; filtering is then instant on every keystroke.
   useEffect(() => { loadAllInventory().then(setAll) }, [])
@@ -71,10 +70,11 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
 
   function confirm() {
     if (!picked || !weight) return
+    if (isImplausibleWeight(n(weight))) return
     if (picked.batchTracked && !batch.trim()) return
     if (picked.batchTracked && restrictBatch && !batchOptions.includes(batch.trim())) return
     // Internally-tracked items carry no operator batch — the barcode is the record.
-    onAdd({ productType: picked.productType, code: picked.code, description: picked.description, weight, batch: picked.batchTracked ? (batch || defaultBatch) : '' })
+    onAdd({ productType: picked.productType, code: picked.code, description: picked.description, weight, batch: picked.batchTracked ? (batch || defaultBatch) : '', leaveOpen })
   }
 
   return (
@@ -120,6 +120,9 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               <div className="space-y-1">
                 <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Weight (kg) *</label>
                 <input autoFocus type="text" inputMode="decimal" pattern="[0-9.,]*" value={weight} onChange={e => setWeight(e.target.value)} className={INP} />
+                {isImplausibleWeight(n(weight)) && (
+                  <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
+                )}
               </div>
               {picked.batchTracked && (
                 <div className="space-y-1">
@@ -135,7 +138,11 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               <p className="text-[11px] text-text-muted flex items-center gap-1.5"><Check size={12} /> Tracked by its bag number{LABEL_PRINTING_ENABLED ? ' (barcode)' : ''} — no batch number needed.</p>
             )}
             {picked.code && <p className="text-[11px] text-text-muted font-mono">{picked.code} · {picked.description}</p>}
-            <button onClick={confirm} disabled={!weight || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
+            <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+              <input type="checkbox" checked={leaveOpen} onChange={e => setLeaveOpen(e.target.checked)} className="rounded" />
+              Leave bag open — not full yet, will top up later (from Tags)
+            </label>
+            <button onClick={confirm} disabled={!weight || isImplausibleWeight(n(weight)) || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
               {LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>}
             </button>
