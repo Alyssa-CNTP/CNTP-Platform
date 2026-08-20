@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Gustav (Lab Results upload: stop spurious "Gemini is temporarily overloaded" failures)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported: uploading a Micro COA PDF failed with "Gemini is temporarily overloaded. Please wait 30 seconds and try again." while the account was nowhere near its quota. The message was misleading rather than wrong: `callGemini()` mapped **both** HTTP 429 (our own rate limit) **and** HTTP 503 (Google's own "model overloaded") to the same internal `RATE_LIMIT:` tag, so a capacity problem on Google's side was reported as if it were our usage. Compounding it, the model tried *first* was `gemini-3.1-flash-lite-preview` — a preview endpoint, which gets far less serving capacity than a GA model and therefore returns 503 in bursts unrelated to anything we do.
+
+- **GA model first:** `GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']`. The stable model now leads and the preview one is the fallback (it was the other way round). `gemini-2.5-flash` is also the larger of the two, so this is a small accuracy win on dense reports as well.
+- **429 and 503 are now distinguished** via a `GeminiTransient` error carrying the status, and the final message names the real cause — "capacity on Google's side, not our usage or quota" vs "our own request quota" — so this can't be mistaken for a quota problem again.
+- **Retry ladder widened:** 6 attempts (3 rounds × 2 models) over ~20s with jittered backoff, up from 4 attempts in ~13s, since 503s arrive in bursts that outlasted the old window. Jitter prevents concurrent uploads retrying in lockstep. Honours Google's `Retry-After` header when it sends one. Deliberately capped near 20s because `enqueueGemini()` serialises calls, so a longer ladder would stall other queued uploads.
+- **Retryable set widened** to 429/500/502/503/504; anything else (e.g. a 400 bad request or a revoked key) now fails immediately instead of being retried six times behind an "overloaded" message that hid it.
+- **Scanned PDFs now retry too.** `callGeminiWithPdf()` previously made a *single* un-retried call with no model fallback, so one transient 503 failed the upload outright — the worst case, since a scanned report has no text path to fall back on. It now shares the same ladder.
+- Verified by extracting the real retry block from the source and running it against a mock transport: all-503 → 6 attempts then the capacity message; all-429 → the quota message; 400 → immediate single-attempt failure; 503-then-OK → succeeds on the fallback model; recovery on round 2 → succeeds; `Retry-After: 20` → honoured.
+
 ## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`

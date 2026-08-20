@@ -24,8 +24,16 @@ import { loadMrlMap, applyEuMrl }    from '@/lib/quality/eu-mrl'
 
 // ─── Gemini config ────────────────────────────────────────────────────────────
 
-const GEMINI_FLASH    = 'gemini-3.1-flash-lite-preview'
-const GEMINI_FLASH_8B = 'gemini-2.5-flash'
+// Ordered by how reliably Google actually serves them, NOT by capability.
+// The generally-available model goes first: preview/experimental endpoints get
+// far less serving capacity, so they return 503 ("model overloaded") in bursts
+// that have nothing to do with our own quota — which is what made uploads fail
+// with "Gemini is temporarily overloaded" while we were nowhere near any limit.
+// gemini-2.5-flash is also the larger of the two, so leading with it is a small
+// accuracy win on dense lab reports; the flash-lite preview stays as fallback.
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
+const GEMINI_FLASH    = GEMINI_MODELS[0]
+const GEMINI_FLASH_8B = GEMINI_MODELS[1]
 
 const WORKFLOW_MAX_TOKENS: Record<string, number> = {
   pa_ta_analysis: 2000,
@@ -103,76 +111,131 @@ function stripScreeningAppendix(text: string): string {
   return idx > 500 ? text.slice(0, idx) : text
 }
 
+// A transient upstream failure, carrying WHY so the message we finally show can
+// tell the truth. 429 (our quota) and 503 (Google's capacity) were previously
+// collapsed into one "overloaded" string, which sent people hunting for a quota
+// problem that wasn't there.
+class GeminiTransient extends Error {
+  constructor(
+    readonly status: number,
+    readonly model: string,
+    readonly retryAfterMs: number | null,
+    readonly detail: string,
+  ) { super(`GEMINI_TRANSIENT:${status}:${model}`) }
+  get isQuota() { return this.status === 429 }
+}
+
+// Anything here is worth another go: quota (429), Google's own capacity/edge
+// failures (500/502/503/504). Everything else is a real error — a bad prompt,
+// a revoked key, a malformed request — and must surface immediately rather
+// than being retried six times behind a misleading "overloaded" message.
+const GEMINI_RETRYABLE = new Set([429, 500, 502, 503, 504])
+
+// One request to one model. Throws GeminiTransient for retryable statuses.
+async function geminiOnce(
+  model: string,
+  parts: any[],
+  maxTokens: number,
+  extraConfig: Record<string, any> = {},
+) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+  const res = await fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
+    body:    JSON.stringify({
+      contents:         [{ parts }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens, ...extraConfig },
+    }),
+  })
+  if (GEMINI_RETRYABLE.has(res.status)) {
+    const detail = await res.text().catch(() => '')
+    // Google sends Retry-After on some 429s; honour it rather than guessing.
+    const ra = res.headers.get('retry-after')
+    const raMs = ra && /^\d+$/.test(ra.trim()) ? Number(ra.trim()) * 1000 : null
+    throw new GeminiTransient(res.status, model, raMs, detail.slice(0, 200))
+  }
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Gemini API error (${res.status}) on ${model}: ${err.slice(0, 200)}`)
+  }
+  const data    = await res.json()
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!content) throw new Error(`Gemini ${model} returned empty response`)
+  return { content, model_used: model }
+}
+
+// Tries every model, ROUNDS times, backing off between rounds. 503s arrive in
+// bursts, so the old 4-tries-in-13s window frequently expired while the burst
+// was still going; this spreads 6 attempts over ~20s with jitter (jitter so
+// several concurrent uploads don't retry in lockstep and re-collide). Kept to
+// ~20s deliberately: enqueueGemini serialises calls, so a longer ladder here
+// stalls every other upload queued behind this one, and the browser is waiting.
+async function callGeminiWithRetry(
+  parts: any[],
+  maxTokens: number,
+  extraConfig: Record<string, any> = {},
+  modelSuffix = '',
+) {
+  const ROUNDS = 3
+  const BACKOFF_MS = [0, 5000, 13000]
+  let last: GeminiTransient | null = null
+
+  for (let round = 0; round < ROUNDS; round++) {
+    if (round > 0) {
+      const base = last?.retryAfterMs ?? BACKOFF_MS[round]
+      await sleep(base + Math.floor(Math.random() * 1500))
+    }
+    for (const model of GEMINI_MODELS) {
+      try {
+        const r = await geminiOnce(model, parts, maxTokens, extraConfig)
+        return { ...r, model_used: r.model_used + modelSuffix }
+      } catch (err: any) {
+        if (err instanceof GeminiTransient) { last = err; continue }
+        throw err
+      }
+    }
+  }
+
+  const attempts = ROUNDS * GEMINI_MODELS.length
+  // Name the actual cause. A 503 is Google's capacity, not our usage — saying
+  // so stops this being mistaken for a quota problem again.
+  throw new Error(
+    last?.isQuota
+      ? `Gemini rate limit (429) after ${attempts} attempts across ${GEMINI_MODELS.length} models. This is our own request quota — wait a minute, or upload fewer PDFs at once.`
+      : `Google's Gemini service is temporarily unavailable (${last?.status ?? 503}) — this is capacity on Google's side, not our usage or quota. Retried ${attempts} times over ~20s across ${GEMINI_MODELS.length} models. Please try again shortly.`
+  )
+}
+
 async function callGemini(systemPrompt: string, text: string, workflow: string) {
   const maxTokens = WORKFLOW_MAX_TOKENS[workflow] ?? 1500
   const textLimit = WORKFLOW_TEXT_LIMIT[workflow] ?? WORKFLOW_TEXT_LIMIT.default
   const body = stripScreeningAppendix(text)
   const fullPrompt = `${systemPrompt}\n\nExtract all data from this report:\n\n${body.slice(0, textLimit)}`
-
-  const tryModel = async (model: string) => {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-    const res  = await fetch(url, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
-      body:    JSON.stringify({
-        contents:         [{ parts: [{ text: fullPrompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens, responseMimeType: 'text/plain' },
-      }),
-    })
-    if (res.status === 429 || res.status === 503) throw new Error(`RATE_LIMIT:${model}`)
-    if (!res.ok) {
-      const err = await res.text()
-      throw new Error(`Gemini API error (${res.status}) on ${model}: ${err.slice(0, 200)}`)
-    }
-    const data    = await res.json()
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!content) throw new Error(`Gemini ${model} returned empty response`)
-    return { content, model_used: model }
-  }
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await sleep(4000)
-    for (const model of [GEMINI_FLASH, GEMINI_FLASH_8B]) {
-      try {
-        return await tryModel(model)
-      } catch (err: any) {
-        if (err.message.startsWith('RATE_LIMIT:')) continue
-        throw err
-      }
-    }
-  }
-  throw new Error('Gemini is temporarily overloaded. Please wait 30 seconds and try again.')
+  return callGeminiWithRetry(
+    [{ text: fullPrompt }],
+    maxTokens,
+    { responseMimeType: 'text/plain' },
+  )
 }
 
 // ─── Gemini vision — for scanned PDFs ────────────────────────────────────────
 // Uses Gemini's native PDF understanding (no pdftoppm needed)
 
+// Scanned PDFs go through the same retry/fallback ladder as text extraction.
+// This path previously made a single un-retried call, so one transient 503 from
+// Google failed the upload outright — the worst case of the two, since a scanned
+// report has no text path to fall back on.
 async function callGeminiWithPdf(systemPrompt: string, pdfBase64: string, workflow: string) {
   const maxTokens = WORKFLOW_MAX_TOKENS[workflow] ?? 1500
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FLASH}:generateContent`
-
-  const res = await fetch(url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
-    body:    JSON.stringify({
-      contents: [{
-        parts: [
-          { text: systemPrompt + '\n\nExtract all data from this document. Return ONLY valid JSON.' },
-          { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
-        ],
-      }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens },
-    }),
-  })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Gemini vision error (${res.status}): ${err.slice(0, 200)}`)
-  }
-  const data    = await res.json()
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!content) throw new Error('Gemini vision returned empty response')
-  return { content, model_used: GEMINI_FLASH + ' (vision)' }
+  return callGeminiWithRetry(
+    [
+      { text: systemPrompt + '\n\nExtract all data from this document. Return ONLY valid JSON.' },
+      { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+    ],
+    maxTokens,
+    {},
+    ' (vision)',
+  )
 }
 
 // ─── JSON parser ──────────────────────────────────────────────────────────────
