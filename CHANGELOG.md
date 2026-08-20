@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Alyssa (Production Orders: full production-day run report — both shifts consolidated, grouped totals, AI checks, handover & timesheet)
+
+**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/globals.css`, `app/(app)/production/capture/[section]/page.tsx`, `.gitignore`, removed the accidentally-committed `.claude/worktrees/agent-*` gitlinks
+
+The production order is now **one report per production day** — the morning (07h00–16h00) and afternoon/night (16h00–01h00) shifts roll up into the full 07h00–01h00 run, matching the "one continuous run" model. `loadOrderDay()` consolidates every shift session sharing a (section, date): output bags merged across the whole day from the reliable `bag_tags` ledger (shift-tagged, voided excluded), inputs concatenated, per-shift blocks each carrying that shift's mass balance, sign-off, AI machine-checks summary and timesheet; whole-run mass balance is the honest sum of the per-shift balances.
+
+- **Header** (bold): Date, Shift(s), **Variant & grade**, Operators, Supervisor, Production order **code + description** (resolved from Master Inventory), Submitted.
+- **Mass balance** reconciles: Total output = bagged bags (ledger) **+ bucket-elevator carry-over**, which is stated explicitly (the afternoon shift leaves it in the tower — an output, not an input), so the header total and the bagging list always agree.
+- **Inputs** and **outputs** are each grouped by type with their own count + kg totals; debag columns trimmed to Farm bag (the farm's bag number) / Lot / kg — no gross, delivery or org-conv; "500kg Farm Bag" reads as "Bulk Bag"; **machine spillage** now stored distinct from the bucket elevator.
+- **AI checks summary**, **handover & operator notes**, and the **timesheet** (hours worked per operator) print on the report's later pages.
+- Read **live** across all the day's sessions (realtime + poll).
+- Repo cleanup: `.claude/worktrees/` is now git-ignored and the two stray committed worktree gitlinks removed.
+
 ## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
 
 **Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
