@@ -15,7 +15,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
-import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
+import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
@@ -100,7 +100,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, shifts, bags, bagsOutputKg, debags, massBalance: mb, timesheets, takeovers } = day
+  const { section_id, date, status, shifts, bags, bagsOutputKg, rebagRows, debags, massBalance: mb, timesheets, takeovers } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -218,6 +218,27 @@ export default function ProductionOrderDetailPage() {
           )}
         </PanelBody>
       </Panel>
+
+      {/* Re-bagged in — bags born from an existing bag via re-bagging, not
+          fresh production. Informational only: its kg is deliberately NOT
+          part of bagsOutputKg/totalOutput above, since it was already
+          counted as output on whatever earlier day its source bag was
+          first bagged — showing it again here under any total would
+          double-count it. */}
+      {rebagRows.length > 0 && (
+        <Panel>
+          <PanelHead title="Re-bagged in"
+            meta={`${rebagRows.length} bag${rebagRows.length === 1 ? '' : 's'} · ${rebagRows.reduce((s, r) => s + r.kg, 0).toFixed(1)} kg`} />
+          <PanelBody>
+            <div className="space-y-4">
+              {groupBy(rebagRows, r => r.productType || 'Other').map(g => (
+                <RebagTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
+              ))}
+              <p className="text-[11px] text-text-faint">Already counted as output on an earlier day — not included in Bagged output or Total output above.</p>
+            </div>
+          </PanelBody>
+        </Panel>
+      )}
 
       {/* Per-shift: AI check summary + sign-off */}
       {shifts.map(block => (
@@ -369,6 +390,39 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
             <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(b.bagging_time)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// One re-bag product type's bags — same compact per-bag shape as
+// OutputTypeGroup, plus the source bag each one drew from and its item ID.
+function RebagTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderRebagRow[]; multiShift: boolean }) {
+  const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+  return (
+    <div className="rounded-xl border border-surface-rule overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
+        <span className="text-[12.5px] font-semibold text-text">{type}</span>
+        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
+        </span>
+      </div>
+      <ul className="divide-y divide-surface-rule/60">
+        {rows.map((r, i) => (
+          <li key={`${r.targetSerial}-${i}`} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
+            <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
+            <span className="font-mono text-text flex-1 min-w-0 truncate">
+              {r.targetSerial}
+              {r.sourceSerial && (
+                <span className="text-text-faint"> <ArrowRightLeft size={10} className="inline -mt-px" /> {r.sourceSerial}</span>
+              )}
+            </span>
+            {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{r.shift}</span>}
+            {r.acumaticaId && <span className="font-mono text-[10px] text-text-faint shrink-0">{r.acumaticaId}</span>}
+            <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{r.kg.toFixed(1)} kg</span>
+            <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(r.at)}</span>
           </li>
         ))}
       </ul>

@@ -199,6 +199,103 @@ export async function transferBagWeight(
   ] as any)
 }
 
+// ── Standalone createBagFromTransfer — a re-bag whose target is a BRAND ─────
+// NEW bag, not an existing one (the "create new bag" path of the Re-bagging
+// feature). Same source-side draw-down as transferBagWeight (reduce or
+// void), but the target side is an INSERT, not an UPDATE — a new physical
+// bag born from material moved out of an existing one. Cross-SKU by design:
+// the new bag's product_type/acumatica_id/variant/lot are independent of
+// the source's, whatever the operator picked for it.
+//
+// The new bag's FIRST-EVER scan_events row is 'topped_up', not
+// 'bagging_out' — 'topped_up' already means "received weight, sourced from
+// another bag," true whether the receiver pre-existed or was created for
+// the purpose. This is what keeps it out of every 'bagging_out'-only
+// production sum (dashboard tiles, OperationalTrends, monthly ledgers): the
+// kg was already counted as production on the day the SOURCE bag was first
+// bagged, so counting it again here would double-count it.
+//
+// tag_method is deliberately left unset — unlike top-up (which always
+// forces a reprint because it's correcting an already-printed, now-stale
+// label), a brand-new bag has no prior label. It gets the same "Print
+// label" / "Write on tag" choice every other freshly bagged output already
+// gets; the caller decides that afterward, this function never prints.
+export async function createBagFromTransfer(
+  sourceSerial: string,
+  sourceCurrentWeight: number,
+  target: {
+    serialNumber: string
+    productType: string
+    acumaticaId: string | null
+    variant: string | null
+    lotNumber: string | null
+    destination?: string | null
+    isOpen?: boolean
+  },
+  amountKg: number,
+  sectionId: string,
+  sessionId: string | null,
+  operatorId?: string | null,
+): Promise<void> {
+  if (!sourceSerial || !target.serialNumber || sourceSerial === target.serialNumber) return
+  if (!(amountKg > 0) || amountKg > sourceCurrentWeight) return
+  const now = new Date().toISOString()
+
+  const remaining = sourceCurrentWeight - amountKg
+  if (remaining <= 0) {
+    await getDb().schema('production').from('bag_tags').update({
+      status: 'voided', voided_at: now, voided_by: operatorId ?? null,
+    } as any).eq('serial_number', sourceSerial)
+  } else {
+    await getDb().schema('production').from('bag_tags').update({
+      weight_kg: remaining, is_open: true,
+    } as any).eq('serial_number', sourceSerial)
+  }
+
+  await getDb().schema('production').from('bag_tags').insert({
+    serial_number: target.serialNumber, section_id: sectionId, session_id: sessionId || null,
+    product_type: target.productType, acumatica_id: target.acumaticaId,
+    variant: target.variant, weight_kg: amountKg, lot_number: target.lotNumber,
+    destination: target.destination ?? null, status: 'in_stock',
+    is_open: target.isOpen ?? false, printed_at: now,
+  } as any)
+
+  await getDb().schema('production').from('scan_events').insert([
+    {
+      serial_number: target.serialNumber, related_serial_number: sourceSerial,
+      section_id: sectionId, session_id: sessionId || null,
+      action: 'topped_up', weight_kg: amountKg,
+      operator_id: operatorId ?? null, scanned_at: now,
+    },
+    {
+      serial_number: sourceSerial, related_serial_number: target.serialNumber,
+      section_id: sectionId, session_id: sessionId || null,
+      action: 'drawn_down', weight_kg: amountKg,
+      operator_id: operatorId ?? null, scanned_at: now,
+    },
+  ] as any)
+}
+
+// ── originalBagEvent — a bag's starting weight isn't recoverable from ───────
+// bag_tags.weight_kg once it's been topped up/re-bagged (overwritten in
+// place each time). The earliest scan_events row for a serial always
+// carries it, whether that row is 'bagging_out' (normal capture) or
+// 'topped_up' (a bag born via re-bag) — used both to show a bag's original
+// bagging date/weight on the re-bag confirmation screen, and by Production
+// Orders to tell a bag born via re-bag apart from an ordinary bag that was
+// merely topped up later.
+export async function originalBagEvent(
+  serialNumber: string,
+): Promise<{ action: string; weight_kg: number; scanned_at: string } | null> {
+  const { data } = await getDb().schema('production').from('scan_events')
+    .select('action, weight_kg, scanned_at')
+    .eq('serial_number', serialNumber)
+    .order('scanned_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  return (data as any) ?? null
+}
+
 // ── advanceToNextSerial — moves focus to next empty serial input after scan ──
 // Called after useSerialLookup fires. Finds the next input with
 // data-serial="true" that has no value and focuses it.
