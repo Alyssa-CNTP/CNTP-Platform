@@ -18,18 +18,31 @@ import { JobCardApprovalsPanel } from '@/components/production/JobCardApprovalsP
 // Supervisor Hub → Sign-off. This tab is a QUEUE, not a dashboard: it shows only
 // what is still outstanding, and it empties as things get signed. It used to
 // also carry a "lines this shift" board (including lines already signed off,
-// which by definition need nothing) — that moved to the Dashboard, so this page
-// is now exactly the list of things waiting on a signature:
+// which by definition need nothing) — that moved to the Dashboard.
 //
-//   • capture records submitted and waiting for a supervisor signature
-//   • capture records still open on a shift that has already ended
-//   • pasteuriser job cards sent for approval
-//   • reopen requests waiting for a Production Manager decision
-//   • the shift report waiting to be sent up or signed off
+// The queue is tiered by how much it's actually the viewer's job, not just
+// concatenated in discovery order — that was the "bombarded" version, five
+// equally loud colored boxes stacked regardless of whether the thing was the
+// viewer's to sign:
+//
+//   1. Waiting for your signature — capture records submitted + shift reports
+//      needing this viewer's action. One card, sub-grouped, top of the page.
+//   2. Needs a decision — reopen requests, pasteuriser job-card approvals.
+//   3. Records still open from a finished shift — nobody's signature yet,
+//      just a flag that someone else's record needs finishing or archiving.
+//      Quietest styling of the three: it's visibility, not a task for the
+//      viewer.
 //
 // Records from every date are listed, oldest first — a session left unsigned
 // last Thursday was previously invisible here because the queue only looked at
 // today, which is exactly how it went unnoticed.
+//
+// Archiving a record on Production Orders auto-declines any pending reopen
+// request against it (see app/api/production/orders/[id]/route.ts) — before
+// that guard existed, an archived record could keep showing up here forever
+// via a request that never got resolved. ReopenRequestsPanel also filters
+// defensively against the session's own deleted_at for any request created
+// before the guard shipped.
 
 interface Pending {
   id: string; section_id: string; date: string; shift: string
@@ -88,8 +101,8 @@ export default function SupervisorSignoff() {
 
   useEffect(() => { load() }, [load])
 
-  const total = submitted.length + stale.length + reopenCount
-    + reports.filter(r => (r.status === 'submitted' && canApproveReport) || (r.status === 'draft' && canSubmitReport)).length
+  const actionableReports = reports.filter(r => (r.status === 'submitted' && canApproveReport) || (r.status === 'draft' && canSubmitReport))
+  const total = submitted.length + stale.length + reopenCount + actionableReports.length
   const allClear = !loading && total === 0
 
   return (
@@ -117,87 +130,103 @@ export default function SupervisorSignoff() {
         </div>
       ) : (
         <>
-          {/* Capture records submitted and waiting for a signature. */}
-          {submitted.length > 0 && (
+          {/* Everything that is quite literally waiting on the viewer's own
+              signature lives in ONE card, oldest first within each kind — this
+              used to be two separate colored boxes (records, then reports)
+              competing for attention; now it's one queue with sub-groups. */}
+          {(submitted.length > 0 || actionableReports.length > 0) && (
             <QueueCard
-              tone="info" count={submitted.length} icon={PenLine}
-              title="Capture records waiting for your signature"
-              hint="Oldest first — open one to review the figures and sign it off.">
-              {submitted.map(s => <SessionRow key={s.id} s={s} tab="signoff" />)}
-            </QueueCard>
-          )}
-
-          {/* Still-open records from a shift that has ended. */}
-          {stale.length > 0 && (
-            <QueueCard
-              tone="warn" count={stale.length} icon={Pen}
-              title="Records still open from a finished shift"
-              hint="Never submitted for sign-off. Finish and submit, or archive the record on Production Orders.">
-              {stale.map(s => <SessionRow key={s.id} s={s} tab="capture" />)}
-            </QueueCard>
-          )}
-
-          {/* Shift reports. Shown to whoever can act: the supervisor sees a draft
-              to send up, the manager sees a submitted one to sign. */}
-          {reports.filter(r => (r.status === 'submitted' && canApproveReport) || (r.status === 'draft' && canSubmitReport)).length > 0 && (
-            <QueueCard
-              tone="info"
-              count={reports.filter(r => (r.status === 'submitted' && canApproveReport) || (r.status === 'draft' && canSubmitReport)).length}
-              icon={FileText}
-              title="Shift reports"
-              hint="The end-of-shift record for the day.">
-              {reports
-                .filter(r => (r.status === 'submitted' && canApproveReport) || (r.status === 'draft' && canSubmitReport))
-                .map(r => (
-                  <Link key={`${r.date}-${r.shift}`} href={`/supervisor/report?date=${r.date}&shift=${r.shift}`}
-                    className="flex items-center gap-3 px-4 py-3 bg-white/40 hover:bg-white transition-colors group">
-                    <div className="w-8 h-8 rounded-lg bg-stone-700 flex items-center justify-center shrink-0">
-                      <FileText size={14} className="text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-body font-bold text-[14px] text-text truncate">
-                        {format(parseISO(r.date + 'T12:00:00'), 'EEE d MMM')} · {SHIFT_LABEL[r.shift as 'morning'] ?? r.shift}
+              count={submitted.length + actionableReports.length} icon={PenLine}
+              title="Waiting for your signature"
+              hint="Oldest first — open one to review and sign it off.">
+              {submitted.length > 0 && (
+                <>
+                  {actionableReports.length > 0 && <GroupLabel>Capture records</GroupLabel>}
+                  {submitted.map(s => <SessionRow key={s.id} s={s} tab="signoff" />)}
+                </>
+              )}
+              {actionableReports.length > 0 && (
+                <>
+                  {submitted.length > 0 && <GroupLabel>Shift reports</GroupLabel>}
+                  {actionableReports.map(r => (
+                    <Link key={`${r.date}-${r.shift}`} href={`/supervisor/report?date=${r.date}&shift=${r.shift}`}
+                      className="flex items-center gap-3 px-4 py-3 bg-white/40 hover:bg-white transition-colors group">
+                      <div className="w-8 h-8 rounded-lg bg-stone-700 flex items-center justify-center shrink-0">
+                        <FileText size={14} className="text-white" />
                       </div>
-                      <div className="font-mono text-[11px] text-text-muted truncate">
-                        {r.status === 'submitted'
-                          ? `Sent by ${r.submitted_by_name || 'a supervisor'} — waiting for your sign-off`
-                          : 'Draft — not sent to the Production Manager yet'}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-body font-bold text-[14px] text-text truncate">
+                          {format(parseISO(r.date + 'T12:00:00'), 'EEE d MMM')} · {SHIFT_LABEL[r.shift as 'morning'] ?? r.shift}
+                        </div>
+                        <div className="font-mono text-[11px] text-text-muted truncate">
+                          {r.status === 'submitted'
+                            ? `Sent by ${r.submitted_by_name || 'a supervisor'} — waiting for your sign-off`
+                            : 'Draft — not sent to the Production Manager yet'}
+                        </div>
                       </div>
-                    </div>
-                    <ChevronRight size={15} className="text-info shrink-0 group-hover:translate-x-0.5 transition-transform" />
-                  </Link>
-                ))}
+                      <ChevronRight size={15} className="text-info shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                    </Link>
+                  ))}
+                </>
+              )}
             </QueueCard>
           )}
 
-          {/* Reopen requests (decision tier only) and job-card approvals render
-              their own cards and hide themselves when empty. */}
+          {/* Decisions (approve/reject), not signatures — a distinct action but
+              still something only the viewer can resolve, so it sits right
+              under the signature queue rather than mixed into it. */}
           <ReopenRequestsPanel onCountChange={setReopenCount} />
           {canApproveJobCards && <JobCardApprovalsPanel />}
+
+          {/* Lowest priority: records nobody has even submitted yet. This isn't
+              the viewer's signature to give — it's a flag that someone else's
+              record needs finishing or archiving — so it reads much quieter
+              than the queues above instead of matching their visual weight. */}
+          {stale.length > 0 && (
+            <div className="rounded-xl border border-stone-200 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-stone-50 border-b border-stone-200">
+                <Pen size={13} className="text-stone-400 shrink-0" />
+                <span className="font-body font-semibold text-[12.5px] text-stone-500">
+                  {stale.length} record{stale.length === 1 ? '' : 's'} still open from a finished shift
+                </span>
+              </div>
+              <p className="px-4 pt-2 text-[11px] text-text-muted">
+                Never submitted for sign-off — not yours to sign, but worth chasing. Finish and submit, or archive the record on Production Orders.
+              </p>
+              <div className="divide-y divide-stone-100">
+                {stale.map(s => <SessionRow key={s.id} s={s} tab="capture" />)}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
   )
 }
 
-function QueueCard({ tone, count, icon: Icon, title, hint, children }: {
-  tone: 'info' | 'warn'; count: number; icon: React.ElementType
+function QueueCard({ count, icon: Icon, title, hint, children }: {
+  count: number; icon: React.ElementType
   title: string; hint: string; children: React.ReactNode
 }) {
-  const cls = tone === 'warn'
-    ? { box: 'bg-warn/5 border-warn/40', head: 'border-warn/20', pill: 'bg-warn', text: 'text-warn', divide: 'divide-warn/15' }
-    : { box: 'bg-info/5 border-info/40', head: 'border-info/20', pill: 'bg-info', text: 'text-info', divide: 'divide-info/15' }
   return (
-    <div className={`border-2 rounded-2xl overflow-hidden ${cls.box}`}>
-      <div className={`flex items-start gap-2 px-4 py-3 border-b ${cls.head}`}>
-        <span className={`w-7 h-7 rounded-full ${cls.pill} text-white flex items-center justify-center font-display font-bold text-[13px] shrink-0`}>{count}</span>
-        <Icon size={16} className={`${cls.text} shrink-0 mt-1`} />
+    <div className="border-2 rounded-2xl overflow-hidden bg-info/5 border-info/40">
+      <div className="flex items-start gap-2 px-4 py-3 border-b border-info/20">
+        <span className="w-7 h-7 rounded-full bg-info text-white flex items-center justify-center font-display font-bold text-[13px] shrink-0">{count}</span>
+        <Icon size={16} className="text-info shrink-0 mt-1" />
         <div className="min-w-0">
-          <div className={`font-display font-bold text-[15px] ${cls.text}`}>{title}</div>
+          <div className="font-display font-bold text-[15px] text-info">{title}</div>
           <div className="text-[11px] text-text-muted mt-0.5">{hint}</div>
         </div>
       </div>
-      <div className={`divide-y ${cls.divide}`}>{children}</div>
+      <div className="divide-y divide-info/15">{children}</div>
+    </div>
+  )
+}
+
+function GroupLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-4 pt-2.5 pb-1 font-mono text-[10px] uppercase tracking-wide text-text-faint bg-white/40">
+      {children}
     </div>
   )
 }
