@@ -106,13 +106,68 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const sectionName = sectionMeta(sectionId).name
   const [step, setStep] = useState<'source' | 'target' | 'confirm' | 'newBagPrint'>('source')
 
+  // Source can come from an EXISTING tracked bag (scan/type lookup), or —
+  // since not all floor material is on the system yet during the
+  // transition — get registered into the system for the first time right
+  // here: a proper serial is generated, a label is printed for it (it had
+  // none before), and it's logged as 'stock_count' (never 'bagging_out' —
+  // this is old material entering tracking today, not fresh production, so
+  // it must never count toward today's output).
+  const [sourceMode, setSourceMode] = useState<'existing' | 'new'>('existing')
   const [sourceInput, setSourceInput] = useState('')
   const sourceBag = useBagLookup(sourceInput)
-  const source = found(sourceBag)
+  const [onboardedSource, setOnboardedSource] = useState<RebagBag | null>(null)
+  const [pendingOnboard, setPendingOnboard] = useState<PickedOutput | null>(null)
+  const [onboardNotes, setOnboardNotes] = useState('')
+  const [onboarding, setOnboarding] = useState(false)
+  const [onboardError, setOnboardError] = useState<string | null>(null)
+  const source = onboardedSource ?? found(sourceBag)
   const sourceVoided = source?.status === 'voided'
   const sourceConsumed = Boolean(source?.consumed_at_section)
   const [sourceOriginal, setSourceOriginal] = useState<{ weight_kg: number } | null>(null)
   const [sourceHistory, setSourceHistory] = useState<HistoryRow[]>([])
+
+  async function onboardSource() {
+    if (!pendingOnboard) return
+    setOnboarding(true); setOnboardError(null)
+    try {
+      const serial = genSerial()
+      const now = new Date().toISOString()
+      await getDb().schema('production').from('bag_tags').insert({
+        serial_number: serial, section_id: sectionId, session_id: sessionId || null,
+        product_type: pendingOnboard.productType, acumatica_id: pendingOnboard.code,
+        variant: variantWord || null, weight_kg: n(pendingOnboard.weight) || 0,
+        lot_number: pendingOnboard.batch || null, destination: gradeLetter ?? null,
+        status: 'in_stock', is_open: !!pendingOnboard.leaveOpen, printed_at: now,
+      } as any)
+      await getDb().schema('production').from('scan_events').insert({
+        serial_number: serial, action: 'stock_count', section_id: sectionId,
+        session_id: sessionId || null, weight_kg: n(pendingOnboard.weight) || 0,
+        operator_id: operatorId ?? null, notes: onboardNotes.trim() || null, scanned_at: now,
+      } as any)
+      // Re-labelling — this bag had no valid system barcode before now,
+      // unlike a top-up on an already-tracked bag, so there's no "write on
+      // tag" choice here: it always gets a real printed label.
+      await printLabelAuto({
+        id: serial, serial_number: serial, product_type: pendingOnboard.productType,
+        variant: variantWord || 'Conventional', grade: (gradeLetter as any) || 'A',
+        weight_kg: n(pendingOnboard.weight) || 0, lot_number: pendingOnboard.batch || '',
+        section_id: sectionId, section_name: sectionName, created_at: now, printed: true,
+        acumaticaId: pendingOnboard.code ?? undefined,
+      } as any)
+      setOnboardedSource({
+        serial_number: serial, product_type: pendingOnboard.productType, acumatica_id: pendingOnboard.code,
+        variant: variantWord || null, weight_kg: n(pendingOnboard.weight) || 0,
+        lot_number: pendingOnboard.batch || null, destination: gradeLetter ?? null,
+        status: 'in_stock', consumed_at_section: null, created_at: now, is_open: !!pendingOnboard.leaveOpen,
+      })
+      setStep('target')
+    } catch {
+      setOnboardError('Could not register this bag — check the connection and try again.')
+    } finally {
+      setOnboarding(false)
+    }
+  }
 
   const [targetMode, setTargetMode] = useState<'existing' | 'new'>('existing')
   const [targetInput, setTargetInput] = useState('')
@@ -255,30 +310,76 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
         <div className="p-4 space-y-3">
           {step === 'source' && (
             <>
-              <p className="text-[12px] text-text-muted">Scan or type the bag the material is coming from.</p>
-              <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200">
-                <Search size={16} className="text-stone-400" />
-                <input autoFocus value={sourceInput} autoCapitalize="characters"
-                  onChange={e => setSourceInput(e.target.value.toUpperCase())}
-                  placeholder="Source bag serial…" className="flex-1 py-2.5 text-[14px] outline-none bg-transparent font-mono" />
+              <p className="text-[12px] text-text-muted">Where is the material coming from?</p>
+              <div className="flex gap-2">
+                <button onClick={() => setSourceMode('existing')}
+                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${sourceMode === 'existing' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+                  From existing stock
+                </button>
+                <button onClick={() => setSourceMode('new')}
+                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${sourceMode === 'new' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+                  Not on the system yet
+                </button>
               </div>
-              {sourceBag === 'loading' && <p className="text-[12px] text-text-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Looking up…</p>}
-              {sourceBag === 'not_found' && <p className="text-[12px] text-err">Serial not found.</p>}
-              {source && sourceVoided && <p className="text-[12px] text-err">That bag has already been voided.</p>}
-              {source && sourceConsumed && <p className="text-[12px] text-err">That bag was already consumed downstream.</p>}
-              {source && !sourceVoided && !sourceConsumed && (
-                <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-text">{source.serial_number}</span>
-                    <span className="text-text-muted">{source.product_type}</span>
+
+              {sourceMode === 'existing' ? (
+                <>
+                  <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200">
+                    <Search size={16} className="text-stone-400" />
+                    <input autoFocus value={sourceInput} autoCapitalize="characters"
+                      onChange={e => setSourceInput(e.target.value.toUpperCase())}
+                      placeholder="Source bag serial…" className="flex-1 py-2.5 text-[14px] outline-none bg-transparent font-mono" />
                   </div>
-                  <div className="text-text-muted">{sourceKg.toFixed(1)}kg currently in stock</div>
-                </div>
+                  {sourceBag === 'loading' && <p className="text-[12px] text-text-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Looking up…</p>}
+                  {sourceBag === 'not_found' && <p className="text-[12px] text-err">Serial not found.</p>}
+                  {source && sourceVoided && <p className="text-[12px] text-err">That bag has already been voided.</p>}
+                  {source && sourceConsumed && <p className="text-[12px] text-err">That bag was already consumed downstream.</p>}
+                  {source && !sourceVoided && !sourceConsumed && (
+                    <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-text">{source.serial_number}</span>
+                        <span className="text-text-muted">{source.product_type}</span>
+                      </div>
+                      <div className="text-text-muted">{sourceKg.toFixed(1)}kg currently in stock</div>
+                    </div>
+                  )}
+                  <button onClick={() => setStep('target')} disabled={!source || sourceVoided || sourceConsumed}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
+                    Next <ArrowRight size={15} />
+                  </button>
+                </>
+              ) : !pendingOnboard ? (
+                <>
+                  <p className="text-[11px] text-text-muted">This material isn't tracked yet — pick what it is and weigh it. It'll be given a real serial and labelled before anything is drawn from it.</p>
+                  <OutputPicker sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
+                    defaultBatch="" onAdd={p => setPendingOnboard(p)} onClose={() => setSourceMode('existing')} />
+                </>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-text">{pendingOnboard.productType}</span>
+                      <span className="font-mono text-text-muted">{n(pendingOnboard.weight).toFixed(1)} kg</span>
+                    </div>
+                    {pendingOnboard.batch && <div className="text-text-muted">Batch {pendingOnboard.batch}</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Notes (optional) — origin, condition, why it's only being tracked now</label>
+                    <textarea value={onboardNotes} onChange={e => setOnboardNotes(e.target.value)} rows={2}
+                      className="w-full px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                  </div>
+                  {onboardError && <p className="text-[12px] text-err">{onboardError}</p>}
+                  <div className="flex gap-2">
+                    <button onClick={() => setPendingOnboard(null)} disabled={onboarding}
+                      className="py-3 px-4 rounded-xl border border-stone-200 text-text-muted text-[13px] font-medium">Back</button>
+                    <button onClick={onboardSource} disabled={onboarding}
+                      className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
+                      {onboarding ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />}
+                      {onboarding ? 'Registering…' : 'Label & continue'}
+                    </button>
+                  </div>
+                </>
               )}
-              <button onClick={() => setStep('target')} disabled={!source || sourceVoided || sourceConsumed}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
-                Next <ArrowRight size={15} />
-              </button>
             </>
           )}
 
@@ -286,11 +387,11 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
             <>
               <div className="flex gap-2">
                 <button onClick={() => setTargetMode('existing')}
-                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${targetMode === 'existing' ? 'border-brand bg-brand/5 text-brand' : 'border-stone-200 text-text-muted'}`}>
+                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${targetMode === 'existing' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
                   Existing bag
                 </button>
                 <button onClick={() => setTargetMode('new')}
-                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${targetMode === 'new' ? 'border-brand bg-brand/5 text-brand' : 'border-stone-200 text-text-muted'}`}>
+                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${targetMode === 'new' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
                   New bag
                 </button>
               </div>
@@ -323,12 +424,12 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to move (kg)</label>
                       <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-brand" />
+                        className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
                       {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
                     </div>
                   )}
                   <button onClick={() => setStep('confirm')} disabled={!targetReady || exceedsSource || amountKg <= 0}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                     Next <ArrowRight size={15} />
                   </button>
                 </>
@@ -375,7 +476,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
               {error && <p className="text-[12px] text-err">{error}</p>}
 
               <button onClick={submit} disabled={!canSubmit || saving}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                 {saving ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />}
                 {saving ? 'Saving…' : targetMode === 'existing' ? 'Save & print label(s)' : 'Save re-bag'}
               </button>
@@ -387,11 +488,11 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
               <p className="text-[12.5px] text-text">New bag <span className="font-mono">{newBagSerial}</span> created at {amountKg.toFixed(1)}kg.</p>
               <div className="flex gap-2">
                 <button onClick={() => tagNewBag('printed')}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-stone-200 text-[12.5px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-stone-200 text-[12.5px] font-medium text-stone-600 hover:border-violet-600 hover:text-violet-700">
                   <Printer size={14} /> Print label
                 </button>
                 <button onClick={() => tagNewBag('handwritten')}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-stone-200 text-[12.5px] font-medium text-stone-600 hover:border-brand hover:text-brand">
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-stone-200 text-[12.5px] font-medium text-stone-600 hover:border-violet-600 hover:text-violet-700">
                   <PenLine size={14} /> Write on tag
                 </button>
               </div>
