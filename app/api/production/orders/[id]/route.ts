@@ -33,6 +33,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (action === 'delete') {
     if (!caller.can('can_delete_session')) return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
     patch = { deleted_at: now, deleted_by: caller.userId }
+    // A pending reopen request for this session would otherwise sit forever on
+    // the Sign-off queue pointing at a record that no longer exists there.
+    await admin.schema('production').from('po_reopen_requests')
+      .update({ status: 'rejected', decided_by: caller.userId, decided_by_name: caller.name,
+        decision_note: 'Auto-declined — record archived', decided_at: now })
+      .eq('session_id', id).eq('status', 'pending')
   } else if (action === 'restore') {
     if (!caller.can('can_delete_session')) return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
     patch = { deleted_at: null, deleted_by: null }
