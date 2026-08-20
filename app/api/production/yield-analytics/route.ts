@@ -68,7 +68,16 @@ export async function GET(req: NextRequest) {
       totalOut += num(s.output_kg) || 0
       if (s.within_tol !== null) { tolCount++; if (s.within_tol) withinTol++ }
     }
-    const batchKeys = new Set(sess.map(s => s.batch_key).filter(Boolean))
+    // Sieving sessions debag several raw-material lots per shift, so
+    // prod_sessions.batch_id (and therefore v_session_yield.batch_key) is
+    // always NULL there — a batch that's only been through Sieving would
+    // never surface here if we only looked at `sess`. v_output_stream now
+    // keys off the bag's own batch_id (see 20260820_001 migration), so its
+    // rows carry the correct batch_key even when the session's doesn't.
+    const batchKeys = new Set([
+      ...sess.map(s => s.batch_key),
+      ...streams.map(s => s.batch_key),
+    ].filter(Boolean))
 
     // ── Daily yield trend ─────────────────────────────────────────────────────
     const dayMap: Record<string, { date: string; inputKg: number; outputKg: number; sessions: number }> = {}
