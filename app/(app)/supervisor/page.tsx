@@ -9,18 +9,23 @@ import {
   CalendarRange, Trophy,
 } from 'lucide-react'
 import { currentShift, sastToday, SHIFT_LABEL } from '@/lib/production/shifts'
+import { sectionMeta } from '@/lib/production/capture-config'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 import { hoursLabel, STATUS_LABEL, type ShiftReport } from '@/lib/production/shift-report'
 
 // Supervisor Hub → Dashboard. The ONLY summary page in the hub: what is
 // happening right now, what still needs a signature, and one line each on
 // people, output and breakdowns. Everything here is a link to the tab that owns
-// the detail — the dashboard deliberately holds no controls of its own, which is
-// what stops it turning back into a page that does five jobs at once.
+// the detail — the dashboard deliberately holds no ACTION controls of its own
+// (no sign, no edit, no approve — those live on the tab that owns them), which
+// is what stops it turning back into a page that does five jobs at once. The
+// line filter is the one exception: it only narrows what this page displays,
+// it doesn't do anything, so it doesn't reintroduce that problem.
 //
 // It reads the same /api/production/shift-report assembly the Shift Report tab
 // renders, so the numbers on the dashboard and in the signed report can never
-// disagree — there is one calculation, not two.
+// disagree — there is one calculation, not two. Mass balance (input vs output)
+// is per-line data straight off that same report, just not previously shown.
 
 const LINE_STATUS: Record<string, { cls: string; dot: string }> = {
   draft:     { cls: 'bg-warn/10 text-warn',           dot: 'bg-warn' },
@@ -35,6 +40,7 @@ export default function SupervisorDashboard() {
   const [report, setReport] = useState<ShiftReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [lineFilter, setLineFilter] = useState<string>('all')
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -51,7 +57,20 @@ export default function SupervisorDashboard() {
 
   useEffect(() => { load() }, [load])
 
+  // A refresh can drop a line that was running (or add a new one) — don't
+  // leave the filter pointed at a section that's no longer on this shift.
+  useEffect(() => {
+    if (lineFilter !== 'all' && report && !report.lines.some(l => l.sectionId === lineFilter)) setLineFilter('all')
+  }, [report, lineFilter])
+
   const h = report?.headline
+  const lines = report?.lines ?? []
+  const availableSections = Array.from(new Set(lines.map(l => l.sectionId)))
+  const visibleLines = lineFilter === 'all' ? lines : lines.filter(l => l.sectionId === lineFilter)
+  const massBalance = visibleLines.reduce((acc, l) => ({
+    input: acc.input + l.inputKg, output: acc.output + l.outputKg,
+  }), { input: 0, output: 0 })
+  const massBalanceOff = visibleLines.some(l => l.withinTolerance === false)
 
   const tiles = [
     { label: 'Lines running', value: h ? String(h.linesRun) : '—', icon: Factory, cls: 'text-text', href: '/production/orders' },
@@ -101,17 +120,38 @@ export default function SupervisorDashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Lines this shift */}
           <div className="lg:col-span-2 bg-surface-card border border-surface-rule rounded-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-surface-rule bg-surface">
+            <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3 border-b border-surface-rule bg-surface">
               <div className="flex items-center gap-2">
                 <Factory size={15} className="text-text-muted" />
                 <span className="font-display font-bold text-[14px] text-text">Lines this shift</span>
               </div>
-              {!!report?.lines.length && (
-                <span className="font-mono text-[11px] text-text-muted">
-                  {report.headline.sessionsSignedOff}/{report.lines.length} signed off
-                </span>
-              )}
+              <div className="flex items-center gap-3">
+                {availableSections.length > 1 && (
+                  <select value={lineFilter} onChange={e => setLineFilter(e.target.value)}
+                    className="text-[11px] font-medium border border-surface-rule rounded-full pl-2.5 pr-6 py-1 text-text-muted hover:border-brand hover:text-brand bg-surface-card cursor-pointer">
+                    <option value="all">All lines</option>
+                    {availableSections.map(id => <option key={id} value={id}>{sectionMeta(id).name}</option>)}
+                  </select>
+                )}
+                {!!visibleLines.length && (
+                  <span className="font-mono text-[11px] text-text-muted">
+                    {visibleLines.filter(l => l.status === 'approved').length}/{visibleLines.length} signed off
+                  </span>
+                )}
+              </div>
             </div>
+            {!!visibleLines.length && (
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-surface-rule bg-surface-dim/30 font-mono text-[11px]">
+                <Scale size={12} className="text-text-muted shrink-0" />
+                <span className="text-text-muted">Mass balance:</span>
+                <span className="text-text font-semibold">{massBalance.input.toLocaleString()} kg in</span>
+                <ArrowRight size={11} className="text-stone-300 shrink-0" />
+                <span className="text-text font-semibold">{massBalance.output.toLocaleString()} kg out</span>
+                <span className={massBalanceOff ? 'text-warn' : 'text-ok'}>
+                  ({massBalance.input - massBalance.output >= 0 ? '+' : ''}{(massBalance.input - massBalance.output).toFixed(1)} kg)
+                </span>
+              </div>
+            )}
             {!report?.lines.length ? (
               <div className="text-center py-14 px-4">
                 <Factory size={24} className="mx-auto mb-3 text-stone-200" />
@@ -120,7 +160,7 @@ export default function SupervisorDashboard() {
               </div>
             ) : (
               <div className="divide-y divide-surface-rule">
-                {report.lines.map(l => {
+                {visibleLines.map(l => {
                   const st = LINE_STATUS[l.status] ?? LINE_STATUS.draft
                   const href = `/production/capture/${l.sectionId}?date=${report.meta.date}&shift=${report.meta.shift}`
                     + `${l.status === 'submitted' ? '&tab=signoff' : ''}&return=${encodeURIComponent('/supervisor')}`
@@ -136,9 +176,16 @@ export default function SupervisorDashboard() {
                           {l.lotNumber ? ` · ${l.lotNumber}` : ''}
                         </div>
                       </div>
-                      <div className="text-right shrink-0 hidden sm:block">
-                        <div className="font-mono text-[12px] text-text">{l.outputKg.toLocaleString()}</div>
-                        <div className="font-mono text-[9px] text-text-muted uppercase">kg out</div>
+                      <div className="items-center gap-2 shrink-0 hidden sm:flex">
+                        <div className="text-right">
+                          <div className="font-mono text-[12px] text-text">{l.inputKg.toLocaleString()}</div>
+                          <div className="font-mono text-[9px] text-text-muted uppercase">kg in</div>
+                        </div>
+                        <ArrowRight size={11} className="text-stone-300 shrink-0" />
+                        <div className="text-right">
+                          <div className={`font-mono text-[12px] ${l.withinTolerance === false ? 'text-warn font-semibold' : 'text-text'}`}>{l.outputKg.toLocaleString()}</div>
+                          <div className="font-mono text-[9px] text-text-muted uppercase">kg out</div>
+                        </div>
                       </div>
                       {l.withinTolerance === false && (
                         <span title={`Mass balance off by ${l.balanceKg} kg`} className="shrink-0">
