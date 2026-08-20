@@ -154,12 +154,22 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
   // "Present" is anyone with a timesheet OR named on a capture session — an
   // operator whose timesheet was never confirmed still physically ran a line,
   // and reporting them absent because of missing paperwork would be wrong.
+  // Neither prod_timesheets nor a session's operator_names carries an
+  // employee id — the roster is the only source that does, so a present
+  // person can only be linked to their Staff Directory profile when their
+  // name matches a rostered one for this shift.
+  const rosterEmployeeByName = new Map(
+    rostered.filter(r => r.employeeId).map(r => [r.personName.trim().toLowerCase(), r.employeeId as string])
+  )
   const presentMap = new Map<string, PresentPerson>()
   const touch = (name: string): PresentPerson => {
     const key = name.trim().toLowerCase()
     let p = presentMap.get(key)
     if (!p) {
-      p = { personName: name.trim(), sectionIds: [], workedMinutes: 0, firstIn: null, lastOut: null, breakMinutes: 0, confirmed: false }
+      p = {
+        personName: name.trim(), employeeId: rosterEmployeeByName.get(key) ?? null,
+        sectionIds: [], workedMinutes: 0, firstIn: null, lastOut: null, breakMinutes: 0, confirmed: false,
+      }
       presentMap.set(key, p)
     }
     return p
@@ -193,6 +203,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
       const lv = r.employeeId ? leaveByEmployee.get(r.employeeId) : undefined
       return {
         personName: r.personName,
+        employeeId: r.employeeId,
         roleName: r.roleName,
         reason: lv ? 'leave' as const : 'no_record' as const,
         leaveKind: lv?.kind ?? null,
