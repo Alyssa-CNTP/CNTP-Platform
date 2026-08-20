@@ -1348,7 +1348,6 @@ export default function SievingPage() {
     const normKey = key.replace(/\s*-\s*/g, '-')
     const leafShadeFromRaw = leafShadeLookup[normKey] ?? leafShadeLookup[key]
     if (leafShadeFromRaw != null && !fields.leafShade && shadeShown) fields.leafShade = String(leafShadeFromRaw)
-    if (leafShadeFromRaw != null && !fields.leafShade) fields.leafShade = String(leafShadeFromRaw)
     // Captured regardless of whether the field is shown/pre-filled, so the
     // raw-material figure is on record on this run even when it only ever
     // existed as context text (In-Process) or got overwritten by the QC.
