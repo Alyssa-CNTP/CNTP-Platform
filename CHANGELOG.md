@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Fix: "View batch KPIs" broken — missing migration + Sieving multi-lot session gap)
+
+**Files changed:** `supabase/migrations/20260820_001_fix_multi_lot_session_batch_kpis.sql` (new), `app/api/production/yield-analytics/route.ts`
+
+**⚠ Requires running, in this order, in the Supabase SQL Editor (staging first, then production once promoted):**
+**1. `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`** — written 2026-08-05, flagged then as requiring a manual run, but never actually applied to staging (confirmed live: `v_batch_360` is still missing `granule_moisture_latest` and the other columns that migration adds).
+**2. `supabase/migrations/20260820_001_fix_multi_lot_session_batch_kpis.sql`** — the new fix below.
+
+Reported as "batch KPIs don't work for Fine/Coarse Leaf." Investigation found two separate bugs:
+
+- **Bug 1 (universal, currently 500s for every batch, not just Fine/Coarse Leaf):** `/api/production/batch/[key]` selects `granule_moisture_latest` and other columns from `production.v_batch_360` that `20260805_002_batch_quality_granule_pasteuriser_lab.sql` was supposed to add — but that migration was never run on staging (its own CHANGELOG entry flagged the manual step and it was missed). Reproduced live: every `/api/production/batch/<lot>` call currently returns `{"error":"column v_batch_360.granule_moisture_latest does not exist"}`. No code fix needed — just run the migration that's already sitting in the repo.
+- **Bug 2 (Fine/Coarse Leaf specifically, and any batch that hasn't left Sieving yet):** Sieving Tower debags several different raw-material lots into one shift session, so it has no single session-level lot — `production.prod_sessions.batch_id`/`lot_number` are `NULL` for every Sieving session (confirmed live for the 10 most recent). `v_output_stream` and `v_batch_360`'s rollup both keyed off that session-level `batch_id`, so a batch that's only been through Sieving got zero rows in "Output mix" and blank Yield/Output/Input tiles, even once Bug 1 is fixed. The bag rows themselves (`prod_debagging`/`prod_bagging`) already carry the correct per-row `batch_id` (set by `resolveBatchIds()` from each bag's own lot); `20260820_001` rewrites `v_output_stream` to key off that instead, and adds a bag-sourced fallback to `v_batch_360`'s rollup for any batch the session-based rollup finds nothing for — additive only, doesn't change any already-working figure. `yield-analytics/route.ts`'s "recent batches" list now also unions batch keys discovered via `v_output_stream`, so a Sieving-only batch shows up there too.
+
 ## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
