@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Supervisor Hub: filterable 7/30/all-time window on Sign-off, softer age badges)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`
+
+Follow-up to the redesign below, after seeing it live on staging with real backlog (74 outstanding items, some 60+ days old): the queue has no natural ceiling, so unfiltered it read as weeks of noise burying anything current, and almost every row's "Xd old" badge was rendering red with a warning triangle — the whole page looked like it was on fire.
+
+- Added a Show: **7 days / 30 days / All time** filter, defaulting to 7 days. Applies to the two date-bearing sections (capture records + shift reports waiting for signature, and records still open from a finished shift). Filtering never deletes data — switching to "All time" is one click and the header subtitle always states how many more are further back.
+- Reopen requests and job-card approvals are deliberately **not** windowed — a pending decision doesn't get less urgent with age, so hiding an old one would be the wrong instinct.
+- Re-tiered the age badge: red + warning triangle now only at 30+ days, amber at a week or more, plain neutral under that (was: red past 3 days).
+
 ## 2026-08-20 — Alyssa (Supervisor Hub: redesign Sign-off queue, fix archived orders leaking through reopen requests)
 
 **Files changed:** `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/orders/[id]/route.ts`, `components/supervisor/ReopenRequestsPanel.tsx`
