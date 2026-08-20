@@ -2,6 +2,27 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)
+
+Reported as: on most production orders the Debagging — inputs panel pulls nothing from the database, but the mass balance is right.
+
+Root cause: `persist()` wrote the input rows as one multi-row `prod_debagging` insert **whose result was never checked**. One unacceptable value in any row therefore lost every input row for that session — while `draft_data` (written before) and `prod_mass_balance` (written after, and computed from `draft_data`, not from these rows) both saved normally. So the order read "No inputs recorded" under a perfectly correct total, with nothing in the capture UI, the console or the DB saying why. Three separate causes were confirmed against the staging database by replaying the exact payloads capture sends:
+
+- **`22008 date/time field value out of range`** — Refining stores the delivery date the way the floor writes it on a bag tag, `DD-MM-YY` (`todayDelivery()` in `RefiningCapture`, and the same conversion in its system-pick and scan handlers). Postgres rejects that on a `date` column. Every Refining order lost its inputs.
+- **`23503` FK violation on `prod_debagging_bag_serial_no_fkey`** — `bag_serial_no` was set for any row whose `inputMode` wasn't `manual`, on the assumption that scan/system rows are always in `bag_tags`. Blender's scan rows routinely carry the date written on an untagged bag (e.g. `18-11-22`), which is in no `bag_tags` row. Every Blender order lost its inputs.
+- **`PGRST204` unknown column `batch_id`** — for the window between the batch-spine code shipping and its migration reaching a database, every section's insert failed. This is what emptied Sieving and Granule records up to 2026-08-11.
+
+Fixes, all at the write layer rather than in each capture screen (same chokepoint principle as `upperCode` for lot numbers):
+
+- **New `lib/production/db-date.ts`** — `dbDate()` normalises a captured date to `yyyy-MM-dd`, or null when there's nothing usable. Accepts ISO and day-first `d-M-yy` / `d-M-yyyy` with `-`, `/` or `.`; rejects the almost-valid (31 February) by round-tripping through UTC rather than letting Postgres roll it over; drops anything unparseable rather than letting it fail the write it travels in. Verified against 19 cases including `20-08-26`, `05-03-08`, `2026-08-20T14:05:00Z`, `31-02-26`, `08/20/2026` and blank/null input.
+- **`bag_serial_no` is now verified against `bag_tags`** in one batched query before the insert; a serial that isn't a real tag is moved into `notes` (it's still the only identifier that bag has) and the FK column left null.
+- **The writes are error-checked and surfaced.** `prod_debagging` and `prod_bagging` insert/delete results are inspected, and a failure raises a red banner on the capture screen: the weights are saved, the row list isn't, here is the database message to send IT. `prod_bagging` is included because it has emptied out on production before in exactly the same silent way.
+- **`scripts/backfill-debag-rows.cjs`** rebuilds the missing rows from `draft_data` (that's where every input has been safely stored all along). Dry-run by default; only touches sessions with **zero** existing rows, so it can't overwrite a real save and is safe to re-run. Dry-run against staging finds **74 sessions / 606 recoverable input rows** (sieving 160, blender 291, granule 88, refining1 47, refining2 20) — not run yet, awaiting the go-ahead.
+
+**The repair itself hasn't been run on either database.** The code fix only stops new records losing their rows; existing orders stay empty until the backfill runs — `node scripts/backfill-debag-rows.cjs` (dry run, writes nothing) then `--apply`, on staging and, once this is promoted, on production. Nothing else about the data changes.
+
 ## 2026-08-20 — Gustav (Lab Results upload: drop the free-tier Gemini throttle now we're on a paid key)
 
 **Files changed:** `app/api/upload/route.ts`
