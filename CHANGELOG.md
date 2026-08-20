@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Gustav (Pasteuriser: Reload Spec button to re-check a run against an updated Specifications entry)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+Requested: a customer spec edited in the Specifications tab after a Pasteuriser run was already started never reached that run — `_spec` (the matched spec row) and `batch_specs` (its flattened min/max values, which every in-spec check actually reads) are both snapshotted once at batch creation, so there was no way to see whether already-recorded samples were still in spec against the new numbers without deleting and recreating the run.
+
+- New "🔄 Reload Spec" button next to the batch's spec badge (hidden once the batch is finalised). Re-runs the same customer-vs-generic spec match used at creation for this batch's product family/grade/variant, confirms with the QC (since it overwrites this batch's current spec values), then overwrites both `_spec` and `batch_specs` and saves — every sample's pass/fail re-evaluates immediately because those checks already read live off the batch, not a cached result.
+- If no matching spec exists any more, it says so and changes nothing.
+
 ## 2026-08-20 — Alyssa (Re-bagging: capture-page material transfer, cross-SKU, existing or brand-new target)
 
 **Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/RebagModal.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`

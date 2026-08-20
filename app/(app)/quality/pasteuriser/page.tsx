@@ -1447,6 +1447,49 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     setEditingField(null)
   }
 
+  // Re-fetches the customer spec for this batch's product/grade/variant and
+  // overwrites both _spec (the matched row, drives the "✓ Spec" badge) and
+  // batch_specs (the flat min/max map every pastChk() call actually reads —
+  // see getPastSpec()'s priority order). Both are snapshotted once at batch
+  // creation, so editing the master spec afterwards never touches a batch
+  // already in progress until this is run — this is the deliberate "pull the
+  // latest numbers in and re-check my recorded values against them" action.
+  async function reloadSpec() {
+    const b = activeBatch
+    if (!b) return
+    const { data } = await db.schema('qms').from('customer_specs').select('*')
+      .ilike('product_family', b.product_family)
+      .ilike('grade', b.grade)
+      .ilike('variant', b.variant)
+    const rows = data ?? []
+    const spec = rows.length
+      ? (rows.find((s: any) => (s.customer || '').toLowerCase() === (b.customer || '').toLowerCase())
+          ?? rows.find((s: any) => !s.customer || s.customer === '')
+          ?? rows[0])
+      : null
+    if (!spec) { alert(`No spec found for ${b.product_family} ${b.grade} · ${b.variant} — nothing changed.`); return }
+    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec into this batch?\n\nThis overwrites this batch's spec values with what's saved in Specifications now, and every sample's in-spec check updates immediately.`)) return
+    const ss = spec.sieve_specs ?? {}
+    const newBatchSpecs = {
+      moisture_max: spec.moisture_max ?? '',
+      bd_min: spec.bulk_density_min ?? '', bd_max: spec.bulk_density_max ?? '',
+      gt6_min:  ss.gt6?.min  ?? spec.gt6_min  ?? '', gt6_max:  ss.gt6?.max  ?? spec.gt6_max  ?? '',
+      gt10_min: ss.gt10?.min ?? spec.gt10_min ?? '', gt10_max: ss.gt10?.max ?? spec.gt10_max ?? '',
+      gt12_min: ss.gt12?.min ?? spec.gt12_min ?? '', gt12_max: ss.gt12?.max ?? spec.gt12_max ?? '',
+      gt16_min: ss.gt16?.min ?? spec.gt16_min ?? '', gt16_max: ss.gt16?.max ?? spec.gt16_max ?? '',
+      gt20_min: ss.gt20?.min ?? spec.gt20_min ?? '', gt20_max: ss.gt20?.max ?? spec.gt20_max ?? '',
+      gt40_min: ss.gt40?.min ?? spec.gt40_min ?? '', gt40_max: ss.gt40?.max ?? spec.gt40_max ?? '',
+      gt60_min: ss.gt60?.min ?? spec.gt60_min ?? '', gt60_max: ss.gt60?.max ?? spec.gt60_max ?? '',
+      dust_min: ss.dust?.min ?? spec.dust_min ?? '', dust_max: ss.dust?.max ?? spec.dust_max ?? '',
+    }
+    setBatches(p => {
+      const updated = p.map(x => x.id !== activeBatchId ? x : { ...x, _spec: spec, batch_specs: newBatchSpecs })
+      const batch = updated.find(x => x.id === activeBatchId)
+      if (batch) saveBatchToDB(batch)
+      return updated
+    })
+  }
+
   const activeBatch    = batches.find(b => b.id === activeBatchId) || null
   const activeBatches  = batches.filter(b => !b.final_result)
   const completedBatches = (() => {
@@ -1589,6 +1632,12 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         ? <span className="badge badge-ok text-[9px]">✓ Spec: {activeBatch.product_family} {activeBatch.grade} · {activeBatch.variant}</span>
                         : <span className="badge badge-warn text-[9px]">⚠ Default spec</span>
                       }
+                      {!activeBatch.final_result && (
+                        <button onClick={reloadSpec} title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch's samples against them"
+                          className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
+                          🔄 Reload Spec
+                        </button>
+                      )}
                     </div>
                   </div>
 
