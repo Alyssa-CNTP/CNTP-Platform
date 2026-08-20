@@ -7,7 +7,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, ArrowRight, RefreshCw,
+  FileText, Check, ArrowRight, RefreshCw, Scale,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -34,6 +34,7 @@ import {
   PasteuriserCapture, emptyPasteuriserData, pasteuriserTotals,
   type PasteuriserData,
 } from '@/components/production/capture/PasteuriserCapture'
+import { RebagModal } from '@/components/production/capture/RebagModal'
 import { upperCode } from '@/lib/production/normalize-code'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
@@ -253,6 +254,7 @@ function CaptureScreen() {
   const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
   const [changeoverAsk, setChangeoverAsk] = useState(false) // early-submit "is there a changeover?" prompt
   const [gradeChangeover, setGradeChangeover] = useState(false) // Sieving: mid-shift grade/variant changeover confirm
+  const [rebagOpen, setRebagOpen] = useState(false) // Re-bag material: move weight from an existing bag into another (existing or new)
   const [error, setError]         = useState<string | null>(null)
 
   // Serial counter, seeded from existing tags for this section+date
@@ -1624,6 +1626,23 @@ function CaptureScreen() {
         />
       )}
 
+      {/* Re-bag material — move weight out of an existing bag into another
+          bag (existing or brand new), from this capture page directly
+          instead of the separate Tags page. Source scope stays bag-to-bag
+          only (no untracked bulk/farm lots — there's no local weight
+          record for those); Pasteuriser is excluded, same reason it was
+          excluded from the top-up feature (no per-bag records today). */}
+      {rebagOpen && !locked && (
+        <RebagModal
+          sectionId={sectionId} sessionId={sessionId}
+          operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+          variantWord={active?.variant || ''} gradeLetter={active?.grade || 'A'}
+          genSerial={genSerial}
+          onDone={() => setRebagOpen(false)}
+          onClose={() => setRebagOpen(false)}
+        />
+      )}
+
       {/* Mid-shift grade/variant changeover confirm — shows the leftover mass
           balance before switching, since it's the operator's cue to bag it out
           as Blocks/Sticks under the new grade (or, if organic, that it must be
@@ -2057,6 +2076,12 @@ function CaptureScreen() {
                         sessionId={sessionId}
                       />
                   }
+                  {!locked && !isPasteuriser(sectionId) && (
+                    <button onClick={() => setRebagOpen(true)}
+                      className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
+                      <Scale size={16} /> Re-bag material
+                    </button>
+                  )}
                   {!locked && (
                     <button onClick={saveDraft} disabled={saving}
                       className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">

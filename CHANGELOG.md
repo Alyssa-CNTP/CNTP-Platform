@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Re-bagging: capture-page material transfer, cross-SKU, existing or brand-new target)
+
+**Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/RebagModal.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`
+
+Generalizes the shipped bag-weight top-up feature into full re-bagging: a bold "Re-bag material" button on the capture page (not the separate Tags page) lets an operator move weight out of an existing bag into either another existing bag or a **brand-new** one — including across different product types/SKUs, a first-class case here rather than just a warned mismatch.
+
+- New `createBagFromTransfer()` in `scan-utils.ts`: same source-side draw-down (reduce or void) as the existing `transferBagWeight()`, but the target side is an INSERT — a new physical bag born from material moved out of an existing one. Its first-ever `scan_events` row is `'topped_up'` (not `'bagging_out'`), which is what keeps it out of every `'bagging_out'`-only production sum — the kg was already counted as production on the day the source bag was first bagged. No new migration needed: the existing action list and `related_serial_number` column already cover this.
+- New `originalBagEvent()`: recovers a bag's starting weight from its earliest `scan_events` row (`bag_tags.weight_kg` gets overwritten in place on every top-up/re-bag, so it can't tell you what a bag started at).
+- `RebagModal.tsx` (new): scan/type the source bag → choose an existing target or pick a brand-new one (reusing `OutputPicker` unmodified, so the Fine/Coarse Leaf batch requirement comes along for free) → a confirmation screen showing, for every existing bag involved, its current weight, original bagging date/weight, full history, both resulting weights as explicit labelled fields, and both serials, before printing.
+- **Printing rule, deliberately not a blanket force**: the source bag (always) and an existing target both get an unconditional forced reprint — their physical label is now stale the moment the weight changes, same as the shipped top-up feature. A brand-new target bag has no prior label, so it gets the ordinary "Print label" / "Write on tag" choice every other freshly bagged output already gets, instead of a forced print — several sections share one physical printer, and forcing a print job on every re-bagged new bag would add contention for no safety benefit.
+- **Production Orders fix**: creating a new bag via re-bag would otherwise inflate that day's "Bagging — outputs" total with kg already counted as output on whichever earlier day the source bag was first produced (Production Orders reads a live `bag_tags` snapshot, not an event ledger, so it never had this problem before — top-up only ever updated existing rows). `order-detail.ts` now batches each active bag's earliest `scan_events` row to tell a bag *born* via re-bag apart from an ordinary bag merely topped up later, excludes the former from `bagsOutputKg` (both per-shift and whole-day), and surfaces it instead in a new informational "Re-bagged in" panel with its item ID and source bag, never summed into any output total.
+- Pasteuriser excluded, same reason as the top-up feature (no per-bag records today). Acumatica ERP stock adjustments are explicitly out of scope for this build — today's integration is read-only; transactions are recorded locally for now.
+
 ## 2026-08-20 — Alyssa (Roster: surface save/submit failures. Shift Report: collapsible + linked attendance)
 
 **Files changed:** `app/(app)/supervisor/roster/page.tsx`, `app/(app)/supervisor/report/page.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`

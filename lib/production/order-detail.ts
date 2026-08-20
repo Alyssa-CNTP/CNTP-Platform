@@ -55,10 +55,34 @@ export interface OrderBagRow {
   bag_serial_no: string | null
   product_type: string | null
   variant: string | null
+  acumatica_id: string | null
   kg: number
   bagging_time: string | null
   session_id: string        // which shift-session produced this bag
   shift: string             // 'morning' | 'afternoon' | 'night'
+  // true when this bag's FIRST-EVER scan_events row is 'topped_up' rather
+  // than 'bagging_out' — i.e. it was born via a re-bag, not fresh capture.
+  // Its kg was already counted as production on the day rebagSourceSerial
+  // was originally bagged, so it's excluded from bagsOutputKg everywhere
+  // below (see loadOrderDay) to avoid double-counting; it still appears in
+  // `bags` and in the separate `rebagRows` list.
+  bornViaRebag: boolean
+  rebagSourceSerial: string | null
+}
+
+// A re-bag transaction shown on its own panel, distinct from ordinary
+// output bagging — informational only, deliberately never added into any
+// output-kg total (that kg was already counted the day rebagSourceSerial
+// was first bagged).
+export interface OrderRebagRow {
+  targetSerial: string
+  sourceSerial: string | null
+  productType: string | null
+  acumaticaId: string | null
+  kg: number
+  at: string | null
+  sessionId: string
+  shift: string
 }
 
 export interface OrderDebagRow {
@@ -140,7 +164,8 @@ export interface OrderDay {
   poItems: OrderPO[]                // production order codes + their Master Inventory descriptions
   shifts: OrderShiftBlock[]         // morning first
   bags: OrderBagRow[]               // merged across ALL shifts, continuous 1..N, shift-tagged
-  bagsOutputKg: number
+  bagsOutputKg: number              // excludes bornViaRebag rows — see OrderBagRow
+  rebagRows: OrderRebagRow[]        // bags born via re-bag on this day, shift-tagged
   debags: OrderDebagRow[]           // all shifts, morning first
   massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
   reopenRequests: OrderReopenRequest[]   // union across shifts
@@ -196,7 +221,17 @@ function sumMassBalance(shifts: OrderShiftBlock[], sectionId: string): OrderMass
 // - active bag_tags rows  → the spine (authoritative existence + weight/type)
 // - prod_bagging-only rows (no-serial by-products, Pasteuriser range rows) → kept
 // - voided bag_tags serials → excluded everywhere (even if prod_bagging lags)
-function mergeOutputBags(tags: any[], bagging: any[]): OrderBagRow[] {
+//
+// firstEvent: each active serial's EARLIEST scan_events row (action +
+// related_serial_number) — used only to tell a bag born via re-bag
+// ('topped_up' as its first-ever row) apart from an ordinary bag that was
+// merely topped up LATER (whose first row is still 'bagging_out'). A bag
+// with no scan_events row at all (shouldn't happen, but defensively) is
+// treated as an ordinary bag, not a re-bag.
+function mergeOutputBags(
+  tags: any[], bagging: any[],
+  firstEvent: Map<string, { action: string; related_serial_number: string | null }>,
+): OrderBagRow[] {
   const voided = new Set(tags.filter(t => t.status === 'voided').map(t => t.serial_number))
   const active = tags.filter(t => t.status !== 'voided')
 
@@ -213,15 +248,20 @@ function mergeOutputBags(tags: any[], bagging: any[]): OrderBagRow[] {
   for (const t of active) {
     const pb = pbBySerial.get(t.serial_number)
     pbBySerial.delete(t.serial_number)
+    const fe = firstEvent.get(t.serial_number)
+    const bornViaRebag = fe?.action === 'topped_up'
     rows.push({
       ...base, id: t.serial_number,
       output_group: pb?.output_group ?? null,
       bag_serial_no: t.serial_number,
       product_type: t.product_type ?? pb?.product_type ?? null,
       variant: t.variant ?? pb?.variant ?? null,
+      acumatica_id: t.acumatica_id ?? null,
       kg: Number(t.weight_kg) || 0,
       bagging_time: pb?.bagging_time ?? t.printed_at ?? null,
       session_id: t.session_id,
+      bornViaRebag,
+      rebagSourceSerial: bornViaRebag ? (fe?.related_serial_number ?? null) : null,
     })
   }
   for (const pb of pbBySerial.values()) {
@@ -229,16 +269,18 @@ function mergeOutputBags(tags: any[], bagging: any[]): OrderBagRow[] {
     rows.push({
       ...base, id: pb.id, output_group: pb.output_group ?? null,
       bag_serial_no: pb.bag_serial_no, product_type: pb.product_type ?? null,
-      variant: pb.variant ?? null, kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
-      session_id: pb.session_id,
+      variant: pb.variant ?? null, acumatica_id: null,
+      kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
+      session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
     })
   }
   for (const pb of pbNoSerial) {
     rows.push({
       ...base, id: pb.id, output_group: pb.output_group ?? null,
       bag_serial_no: null, product_type: pb.product_type ?? null,
-      variant: pb.variant ?? null, kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
-      session_id: pb.session_id,
+      variant: pb.variant ?? null, acumatica_id: null,
+      kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
+      session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
     })
   }
 
@@ -288,7 +330,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, checksRes, tsRes, takeoverRes, invRes] = await Promise.all([
     db.from('prod_mass_balance').select('*').in('session_id', ids),
-    db.from('bag_tags').select('session_id,serial_number,product_type,variant,weight_kg,printed_at,status').in('session_id', ids),
+    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status').in('session_id', ids),
     db.from('prod_bagging').select('*').in('session_id', ids),
     db.from('prod_debagging').select('*').in('session_id', ids).order('bag_no'),
     db.from('session_signatures').select('*').in('session_id', ids),
@@ -304,6 +346,25 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   const descByCode = new Map<string, string>(((invRes.data as any[]) ?? []).map(r => [r.inventory_id, r.description]))
   const poItems: OrderPO[] = poCodes.map(code => ({ code, description: descByCode.get(code) ?? null }))
+  // Earliest scan_events row per active serial — tells a bag born via
+  // re-bag ('topped_up' as its first-ever row) apart from an ordinary bag
+  // topped up later (still 'bagging_out' first). One batched query, not one
+  // per bag: fetch every event for this day's active serials, ordered, then
+  // take each serial's first occurrence.
+  const activeSerials = ((tagsRes.data as any[]) ?? [])
+    .filter(t => t.status !== 'voided').map(t => t.serial_number)
+  const firstEventBySerial = new Map<string, { action: string; related_serial_number: string | null }>()
+  if (activeSerials.length) {
+    const { data: evData } = await db.from('scan_events')
+      .select('serial_number, action, related_serial_number, scanned_at')
+      .in('serial_number', activeSerials)
+      .order('scanned_at', { ascending: true })
+    for (const ev of (evData as any[]) ?? []) {
+      if (!firstEventBySerial.has(ev.serial_number)) {
+        firstEventBySerial.set(ev.serial_number, { action: ev.action, related_serial_number: ev.related_serial_number ?? null })
+      }
+    }
+  }
 
   const mbBySession = new Map<string, OrderMassBalance>(((mbRes.data as any[]) ?? []).map(m => [m.session_id, m]))
   const sigBySession = group<any>((sigRes.data as any[]) ?? [], (s: any) => s.session_id) as Map<string, OrderSignature[]>
@@ -321,8 +382,18 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }))
 
   // Whole-day output bags, then attribute each to its shift.
-  const bags = mergeOutputBags((tagsRes.data as any[]) ?? [], (bagsRes.data as any[]) ?? [])
+  const bags = mergeOutputBags((tagsRes.data as any[]) ?? [], (bagsRes.data as any[]) ?? [], firstEventBySerial)
   bags.forEach(b => { b.shift = shiftBySession.get(b.session_id) ?? '' })
+
+  // Re-bag transactions shown on their own panel — never folded into
+  // bagsOutputKg (see OrderBagRow/mergeOutputBags): that kg was already
+  // counted as output on whatever earlier day rebagSourceSerial was
+  // originally bagged.
+  const rebagRows: OrderRebagRow[] = bags.filter(b => b.bornViaRebag && b.bag_serial_no).map(b => ({
+    targetSerial: b.bag_serial_no as string, sourceSerial: b.rebagSourceSerial,
+    productType: b.product_type, acumaticaId: b.acumatica_id,
+    kg: b.kg, at: b.bagging_time, sessionId: b.session_id, shift: b.shift,
+  }))
 
   // Debag inputs across the day (already ordered per session by bag_no), tagged with shift.
   const debags: OrderDebagRow[] = ((debagsRes.data as any[]) ?? []).map(d => ({
@@ -345,7 +416,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
         breaks: Array.isArray(t.breaks) ? t.breaks : [], confirmed: !!t.confirmed,
       })),
       bagCount: own.length,
-      bagsOutputKg: own.reduce((t, b) => t + (b.kg || 0), 0),
+      bagsOutputKg: own.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0),
     }
   })
 
@@ -359,7 +430,8 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     poItems,
     shifts,
     bags,
-    bagsOutputKg: bags.reduce((t, b) => t + (b.kg || 0), 0),
+    bagsOutputKg: bags.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0),
+    rebagRows,
     debags,
     massBalance: sumMassBalance(shifts, section_id),
     reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],
