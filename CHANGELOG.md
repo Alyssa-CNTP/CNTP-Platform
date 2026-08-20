@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Supervisor Hub Dashboard: line filter, mass balance input/output)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`
+
+Requested: the Dashboard tab filterable by line, showing mass balance input and output.
+
+- Added a line filter on "Lines this shift" — lists only the sections actually running this shift (not the full 7-section list), defaulting to All lines.
+- Added a mass balance summary strip (kg in, kg out, net balance) above the line list, which reacts to the filter — pick one line to see just its balance, or leave it on All lines for the shift total.
+- Each line row now shows input kg alongside output kg (was output-only); the output figure still turns amber when that line's mass balance is outside tolerance.
+- The underlying report data (`lib/production/shift-report.ts`'s `LineReport`) already carried `inputKg` — it just wasn't surfaced on this page. No API or data changes needed.
+- The line filter is display-only (it narrows what renders, nothing else) — doesn't conflict with the dashboard's standing rule of holding no sign/edit/approve controls of its own.
+
 ## 2026-08-20 — Alyssa (Supervisor Hub: today's records first by default, Sort + Section filters on Sign-off)
 
 **Files changed:** `app/(app)/supervisor/signoff/page.tsx`
