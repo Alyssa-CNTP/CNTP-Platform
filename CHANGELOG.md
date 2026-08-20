@@ -2,6 +2,23 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Capture: "Bags this shift" — the whole shift's bags in and out, as a reference)
+
+**Files changed:** `components/production/capture/ShiftBagLog.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested by the afternoon shift: they want to see the entire shift's bags **inputted (debagging)** and **outputted (bagging)** while capturing, as a reference.
+
+Why it wasn't already possible: the Capture tab only ever renders the batch record open on screen, so anything captured under an earlier record on the same shift (a record submitted before "Start new batch record" opened the next one) was invisible there. Overview does list every bag, but it merges **both** shifts into one product/lot rollup and only counts sibling records whose variant/grade matches the active one — so neither screen answered "what has *this shift* put in and taken out so far", the question asked at every changeover, hand-over and stock check.
+
+- **New `ShiftBagLog`** — a collapsed one-line card between the batch card and the capture form on the Capture tab: `Bags this shift · in N bags / X kg · out N bags / Y kg`. Expanding it shows two lists, Debagged in and Bagged out, each row carrying its time (SAST), product, serial/bag number, lot and kg. Lists are capped and scroll inside the card so a reference can never push the capture form off a tablet screen; the card hides itself entirely until the shift has captured something.
+- **Scope is the whole shift on that line**, all batch records, whatever each was running — that's what "the entire shift's bags" means. Each record is listed under its own heading with its variant/grade and a `current` chip, so a record on another grade explains itself rather than looking like a stray total. The panel shows **no in-vs-out variance**: it is a bag list, not a second mass balance, and it deliberately can't be misread as one.
+- **Every section is read through an explicit `sectionId` switch** (sieving, refining1/2, granule, blender/smallblender, pasteuriser) rather than by duck-typing the shared `inputs`/`outputs`/`debag` field names — the lines are independent processes that happen to reuse those names. Pasteuriser pallet lines count as their many physical bags (`bags × kg/bag`, the same figure `prod_bagging` stores); granule dust rows likewise. Sieving's bucket-elevator and machine spillage are excluded: they're carry-over/loss figures, not bags, and already read on the mass balance.
+- **Data comes from the same place the screen already trusts** — the live in-memory records for the open session, plus the `draft_data` of the shift's other `prod_sessions` rows (already fetched by the existing load, now also kept **unfiltered** for this panel in `shiftOtherProductions`). No new query, and no reading of `prod_debagging`/`prod_bagging`, whose rows lag the screen by up to an autosave.
+- **`siblingProductions` is unchanged.** The variant/grade match filter on that set guards the mass balance from combining two different grades' or blends' balances; only the new unfiltered set feeds the bag log.
+- **`startNewProduction()` now hands the closing record to the bag log** before clearing local state. Without it, submitting a batch and starting the next one dropped "Bags this shift" to zero until a page reload, since sibling session rows are only re-read on load. It is deliberately *not* added to the mass-balance set, for the reason above.
+
+Verified: renders and totals correct against representative sieving data across two batch records on different grades (in 4 bags/1997.4 kg excluding the 120 kg elevator figure, out 4 bags/781.3 kg), SAST times correct from UTC instants, single-row header on tablet and a wrapped two-row header on a phone with no horizontal overflow, no console errors. Typecheck and lint clean on both files.
+
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)
