@@ -60,9 +60,15 @@ const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
 }
 
 // ─── Rate limiter (simple in-process queue) ───────────────────────────────────
-// Prevents Gemini 429s on the free tier (15 RPM)
-
-const GEMINI_MIN_GAP_MS = 4500
+// Spaces Gemini calls out so a batch of PDFs can't burst past the per-minute
+// quota. The gap was 4500ms, sized for the FREE tier's 15 RPM — but this project
+// is on Tier 1, where the two models used here allow 1,000 RPM (2.5 Flash) and
+// 4,000 RPM (3.1 Flash Lite). At 4.5s/call the app was throttling itself to
+// ~13 RPM: roughly 1-2% of the available rate, and every queued lab report
+// waited behind the one before it (10 PDFs = 45s of pure queue delay before any
+// Gemini latency). 250ms ≈ 240 RPM, still 4x inside the tightest model's limit.
+// Override with GEMINI_MIN_GAP_MS if a tier change ever needs it re-tuned.
+const GEMINI_MIN_GAP_MS = Number(process.env.GEMINI_MIN_GAP_MS ?? 250)
 let lastGeminiCall = 0
 const geminiQueue: { fn: () => Promise<any>; resolve: (v: any) => void; reject: (e: any) => void }[] = []
 let queueRunning = false
@@ -87,6 +93,91 @@ async function drainQueue() {
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+// ─── Retry / error classification ─────────────────────────────────────────────
+// 429 (quota or rate limit) and 503 (model temporarily overloaded) are entirely
+// different problems, and lumping them together is what made this undiagnosable:
+// every failure — whatever its cause — reached the QC as "Gemini is temporarily
+// overloaded", and Google's own explanation was thrown away unread. QC then
+// reported it as "Gemini has exceeded the rate limit" while the project's
+// dashboard sat at ~1% of its quota. Keep the status and Google's message, log
+// them, and say which one actually happened.
+const GEMINI_RETRYABLE = new Set([429, 500, 502, 503, 504])
+
+class GeminiRetryable extends Error {
+  status: number
+  model: string
+  retryAfterMs: number
+  detail: string
+  constructor(status: number, model: string, retryAfterMs: number, detail: string) {
+    super(`Gemini ${model} returned ${status}`)
+    this.status = status
+    this.model = model
+    this.retryAfterMs = retryAfterMs
+    this.detail = detail
+  }
+}
+
+// Honour Retry-After when Google sends it (seconds, or an HTTP date).
+function retryAfterMs(res: Response): number {
+  const raw = res.headers.get('retry-after')
+  if (!raw) return 0
+  const secs = Number(raw)
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000)
+  const at = Date.parse(raw)
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0
+}
+
+// Escalating waits BETWEEN rounds. The old loop tried both models twice with a
+// single 4s sleep in the middle, so it gave up ~4 seconds after the first
+// failure — far too fast for a transient overload to clear, which is why a brief
+// blip became a hard error the QC had to re-upload through. This spans ~15s.
+const GEMINI_BACKOFF_MS = [1000, 4000, 10000]
+
+async function withGeminiRetries<T>(
+  models: string[],
+  attempt: (model: string) => Promise<T>,
+  label: string,
+): Promise<T> {
+  let last: GeminiRetryable | null = null
+  const rounds = GEMINI_BACKOFF_MS.length + 1
+
+  for (let round = 0; round < rounds; round++) {
+    for (const model of models) {
+      try {
+        return await attempt(model)
+      } catch (err: any) {
+        if (!(err instanceof GeminiRetryable)) throw err   // real error — surface it
+        last = err
+        console.warn(
+          `[gemini:${label}] ${model} → ${err.status} (round ${round + 1}/${rounds})` +
+          (err.retryAfterMs ? ` retry-after=${err.retryAfterMs}ms` : '') +
+          ` :: ${err.detail.replace(/\s+/g, ' ').slice(0, 300)}`,
+        )
+      }
+    }
+    if (round < rounds - 1) {
+      // Jitter so parallel uploads don't retry in lockstep.
+      const wait = Math.max(last?.retryAfterMs ?? 0, GEMINI_BACKOFF_MS[round]) + Math.random() * 400
+      await sleep(wait)
+    }
+  }
+
+  // Every model failed every round — report which failure it actually was.
+  const tried = models.join(', ')
+  if (last?.status === 429) {
+    throw new Error(
+      `Gemini rejected this with a quota/rate-limit error (429) on ${tried}. ` +
+      `This is a quota problem, not a busy model — check the API key's project and tier ` +
+      `in Google AI Studio (a free-tier key has far lower limits than Tier 1). ` +
+      `Google's message: ${(last.detail || 'none').replace(/\s+/g, ' ').slice(0, 200)}`,
+    )
+  }
+  throw new Error(
+    `Gemini was unavailable (${last?.status ?? 'no response'}) on ${tried} after ${rounds} attempts over ~15s. ` +
+    `This is the model being temporarily overloaded, not a quota limit. Please try again.`,
+  )
+}
 
 // ─── Gemini call with model fallback ─────────────────────────────────────────
 
@@ -119,10 +210,12 @@ async function callGemini(systemPrompt: string, text: string, workflow: string) 
         generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens, responseMimeType: 'text/plain' },
       }),
     })
-    if (res.status === 429 || res.status === 503) throw new Error(`RATE_LIMIT:${model}`)
     if (!res.ok) {
-      const err = await res.text()
-      throw new Error(`Gemini API error (${res.status}) on ${model}: ${err.slice(0, 200)}`)
+      const detail = await res.text().catch(() => '')
+      if (GEMINI_RETRYABLE.has(res.status)) {
+        throw new GeminiRetryable(res.status, model, retryAfterMs(res), detail)
+      }
+      throw new Error(`Gemini API error (${res.status}) on ${model}: ${detail.slice(0, 200)}`)
     }
     const data    = await res.json()
     const content = data.candidates?.[0]?.content?.parts?.[0]?.text
@@ -130,18 +223,11 @@ async function callGemini(systemPrompt: string, text: string, workflow: string) 
     return { content, model_used: model }
   }
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await sleep(4000)
-    for (const model of [GEMINI_FLASH, GEMINI_FLASH_8B]) {
-      try {
-        return await tryModel(model)
-      } catch (err: any) {
-        if (err.message.startsWith('RATE_LIMIT:')) continue
-        throw err
-      }
-    }
-  }
-  throw new Error('Gemini is temporarily overloaded. Please wait 30 seconds and try again.')
+  return await withGeminiRetries(
+    [GEMINI_FLASH, GEMINI_FLASH_8B],
+    tryModel,
+    `extract ${workflow}`,
+  )
 }
 
 // ─── Gemini vision — for scanned PDFs ────────────────────────────────────────
@@ -149,30 +235,45 @@ async function callGemini(systemPrompt: string, text: string, workflow: string) 
 
 async function callGeminiWithPdf(systemPrompt: string, pdfBase64: string, workflow: string) {
   const maxTokens = WORKFLOW_MAX_TOKENS[workflow] ?? 1500
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FLASH}:generateContent`
 
-  const res = await fetch(url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
-    body:    JSON.stringify({
-      contents: [{
-        parts: [
-          { text: systemPrompt + '\n\nExtract all data from this document. Return ONLY valid JSON.' },
-          { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
-        ],
-      }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens },
-    }),
-  })
+  // Scanned reports come through here, and this path previously had no retry at
+  // all: a single 503 failed the upload outright, with Google's raw error text
+  // shown to the QC. It now retries and falls back to the second model exactly
+  // like the text path, and is subject to the same 429-vs-503 wording.
+  const tryModel = async (model: string) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
+      body:    JSON.stringify({
+        contents: [{
+          parts: [
+            { text: systemPrompt + '\n\nExtract all data from this document. Return ONLY valid JSON.' },
+            { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+          ],
+        }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens },
+      }),
+    })
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Gemini vision error (${res.status}): ${err.slice(0, 200)}`)
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      if (GEMINI_RETRYABLE.has(res.status)) {
+        throw new GeminiRetryable(res.status, model, retryAfterMs(res), detail)
+      }
+      throw new Error(`Gemini vision error (${res.status}) on ${model}: ${detail.slice(0, 200)}`)
+    }
+    const data    = await res.json()
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!content) throw new Error(`Gemini vision ${model} returned empty response`)
+    return { content, model_used: `${model} (vision)` }
   }
-  const data    = await res.json()
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!content) throw new Error('Gemini vision returned empty response')
-  return { content, model_used: GEMINI_FLASH + ' (vision)' }
+
+  return await withGeminiRetries(
+    [GEMINI_FLASH, GEMINI_FLASH_8B],
+    tryModel,
+    `vision ${workflow}`,
+  )
 }
 
 // ─── JSON parser ──────────────────────────────────────────────────────────────
