@@ -2,6 +2,43 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Fix: 20260805_002 migration failed to run — view column reorder)
+
+**Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`
+
+Running `20260805_002` in the Supabase SQL Editor (staging) failed with `42P16: cannot change name of view column "has_quality" to "granule_moisture_latest"` — this is why it was never actually applied back on 2026-08-05 despite the changelog note asking for it. `CREATE OR REPLACE VIEW` only allows appending trailing columns; the migration's `v_batch_360` SELECT inserted the new granule/pasteuriser/lab columns *before* `has_quality`, shifting its position, which Postgres treats as a rename. Fixed by adding `DROP VIEW IF EXISTS production.v_batch_360;` before its `CREATE VIEW` (nothing else in the schema depends on it), and wrapping the whole migration in `BEGIN`/`COMMIT`. `v_batch_quality`'s own `CREATE OR REPLACE` only ever appended columns and was never the problem. Re-run `20260805_002` then `20260820_001` in that order in the Supabase SQL Editor — staging first, then production once promoted.
+
+## 2026-08-20 — Gustav (Pasteuriser: Reload Spec button to re-check a run against an updated Specifications entry)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+Requested: a customer spec edited in the Specifications tab after a Pasteuriser run was already started never reached that run — `_spec` (the matched spec row) and `batch_specs` (its flattened min/max values, which every in-spec check actually reads) are both snapshotted once at batch creation, so there was no way to see whether already-recorded samples were still in spec against the new numbers without deleting and recreating the run.
+
+- New "🔄 Reload Spec" button next to the batch's spec badge (hidden once the batch is finalised). Re-runs the same customer-vs-generic spec match used at creation for this batch's product family/grade/variant, confirms with the QC (since it overwrites this batch's current spec values), then overwrites both `_spec` and `batch_specs` and saves — every sample's pass/fail re-evaluates immediately because those checks already read live off the batch, not a cached result.
+- If no matching spec exists any more, it says so and changes nothing.
+
+## 2026-08-20 — Alyssa (Fix: "View batch KPIs" broken — missing migration + Sieving multi-lot session gap)
+
+**Files changed:** `supabase/migrations/20260820_001_fix_multi_lot_session_batch_kpis.sql` (new), `app/api/production/yield-analytics/route.ts`
+
+**⚠ Requires running, in this order, in the Supabase SQL Editor (staging first, then production once promoted):**
+**1. `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`** — written 2026-08-05, flagged then as requiring a manual run, but never actually applied to staging (confirmed live: `v_batch_360` is still missing `granule_moisture_latest` and the other columns that migration adds).
+**2. `supabase/migrations/20260820_001_fix_multi_lot_session_batch_kpis.sql`** — the new fix below.
+
+Reported as "batch KPIs don't work for Fine/Coarse Leaf." Investigation found two separate bugs:
+
+- **Bug 1 (universal, currently 500s for every batch, not just Fine/Coarse Leaf):** `/api/production/batch/[key]` selects `granule_moisture_latest` and other columns from `production.v_batch_360` that `20260805_002_batch_quality_granule_pasteuriser_lab.sql` was supposed to add — but that migration was never run on staging (its own CHANGELOG entry flagged the manual step and it was missed). Reproduced live: every `/api/production/batch/<lot>` call currently returns `{"error":"column v_batch_360.granule_moisture_latest does not exist"}`. No code fix needed — just run the migration that's already sitting in the repo.
+- **Bug 2 (Fine/Coarse Leaf specifically, and any batch that hasn't left Sieving yet):** Sieving Tower debags several different raw-material lots into one shift session, so it has no single session-level lot — `production.prod_sessions.batch_id`/`lot_number` are `NULL` for every Sieving session (confirmed live for the 10 most recent). `v_output_stream` and `v_batch_360`'s rollup both keyed off that session-level `batch_id`, so a batch that's only been through Sieving got zero rows in "Output mix" and blank Yield/Output/Input tiles, even once Bug 1 is fixed. The bag rows themselves (`prod_debagging`/`prod_bagging`) already carry the correct per-row `batch_id` (set by `resolveBatchIds()` from each bag's own lot); `20260820_001` rewrites `v_output_stream` to key off that instead, and adds a bag-sourced fallback to `v_batch_360`'s rollup for any batch the session-based rollup finds nothing for — additive only, doesn't change any already-working figure. `yield-analytics/route.ts`'s "recent batches" list now also unions batch keys discovered via `v_output_stream`, so a Sieving-only batch shows up there too.
+
+## 2026-08-20 — Alyssa (Re-bag: distinct color + allow registering untracked source bags)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Follow-up to the re-bagging feature below: the button/modal now use a distinct violet accent instead of the brand green, so re-bagging reads as a different category of action from ordinary capture (feedback: it blended in too much).
+
+- Third source option alongside scanning an existing bag: **"Not on the system yet"** — not all floor material is tracked yet during the transition to this system. Reuses `OutputPicker` to pick what it is and weigh it, generates a real serial, prints a label for it (it never had a system barcode before), and logs it as a `stock_count` scan_events row rather than `bagging_out` — this is old material entering tracking today, not fresh production, so it must never count toward today's output (the existing `bagging_out`-only production sums already exclude it with zero further changes).
+- Once registered, that bag is treated exactly like any existing tracked bag for the rest of the flow (target selection, confirmation, transfer, printing).
+
 ## 2026-08-20 — Alyssa (Re-bagging: capture-page material transfer, cross-SKU, existing or brand-new target)
 
 **Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/RebagModal.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`
