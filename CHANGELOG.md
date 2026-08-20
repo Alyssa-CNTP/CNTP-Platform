@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Fix: batch KPI route never read the batch key — Next.js 16 async `params`)
+
+**Files changed:** `app/api/production/batch/[key]/route.ts`
+
+Even with both migrations applied, "View batch KPIs" still 404'd ("Batch not found") for a real batch (GS-0313, confirmed present in `production.batches` with valid `v_batch_360` data). Root cause: this was the only dynamic API route left in the whole codebase still typed as `{ params }: { params: { key: string } }` and reading `params.key` directly — every other `[id]`/`[key]`/`[token]` route already uses `{ params: Promise<{...}> }` + `await params`, per Next.js 15/16's breaking change making route params async. Next actually hands the route a `Promise`, so `params.key` was always `undefined`, `decodeURIComponent(undefined)` stringified to `"undefined"`, and the query ran for the literal batch key `UNDEFINED` — meaning this endpoint has never worked for *any* real batch on either environment, independent of the migration issue. Fixed by awaiting `params` like every other route does.
+
 ## 2026-08-20 — Alyssa (Re-bag: capture real history when registering an untracked bag)
 
 **Files changed:** `components/production/capture/RebagModal.tsx`
