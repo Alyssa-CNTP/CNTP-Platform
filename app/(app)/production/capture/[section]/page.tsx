@@ -36,6 +36,7 @@ import {
 } from '@/components/production/capture/PasteuriserCapture'
 import { RebagModal } from '@/components/production/capture/RebagModal'
 import { upperCode } from '@/lib/production/normalize-code'
+import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -251,6 +252,12 @@ function CaptureScreen() {
   // a supervisor never trusts a full-day total that may be stale with zero
   // visible sign anything went wrong (see persist()'s run-rollup try/catch).
   const [runRollupStale, setRunRollupStale] = useState(false)
+  // Set when a structured input/output row write failed. Those writes are
+  // separate statements from draft_data and the mass balance, so they can fail
+  // on their own and leave a production order reading "No inputs recorded"
+  // against a perfectly correct total — which is what happened, three
+  // different ways, until it was surfaced. See persist().
+  const [rowWriteError, setRowWriteError] = useState<string | null>(null)
   const [tab, setTab]             = useState<Tab>(() => {
     const t = sp.get('tab')
     if (t === 'checks' && !hasChecks) return 'production'   // stale ?tab=checks on a section with no checks
@@ -1180,8 +1187,47 @@ function CaptureScreen() {
       draft_data: { productions: prods } as any, batch_id: sessionBatchId, updated_at: new Date().toISOString(),
     } as any).eq('id', sid)
 
-    await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
-    if (debag.length) await db.schema('production').from('prod_debagging').insert(debag as any)
+    // ── Input rows: normalise, then write with the result checked ───────────
+    // These rows travel as ONE multi-row insert, so a single unacceptable value
+    // in any of them loses every input row for the session — and since the mass
+    // balance below is computed from draft_data, not from these rows, the
+    // production order then shows "No inputs recorded" under a correct total,
+    // with nothing anywhere saying why. Two real causes, both fixed here at the
+    // write layer rather than in each capture screen:
+    //
+    //   • delivery_date arriving as the floor writes it on a bag tag, DD-MM-YY.
+    //     Postgres rejects that on a `date` column (22008 date/time field value
+    //     out of range) — this silently emptied every Refining order's
+    //     debagging panel.
+    //   • bag_serial_no carrying a serial that isn't in bag_tags, which the FK
+    //     prod_debagging_bag_serial_no_fkey rejects with 23503. Only manual
+    //     entry was assumed to produce untagged serials, but Blender's scan
+    //     rows routinely hold the date written on an untagged bag, so Blender
+    //     orders lost their inputs the same way.
+    for (const r of debag) r.delivery_date = dbDate(r.delivery_date)
+
+    const claimedSerials = [...new Set(debag.map((r: any) => r.bag_serial_no).filter(Boolean))]
+    if (claimedSerials.length) {
+      const { data: knownTags } = await db.schema('production').from('bag_tags')
+        .select('serial_number').in('serial_number', claimedSerials)
+      const tagged = new Set(((knownTags as any[]) ?? []).map(t => t.serial_number))
+      for (const r of debag as any[]) {
+        if (r.bag_serial_no && !tagged.has(r.bag_serial_no)) {
+          // Keep what the operator entered — for an untagged bag it's the only
+          // identifier it has — just not in the FK column.
+          r.notes = [r.notes, r.bag_serial_no].filter(Boolean).join(' · ')
+          r.bag_serial_no = null
+        }
+      }
+    }
+
+    const rowErrors: string[] = []
+    const delDebag = await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
+    if (delDebag.error) rowErrors.push(`inputs: ${delDebag.error.message}`)
+    if (debag.length) {
+      const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      if (insDebag.error) rowErrors.push(`inputs: ${insDebag.error.message}`)
+    }
 
     // Serialed bags are physical, already-tagged bags (bag_tags has the same
     // serial) — never blanket-delete those, or a save that races the bag being
@@ -1207,8 +1253,18 @@ function CaptureScreen() {
         .delete().eq('session_id', sid)
         .in('bag_serial_no', bagWithSerial.map((r: any) => r.bag_serial_no))
     }
-    if (bagNoSerial.length)   await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
-    if (bagWithSerial.length) await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
+    if (bagNoSerial.length) {
+      const ins = await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
+      if (ins.error) rowErrors.push(`bags: ${ins.error.message}`)
+    }
+    if (bagWithSerial.length) {
+      const ins = await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
+      if (ins.error) rowErrors.push(`bags: ${ins.error.message}`)
+    }
+    // Same failure class as the input rows above: prod_bagging has emptied out
+    // on production before with the capture screen showing no sign of it.
+    setRowWriteError(rowErrors.length ? rowErrors.join(' · ') : null)
+    if (rowErrors.length) console.error('structured row write failed', rowErrors)
 
     // ── Self-heal bag_tags ─────────────────────────────────────────────────────
     // Every output bag is registered in bag_tags by its own atomic write the
@@ -1832,6 +1888,17 @@ function CaptureScreen() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
         <div className="px-4 py-5 max-w-[800px] space-y-5">
+          {rowWriteError && tab !== 'messages' && !cleanerActor && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl text-[12px] text-red-800">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>
+                <strong>Your weights are saved, but the input/output row list didn&apos;t save</strong> — the
+                production order and shift report will show this record as having no
+                debagging or bagging rows even though the mass balance above is right.
+                Try Save draft again; if it keeps failing, send this to IT: <span className="font-mono">{rowWriteError}</span>
+              </span>
+            </div>
+          )}
           {/* The full-day rollup write failed on the last save — the per-shift
               mass balance above is still correct and safely saved, but the
               combined full-day total (production_runs) may be stale until the
