@@ -22,6 +22,18 @@ Fixes, all at the write layer rather than in each capture screen (same chokepoin
 - **`scripts/backfill-debag-rows.cjs`** rebuilds the missing rows from `draft_data` (that's where every input has been safely stored all along). Dry-run by default; only touches sessions with **zero** existing rows, so it can't overwrite a real save and is safe to re-run. Dry-run against staging finds **74 sessions / 606 recoverable input rows** (sieving 160, blender 291, granule 88, refining1 47, refining2 20) — not run yet, awaiting the go-ahead.
 
 **The repair itself hasn't been run on either database.** The code fix only stops new records losing their rows; existing orders stay empty until the backfill runs — `node scripts/backfill-debag-rows.cjs` (dry run, writes nothing) then `--apply`, on staging and, once this is promoted, on production. Nothing else about the data changes.
+## 2026-08-20 — Alyssa (Reopened production records no longer demand a shift-changeover PIN)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported as: reopening a signed-off production record still asks who is on shift, even for a user who holds the permission to reopen.
+
+Root cause: the two reopen endpoints (`app/api/production/orders/[id]/route.ts`, `.../reopen-request/route.ts`) check `can_edit_session` and then only flip `status` back to `'draft'`. The 16h00 shift-changeover gate in capture is keyed off `status` and the clock — `pastChangeover() && !(status === 'submitted' || status === 'approved')` — and nothing else. Submitted/approved suppressed it; reopening put the record straight back into the "still being captured" state, so a morning record reopened after 16h00 raised the full-screen operator-PIN overlay ("Shift changed — confirm who's capturing"). It has no role or permission exemption, so a Production Manager or IT reopening a record to fix a weight hit the same wall as a floor operator, and confirming wrote a `shift_takeovers` row for a hand-over that never happened.
+
+- A record is now recognised as **reopened** rather than live: `submitted_at` is selected with the session, and a `'draft'` that still carries one was submitted and then reopened (reopen doesn't clear it), which a genuine open morning draft never is.
+- The changeover gate is skipped for a reopened record **only** when the current user has `can_edit_session` — the same permission the reopen endpoints require. Anyone who could have reopened it can edit it after 16h00 without PINning in as the incoming operator.
+- Unchanged for everyone else: a floor operator opening a reopened record, and any live morning session past 16h00, still hit the PIN gate, so the `shift_takeovers` audit trail keeps every real hand-over. The gate is still one-shot per session (an existing takeover row suppresses it).
+- `p()` from `useAuth` is aliased to `hasPerm` in this file, since `p` is already used as the arrow-function parameter name for productions throughout it.
 
 ## 2026-08-20 — Gustav (Lab Results upload: drop the free-tier Gemini throttle now we're on a paid key)
 
