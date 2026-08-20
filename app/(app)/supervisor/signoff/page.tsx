@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { sectionMeta } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER } from '@/lib/production/capture-config'
 import { SHIFT_LABEL, sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 import { ReopenRequestsPanel } from '@/components/supervisor/ReopenRequestsPanel'
@@ -33,9 +33,12 @@ import { JobCardApprovalsPanel } from '@/components/production/JobCardApprovalsP
 //      Quietest styling of the three: it's visibility, not a task for the
 //      viewer.
 //
-// Records from every date are listed, oldest first — a session left unsigned
-// last Thursday was previously invisible here because the queue only looked at
-// today, which is exactly how it went unnoticed.
+// Records from every date are listed — a session left unsigned last Thursday
+// was previously invisible here because the queue only looked at today, which
+// is exactly how it went unnoticed. Defaults to newest-first (today's records
+// at the top) with a 7-day window; Sort, Show, and Section are all viewer
+// choices, not a fixed order — a supervisor working through a real backlog
+// wants oldest-first, someone else wants to see today's shift only.
 //
 // Archiving a record on Production Orders auto-declines any pending reopen
 // request against it (see app/api/production/orders/[id]/route.ts) — before
@@ -68,6 +71,18 @@ function cutoffDate(today: string, days: number) {
   return d.toISOString().slice(0, 10)
 }
 
+// Sorted client-side (not re-queried) so flipping the toggle is instant.
+// Ties break on submitted_at where it exists — two records from the same day,
+// the one actually signed-off most recently first.
+function byRecency<T extends { date: string; submitted_at?: string | null }>(dir: 'newest' | 'oldest') {
+  return (a: T, b: T) => {
+    const av = a.submitted_at ?? a.date
+    const bv = b.submitted_at ?? b.date
+    const cmp = av < bv ? -1 : av > bv ? 1 : 0
+    return dir === 'newest' ? -cmp : cmp
+  }
+}
+
 export default function SupervisorSignoff() {
   const { p, isFullAdmin } = useAuth()
   const canApproveJobCards = isFullAdmin || p('can_approve_job_cards')
@@ -80,6 +95,8 @@ export default function SupervisorSignoff() {
   const [reopenCount, setReopenCount] = useState(0)
   const [loading, setLoading]     = useState(true)
   const [windowDays, setWindowDays] = useState<WindowDays>(7)
+  const [sortDir, setSortDir] = useState<'newest' | 'oldest'>('newest')
+  const [sectionFilter, setSectionFilter] = useState<string>('all')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -124,17 +141,20 @@ export default function SupervisorSignoff() {
   const total = submitted.length + stale.length + reopenCount + actionableReports.length
   const allClear = !loading && total === 0
 
-  // reopenCount and job-card approvals aren't windowed — a decision queue
-  // doesn't get less urgent with age, so it's excluded from both totals below.
+  // reopenCount and job-card approvals aren't windowed or section-filtered —
+  // a decision queue doesn't get less urgent with age, so it's excluded from
+  // the filtered totals below. Shift reports have no section of their own, so
+  // the section filter only ever applies to the two session lists.
   const today = sastToday()
   const cutoff = windowDays === 'all' ? null : cutoffDate(today, windowDays)
   const inWindow = (d: string) => !cutoff || d >= cutoff
-  const submittedVisible = submitted.filter(s => inWindow(s.date))
-  const staleVisible = stale.filter(s => inWindow(s.date))
-  const reportsVisible = actionableReports.filter(r => inWindow(r.date))
+  const inSection = (id: string) => sectionFilter === 'all' || id === sectionFilter
+  const submittedVisible = submitted.filter(s => inWindow(s.date) && inSection(s.section_id)).sort(byRecency(sortDir))
+  const staleVisible = stale.filter(s => inWindow(s.date) && inSection(s.section_id)).sort(byRecency(sortDir))
+  const reportsVisible = actionableReports.filter(r => inWindow(r.date)).sort(byRecency(sortDir))
   const totalVisible = submittedVisible.length + staleVisible.length + reopenCount + reportsVisible.length
-  const hiddenOlder = (submitted.length - submittedVisible.length) + (stale.length - staleVisible.length) + (actionableReports.length - reportsVisible.length)
-  const windowLabel = WINDOW_OPTIONS.find(o => o.value === windowDays)!.label.toLowerCase()
+  const hiddenByFilters = total - totalVisible
+  const nonDefault = windowDays !== 7 || sortDir !== 'newest' || sectionFilter !== 'all'
 
   return (
     <div className="px-4 py-6 max-w-[900px] mx-auto space-y-4">
@@ -142,9 +162,9 @@ export default function SupervisorSignoff() {
         title="Sign-off"
         subtitle={loading ? 'Checking what’s outstanding…'
           : total === 0 ? 'Nothing outstanding'
-          : totalVisible === 0 ? `Nothing in the last ${windowLabel} — ${total} further back`
+          : totalVisible === 0 ? `Nothing matches this filter — ${total} waiting further back`
           : `${totalVisible} thing${totalVisible === 1 ? '' : 's'} waiting on a signature`
-            + (hiddenOlder > 0 ? ` · ${hiddenOlder} more further back` : '')}
+            + (hiddenByFilters > 0 ? ` · ${hiddenByFilters} more outside this filter` : '')}
         action={
           <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
@@ -153,15 +173,44 @@ export default function SupervisorSignoff() {
       />
 
       {!loading && !allClear && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-[11px] text-text-faint">Show:</span>
-          {WINDOW_OPTIONS.map(opt => (
-            <button key={opt.value} onClick={() => setWindowDays(opt.value)}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
-                windowDays === opt.value ? 'bg-brand text-white border-brand' : 'border-stone-200 text-text-muted hover:border-brand hover:text-brand'}`}>
-              {opt.label}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-text-faint">Show:</span>
+            {WINDOW_OPTIONS.map(opt => (
+              <button key={opt.value} onClick={() => setWindowDays(opt.value)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
+                  windowDays === opt.value ? 'bg-brand text-white border-brand' : 'border-stone-200 text-text-muted hover:border-brand hover:text-brand'}`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-text-faint">Sort:</span>
+            {(['newest', 'oldest'] as const).map(dir => (
+              <button key={dir} onClick={() => setSortDir(dir)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
+                  sortDir === dir ? 'bg-brand text-white border-brand' : 'border-stone-200 text-text-muted hover:border-brand hover:text-brand'}`}>
+                {dir === 'newest' ? 'Newest first' : 'Oldest first'}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-text-faint">Section:</span>
+            <select value={sectionFilter} onChange={e => setSectionFilter(e.target.value)}
+              className="text-[11px] font-medium border border-stone-200 rounded-full pl-2.5 pr-6 py-1 text-text-muted hover:border-brand hover:text-brand bg-white cursor-pointer">
+              <option value="all">All sections</option>
+              {SECTION_ORDER.map(id => <option key={id} value={id}>{sectionMeta(id).name}</option>)}
+            </select>
+          </div>
+
+          {nonDefault && (
+            <button onClick={() => { setWindowDays(7); setSortDir('newest'); setSectionFilter('all') }}
+              className="text-[11px] text-text-faint hover:text-text underline">
+              Reset
             </button>
-          ))}
+          )}
         </div>
       )}
 
@@ -177,14 +226,15 @@ export default function SupervisorSignoff() {
       ) : (
         <>
           {/* Everything that is quite literally waiting on the viewer's own
-              signature lives in ONE card, oldest first within each kind — this
-              used to be two separate colored boxes (records, then reports)
-              competing for attention; now it's one queue with sub-groups. */}
+              signature lives in ONE card — this used to be two separate
+              colored boxes (records, then reports) competing for attention;
+              now it's one queue with sub-groups, ordered by the Sort control
+              above (today's records first by default). */}
           {(submittedVisible.length > 0 || reportsVisible.length > 0) && (
             <QueueCard
               count={submittedVisible.length + reportsVisible.length} icon={PenLine}
               title="Waiting for your signature"
-              hint="Oldest first — open one to review and sign it off.">
+              hint="Open one to review and sign it off.">
               {submittedVisible.length > 0 && (
                 <>
                   {reportsVisible.length > 0 && <GroupLabel>Capture records</GroupLabel>}
@@ -297,9 +347,9 @@ function SessionRow({ s, tab }: { s: Pending; tab: 'signoff' | 'capture' }) {
           {s.operators.length ? ` · ${s.operators.join(', ')}` : ''}
         </div>
       </div>
-      {/* Age is the point of an oldest-first queue — say it out loud. But with
-          weeks of backlog possible, flagging every 3-day-old row red made the
-          whole queue read as on fire — reserve red for genuinely stale (30d+),
+      {/* Age is worth saying out loud regardless of sort order. But with weeks
+          of backlog possible, flagging every 3-day-old row red made the whole
+          queue read as on fire — reserve red for genuinely stale (30d+),
           amber for a week or more, and a plain neutral pill under that. */}
       {!isToday && ageDays > 0 && (
         <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg shrink-0 ${
