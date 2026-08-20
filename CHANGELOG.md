@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Fix: 20260805_002 migration failed to run — view column reorder)
+
+**Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`
+
+Running `20260805_002` in the Supabase SQL Editor (staging) failed with `42P16: cannot change name of view column "has_quality" to "granule_moisture_latest"` — this is why it was never actually applied back on 2026-08-05 despite the changelog note asking for it. `CREATE OR REPLACE VIEW` only allows appending trailing columns; the migration's `v_batch_360` SELECT inserted the new granule/pasteuriser/lab columns *before* `has_quality`, shifting its position, which Postgres treats as a rename. Fixed by adding `DROP VIEW IF EXISTS production.v_batch_360;` before its `CREATE VIEW` (nothing else in the schema depends on it), and wrapping the whole migration in `BEGIN`/`COMMIT`. `v_batch_quality`'s own `CREATE OR REPLACE` only ever appended columns and was never the problem. Re-run `20260805_002` then `20260820_001` in that order in the Supabase SQL Editor — staging first, then production once promoted.
+
 ## 2026-08-20 — Gustav (Pasteuriser: Reload Spec button to re-check a run against an updated Specifications entry)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
