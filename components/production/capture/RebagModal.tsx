@@ -127,39 +127,96 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const [sourceOriginal, setSourceOriginal] = useState<{ weight_kg: number } | null>(null)
   const [sourceHistory, setSourceHistory] = useState<HistoryRow[]>([])
 
+  // Registering a legacy bag needs its real history, not just today's
+  // snapshot — the original date/weight it actually started at, plus any
+  // later re-weighs the operator knows about, each backdated to its real
+  // date. Only once that's recorded does the bag exist "as of today" at
+  // its true current weight — the actual re-bag/top-up transaction (target
+  // step onward) is a separate, later step on top of that baseline.
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const [onboardOriginalDate, setOnboardOriginalDate] = useState(todayStr)
+  const [onboardOriginalWeight, setOnboardOriginalWeight] = useState('')
+  const [onboardChanges, setOnboardChanges] = useState<{ id: string; date: string; weight: string }[]>([])
+
+  const sortedOnboardChanges = [...onboardChanges].sort((a, b) => a.date.localeCompare(b.date))
+  const onboardCurrentWeight = sortedOnboardChanges.length
+    ? n(sortedOnboardChanges[sortedOnboardChanges.length - 1].weight)
+    : (n(onboardOriginalWeight) || 0)
+  const onboardValid = !!onboardOriginalDate && onboardOriginalDate <= todayStr && n(onboardOriginalWeight) > 0
+    // Every change must fall on or after the original date — the delta math
+    // and "earliest event" lookup both assume chronological order.
+    && onboardChanges.every(c => !!c.date && c.date <= todayStr && c.date >= onboardOriginalDate && n(c.weight) > 0)
+
+  function addOnboardChange() {
+    setOnboardChanges(c => [...c, { id: crypto.randomUUID(), date: todayStr, weight: '' }])
+  }
+  function updateOnboardChange(id: string, field: 'date' | 'weight', value: string) {
+    setOnboardChanges(c => c.map(r => r.id === id ? { ...r, [field]: value } : r))
+  }
+  function removeOnboardChange(id: string) {
+    setOnboardChanges(c => c.filter(r => r.id !== id))
+  }
+
   async function onboardSource() {
-    if (!pendingOnboard) return
+    if (!pendingOnboard || !onboardValid) return
     setOnboarding(true); setOnboardError(null)
     try {
       const serial = genSerial()
       const now = new Date().toISOString()
+      const originalWeight = n(onboardOriginalWeight) || 0
+      const originalDateISO = `${onboardOriginalDate}T12:00:00.000Z`
+      const currentWeight = onboardCurrentWeight
+
       await getDb().schema('production').from('bag_tags').insert({
         serial_number: serial, section_id: sectionId, session_id: sessionId || null,
         product_type: pendingOnboard.productType, acumatica_id: pendingOnboard.code,
-        variant: variantWord || null, weight_kg: n(pendingOnboard.weight) || 0,
+        variant: variantWord || null, weight_kg: currentWeight,
         lot_number: pendingOnboard.batch || null, destination: gradeLetter ?? null,
         status: 'in_stock', is_open: !!pendingOnboard.leaveOpen, printed_at: now,
+        created_at: originalDateISO,
       } as any)
-      await getDb().schema('production').from('scan_events').insert({
+
+      // Backdated ledger: the original weight is this bag's first-ever
+      // event (its starting value, same convention as a normal
+      // 'bagging_out' row), then each later known re-weigh is logged as a
+      // delta from the previous known point, at its own real date — so
+      // "original bagging date/weight" and "full history" on the confirm
+      // screen reflect what actually happened, not today.
+      const events: any[] = [{
         serial_number: serial, action: 'stock_count', section_id: sectionId,
-        session_id: sessionId || null, weight_kg: n(pendingOnboard.weight) || 0,
-        operator_id: operatorId ?? null, notes: onboardNotes.trim() || null, scanned_at: now,
-      } as any)
+        session_id: sessionId || null, weight_kg: originalWeight,
+        operator_id: operatorId ?? null, notes: onboardNotes.trim() || null,
+        scanned_at: originalDateISO,
+      }]
+      let prevWeight = originalWeight
+      for (const c of sortedOnboardChanges) {
+        const w = n(c.weight) || 0
+        events.push({
+          serial_number: serial, action: 'stock_count', section_id: sectionId,
+          session_id: sessionId || null, weight_kg: w - prevWeight,
+          operator_id: operatorId ?? null, scanned_at: `${c.date}T12:00:00.000Z`,
+        })
+        prevWeight = w
+      }
+      await getDb().schema('production').from('scan_events').insert(events as any)
+
       // Re-labelling — this bag had no valid system barcode before now,
       // unlike a top-up on an already-tracked bag, so there's no "write on
-      // tag" choice here: it always gets a real printed label.
+      // tag" choice here: it always gets a real printed label, showing its
+      // TRUE current weight (after any known history), not just the first
+      // number picked.
       await printLabelAuto({
         id: serial, serial_number: serial, product_type: pendingOnboard.productType,
         variant: variantWord || 'Conventional', grade: (gradeLetter as any) || 'A',
-        weight_kg: n(pendingOnboard.weight) || 0, lot_number: pendingOnboard.batch || '',
-        section_id: sectionId, section_name: sectionName, created_at: now, printed: true,
+        weight_kg: currentWeight, lot_number: pendingOnboard.batch || '',
+        section_id: sectionId, section_name: sectionName, created_at: originalDateISO, printed: true,
         acumaticaId: pendingOnboard.code ?? undefined,
       } as any)
       setOnboardedSource({
         serial_number: serial, product_type: pendingOnboard.productType, acumatica_id: pendingOnboard.code,
-        variant: variantWord || null, weight_kg: n(pendingOnboard.weight) || 0,
+        variant: variantWord || null, weight_kg: currentWeight,
         lot_number: pendingOnboard.batch || null, destination: gradeLetter ?? null,
-        status: 'in_stock', consumed_at_section: null, created_at: now, is_open: !!pendingOnboard.leaveOpen,
+        status: 'in_stock', consumed_at_section: null, created_at: originalDateISO, is_open: !!pendingOnboard.leaveOpen,
       })
       setStep('target')
     } catch {
@@ -350,19 +407,58 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                 </>
               ) : !pendingOnboard ? (
                 <>
-                  <p className="text-[11px] text-text-muted">This material isn't tracked yet — pick what it is and weigh it. It'll be given a real serial and labelled before anything is drawn from it.</p>
+                  <p className="text-[11px] text-text-muted">This material isn't tracked yet — pick what it is. You'll record its real weight history next, before anything is drawn from it.</p>
                   <OutputPicker sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
-                    defaultBatch="" onAdd={p => setPendingOnboard(p)} onClose={() => setSourceMode('existing')} />
+                    defaultBatch="" onAdd={p => { setPendingOnboard(p); setOnboardOriginalWeight(p.weight) }} onClose={() => setSourceMode('existing')} />
                 </>
               ) : (
                 <>
-                  <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
+                  <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px]">
                     <div className="flex items-center justify-between">
                       <span className="text-text">{pendingOnboard.productType}</span>
-                      <span className="font-mono text-text-muted">{n(pendingOnboard.weight).toFixed(1)} kg</span>
+                      {pendingOnboard.batch && <span className="text-text-muted">Batch {pendingOnboard.batch}</span>}
                     </div>
-                    {pendingOnboard.batch && <div className="text-text-muted">Batch {pendingOnboard.batch}</div>}
                   </div>
+
+                  <p className="text-[11px] text-text-muted">When did this bag actually start, and at what weight? This is its real history, not today's — it establishes the bag's true current weight before today's re-bag/top-up happens as a separate step.</p>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Original date</label>
+                      <input type="date" value={onboardOriginalDate} max={todayStr} onChange={e => setOnboardOriginalDate(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Original weight (kg)</label>
+                      <input type="text" inputMode="decimal" value={onboardOriginalWeight} onChange={e => setOnboardOriginalWeight(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Weight changes since then (if known)</label>
+                    {onboardChanges.map(c => (
+                      <div key={c.id}>
+                        <div className="flex gap-2 items-center">
+                          <input type="date" value={c.date} max={todayStr} onChange={e => updateOnboardChange(c.id, 'date', e.target.value)}
+                            className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                          <input type="text" inputMode="decimal" placeholder="kg" value={c.weight} onChange={e => updateOnboardChange(c.id, 'weight', e.target.value)}
+                            className="w-24 px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                          <button onClick={() => removeOnboardChange(c.id)} className="text-stone-400 hover:text-err p-1"><X size={16} /></button>
+                        </div>
+                        {c.date && c.date < onboardOriginalDate && (
+                          <p className="text-[11px] text-err mt-0.5">Can't be before the original date.</p>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={addOnboardChange} className="text-[12px] font-medium text-violet-700">+ Add a weight change</button>
+                  </div>
+
+                  <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] flex items-center justify-between">
+                    <span className="text-text-muted">Current weight (as of today)</span>
+                    <span className="font-mono text-text tabular-nums">{onboardCurrentWeight.toFixed(1)} kg</span>
+                  </div>
+
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Notes (optional) — origin, condition, why it's only being tracked now</label>
                     <textarea value={onboardNotes} onChange={e => setOnboardNotes(e.target.value)} rows={2}
@@ -370,12 +466,12 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                   </div>
                   {onboardError && <p className="text-[12px] text-err">{onboardError}</p>}
                   <div className="flex gap-2">
-                    <button onClick={() => setPendingOnboard(null)} disabled={onboarding}
+                    <button onClick={() => { setPendingOnboard(null); setOnboardChanges([]); setOnboardOriginalDate(todayStr); setOnboardOriginalWeight('') }} disabled={onboarding}
                       className="py-3 px-4 rounded-xl border border-stone-200 text-text-muted text-[13px] font-medium">Back</button>
-                    <button onClick={onboardSource} disabled={onboarding}
+                    <button onClick={onboardSource} disabled={onboarding || !onboardValid}
                       className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                       {onboarding ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />}
-                      {onboarding ? 'Registering…' : 'Label & continue'}
+                      {onboarding ? 'Registering…' : 'Add to stock & label'}
                     </button>
                   </div>
                 </>
