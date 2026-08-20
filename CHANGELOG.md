@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Supervisor Hub: today's records first by default, Sort + Section filters on Sign-off)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`
+
+Requested: today's records should show first, and let the supervisor choose their own filters.
+
+- Default order flipped to newest-first — today's shift now shows at the top of "Waiting for your signature" instead of being buried under weeks of oldest-first backlog.
+- Added a **Sort** toggle (Newest first / Oldest first) — a supervisor working through a real backlog still wants oldest-first, so this is a viewer choice, not a fixed order.
+- Added a **Section** filter (All sections or one specific line), alongside the existing 7/30/all-time **Show** window from the prior pass.
+- A **Reset** link appears once any control has been moved away from the defaults (7 days / newest first / all sections).
+- Reopen requests and job-card approvals stay unfiltered by Sort/Section, same reasoning as the existing Show window: a pending decision doesn't get less relevant with age or by which line it's on.
+
 ## 2026-08-20 — Alyssa (Supervisor Hub: filterable 7/30/all-time window on Sign-off, softer age badges)
 
 **Files changed:** `app/(app)/supervisor/signoff/page.tsx`
