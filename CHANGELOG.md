@@ -2,6 +2,22 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Supervisor Hub: redesign Sign-off queue, fix archived orders leaking through reopen requests)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/orders/[id]/route.ts`, `components/supervisor/ReopenRequestsPanel.tsx`
+
+Reported: the Sign-off tab was "very messy" and kept surfacing production orders that had already been archived on Production Orders.
+
+Retiered the queue by how much it's actually the viewer's job, instead of stacking every queue as an equally loud colored box:
+1. **Waiting for your signature** — submitted capture records and shift reports needing this viewer's action, merged into one card with sub-grouped headings instead of two separate boxes.
+2. **Needs a decision** — reopen requests, pasteuriser job-card approvals (unchanged components, just repositioned).
+3. **Records still open from a finished shift** — demoted to a quiet, muted flag at the bottom: it isn't the viewer's signature to give, just a heads-up that someone else's record needs finishing or archiving.
+
+Root cause of the archived-orders leak: archiving a session (`action: 'delete'` on `/api/production/orders/[id]`) sets `prod_sessions.deleted_at` but never touched any pending `po_reopen_requests` row against that session — so a reopen request created before the archive kept showing up on the decision queue forever, pointing at a record gone from every other list.
+
+- Archiving a session now auto-declines any pending reopen request for it (`decision_note: 'Auto-declined — record archived'`).
+- `ReopenRequestsPanel` additionally joins `prod_sessions.deleted_at` and filters out any request whose session is already archived, defensively covering requests created before this fix shipped.
+
 ## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
 
 **Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
