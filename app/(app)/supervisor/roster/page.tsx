@@ -264,7 +264,10 @@ export default function SupervisorRoster() {
       const diff = diffEntries(baseline, entries)
       const wasPublished = isPublished
       const roleKeys = PRODUCTION_ROLES.map(r => r.key)
-      await db().from('roster_entries').delete().eq('period_id', per.id).in('role_key', roleKeys)
+      const { error: delErr } = await db().from('roster_entries').delete().eq('period_id', per.id).in('role_key', roleKeys)
+      // A failed delete followed by the insert below would duplicate every row
+      // instead of replacing it — stop before that insert runs.
+      if (delErr) throw delErr
       const toInsert = entries.map((e, i) => ({
         period_id: per.id, role_key: e.role_key, shift: e.shift,
         employee_id: e.employee_id, operator_id: e.operator_id, person_name: e.person_name, sort_order: i,
@@ -308,11 +311,15 @@ export default function SupervisorRoster() {
       // edit — that would erase the fact it was signed off. It becomes
       // changes_pending: still published, with a short list for the manager.
       const nextStatus: SectionStatus = wasPublished ? 'changes_pending' : 'draft'
-      await db().from('roster_section_status').upsert({
+      const { error: statusErr } = await db().from('roster_section_status').upsert({
         period_id: per.id, section: 'production', status: nextStatus,
         submitted_by: wasPublished ? (status?.submitted_by ?? null) : null,
         submitted_at: wasPublished ? (status?.submitted_at ?? null) : null,
       } as any, { onConflict: 'period_id,section' })
+      // The entries themselves are already safely written by this point — but
+      // don't claim "Saved" if the status row (what the Production Manager and
+      // this page's own badge read) didn't actually persist.
+      if (statusErr) throw statusErr
       setStatus(s => ({
         status: nextStatus,
         submitted_by: wasPublished ? (s?.submitted_by ?? null) : null,
@@ -336,10 +343,11 @@ export default function SupervisorRoster() {
       const per = await saveDraft({ silent: true })
       if (!per) { setSubmitting(false); return }
       const submitted_at = new Date().toISOString()
-      await db().from('roster_section_status').upsert({
+      const { error: statusErr } = await db().from('roster_section_status').upsert({
         period_id: per.id, section: 'production', status: 'submitted',
         submitted_by: user?.id ?? null, submitted_at,
       } as any, { onConflict: 'period_id,section' })
+      if (statusErr) throw statusErr
       setStatus({ status: 'submitted', submitted_by: user?.id ?? null, submitted_at })
       fetch('/api/production/roster/audit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -457,7 +465,11 @@ export default function SupervisorRoster() {
             </div>
           )}
 
-          {error && <p className="no-print text-[12px] text-err px-1">{error}</p>}
+          {error && (
+            <p className="no-print flex items-center gap-2 text-[12px] text-err px-4 py-3 bg-err/5 border border-err/20 rounded-xl">
+              <AlertTriangle size={13} className="shrink-0" /> Couldn’t save: {error}
+            </p>
+          )}
 
           {/* Print header (screen shows the HubHeader above instead) */}
           <div className="print-only mb-4">

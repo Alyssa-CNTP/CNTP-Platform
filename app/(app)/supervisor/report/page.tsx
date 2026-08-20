@@ -17,6 +17,7 @@ import {
   hoursLabel, sastTime, sastDateTime, STATUS_LABEL,
   type ShiftReport, type ShiftReportStatus,
 } from '@/lib/production/shift-report'
+import { Collapse } from '@/components/production/ui/kit'
 
 // Supervisor Hub → Shift Report.
 //
@@ -280,6 +281,18 @@ const Td = ({ children, mono, right, className = '' }: {
   </td>
 )
 
+// Only linkable when the name matched someone on the roster (see
+// lib/production/shift-report-builder.ts) — an unrostered swap has no
+// employee id to link to, so it stays plain text rather than a dead link.
+// Reads as plain text on paper either way; a disclosure link means nothing
+// on a printed page.
+const PersonName = ({ name, employeeId }: { name: string; employeeId: string | null }) =>
+  employeeId ? (
+    <Link href={`/production/staff/${employeeId}`} className="text-brand hover:underline print:text-text print:no-underline">
+      {name}
+    </Link>
+  ) : <>{name}</>
+
 // ── Report sections ──────────────────────────────────────────────────────────
 
 function ReportHeader({ report }: { report: ShiftReport }) {
@@ -342,12 +355,13 @@ function Attendance({ report }: { report: ShiftReport }) {
       {a.present.length === 0 && a.rostered.length === 0 ? (
         <Empty>No roster and no timesheets for this shift.</Empty>
       ) : (
+        <Collapse label="Present / absent detail" count={a.present.length} defaultOpen printOpen>
         <div className="space-y-4">
           {a.present.length > 0 && (
             <Table head={['Person', 'Line(s)', 'On', 'Off', 'Breaks', 'Worked', 'Timesheet']}>
               {a.present.map(pp => (
                 <tr key={pp.personName}>
-                  <Td>{pp.personName}</Td>
+                  <Td><PersonName name={pp.personName} employeeId={pp.employeeId} /></Td>
                   <Td mono>{pp.sectionIds.length ? pp.sectionIds.join(', ') : '—'}</Td>
                   <Td mono>{sastTime(pp.firstIn)}</Td>
                   <Td mono>{sastTime(pp.lastOut)}</Td>
@@ -372,7 +386,7 @@ function Attendance({ report }: { report: ShiftReport }) {
               <Table head={['Person', 'Role', 'Reason']}>
                 {a.absent.map(x => (
                   <tr key={x.personName}>
-                    <Td>{x.personName}</Td>
+                    <Td><PersonName name={x.personName} employeeId={x.employeeId} /></Td>
                     <Td>{x.roleName}</Td>
                     <Td>
                       {x.reason === 'leave'
@@ -393,7 +407,7 @@ function Attendance({ report }: { report: ShiftReport }) {
               <Table head={['Person', 'Line(s)', 'Worked']}>
                 {a.unrostered.map(x => (
                   <tr key={x.personName}>
-                    <Td>{x.personName}</Td>
+                    <Td><PersonName name={x.personName} employeeId={x.employeeId} /></Td>
                     <Td mono>{x.sectionIds.join(', ') || '—'}</Td>
                     <Td mono>{x.workedMinutes ? hoursLabel(x.workedMinutes) : '—'}</Td>
                   </tr>
@@ -405,6 +419,7 @@ function Attendance({ report }: { report: ShiftReport }) {
             </div>
           )}
         </div>
+        </Collapse>
       )}
     </Section>
   )
