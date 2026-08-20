@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Fix: Sieving Quality overview silently dropped freshly-saved in-process runs)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported as: saving an In-Process run on Coarse/Fine Leaf appeared to do nothing — no error, but the run never showed up in the overview table/chart below, as if it hadn't saved. It *was* saving correctly. Root cause: saved runs are stamped with a SAST-based date (`sastDateStr()`, `Africa/Johannesburg`), but the overview table/chart's default date-range (`rangeStart`/`rangeEnd`), its 3-month fetch floor (`threeMonthsAgoISO()`), and the date-picker's `maxDate` all used `isoDate(new Date())`, which reads the **device's local system timezone** instead. On any device not set to SAST, a freshly-saved run's SAST date could fall outside that default window and get silently filtered out of `rangeRuns`/`filteredRuns` — and the date-picker's `maxDate` being stuck on the device's "yesterday" meant the user couldn't even manually widen the range to find it. Fixed by using `sastDateStr()` consistently everywhere the default window/bounds are computed, so the table/chart's "today" always matches the "today" runs are actually saved under. Merged via [PR #752](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/752).
+
 ## 2026-08-20 — Alyssa (Fix: batch KPI route never read the batch key — Next.js 16 async `params`)
 
 **Files changed:** `app/api/production/batch/[key]/route.ts`
