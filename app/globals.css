@@ -413,6 +413,9 @@ select.input { cursor: pointer; }
   .print-only      { display: block !important; }
   /* Let the printout use the full page width, not the app's centred column */
   .print-full-width { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+  /* Force a section onto a fresh page (handover notes + timesheet on the
+     production-order report's later pages). */
+  .print-page-break { break-before: page; page-break-before: always; }
   /* The app shell is a fixed-height (h-screen), overflow-hidden layout with
      an internally-scrolling <main> — that's what actually caps every printout
      to a single page, regardless of how the printed content itself is laid

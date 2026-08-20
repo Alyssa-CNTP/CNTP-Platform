@@ -935,9 +935,12 @@ function CaptureScreen() {
         })
       } else {
         const sd = prod.data as SievingData
-        sd.spillage.forEach(r => {
+        // spillage[0] is the bucket-elevator carry-over; spillage[1..] are
+        // machine spillage — different inputs that must read as their own type
+        // on the production order, not both as "Bucket Elevator".
+        sd.spillage.forEach((r, idx) => {
           if (n(r.kg) === 0) return
-          rows.push({ session_id: sid, bag_no: bagNo++, product_type: 'Bucket Elevator', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
+          rows.push({ session_id: sid, bag_no: bagNo++, product_type: idx === 0 ? 'Bucket Elevator' : 'Machine Spillage', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
         })
         sd.debag.forEach(r => {
           if (n(r.nett) === 0) return

@@ -1,30 +1,35 @@
 'use client'
 
 // app/(app)/production/orders/[id]/page.tsx
-// Full production order detail — everything about one prod_sessions row in
-// one place: identifiers, mass balance, the full bag/debag list (not just
-// counts), both sign-offs with their actual signature images, comments and
-// reopen history. Built on components/production/ui/kit so it reads as the
-// same product as the Orders list, Supervisor Hub and Shift Report.
+// Full production ORDER = one whole production day (both shifts of a section on
+// one date, 07h00–01h00, rolled up). Everything about the day's activity in one
+// place: combined mass balance, inputs and outputs each grouped by type with
+// their own totals (the same at-a-glance shape as the capture Overview), the AI
+// machine-checks summary, and per-shift sign-offs. Reads output bags live from
+// the bag_tags ledger, so nothing captured on the floor is ever missing.
 //
-// Doubles as the printable record: app/globals.css already hides app chrome
-// (aside/header) under @media print, and this page renders everything
-// un-collapsed by default (no Collapse behind a click — "show everything"
-// was the actual ask), so Print produces the same full report you see here.
+// Doubles as the printable record: globals.css hides app chrome under @media
+// print and everything renders un-collapsed, so Print produces the full report.
 
 import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
-import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio } from 'lucide-react'
-import { loadOrderDetail, type OrderDetail, type OrderBagRow } from '@/lib/production/order-detail'
+import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
+import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
+import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
 
-// bagging_time is a timestamptz (the bag's real creation instant) — show it as
-// SAST wall-clock time. Falls back to em-dash for bags with no recorded time.
 const fmtBagTime = (ts: string | null) =>
   ts ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(ts)) : '—'
-import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
+
+const fmtHrs = (min: number | null) => {
+  if (min == null) return '—'
+  const h = Math.floor(min / 60), m = Math.round(min % 60)
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`
+}
+
+const SHIFT_LABEL: Record<string, string> = { morning: 'Morning', afternoon: 'Afternoon', night: 'Night' }
 
 const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 'info'; icon: any }> = {
   draft:     { label: 'In progress',       tone: 'warn', icon: Pen },
@@ -35,39 +40,56 @@ const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 
 
 const num = (v: number | null | undefined) => v ?? 0
 
+// A debag row's material as it should READ on the order: the farm's 500kg bag
+// is a "Bulk Bag"; Bucket Elevator / Machine Spillage carry their own type.
+function inputType(d: OrderDebagRow): string {
+  const pt = (d.product_type || '').trim()
+  if (!pt || /500\s*kg\s*farm\s*bag/i.test(pt)) return 'Bulk Bag'
+  return pt
+}
+
 export default function ProductionOrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const [detail, setDetail] = useState<OrderDetail | null>(null)
+  const [day, setDay] = useState<OrderDay | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [live, setLive] = useState(false)
 
-  // Live, independent read: this page reloads straight from the database
-  // (bag_tags is the source of truth for output bags — see order-detail.ts),
-  // and re-fetches whenever a bag / bagging row / the session itself changes
-  // for this order, so a bag captured on the floor appears here within a tick
-  // without anyone opening the capture page or refreshing. Realtime is a live
-  // convenience on top of a correct read — a 20s poll backstops it so the
-  // record stays current even if the socket drops.
   const loadedOnceRef = useRef(false)
+  const idsRef = useRef<Set<string>>(new Set())
+  const scopeRef = useRef<{ section_id: string; date: string } | null>(null)
+
+  // Live, independent read straight from the database. Reloads whenever a bag /
+  // bagging / mass-balance / signature row changes for ANY of the day's shift
+  // sessions, or a NEW shift session for this (section, date) is inserted — so a
+  // bag captured on the floor (or the afternoon shift opening) appears here
+  // within a tick without anyone opening the capture page. A 20s poll backstops
+  // the socket.
   useEffect(() => {
     let alive = true
     const reload = () =>
-      loadOrderDetail(id)
-        .then(d => { if (alive) { setDetail(d); loadedOnceRef.current = true; setLoading(false) } })
-        // Only surface an error on the FIRST load — a transient failure on a
-        // later realtime/poll refresh must not blank out the record already
-        // on screen.
+      loadOrderDay(id)
+        .then(d => {
+          if (!alive) return
+          setDay(d); loadedOnceRef.current = true; setLoading(false)
+          if (d) { idsRef.current = new Set(d.shifts.map(s => s.session.id)); scopeRef.current = { section_id: d.section_id, date: d.date } }
+        })
         .catch(() => { if (alive && !loadedOnceRef.current) { setError('Could not load this production order'); setLoading(false) } })
     reload()
 
     const db = getDb()
-    const bump = () => { reload() }
-    const channel = db.channel(`order-detail-${id}`)
-      .on('postgres_changes', { event: '*', schema: 'production', table: 'bag_tags',    filter: `session_id=eq.${id}` }, bump)
-      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_bagging', filter: `session_id=eq.${id}` }, bump)
-      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_sessions', filter: `id=eq.${id}` }, bump)
+    const inScopeSession = (p: any) => idsRef.current.has(p?.new?.session_id ?? p?.old?.session_id)
+    const inScopeDay = (p: any) => {
+      const r = p?.new ?? p?.old
+      return !!r && scopeRef.current?.section_id === r.section_id && scopeRef.current?.date === r.date
+    }
+    const channel = db.channel(`order-day-${id}`)
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'bag_tags' },          (p: any) => { if (inScopeSession(p)) reload() })
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_bagging' },       (p: any) => { if (inScopeSession(p)) reload() })
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_mass_balance' },  (p: any) => { if (inScopeSession(p)) reload() })
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'session_signatures' }, (p: any) => { if (inScopeSession(p)) reload() })
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_sessions' },      (p: any) => { if (inScopeSession(p) || inScopeDay(p)) reload() })
       .subscribe((s: string) => { if (alive) setLive(s === 'SUBSCRIBED') })
     const poll = setInterval(reload, 20_000)
 
@@ -76,15 +98,34 @@ export default function ProductionOrderDetailPage() {
   }, [id])
 
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
-  if (error || !detail) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
+  if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { session: s, massBalance: mb, bags, bagsOutputKg, debags, signatures, reopenRequests } = detail
-  const meta = sectionMeta(s.section_id)
-  const st = STATUS[s.status] ?? STATUS.new
-  const opSig  = signatures.find(x => x.signer_role === 'operator')
-  const supSig = signatures.find(x => x.signer_role === 'supervisor')
-  const totalOutput = mb ? num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg) : 0
-  const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / mb.total_input_kg) * 1000) / 10 : null
+  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, debags, massBalance: mb, timesheets, takeovers } = day
+  const meta = sectionMeta(section_id)
+  const st = STATUS[status] ?? STATUS.new
+  const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
+  const variant = shifts.map(s => s.session.variant).find(Boolean) ?? null
+  const supervisor = shifts.map(s => s.session.sup_name_signoff || s.session.supervisor_name).find(Boolean) ?? null
+  const submittedAt = shifts.map(s => s.session.submitted_at).filter(Boolean).sort().slice(-1)[0] ?? null
+  const variantGrade = [variant, grade ? `Grade ${grade}` : null].filter(Boolean).join(' · ') || '—'
+  const poText = poItems.length
+    ? poItems.map(p => p.description ? `${p.code} — ${p.description}` : p.code).join('; ')
+    : '—'
+
+  // The bucket elevator is WIP that carries across the day: the afternoon/night
+  // shift LEAVES it in the tower for tomorrow, so it's an OUTPUT (carry-over),
+  // not a bagged product and not an input. It's captured as a debag row, so
+  // pull it out of the inputs and state it on the output side — that 's exactly
+  // the gap between the bagged-bag total and the mass-balance output total.
+  const isBucketCarryOut = (d: OrderDebagRow) =>
+    /bucket elevator/i.test(d.product_type || '') && (d.shift === 'afternoon' || d.shift === 'night')
+  const inputRows = debags.filter(d => !isBucketCarryOut(d))
+  const bucketCarryOverKg = debags.filter(isBucketCarryOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
+  // Total output = physical bagged product (the reliable ledger) + the bucket
+  // elevator carried over. Derived from the ledger, so it always agrees with
+  // the Bagging section below instead of the race-prone mass-balance snapshot.
+  const totalOutput = bagsOutputKg + bucketCarryOverKg
+  const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / num(mb.total_input_kg)) * 1000) / 10 : null
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -105,151 +146,214 @@ export default function ProductionOrderDetailPage() {
         </div>
       </div>
 
-      {/* Header */}
+      {/* Day header */}
       <Panel>
-        <PanelHead title={`${meta.name} — Production Order`} meta={s.record_no ?? undefined}
+        <PanelHead title={`${meta.name} — Production Order`}
+          meta={`${format(new Date(date), 'd MMM yyyy')} · ${shifts.map(s => SHIFT_LABEL[s.session.shift] ?? s.session.shift).join(' + ')}`}
           action={<Pill tone={st.tone}><st.icon size={11} /> {st.label}</Pill>} />
         <PanelBody>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Field label="Date" value={format(new Date(s.date), 'd MMM yyyy')} />
-            <Field label="Shift" value={s.shift} />
-            <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />
-            <Field label="Supervisor" value={s.supervisor_name || s.sup_name_signoff || '—'} />
-            <Field label="Lot number" value={s.lot_number || '—'} />
-            <Field label="Variant" value={s.variant || '—'} />
-            <Field label="Production orders" value={s.production_orders?.join(', ') || '—'} />
-            <Field label="Submitted" value={s.submitted_at ? format(new Date(s.submitted_at), 'd MMM HH:mm') : '—'} />
+            <Field label="Date" value={format(new Date(date), 'd MMM yyyy')} bold />
+            <Field label="Shift" value={shifts.map(s => SHIFT_LABEL[s.session.shift] ?? s.session.shift).join(' + ')} bold />
+            <Field label="Variant & grade" value={variantGrade} strong />
+            <Field label="Operators" value={operators.join(', ') || '—'} bold />
+            <Field label="Supervisor" value={supervisor || '—'} bold />
+            <Field label="Submitted" value={submittedAt ? format(new Date(submittedAt), 'd MMM HH:mm') : '—'} bold />
+            <Field label="Production order" value={poText} bold className="col-span-2 sm:col-span-4" />
           </div>
         </PanelBody>
       </Panel>
 
-      {/* Mass balance */}
+      {/* Whole-run mass balance */}
       {mb && (
         <Panel>
-          <PanelHead title="Mass balance" />
+          <PanelHead title="Mass balance — full run (07h00–01h00)" />
           <PanelBody>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <Field label="Total input"  value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
+              <Field label="Bagged output" value={`${bagsOutputKg.toFixed(1)} kg`} />
+              {bucketCarryOverKg > 0 && <Field label="Bucket elevator (carried over)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
               <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />
-              <Field label="Balance"      value={`${num(mb.balance_kg).toFixed(1)} kg`} />
+              <Field label="Balance"      value={`${(num(mb.total_input_kg) - totalOutput).toFixed(1)} kg`} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
-              <Field label="Output A"     value={`${num(mb.total_output_a_kg).toFixed(1)} kg`} />
-              <Field label="Output B"     value={`${num(mb.total_output_b_kg).toFixed(1)} kg`} />
-              <Field label="Output C"     value={`${num(mb.total_output_c_kg).toFixed(1)} kg`} />
-              <Field label="Output D"     value={`${num(mb.total_output_d_kg).toFixed(1)} kg`} />
-              <Field label="Water"            value={mb.water_kg != null ? `${num(mb.water_kg).toFixed(1)} kg` : '—'} />
-              <Field label="Dust extraction"  value={mb.dust_extraction_kg != null ? `${num(mb.dust_extraction_kg).toFixed(1)} kg` : '—'} />
-              <Field label="Floor waste"      value={mb.floor_waste_kg != null ? `${num(mb.floor_waste_kg).toFixed(1)} kg` : '—'} />
-              <Field label="Tolerance"        value={mb.tolerance_kg != null ? `±${num(mb.tolerance_kg).toFixed(1)} kg` : '—'} />
             </div>
           </PanelBody>
         </Panel>
       )}
 
-      {/* Debagging (inputs) */}
+      {/* Debagging (inputs) — grouped by type with per-type totals */}
       <Panel>
-        <PanelHead title="Debagging — input bags" meta={String(debags.length)} />
+        <PanelHead title="Debagging — inputs" meta={`${inputRows.length} row${inputRows.length === 1 ? '' : 's'}`} />
         <PanelBody>
-          {debags.length === 0 ? <Empty>No input bags recorded.</Empty> : (
-            <Table head={['Bag #', 'Serial', 'Lot', 'Product', 'Variant', 'kg Gross', 'kg Nett', 'Delivery', 'Type', 'Org/Conv', 'Spillage', 'Notes']} align={[5, 6]}>
-              {debags.map(d => (
-                <Tr key={d.id}>
-                  <Td mono>{d.bag_no}</Td>
-                  <Td mono>{d.bag_serial_no || '—'}</Td>
-                  <Td>{d.lot_number || '—'}</Td>
-                  <Td>{d.product_type || '—'}</Td>
-                  <Td>{d.variant || '—'}</Td>
-                  <Td right mono>{d.kg_gross != null ? d.kg_gross.toFixed(1) : '—'}</Td>
-                  <Td right mono>{d.kg_nett.toFixed(1)}</Td>
-                  <Td>{d.delivery_date || '—'}</Td>
-                  <Td>{d.local_or_export || '—'}</Td>
-                  <Td>{d.org_or_conv || '—'}</Td>
-                  <Td tone={d.is_spillage ? 'warn' : undefined}>{d.is_spillage ? 'Yes' : 'No'}</Td>
-                  <Td>{d.notes || '—'}</Td>
-                </Tr>
+          {inputRows.length === 0 ? <Empty>No inputs recorded.</Empty> : (
+            <div className="space-y-4">
+              {groupBy(inputRows, inputType).map(g => (
+                <InputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
-            </Table>
+            </div>
           )}
         </PanelBody>
       </Panel>
 
-      {/* Bagging (outputs) — grouped by product type, each type counted on its
-          own ("14 bags of Fine Leaf"), read live from the bag_tags ledger so
-          nothing the floor bagged is ever missing here. */}
+      {/* Bagging (outputs) — grouped by product type with per-type totals */}
       <Panel>
-        <PanelHead title="Bagging — output bags"
+        <PanelHead title="Bagging — outputs"
           meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
         <PanelBody>
-          {bags.length === 0 ? <Empty>No output bags recorded.</Empty> : (
+          {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">
-              {groupByType(bags).map(g => (
-                <BagTypeGroup key={g.type} type={g.type} rows={g.rows} />
+              {groupBy(bags, b => b.product_type || 'Other').map(g => (
+                <OutputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
+              {bucketCarryOverKg > 0 && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
+                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged)</span></span>
+                  <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
+                </div>
+              )}
+              {bucketCarryOverKg > 0 && (
+                <div className="flex items-center justify-between gap-2 px-3 pt-1 text-[13px] font-semibold border-t border-surface-rule/60">
+                  <span className="text-text pt-2">Total output</span>
+                  <span className="font-mono text-text tabular-nums pt-2">{bags.length} bags bagged + {bucketCarryOverKg.toFixed(0)} kg carry-over = {totalOutput.toFixed(1)} kg</span>
+                </div>
+              )}
             </div>
           )}
         </PanelBody>
       </Panel>
 
-      {/* Sign-off */}
-      <Panel>
-        <PanelHead title="Sign-off" />
-        <PanelBody>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <SignoffBlock label="Operator"   name={s.op_name_signoff}  signedAt={s.op_signed_at}  image={opSig?.signature_b64} />
-            <SignoffBlock label="Supervisor" name={s.sup_name_signoff} signedAt={s.sup_signed_at} image={supSig?.signature_b64} />
-          </div>
-        </PanelBody>
-      </Panel>
+      {/* Per-shift: AI check summary + sign-off */}
+      {shifts.map(block => (
+        <ShiftBlock key={block.session.id} block={block} />
+      ))}
 
-      {/* Comments */}
-      {s.comments && (
-        <Panel>
-          <PanelHead title="Comments" />
-          <PanelBody><p className="text-[12.5px] text-text whitespace-pre-wrap">{s.comments}</p></PanelBody>
-        </Panel>
+      {/* ── Later pages: handover notes + timesheet ── */}
+      {(shifts.some(s => s.session.comments) || takeovers.length > 0) && (
+        <div className="print-page-break">
+          <Panel>
+            <PanelHead title="Handover & operator notes" />
+            <PanelBody>
+              <div className="space-y-3">
+                {takeovers.map((t, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[12.5px] text-text">
+                    <ArrowRightLeft size={14} className="text-text-faint shrink-0 mt-0.5" />
+                    <span>
+                      <span className="capitalize">{t.from_shift}</span> → <span className="capitalize">{t.to_shift}</span> handed over to <span className="font-medium">{t.operator_name}</span>
+                      {!t.rostered && <span className="text-warn"> (not rostered)</span>}
+                      <span className="text-text-faint"> · {format(new Date(t.taken_over_at), 'd MMM HH:mm')}</span>
+                    </span>
+                  </div>
+                ))}
+                {shifts.filter(s => s.session.comments).map(s => (
+                  <div key={s.session.id} className="flex items-start gap-2">
+                    <MessageSquare size={14} className="text-text-faint shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-text-faint">{SHIFT_LABEL[s.session.shift] ?? s.session.shift}</span>
+                      <p className="text-[12.5px] text-text whitespace-pre-wrap leading-relaxed">{s.session.comments}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </PanelBody>
+          </Panel>
+        </div>
       )}
 
-      {/* Reopen history */}
-      {reopenRequests.length > 0 && (
-        <Panel>
-          <PanelHead title="Reopen history" meta={String(reopenRequests.length)} />
-          <PanelBody>
-            <Table head={['Requested by', 'Reason', 'Status', 'Decided by', 'Decision note', 'Decided at']} align={[]}>
-              {reopenRequests.map(r => (
-                <Tr key={r.id}>
-                  <Td>{r.requested_by_name || '—'}</Td>
-                  <Td>{r.reason}</Td>
-                  <Td><Pill tone={r.status === 'approved' ? 'ok' : r.status === 'rejected' ? 'err' : 'warn'}>{r.status}</Pill></Td>
-                  <Td>{r.decided_by_name || '—'}</Td>
-                  <Td>{r.decision_note || '—'}</Td>
-                  <Td>{r.decided_at ? format(new Date(r.decided_at), 'd MMM HH:mm') : '—'}</Td>
-                </Tr>
-              ))}
-            </Table>
-          </PanelBody>
-        </Panel>
+      {timesheets.length > 0 && (
+        <div className="print-page-break">
+          <Panel>
+            <PanelHead title="Timesheet — hours worked" meta={`${timesheets.length} operator${timesheets.length === 1 ? '' : 's'}`} />
+            <PanelBody>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[520px]">
+                  <thead>
+                    <tr>
+                      {['Operator', 'Shift', 'Start', 'End', 'Breaks', 'Worked', ''].map((h, i) => (
+                        <th key={i} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${h === 'Worked' ? 'text-right' : ''}`}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule/60">
+                    {timesheets.map((t, i) => {
+                      const brk = (t.breaks ?? []).reduce((m, b) => {
+                        if (b.start && b.end) return m + Math.max(0, (Date.parse(b.end) - Date.parse(b.start)) / 60000)
+                        return m
+                      }, 0)
+                      return (
+                        <tr key={i}>
+                          <td className="px-3 py-1.5 text-[12.5px] text-text">{t.operator_name}</td>
+                          <td className="px-3 py-1.5 text-[11px] text-text-muted capitalize">{t.shift}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted">{fmtBagTime(t.shift_start)}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted">{fmtBagTime(t.shift_end)}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint">{brk > 0 ? fmtHrs(brk) : '—'}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12.5px] text-text text-right tabular-nums">{fmtHrs(t.worked_minutes)}</td>
+                          <td className="px-3 py-1.5">{t.confirmed ? <CheckCircle2 size={13} className="text-ok" /> : <span className="text-[10px] text-text-faint">unconfirmed</span>}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </PanelBody>
+          </Panel>
+        </div>
       )}
     </div>
   )
 }
 
-// Group the merged bag list by product type, preserving first-seen order, so
-// each output type reads as its own tally ("14 bags of Fine Leaf · 4,200 kg")
-// — the same per-type mental model as the capture screen.
-function groupByType(bags: OrderBagRow[]): { type: string; rows: OrderBagRow[] }[] {
+// ── grouping helper: preserve first-seen order, one entry per type ────────────
+function groupBy<T>(rows: T[], key: (r: T) => string): { type: string; rows: T[] }[] {
   const order: string[] = []
-  const map = new Map<string, OrderBagRow[]>()
-  for (const b of bags) {
-    const t = b.product_type || 'Other'
+  const map = new Map<string, T[]>()
+  for (const r of rows) {
+    const t = key(r)
     if (!map.has(t)) { map.set(t, []); order.push(t) }
-    map.get(t)!.push(b)
+    map.get(t)!.push(r)
   }
   return order.map(type => ({ type, rows: map.get(type)! }))
 }
 
-// One product type's bags. Compact per-bag lines (not a wide table) so it stays
-// readable on a phone — the whole reason the flat 7-column table was cramped.
-function BagTypeGroup({ type, rows }: { type: string; rows: OrderBagRow[] }) {
+// One input type's rows. Columns per the agreed layout: farm bag number (from
+// notes), lot, and nett kg — no gross, no delivery date, no org/conv (variant
+// is stated on the order). Compact list, mobile-friendly, with a per-type total.
+function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderDebagRow[]; multiShift: boolean }) {
+  const kg = rows.reduce((s, r) => s + (Number(r.kg_nett) || 0), 0)
+  return (
+    <div className="rounded-xl border border-surface-rule overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
+        <span className="text-[12.5px] font-semibold text-text">{type}</span>
+        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {rows.length} · {kg.toFixed(1)} kg
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse min-w-[380px]">
+          <thead>
+            <tr>
+              {['Farm bag', 'Lot', multiShift ? 'Shift' : null, 'kg'].filter(Boolean).map(h => (
+                <th key={h as string} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${h === 'kg' ? 'text-right' : ''}`}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-surface-rule/60">
+            {rows.map(d => (
+              <tr key={d.id}>
+                <td className="px-3 py-1.5 font-mono text-[12px] text-text">{d.notes || d.bag_serial_no || '—'}</td>
+                <td className="px-3 py-1.5 text-[12px] text-text-muted">{d.lot_number || '—'}</td>
+                {multiShift && <td className="px-3 py-1.5 text-[11px] text-text-faint capitalize">{d.shift}</td>}
+                <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{Number(d.kg_nett).toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// One output product type's bags — compact per-bag lines with a per-type total.
+function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderBagRow[]; multiShift: boolean }) {
   const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
@@ -264,6 +368,7 @@ function BagTypeGroup({ type, rows }: { type: string; rows: OrderBagRow[] }) {
           <li key={b.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
             <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
             <span className="font-mono text-text flex-1 min-w-0 truncate">{b.bag_serial_no || '—'}</span>
+            {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{b.shift}</span>}
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
             <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(b.bagging_time)}</span>
@@ -274,11 +379,49 @@ function BagTypeGroup({ type, rows }: { type: string; rows: OrderBagRow[] }) {
   )
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+// One shift's block: its AI machine-checks summary, its own mass balance, and
+// its sign-off.
+function ShiftBlock({ block }: { block: OrderShiftBlock }) {
+  const { session: s, massBalance: mb, signatures, aiSummary } = block
+  const opSig  = signatures.find(x => x.signer_role === 'operator')
+  const supSig = signatures.find(x => x.signer_role === 'supervisor')
+  const label = SHIFT_LABEL[s.shift] ?? s.shift
   return (
-    <div className="min-w-0">
+    <Panel>
+      <PanelHead title={`${label} shift`} meta={s.record_no ?? undefined}
+        action={<span className="font-mono text-[10.5px] text-text-faint">{block.bagCount} bags · {block.bagsOutputKg.toFixed(1)} kg</span>} />
+      <PanelBody>
+        <div className="space-y-4">
+          {aiSummary && (
+            <div className="rounded-xl border border-ok/30 bg-ok/5 px-3 py-2.5">
+              <div className="flex items-center gap-1.5 mb-1 text-[10px] font-semibold text-ok uppercase tracking-[0.06em]"><Sparkles size={12} /> Checks summary</div>
+              <p className="text-[12.5px] text-text leading-relaxed">{aiSummary}</p>
+            </div>
+          )}
+          {mb && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <Field label="Input"   value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
+              <Field label="Output"  value={`${(num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg)).toFixed(1)} kg`} />
+              <Field label="Balance" value={`${num(mb.balance_kg).toFixed(1)} kg`} />
+              <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <SignoffBlock label="Operator"   name={s.op_name_signoff}  signedAt={s.op_signed_at}  image={opSig?.signature_b64} />
+            <SignoffBlock label="Supervisor" name={s.sup_name_signoff} signedAt={s.sup_signed_at} image={supSig?.signature_b64} />
+          </div>
+          {s.comments && <p className="text-[12.5px] text-text whitespace-pre-wrap border-t border-surface-rule/60 pt-3">{s.comments}</p>}
+        </div>
+      </PanelBody>
+    </Panel>
+  )
+}
+
+function Field({ label, value, bold, strong, className }: { label: string; value: string; bold?: boolean; strong?: boolean; className?: string }) {
+  return (
+    <div className={`min-w-0 ${className ?? ''}`}>
       <div className="font-mono text-[9px] uppercase tracking-[0.06em] text-text-faint">{label}</div>
-      <div className="text-[12.5px] text-text mt-0.5 truncate">{value}</div>
+      <div className={`mt-0.5 ${strong ? 'text-[13.5px] font-bold text-text' : bold ? 'text-[12.5px] font-semibold text-text' : 'text-[12.5px] text-text'} ${className?.includes('col-span') ? '' : 'truncate'}`}>{value}</div>
     </div>
   )
 }

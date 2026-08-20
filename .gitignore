@@ -54,3 +54,6 @@ scripts/data/
 
 # ad-hoc session scratch files (temp working data, not app code)
 .scratch_*
+
+# Ephemeral agent git-worktrees (should never be committed)
+.claude/worktrees/
