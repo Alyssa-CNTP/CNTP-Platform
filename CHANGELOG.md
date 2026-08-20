@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Gustav (Lab Results upload: drop the free-tier Gemini throttle now we're on a paid key)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Follow-up to the "Gemini overloaded" fix below, after confirming the Gemini key is a **paid** one. The upload queue's pacing gap was `4500ms`, explicitly sized for the **free** tier's 15 requests/minute (`// Prevents Gemini 429s on the free tier (15 RPM)`). Because `enqueueGemini()` is strictly serial, that capped the whole endpoint at ~13 requests/minute regardless of what the key is entitled to — so a 10-PDF batch upload burned ~45s sitting in the gap before any extraction time. That ceiling is now the binding constraint on nothing but our own code.
+
+- Gap default is now `500ms` (~120 req/min) — still far below any paid-tier limit, but no longer the bottleneck on a batch upload.
+- Overridable via a new **`GEMINI_MIN_GAP_MS`** env var, so the tier can change without a code change. Set it back to `4500` if the key ever reverts to free tier.
+- Parsed defensively: unset, blank, malformed or negative values fall back to 500. (`Number('')` is `0`, which would have silently removed the pacing entirely — an explicit `0` is still honoured if someone sets it deliberately.) Verified across `undefined`/`''`/`'   '`/`'abc'`/`'0'`/`'250'`/`'-1'`/`' 300 '`/`'1e3'`.
+- Safe in combination with the retry ladder below: a 429 from too-aggressive pacing now backs off and honours `Retry-After` rather than failing the upload.
+- **Not changed:** `lib/axis/categorize.ts` has the same 4500ms constant, but it's a scheduled background job whose comment states the intent is to stop concurrent triggers bursting the API, and its speed doesn't affect anyone waiting on a screen. Left alone deliberately.
+
 ## 2026-08-20 — Gustav (Lab Results upload: stop spurious "Gemini is temporarily overloaded" failures)
 
 **Files changed:** `app/api/upload/route.ts`
