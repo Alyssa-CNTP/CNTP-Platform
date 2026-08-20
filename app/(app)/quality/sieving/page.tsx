@@ -206,7 +206,7 @@ function sastDateStr(iso: string): string {
 function threeMonthsAgoISO(): string {
   const d = new Date()
   d.setMonth(d.getMonth() - 3)
-  return isoDate(d)
+  return sastDateStr(d.toISOString())
 }
 // qms.sd_runs (and SIEVING_SPECS_DB / SD_VARIANTS) now spell variant out in
 // full — 'Conventional', 'Organic', 'RA-Conventional', 'RA-Organic',
@@ -1042,8 +1042,8 @@ export default function SievingPage() {
   // so the two always show the same slice of history. Defaults to the last 7
   // days rather than just "today" — a single day is often empty for a given
   // product and left both the chart and table blank on load.
-  const [rangeStart, setRangeStart] = useState(() => { const d = new Date(); d.setDate(d.getDate()-6); return isoDate(d) })
-  const [rangeEnd,   setRangeEnd]   = useState(() => isoDate(new Date()))
+  const [rangeStart, setRangeStart] = useState(() => { const d = new Date(); d.setDate(d.getDate()-6); return sastDateStr(d.toISOString()) })
+  const [rangeEnd,   setRangeEnd]   = useState(() => sastDateStr(new Date().toISOString()))
   const [searchText,     setSearchText]     = useState('')
   const [sdSort,         setSdSort]         = useState<{key:string;dir:'asc'|'desc'}>({ key:'date', dir:'desc' })
   const [editRunId,      setEditRunId]      = useState<any>(null)
@@ -2290,7 +2290,7 @@ export default function SievingPage() {
           body already shows "no data for this range" internally. */}
       {showOutlierChart && (
         <SievingOutlierChart runs={rangeRuns} activeProduct={activeProduct} specDef={specDef} activeSpecs={activeSpecs}
-          rangeStart={rangeStart} rangeEnd={rangeEnd} minDate={threeMonthsAgoISO()} maxDate={isoDate(new Date())}
+          rangeStart={rangeStart} rangeEnd={rangeEnd} minDate={threeMonthsAgoISO()} maxDate={sastDateStr(new Date().toISOString())}
           onRangeChange={(s,e)=>{setRangeStart(s);setRangeEnd(e)}}
           onPointClick={(runId)=>{
             setChartHighlightId(runId)
