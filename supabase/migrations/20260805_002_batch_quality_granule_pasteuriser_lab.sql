@@ -32,7 +32,20 @@
 -- this migration only adds read-only SELECTs against them from a new view
 -- layer in the production schema, exactly like 20260721_003 already does for
 -- qms.sd_runs and qms.quality_records.
+--
+-- 2026-08-20 correction: this migration was never actually applied (the
+-- manual-run step below got missed — see CHANGELOG). A first attempt to run
+-- it as-written fails with "42P16: cannot change name of view column
+-- has_quality to granule_moisture_latest" — Postgres only allows CREATE OR
+-- REPLACE VIEW to APPEND trailing columns, and the v_batch_360 SELECT below
+-- inserts the new granule/pasteuriser/lab columns BEFORE has_quality, which
+-- shifts its position. Fixed by dropping v_batch_360 first (nothing else in
+-- the schema depends on it) so it's a fresh CREATE rather than a REPLACE.
+-- v_batch_quality itself only appends columns after the existing ones, so
+-- its REPLACE was never the problem and is left as-is.
 -- ============================================================
+
+BEGIN;
 
 CREATE OR REPLACE VIEW production.v_batch_quality AS
 WITH sd AS (
@@ -135,7 +148,9 @@ LEFT JOIN past    ON past.batch_key    = b.batch_key
 LEFT JOIN lab     ON lab.batch_key     = b.batch_key;
 
 
-CREATE OR REPLACE VIEW production.v_batch_360 AS
+DROP VIEW IF EXISTS production.v_batch_360;
+
+CREATE VIEW production.v_batch_360 AS
 WITH prod AS (
   SELECT
     batch_id,
@@ -191,6 +206,12 @@ LEFT JOIN production.v_batch_quality q ON q.batch_id = b.id;
 
 
 -- Grants unchanged (views already granted by 20260721_003); re-stated in case
--- this runs standalone on an environment where that grant was missed.
+-- this runs standalone on an environment where that grant was missed. The
+-- DROP above does NOT drop these grants' record — GRANT is a privilege on
+-- the object, re-issuing it after CREATE is what actually re-applies it.
 GRANT SELECT ON production.v_batch_quality TO authenticated, service_role;
 GRANT SELECT ON production.v_batch_360     TO authenticated, service_role;
+
+COMMIT;
+
+NOTIFY pgrst, 'reload schema';
