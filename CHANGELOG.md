@@ -2,6 +2,44 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Supervisor Hub: redesign Sign-off queue, fix archived orders leaking through reopen requests)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/orders/[id]/route.ts`, `components/supervisor/ReopenRequestsPanel.tsx`
+
+Reported: the Sign-off tab was "very messy" and kept surfacing production orders that had already been archived on Production Orders.
+
+Retiered the queue by how much it's actually the viewer's job, instead of stacking every queue as an equally loud colored box:
+1. **Waiting for your signature** — submitted capture records and shift reports needing this viewer's action, merged into one card with sub-grouped headings instead of two separate boxes.
+2. **Needs a decision** — reopen requests, pasteuriser job-card approvals (unchanged components, just repositioned).
+3. **Records still open from a finished shift** — demoted to a quiet, muted flag at the bottom: it isn't the viewer's signature to give, just a heads-up that someone else's record needs finishing or archiving.
+
+Root cause of the archived-orders leak: archiving a session (`action: 'delete'` on `/api/production/orders/[id]`) sets `prod_sessions.deleted_at` but never touched any pending `po_reopen_requests` row against that session — so a reopen request created before the archive kept showing up on the decision queue forever, pointing at a record gone from every other list.
+
+- Archiving a session now auto-declines any pending reopen request for it (`decision_note: 'Auto-declined — record archived'`).
+- `ReopenRequestsPanel` additionally joins `prod_sessions.deleted_at` and filters out any request whose session is already archived, defensively covering requests created before this fix shipped.
+
+## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
+
+**Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
+
+Requested: raw-material leaf shade (from `qms.leaf_shade_predictions`, graded at intake) and the QC's own leaf shade at Sieving can legitimately differ for the same lot — the sieve run is the final truth, the raw-material figure is only a suggestion. Until now that suggestion was written straight into `sd_runs.leaf_shade` as the pre-filled value, so a saved run couldn't tell "the QC typed this" apart from "the QC left the suggestion unchanged" — losing the comparison the moment it was saved. Also flagged: a lot of raw material intake has no shade prediction on record yet, so the suggestion is often simply absent — expected, not a bug.
+
+- New nullable `qms.sd_runs.raw_material_leaf_shade` column, independent of `leaf_shade`.
+- Every place the raw-material shade gets suggested into the form (`lookupLot()` on typing a lot number, and `applyBagToForm()` on "Sample now") now also stamps this new column on save — capturing the suggestion whether or not the QC changed it, and even on In-Process runs where Leaf Shade has no visible input at all (Fine Leaf/Coarse Leaf).
+- `leaf_shade` keeps meaning exactly what it always has: the QC's own final entry. Nothing about validation or the save flow changed.
+- The edit-run save path is untouched, so editing a run never overwrites the raw-material snapshot captured at creation.
+
+## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: clicking "Sample now →" on a pending Fine Leaf/Coarse Leaf bag card (e.g. STFL-190826-004) alerted "was already sampled — nothing to do", even though the runs table showed no Final QC for that serial and the DB confirmed the bag was genuinely still pending (`qms.v_pending_bag_qc` had it, `qc_done: false`).
+
+Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the clicked card's `bagging_id` only. `production.prod_bagging` is a mirror row rewritten by `persist()` on every save (see migration `20260813_007`'s comment), so its `id` — our `bagging_id` — is not guaranteed to stay the same between when a card renders and when it's clicked. If the bag's mirror row got rewritten in between, the old id no longer matched anything in the fresh list, and the code treated "not found by that id" as "already sampled" instead of checking the bag's permanent serial number.
+
+- `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
+- Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
+
 ## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
