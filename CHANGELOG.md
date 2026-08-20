@@ -2,6 +2,21 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Local warm standby: run production off the local server when the VPS is down)
+
+**Files changed:** `docs/ops/local-standby.md` (new), `scripts/local-standby.sh` (new)
+
+Docs + tooling only; nothing in the app changes.
+
+The VPS runs **both** apps (`154.65.97.200` — production on :3001, staging on :3000), so it is a single point of failure for the whole platform. The databases are not on it: production data is the Supabase cloud project `sxzjjcyuzyfneesnsjna`. That makes a standby unusually cheap — the local server only has to run the app and be reachable, with no replication and no split-brain, because both hosts write to the same Supabase project (so there is also no merge step on failback).
+
+- **Scope, stated honestly in the runbook:** covers the VPS being dead / rebuilt / crash-looping after a bad deploy. Does **not** cover the factory internet being down (the app still has to reach Supabase) or Supabase itself being down. "The floor keeps capturing with no internet" is a separate, much larger project — local Postgres, offline-first capture, reconciliation of shared identifiers — and the runbook says so rather than implying it's handled.
+- **Access is Tailscale-only** (internal), by choice: no public URL, no certificate, no inbound ports on the factory network.
+- **`scripts/local-standby.sh`** — `sync` / `start` / `stop` / `status`. Never touches the VPS: it reads `main` from GitHub and builds on the local machine, so keeping the standby warm costs nothing on the shared box.
+- **Two guards, both for mistakes that would be worse than an outage.** The env file is a required argument and is rejected if it points at the staging project — a standby on staging keys is an app that looks like production and writes real capture into the staging database. And the build goes into `.next-standby`, swapped in only once a `BUILD_ID` exists (same pattern as `scripts/production-deploy.sh`), so a failed sync leaves the last working standby intact — which is what you need when you're syncing *because* the VPS is already down.
+- **Pre-outage wiring is called out up front:** the standby origin has to be in the Supabase Auth redirect allowlist and the Azure app registration *before* an outage, or staff SSO login fails and it can't be fixed from a dead VPS. Floor PIN login is a plain database lookup, so capture works either way — the floor can capture even when office sign-in can't.
+- Verified on the local machine: Node v24.19.0 present, Tailscale installed but logged out, pm2 not installed (all three recorded in the runbook's prerequisites table). Script syntax-checked and all four subcommands exercised; the staging-env guard and the missing-file guard both fire correctly, and `status` correctly reported production answering 200.
+
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)
