@@ -2,6 +2,29 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+Requested off a screenshot of the COA generator: Glyphosate was missing from both "Data sources" and "Include sections" — the Lab Results tab and its `qms.lab_results` test type already existed, and the customer-spec editor (`CoaSpecsTab.tsx`) already had a `contaminants.glyphosate` field, but nothing on the COA side ever read it. Wired through exactly the same way Chlorate/Perchlorate was previously: `found`/`sections` on `CoaModel`, the `lookup()` fetch, the Data sources / Include sections lists, `buildModel()`, and `otherRowVisible()` (shared by the on-screen table, the print view and the PDF export, so all three agree automatically).
+
+- **Business rule, not just wiring:** "the spec for Glyphosate is none detected for all organic batches" — so unlike every other contaminant row here, Glyphosate is included on an Organic batch's COA regardless of which customer spec matched, or whether one matched at all, with **"None Detected"** as the default Specification text. A customer spec can still require it on a Conventional batch (as before), or override the spec text on an Organic one.
+- Verified the resulting inclusion/spec-text logic in Node across 7 cases: organic with no matched spec, organic with a spec that doesn't mention glyphosate, organic with a spec that overrides the text, conventional with no spec/no result, conventional with a found lab result, conventional with a spec that requires it, and conventional with a spec explicitly marked "NOT REQUIRED" — all came out as expected, including that "NOT REQUIRED" is honoured on a Conventional batch but does not suppress the row on an Organic one.
+- `npx tsc --noEmit` clean. No migration — no schema changes.
+
+## 2026-08-19 — Gustav (Sieving: In-Process run silently refused to save on Fine Leaf / Coarse Leaf)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: on the Fine Leaf and Coarse Leaf tabs, a QC fills in an In-Process run, taps **Save Run**, and nothing happens — no error, no saved row. Reproduced and traced to a hidden field failing validation.
+
+**Cause.** Fine Leaf and Coarse Leaf carry `qcFieldsFinalOnly`, which hides the Bulk Density and Leaf Shade inputs on In-Process runs (they are Final-QC measurements for those two products). But `lookupLot()` still auto-filled `leafShade` from the raw-material shade the moment the QC typed a lot number. `validate()` then range-checked that value — `parseInt(leafShade)` must be 1–11 — against an input that wasn't on screen, so a raw-material shade of **0** (recorded as "not assessed"), anything above 11, or a non-numeric value set `errors.leafShade`, and `addRun()` returned early. Because the Leaf Shade field and its inline error message are both inside the hidden block, the message rendered nowhere: the save just died with no feedback. Shade `0` is the most likely trigger in practice — `String(0)` is `"0"`, which is truthy, so it passed the "has a value" guard and then failed the range check.
+
+- **Hidden fields no longer validate.** New `fieldShown()` is the single source of truth for whether Bulk Density / Leaf Shade / Needle Count are actually on screen for a given product + run type, and it mirrors the render conditions on those three inputs so the two cannot drift apart again. The leaf-shade range check and the two negative-value checks now only apply when the field is visible.
+- **Hidden fields no longer auto-fill either.** `lookupLot()` only writes `leafShade` into the form when that input is shown — storing a shade nobody measured on that sample was the other half of the same defect. The raw-material shade is still surfaced in the lot-lookup message as context, so no information is lost to the QC.
+- **A blocked save can never be invisible again.** A summary banner now renders directly above the Save button listing every reason the save was refused, whatever the field. This is the backstop for the whole class of bug: it also covers `errors.runType`, which `validate()` can set but which has had no inline renderer at all since the in-form Run Type picker was removed (#661), and it helps when the offending field is simply scrolled off screen.
+- Final QC is deliberately unchanged and still strict — verified that an invalid or missing leaf shade, and a missing or negative bulk density, all still block a Final QC save (those fields *are* visible there), and that missing lot number / QC name / incomplete mesh / negative needle count all still block an In-Process save. The inline row editor needed no change: it reports every rejection through `alert()`, so it was never silent.
+- Verified by simulating the real `validate()` + render-gating logic across both affected products, all four products' In-Process paths, five leaf-shade values (including 0, 12 and non-numeric), and six Final-QC cases. `npx tsc --noEmit` clean.
 ## 2026-08-19 — Alyssa (Production Orders: full production-day run report — both shifts consolidated, grouped totals, AI checks, handover & timesheet)
 
 **Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/globals.css`, `app/(app)/production/capture/[section]/page.tsx`, `.gitignore`, removed the accidentally-committed `.claude/worktrees/agent-*` gitlinks
@@ -151,6 +174,17 @@ Reported: a production run spans one continuous shift-day (07h00-01h00 next morn
 
 - `nextSievingSerial()` derived its daily date stem from `new Date()` instead of the session's own pinned date — invisible for most of the shift, but past midnight (still the same continuous afternoon/night shift) the wall clock rolls to tomorrow while the session/mass-balance/everything else stays on yesterday's date, silently resetting the per-type sequence. Fixed to take the session's `date`. (The identical bug in `nextGranuleSerial` had already been independently fixed on staging — confirmed via diff, no further change needed there.)
 - The 16h00 PIN-required `ChangeoverModal` is a full-screen overlay that can land mid-gesture any time in the 30s after 16:00:00 on a still-open morning session. It doesn't block the debounced autosave, but a bag just added to local state could still be sitting on the 2.5s/20s save timer when the modal suddenly covers the screen. The changeover check now flushes any pending save immediately the moment it decides to show the modal.
+
+## 2026-08-17 — Gustav (Sieving Final QC: remind (not block) when an earlier bag still needs its QC)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Requested: Final QC is linked to the bag's serial number, not its lot — so every serial output from Sieving production should eventually get exactly one Final QC result. Two of the three asks here were already built (both worth confirming rather than re-implementing): a hard block on a second Final QC against the same serial (`errors._dupSerial`, in both the new-run form and the inline row editor), and a serial-vs-tab mismatch check (`serialTabMismatch`) that already keeps Fine Leaf and Coarse Leaf's separate serial sequences (`STFL-`/`STCL-`) from being crossed.
+
+- **New: a soft reminder when picking a bag out of sequence.** Selecting (or typing/scanning) a serial for Final QC now checks whether any *earlier* bag of the same product — Fine Leaf and Coarse Leaf tracked completely separately, since each has its own daily sequence — is still sitting in the "awaiting QC" queue, and shows a non-blocking amber banner naming them if so. Saving is never prevented; a QC can legitimately pull a later bag for a spot-check while an earlier one is still queued.
+- New `serialOrderKey()` turns a bag's `ST{TYPE}-DDMMYY-NNN` serial into a key that sorts correctly across month and year boundaries (the raw `DDMMYY` on its own does not — lexicographic order puts day-of-month first). Legacy hand-typed serials that predate this format return `null` and are excluded rather than treated as a gap.
+- No new query: the reminder is computed entirely from `tabPendingBags`, the same per-product "not yet QC'd" list the picker dropdown already loads — every bag in it is, by construction, missing a Final QC, so ordering that list against the bag just picked is all this needed.
+- Verified the ordering logic in Node against same-day, cross-month, and cross-year cases, plus a legacy-serial and a self-selection case, before wiring it into the page. `npx tsc --noEmit` clean.
 
 ## 2026-08-17 — Gustav (Production capture: fix the night shift disappearing at midnight)
 
