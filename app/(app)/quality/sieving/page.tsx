@@ -852,9 +852,18 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
   const setF = (k: string, v: string) => setFields(f => ({...f,[k]:v}))
   const inputSt: React.CSSProperties = { width:'100%', padding:'5px 7px', border:'1px solid #d1d5db', borderRadius:5, fontSize:11, boxSizing:'border-box' }
 
+  // Single source of truth for both the save guard and the inline warning, so
+  // the two can't drift apart. Final QC only — same reasoning as validate() in
+  // the page below. In-Process runs carry no serial, and legacy ones (captured
+  // before In-Process stopped auto-filling a serial at all) still have one
+  // stored, so checking this unconditionally made those old rows impossible to
+  // edit at all.
+  const editSerialMismatch = fields.runType === 'final'
+    ? serialTabMismatch(fields.serialNumber, activeProduct)
+    : null
+
   function handleSaveClick() {
-    const serialMismatch = serialTabMismatch(fields.serialNumber, activeProduct)
-    if (serialMismatch) { alert(serialMismatch); return }
+    if (editSerialMismatch) { alert(editSerialMismatch); return }
     if (isNegative(fields.bulkDensity)) { alert('Bulk density cannot be negative.'); return }
     if (isNegative(fields.needleCount)) { alert('Needle count cannot be negative.'); return }
     if (Object.keys(gramVals).some(k => isNegative(gramVals[k]))) { alert('Sieve grams cannot be negative.'); return }
@@ -905,15 +914,19 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
                 <QCNameField value={(fields as any)[key]} onChange={v=>setF(key,v)} names={qcNames} style={inputSt} />
               ) : key==='serialNumber' ? (
                 <>
+                  {/* The mismatch warning is shown only where it's actually
+                      enforced — Final QC (see handleSaveClick above). On an
+                      In-Process row the serial is vestigial, so flagging it
+                      would be an error the QC can't act on. */}
                   <input list="edit-serial-dl" value={fields.serialNumber} onChange={e=>setF('serialNumber',e.target.value)}
                     placeholder="Pick or type a serial"
-                    style={{...inputSt, borderColor: serialTabMismatch(fields.serialNumber, activeProduct) ? '#fca5a5' : '#d1d5db'}}/>
+                    style={{...inputSt, borderColor: editSerialMismatch ? '#fca5a5' : '#d1d5db'}}/>
                   <datalist id="edit-serial-dl">
                     {(bagSerials||[]).map(b=>(
                       <option key={b.serial} value={b.serial}>{b.lot?`lot ${b.lot}`:''}{b.baggedAt?` · ${String(b.baggedAt).slice(0,16).replace('T',' ')}`:''}</option>
                     ))}
                   </datalist>
-                  {serialTabMismatch(fields.serialNumber, activeProduct) && (
+                  {editSerialMismatch && (
                     <div style={{ fontSize:9, color:'#dc2626', marginTop:2 }}>
                       ⚠ {productOfSerial(fields.serialNumber)} serial — not valid on the {activeProduct} tab
                     </div>
@@ -1440,8 +1453,21 @@ export default function SievingPage() {
     // A serial encodes its own output type, so a Coarse Leaf bag can never be
     // captured on the Fine Leaf tab (or vice versa) — that would file the run
     // against the wrong product's specs entirely.
-    const mismatch = serialTabMismatch(f.serialNumber, activeProduct)
-    if (mismatch) errs.serialNumber = mismatch
+    //
+    // Final QC only. An In-Process run has no serial: the field isn't rendered
+    // for it (see the runType==='final' block around the bag picker) and
+    // addRun() discards the value outright (serial_number: final ? ... : null).
+    // Checking it regardless meant a serial left in state by an earlier Final
+    // QC — "Sample now →" pre-fills one, and switching product tabs closes the
+    // form without clearing it — blocked the In-Process save with a message
+    // naming a bag the QC could neither see nor clear ("STFL-… is a Fine Leaf
+    // bag — it can't be used on the … tab"), while the value it complained
+    // about would never have been saved. Same class of bug as the hidden
+    // Leaf Shade check fixed via fieldShown() below.
+    if (f.runType === 'final') {
+      const mismatch = serialTabMismatch(f.serialNumber, activeProduct)
+      if (mismatch) errs.serialNumber = mismatch
+    }
     if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
       if (dup) errs._dupTime=`A ${f.runType} run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
@@ -1836,10 +1862,16 @@ export default function SievingPage() {
       {saving && <div style={{padding:'6px 12px',background:'#fefce8',borderRadius:7,marginBottom:10,fontSize:11,color:'#854d0e'}}>⏳ Saving…</div>}
       {!loading&&!sdError&&lastSaved && <div style={{display:'flex',justifyContent:'flex-end',marginBottom:6}}><span style={{fontSize:10,color:'#9ca3af'}}>✓ Synced {lastSaved.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>}
 
-      {/* Product tabs */}
+      {/* Product tabs. Switching sieve clears the bag linkage as well as closing
+          the form: a serial belongs to exactly one product, so carrying one
+          across tabs can only ever be wrong — and it used to survive here (this
+          closed the form without resetting it), which is how an In-Process
+          capture ended up holding another sieve's serial. */}
       <div style={{display:'flex',gap:4,marginBottom:14,flexWrap:'wrap'}}>
         {SD_PRODUCTS.map(p=>(
-          <button key={p} onClick={()=>{setActiveProduct(p);setShowForm(false);setShowSpecEditor(false);setFilter('all');setEditRunId(null)}}
+          <button key={p} onClick={()=>{setActiveProduct(p);setShowForm(false);setShowSpecEditor(false);setFilter('all');setEditRunId(null)
+            setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setErrors({})
+            setForm((f:any)=>({...f, serialNumber:'', baggingId:''}))}}
             style={{padding:'7px 16px',borderRadius:8,border:'none',cursor:'pointer',fontSize:12,fontWeight:600,
               background:activeProduct===p?'#1f4e79':'#f3f4f6',color:activeProduct===p?'#fff':'#374151'}}>
             {p}
