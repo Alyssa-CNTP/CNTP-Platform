@@ -50,6 +50,24 @@ interface Pending {
 }
 interface ReportRow { date: string; shift: string; status: string; submitted_by_name: string | null }
 
+// The queue has no natural ceiling — every unsigned record from every date
+// stays on it forever, which is exactly right for not losing one, but wrong
+// for "what do I look at right now": weeks of backlog reads as noise, not a
+// queue. Default to a 7-day window; the full backlog is one click away, never
+// hidden for good.
+const WINDOW_OPTIONS = [
+  { value: 7 as const,     label: '7 days' },
+  { value: 30 as const,    label: '30 days' },
+  { value: 'all' as const, label: 'All time' },
+]
+type WindowDays = typeof WINDOW_OPTIONS[number]['value']
+
+function cutoffDate(today: string, days: number) {
+  const d = new Date(today + 'T12:00:00')
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
 export default function SupervisorSignoff() {
   const { p, isFullAdmin } = useAuth()
   const canApproveJobCards = isFullAdmin || p('can_approve_job_cards')
@@ -61,6 +79,7 @@ export default function SupervisorSignoff() {
   const [reports, setReports]     = useState<ReportRow[]>([])
   const [reopenCount, setReopenCount] = useState(0)
   const [loading, setLoading]     = useState(true)
+  const [windowDays, setWindowDays] = useState<WindowDays>(7)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -105,19 +124,46 @@ export default function SupervisorSignoff() {
   const total = submitted.length + stale.length + reopenCount + actionableReports.length
   const allClear = !loading && total === 0
 
+  // reopenCount and job-card approvals aren't windowed — a decision queue
+  // doesn't get less urgent with age, so it's excluded from both totals below.
+  const today = sastToday()
+  const cutoff = windowDays === 'all' ? null : cutoffDate(today, windowDays)
+  const inWindow = (d: string) => !cutoff || d >= cutoff
+  const submittedVisible = submitted.filter(s => inWindow(s.date))
+  const staleVisible = stale.filter(s => inWindow(s.date))
+  const reportsVisible = actionableReports.filter(r => inWindow(r.date))
+  const totalVisible = submittedVisible.length + staleVisible.length + reopenCount + reportsVisible.length
+  const hiddenOlder = (submitted.length - submittedVisible.length) + (stale.length - staleVisible.length) + (actionableReports.length - reportsVisible.length)
+  const windowLabel = WINDOW_OPTIONS.find(o => o.value === windowDays)!.label.toLowerCase()
+
   return (
     <div className="px-4 py-6 max-w-[900px] mx-auto space-y-4">
       <HubHeader
         title="Sign-off"
         subtitle={loading ? 'Checking what’s outstanding…'
           : total === 0 ? 'Nothing outstanding'
-          : `${total} thing${total === 1 ? '' : 's'} waiting on a signature`}
+          : totalVisible === 0 ? `Nothing in the last ${windowLabel} — ${total} further back`
+          : `${totalVisible} thing${totalVisible === 1 ? '' : 's'} waiting on a signature`
+            + (hiddenOlder > 0 ? ` · ${hiddenOlder} more further back` : '')}
         action={
           <button onClick={load} className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         }
       />
+
+      {!loading && !allClear && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-text-faint">Show:</span>
+          {WINDOW_OPTIONS.map(opt => (
+            <button key={opt.value} onClick={() => setWindowDays(opt.value)}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
+                windowDays === opt.value ? 'bg-brand text-white border-brand' : 'border-stone-200 text-text-muted hover:border-brand hover:text-brand'}`}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-24"><Loader2 size={22} className="animate-spin text-stone-300" /></div>
@@ -134,21 +180,21 @@ export default function SupervisorSignoff() {
               signature lives in ONE card, oldest first within each kind — this
               used to be two separate colored boxes (records, then reports)
               competing for attention; now it's one queue with sub-groups. */}
-          {(submitted.length > 0 || actionableReports.length > 0) && (
+          {(submittedVisible.length > 0 || reportsVisible.length > 0) && (
             <QueueCard
-              count={submitted.length + actionableReports.length} icon={PenLine}
+              count={submittedVisible.length + reportsVisible.length} icon={PenLine}
               title="Waiting for your signature"
               hint="Oldest first — open one to review and sign it off.">
-              {submitted.length > 0 && (
+              {submittedVisible.length > 0 && (
                 <>
-                  {actionableReports.length > 0 && <GroupLabel>Capture records</GroupLabel>}
-                  {submitted.map(s => <SessionRow key={s.id} s={s} tab="signoff" />)}
+                  {reportsVisible.length > 0 && <GroupLabel>Capture records</GroupLabel>}
+                  {submittedVisible.map(s => <SessionRow key={s.id} s={s} tab="signoff" />)}
                 </>
               )}
-              {actionableReports.length > 0 && (
+              {reportsVisible.length > 0 && (
                 <>
-                  {submitted.length > 0 && <GroupLabel>Shift reports</GroupLabel>}
-                  {actionableReports.map(r => (
+                  {submittedVisible.length > 0 && <GroupLabel>Shift reports</GroupLabel>}
+                  {reportsVisible.map(r => (
                     <Link key={`${r.date}-${r.shift}`} href={`/supervisor/report?date=${r.date}&shift=${r.shift}`}
                       className="flex items-center gap-3 px-4 py-3 bg-white/40 hover:bg-white transition-colors group">
                       <div className="w-8 h-8 rounded-lg bg-stone-700 flex items-center justify-center shrink-0">
@@ -182,19 +228,19 @@ export default function SupervisorSignoff() {
               the viewer's signature to give — it's a flag that someone else's
               record needs finishing or archiving — so it reads much quieter
               than the queues above instead of matching their visual weight. */}
-          {stale.length > 0 && (
+          {staleVisible.length > 0 && (
             <div className="rounded-xl border border-stone-200 overflow-hidden">
               <div className="flex items-center gap-2 px-4 py-2.5 bg-stone-50 border-b border-stone-200">
                 <Pen size={13} className="text-stone-400 shrink-0" />
                 <span className="font-body font-semibold text-[12.5px] text-stone-500">
-                  {stale.length} record{stale.length === 1 ? '' : 's'} still open from a finished shift
+                  {staleVisible.length} record{staleVisible.length === 1 ? '' : 's'} still open from a finished shift
                 </span>
               </div>
               <p className="px-4 pt-2 text-[11px] text-text-muted">
                 Never submitted for sign-off — not yours to sign, but worth chasing. Finish and submit, or archive the record on Production Orders.
               </p>
               <div className="divide-y divide-stone-100">
-                {stale.map(s => <SessionRow key={s.id} s={s} tab="capture" />)}
+                {staleVisible.map(s => <SessionRow key={s.id} s={s} tab="capture" />)}
               </div>
             </div>
           )}
@@ -251,10 +297,14 @@ function SessionRow({ s, tab }: { s: Pending; tab: 'signoff' | 'capture' }) {
           {s.operators.length ? ` · ${s.operators.join(', ')}` : ''}
         </div>
       </div>
-      {/* Age is the point of an oldest-first queue — say it out loud. */}
+      {/* Age is the point of an oldest-first queue — say it out loud. But with
+          weeks of backlog possible, flagging every 3-day-old row red made the
+          whole queue read as on fire — reserve red for genuinely stale (30d+),
+          amber for a week or more, and a plain neutral pill under that. */}
       {!isToday && ageDays > 0 && (
-        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg shrink-0 ${ageDays >= 3 ? 'bg-err/10 text-err' : 'bg-stone-100 text-stone-500'}`}>
-          {ageDays >= 3 && <AlertTriangle size={10} />}
+        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg shrink-0 ${
+          ageDays >= 30 ? 'bg-err/10 text-err' : ageDays >= 7 ? 'bg-warn/10 text-warn' : 'bg-stone-100 text-stone-500'}`}>
+          {ageDays >= 30 && <AlertTriangle size={10} />}
           {ageDays}d old
         </span>
       )}
