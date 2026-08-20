@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Roster: surface save/submit failures. Shift Report: collapsible + linked attendance)
+
+**Files changed:** `app/(app)/supervisor/roster/page.tsx`, `app/(app)/supervisor/report/page.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`
+
+Reported: rostering people "isn't working as well," and the supervisor's save-then-send-to-Production-Manager flow doesn't seem to work.
+
+- **Roster (Staffing tab) — real bug fixed:** three Supabase writes in `saveDraft()`/`submit()` (the `roster_entries` delete, and both `roster_section_status` upserts) never checked their `{error}` — Supabase-js returns errors rather than throwing, so a failed write still fell through to the success path: the UI said "Saved" or "Confirmed" while the status row (what the Production Manager and the page's own badge actually read) silently didn't persist. A failed delete ahead of the insert that follows it would also have duplicated every row instead of replacing them. All three now check their error and throw into the existing catch block; the error banner is upgraded from a bare line of red text to the same alert-box style used elsewhere in the hub.
+- **Roster send-to-PM — investigated, not a bug:** traced the flow end to end; the code works correctly. The Send/"Confirm roster" button is gated on `can_submit_roster_production`, which was deliberately moved off `production_supervisor` onto a `production_manager` role in an earlier change (the supervisor's draft is only official once a manager signs off) — confirmed with Alyssa this model stays as-is. If nobody is actually signed in as `production_manager`, a supervisor's saved draft will look stuck with no Send button — that's a role-assignment gap to check, not a code fix.
+- **Shift Report "Who was here":** the present/absent/unrostered tables are now wrapped in the existing `Collapse` component (open by default — this is the section's main content). Threaded an `employeeId` through `PresentPerson`/`AbsentPerson` (`lib/production/shift-report.ts`, `shift-report-builder.ts`) so a name links to their Staff Directory profile whenever it matches a rostered person for that shift — the only data source that carries an id; an unrostered swap has none to link to and stays plain text. Links fall back to plain text on print.
+
+**Also investigated (no code change yet, pending your input):**
+- **Capture ratings "not working":** the feature is fully built, not stubbed. Confirmed the underlying tables (`capture_ratings`, `capture_rating_audit`, `v_capture_scoreboard`) exist on the staging Supabase project. Given this repo's migration pipeline is manual-only, the strongest remaining lead if it's still not working live is that migration `20260730_001` was never run against the production database — worth confirming directly (the Team tab already shows an explicit "not available yet" banner rather than failing silently, if that's the case).
+- **Timesheets "same for both people on a shift":** held off pending more detail from Alyssa — her clarification (shared-per-section timesheet when either operator signs in; breakdown/maintenance visibility; suggested pre-filled activity types like Deep Clean/Breakdown) is a real feature to scope properly, not a quick fix, especially since forcing identical shift windows would reverse the PR #408 fix that intentionally kept per-operator break accuracy.
+
 ## 2026-08-20 — Alyssa (Supervisor Hub Dashboard: line filter, mass balance input/output)
 
 **Files changed:** `app/(app)/supervisor/page.tsx`
