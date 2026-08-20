@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-19 — Alyssa (Docs: manual deployment runbook — auto-deploy disabled)
+
+**Files changed:** `docs/DEPLOYMENT.md` (new), `CLAUDE.md`
+
+Both auto-deploy workflows (`Deploy to Staging` / `Deploy to Production`) are now disabled, so merging no longer deploys. Documented the new manual flow: deploy each environment with its safe atomic script (`scripts/staging-deploy.sh` / `scripts/production-deploy.sh` — side-dir build → verify → auto-rollback), the hard rule that **only one build may run on the VPS at a time** (two concurrent builds OOM'd the box and caused the 2026-08-19 outage), production deploys off-peak, migrations applied to the DB separately, and a recovery section. Corrected CLAUDE.md, which still described the old "merge = deploy" behaviour.
+
 ## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
