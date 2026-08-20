@@ -2044,7 +2044,7 @@ function CaptureScreen() {
                   }
                   {!locked && !isPasteuriser(sectionId) && (
                     <button onClick={() => setRebagOpen(true)}
-                      className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
+                      className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 text-white font-medium text-[14px] hover:bg-violet-700 transition-colors">
                       <Scale size={16} /> Re-bag material
                     </button>
                   )}
