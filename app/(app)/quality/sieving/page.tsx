@@ -308,6 +308,7 @@ function mapDbRow(r: any) {
     time:         r.time_of_run||'',
     needleCount:  r.needle_count||'',
     leafShade:    r.leaf_shade||'',
+    rawMaterialLeafShade: r.raw_material_leaf_shade||'',
     bulkDensity:  r.bulk_density||'',
     comment:      r.comment||'',
     paLevel:      r.pa_level||'',
@@ -1174,6 +1175,9 @@ export default function SievingPage() {
       date: sastDateStr(new Date().toISOString()),
       lotNumber:'', serialNumber:'', grade:'Export', variant:'Conventional',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
+      // The raw-material's suggested shade for this lot, captured separately
+      // from leafShade (the QC's own entry) — see raw_material_leaf_shade.
+      rawMaterialLeafShade: '',
       bulkDensity:'', comment:'', paLevel:'', manualPaLevel:'', baggingId:'',
     }
   }
@@ -1331,6 +1335,11 @@ export default function SievingPage() {
     const normKey = key.replace(/\s*-\s*/g, '-')
     const leafShadeFromRaw = leafShadeLookup[normKey] ?? leafShadeLookup[key]
     if (leafShadeFromRaw != null && !fields.leafShade && shadeShown) fields.leafShade = String(leafShadeFromRaw)
+    if (leafShadeFromRaw != null && !fields.leafShade) fields.leafShade = String(leafShadeFromRaw)
+    // Captured regardless of whether the field is shown/pre-filled, so the
+    // raw-material figure is on record on this run even when it only ever
+    // existed as context text (In-Process) or got overwritten by the QC.
+    fields.rawMaterialLeafShade = leafShadeFromRaw != null ? String(leafShadeFromRaw) : ''
     const extras = [
       paFromLookup ? `PA: ${paFromLookup}` : '',
       rFromLookup  ? `R: ${rFromLookup}`  : '',
@@ -1509,6 +1518,11 @@ export default function SievingPage() {
       bagging_id:    form.baggingId || null,
       needle_count:  form.needleCount||null,
       leaf_shade:    form.leafShade||null,
+      // The raw-material's suggested shade for this lot at capture time —
+      // independent of leaf_shade above, which is the QC's own entry (the
+      // final truth). Kept so the two can be compared later even when they
+      // agree, or when the QC left the suggestion unchanged.
+      raw_material_leaf_shade: form.rawMaterialLeafShade || null,
       bulk_density:  form.bulkDensity||null,
       comment:       form.comment||null,
       pa_level:      form.paLevel||form.manualPaLevel||null,
@@ -1646,7 +1660,11 @@ export default function SievingPage() {
       qcName:       f.qcName || myName,
       time:         nowHHMM(),
       ...(pa    ? { paLevel: pa } : {}),
-      ...(shade != null ? { leafShade: String(shade) } : {}),
+      // leafShade is only pre-filled as a convenience the QC can overwrite;
+      // rawMaterialLeafShade is the raw-material figure itself, kept
+      // separately so the save records both even if the QC leaves the
+      // suggestion unchanged.
+      ...(shade != null ? { leafShade: String(shade), rawMaterialLeafShade: String(shade) } : { rawMaterialLeafShade: '' }),
     }))
     const bits = [
       `📦 Bag ${bag.bag_serial_no || '—'} · ${bag.product} · lot ${bag.lot_number || '—'}`,
@@ -1704,7 +1722,14 @@ export default function SievingPage() {
   async function openBagAlert(bagAlert: any) {
     setActiveProduct(bagAlert.product)
     const fresh = await loadPendingBags()
+    // prod_bagging is a mirror row rewritten by persist() on every save (see
+    // 20260813_007), so its id — our bagging_id — is not guaranteed stable
+    // between the card rendering with a stale id and this click. The serial
+    // number is permanent, so fall back to it before concluding the bag is
+    // done: matching on bagging_id alone here previously produced a false
+    // "already sampled" for a bag that was, in fact, still pending.
     const bag = fresh.find((b:any) => String(b.bagging_id) === String(bagAlert.bagging_id))
+      || (bagAlert.bag_serial_no && fresh.find((b:any) => String(b.bag_serial_no).toUpperCase() === String(bagAlert.bag_serial_no).toUpperCase()))
     if (!bag) { alert(`${bagAlert.bag_serial_no || 'That bag'} was already sampled — nothing to do.`); return }
     setShowForm(true)
     setEditRunId(null)

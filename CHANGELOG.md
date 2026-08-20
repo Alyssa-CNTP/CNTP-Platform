@@ -25,6 +25,37 @@ Reported: on the Fine Leaf and Coarse Leaf tabs, a QC fills in an In-Process run
 - **A blocked save can never be invisible again.** A summary banner now renders directly above the Save button listing every reason the save was refused, whatever the field. This is the backstop for the whole class of bug: it also covers `errors.runType`, which `validate()` can set but which has had no inline renderer at all since the in-form Run Type picker was removed (#661), and it helps when the offending field is simply scrolled off screen.
 - Final QC is deliberately unchanged and still strict — verified that an invalid or missing leaf shade, and a missing or negative bulk density, all still block a Final QC save (those fields *are* visible there), and that missing lot number / QC name / incomplete mesh / negative needle count all still block an In-Process save. The inline row editor needed no change: it reports every rejection through `alert()`, so it was never silent.
 - Verified by simulating the real `validate()` + render-gating logic across both affected products, all four products' In-Process paths, five leaf-shade values (including 0, 12 and non-numeric), and six Final-QC cases. `npx tsc --noEmit` clean.
+## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
+
+**Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
+
+Requested: raw-material leaf shade (from `qms.leaf_shade_predictions`, graded at intake) and the QC's own leaf shade at Sieving can legitimately differ for the same lot — the sieve run is the final truth, the raw-material figure is only a suggestion. Until now that suggestion was written straight into `sd_runs.leaf_shade` as the pre-filled value, so a saved run couldn't tell "the QC typed this" apart from "the QC left the suggestion unchanged" — losing the comparison the moment it was saved. Also flagged: a lot of raw material intake has no shade prediction on record yet, so the suggestion is often simply absent — expected, not a bug.
+
+- New nullable `qms.sd_runs.raw_material_leaf_shade` column, independent of `leaf_shade`.
+- Every place the raw-material shade gets suggested into the form (`lookupLot()` on typing a lot number, and `applyBagToForm()` on "Sample now") now also stamps this new column on save — capturing the suggestion whether or not the QC changed it, and even on In-Process runs where Leaf Shade has no visible input at all (Fine Leaf/Coarse Leaf).
+- `leaf_shade` keeps meaning exactly what it always has: the QC's own final entry. Nothing about validation or the save flow changed.
+- The edit-run save path is untouched, so editing a run never overwrites the raw-material snapshot captured at creation.
+
+## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: clicking "Sample now →" on a pending Fine Leaf/Coarse Leaf bag card (e.g. STFL-190826-004) alerted "was already sampled — nothing to do", even though the runs table showed no Final QC for that serial and the DB confirmed the bag was genuinely still pending (`qms.v_pending_bag_qc` had it, `qc_done: false`).
+
+Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the clicked card's `bagging_id` only. `production.prod_bagging` is a mirror row rewritten by `persist()` on every save (see migration `20260813_007`'s comment), so its `id` — our `bagging_id` — is not guaranteed to stay the same between when a card renders and when it's clicked. If the bag's mirror row got rewritten in between, the old id no longer matched anything in the fresh list, and the code treated "not found by that id" as "already sampled" instead of checking the bag's permanent serial number.
+
+- `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
+- Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
+
+## 2026-08-19 — Alyssa (Capture: self-heal bag_tags so a captured bag can't stay missing from the ledger/UI — promoted to production)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Live incident 2026-08-19: today's Sieving morning shift bagged 24 output bags — all present in `draft_data` and `prod_bagging` — but only 17 were in `bag_tags`. The 7 early-morning bags (STFL-190826-001–004, STCL-190826-001–003) were never in the ledger that Quality's QC queue and the Orders report read, so they didn't show on any monitoring screen even though they were on the operators' tablet. (Those 7 were backfilled by hand to restore today's data.)
+
+Root cause: each output bag is registered in `bag_tags` by its own atomic write at bag-add time, but that single write can fail silently (a network blip — the failure is swallowed in the capture components' `addOutput`) and was **never** recovered. `persist()` rebuilds `prod_bagging` from `draft_data` on every save but never touched `bag_tags`, so a bag whose atomic write failed stayed missing from the ledger forever.
+
+Fix: `persist()` now **self-heals `bag_tags`** — on every save it backfills any output serial that isn't in `bag_tags` yet. INSERT-only (`ON CONFLICT DO NOTHING`), so an existing bag's QC / consumed / status / location is never overwritten; only the missing rows are created. Since `persist()` runs every few seconds, a failed atomic write now self-corrects within a tick, and the ledger (and the already-live Orders detail that reads it) can no longer fall behind what the operators actually captured. Pasteuriser keeps its own range-expanded `bag_tags` write.
 
 ## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners — promoted to production)
 
