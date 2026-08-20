@@ -52,7 +52,8 @@ import { LineChat } from '@/components/production/capture/LineChat'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
-import { productionShiftNow } from '@/lib/production/shifts'
+import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
+import { ShiftBagLog } from '@/components/production/capture/ShiftBagLog'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
 // Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
@@ -238,6 +239,13 @@ function CaptureScreen() {
   // earlier record captured — invisible unless the operator happened to link
   // both to the same production run (an optional, easy-to-skip banner).
   const [siblingProductions, setSiblingProductions] = useState<Production[]>([])
+  // The same sibling rows WITHOUT the variant/grade match filter — every other
+  // batch record this shift opened on this line, whatever it was running. Only
+  // the "Bags this shift" reference list uses these: it answers "what has this
+  // shift put in and taken out", which a record on a different grade is still
+  // part of, while a mass balance is only ever allowed to combine records
+  // running the same thing (hence the filtered set above).
+  const [shiftOtherProductions, setShiftOtherProductions] = useState<Production[]>([])
   const [blenderRatios, setBlenderRatios] = useState<BlenderRatioGroup[]>([])
   const bomGroupsCacheRef = useRef<Map<string, BlendIngredientGroup[]>>(new Map())
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
@@ -357,11 +365,9 @@ function CaptureScreen() {
       const activeMatchKeys = new Set(
         (((sess as any)?.draft_data?.productions ?? []) as Production[]).map(p => productionMatchKey(p, sectionId))
       )
-      setSiblingProductions(
-        siblingRows
-          .flatMap(r => (r.draft_data?.productions ?? []) as Production[])
-          .filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId)))
-      )
+      const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
+      setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
+      setShiftOtherProductions(siblingProds)
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).
@@ -1812,6 +1818,14 @@ function CaptureScreen() {
   // "No data" session behind (the duplicate-orders bug).
   function startNewProduction() {
     const aL = assignment?.lot_number ?? ''
+    // The record being closed is still part of this shift, so hand it to the
+    // whole-shift bag log before the local state is cleared — otherwise "Bags
+    // this shift" drops to zero the moment a new batch record opens, since the
+    // sibling prod_sessions rows are only re-read on a page load. Deliberately
+    // NOT added to siblingProductions: that set feeds the mass balance, which
+    // may only ever combine records running the same variant/grade.
+    const closing = productionsRef.current.filter(p => hasCaptureData([p]))
+    if (closing.length) setShiftOtherProductions(prev => [...prev, ...closing])
     sessionRef.current = null
     setSessionId(null)
     setStatus('new')
@@ -2232,6 +2246,22 @@ function CaptureScreen() {
                   </div>
                 )}
               </div>
+
+              {/* Whole-shift bag reference — collapsed to a one-line in/out
+                  summary, expandable to every bag. Sits between the batch card
+                  and the capture form because it is context for what you are
+                  about to capture, not an action: the shift's own running list
+                  of what went in and what came out, across every batch record
+                  it opened (the capture form below only ever shows the record
+                  open on screen). Asked for by the afternoon shift. */}
+              <ShiftBagLog
+                sectionId={sectionId}
+                shiftLabel={SHIFT_LABEL[shiftBal]}
+                records={[
+                  ...productions.map((p, i) => ({ ...p, label: multi ? `P${i + 1}` : 'This record', current: true })),
+                  ...shiftOtherProductions.map((p, i) => ({ ...p, label: `Earlier record ${i + 1}`, current: false })),
+                ]}
+              />
 
               {variantMismatch && (
                 <div className="flex items-start gap-2.5 px-4 py-3 bg-warn/8 border border-warn/30 rounded-2xl text-[13px] text-amber-800">
