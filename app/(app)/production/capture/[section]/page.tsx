@@ -135,7 +135,7 @@ function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
   const router = useRouter()
-  const { user, role, isSupervisor, isIT, signOut, displayName } = useAuth()
+  const { user, role, isSupervisor, isIT, signOut, displayName, p: hasPerm } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
   // Refining 1/2 and Blender have no machine checks configured (nothing on the
@@ -167,6 +167,10 @@ function CaptureScreen() {
   const dateParam = sp.get('date')  ?? nowFallback.date
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
+  // Same permission the reopen endpoints check (app/api/production/orders/[id]).
+  // Whoever may reopen a signed-off record is also trusted to edit it after
+  // 16h00 without PINning in as the incoming operator — see the changeover gate.
+  const canReopen = hasPerm('can_edit_session')
 
   // Where "back" goes. Capture is reached from several places — the capture
   // landing page, Production Orders (with filters applied), the Supervisor Hub's
@@ -235,6 +239,11 @@ function CaptureScreen() {
   const [afternoonOps, setAfternoonOps]     = useState<{ id: string; name: string; pin: string }[]>([])
   const [takenOver, setTakenOver]           = useState(false)
   const [changeoverNeeded, setChangeoverNeeded] = useState(false)
+  // A draft that still carries submitted_at was signed off and then REOPENED
+  // (the reopen endpoints only flip status back to 'draft'). That is somebody
+  // fixing a finished record, not a live shift being handed over, so it must
+  // not be treated the same as a morning session still open on the floor.
+  const [reopened, setReopened]             = useState(false)
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   // Whether the last production_runs full-day rollup write failed — surfaced so
@@ -312,7 +321,7 @@ function CaptureScreen() {
       // that happen to share a shift; their balances must never be summed
       // together just because of that coincidence.
       const { data: shiftSess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data,comments,created_at')
+        .select('id,status,draft_data,comments,created_at,submitted_at')
         .eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
         .order('created_at', { ascending: false })
       const shiftRows = (shiftSess as any[]) ?? []
@@ -382,6 +391,7 @@ function CaptureScreen() {
         setSessionId(resolvedSid)
         sessionRef.current = resolvedSid   // so autosave targets this row, never creates a duplicate
         setStatus((sess as any).status)
+        setReopened((sess as any).status === 'draft' && !!(sess as any).submitted_at)
         // Best-effort run link — isolated so a missing run_id column can't break load.
         try {
           const { data: rr } = await db.schema('production').from('prod_sessions')
@@ -821,7 +831,12 @@ function CaptureScreen() {
     if (takenOver) { setChangeoverNeeded(false); return }
     const check = () => {
       const done = status === 'submitted' || status === 'approved'
-      const needed = pastChangeover() && !done
+      // Reopened records are exempt for anyone who could have reopened them:
+      // demanding an operator PIN from a manager fixing a weight after 16h00
+      // recorded a hand-over that never happened. A floor operator without the
+      // permission still PINs in, so the audit trail keeps its real cases.
+      const reopenExempt = reopened && canReopen
+      const needed = pastChangeover() && !done && !reopenExempt
       setChangeoverNeeded(was => {
         if (needed && !was) flushRef.current()
         return needed
@@ -831,7 +846,7 @@ function CaptureScreen() {
     const t = setInterval(check, 30_000)
     return () => clearInterval(t)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shift, dateParam, status, takenOver])
+  }, [shift, dateParam, status, takenOver, reopened, canReopen])
 
   // Confirm the incoming operator by PIN and stamp the audit trail.
   async function recordTakeover(op: { id: string; name: string }, rostered: boolean) {
