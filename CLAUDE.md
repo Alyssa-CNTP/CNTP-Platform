@@ -45,15 +45,23 @@ curl -s -X PUT -H "Authorization: token $TOKEN" \
   -d "{\"merge_method\":\"squash\"}"
 ```
 
-### 5. Deploy to VPS
+### 5. Deploy to VPS  — **MANUAL ONLY** (auto-deploy is disabled)
+
+Merging to `staging`/`main` no longer deploys anything. Deploy with the safe
+atomic script (side-dir build → verify → auto-rollback). **See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full runbook.**
+
+> ⚠️ **One build on the box at a time.** Never run a staging and a production
+> deploy (or two of either) concurrently — two `next build`s OOM the VPS and
+> take production down (2026-08-19 outage). Wait for `DEPLOY OK` before the next.
+
+Staging:
 ```bash
-ssh -p 2022 -o StrictHostKeyChecking=no cntpdev@154.65.97.200 '
-  export NVM_DIR="$HOME/.nvm" && source "$NVM_DIR/nvm.sh"
-  cd /home/cntpdev/apps/staging/app/cntp-ops
-  git pull origin staging
-  npm run build 2>&1 | tail -15
-  /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-staging
-'
+ssh -p 2022 -o StrictHostKeyChecking=no cntpdev@154.65.97.200 'bash /home/cntpdev/apps/staging/app/cntp-ops/scripts/staging-deploy.sh'
+```
+Production (off-peak only):
+```bash
+ssh -p 2022 -o StrictHostKeyChecking=no cntpdev@154.65.97.200 'bash /home/cntpdev/apps/production/app/cntp-ops/scripts/production-deploy.sh'
 ```
 
 ### 6. Update CHANGELOG
@@ -78,13 +86,17 @@ client or VPS key, and the network egress allowlist blocks the VPS host *and* th
 staging URL. So the manual SSH step above is **not runnable from a web session** — do
 not ask the developer to run it, and do not ask which deploy method to use.
 
-**Deploy = merge to `staging`.** A push/merge to `staging` triggers
-`.github/workflows/deploy-staging.yml`, which SSHes to the VPS (using the `VPS_SSH_KEY`
-secret) and runs pull → `npm run build` → `pm2 restart cntp-staging`. **That merge is
-the deploy.** Feature branches and `voice-jobcard-v2` are **not** auto-deployed — only
-`staging` is. To ship a feature: get its commits onto `staging` (PR→merge, or push the
-branch's commits to `staging`), then the workflow does the rest. Verify via the repo's
-**Actions** tab.
+**⚠️ Auto-deploy is DISABLED (2026-08-19).** Both `deploy-staging.yml` and
+`deploy-production.yml` are turned off — **merging to `staging` or `main` no
+longer deploys anything.** The old "merge = deploy" flow is gone. Every deploy
+is now a **manual** run of a deploy script over SSH (see step 5 above and
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)), and **only one build may run on the
+VPS at a time** (two concurrent builds OOM the box — that's what caused the
+2026-08-19 production outage).
+
+**A web/cloud session cannot deploy at all** (no SSH client/key, egress blocked).
+From a web session: get the commits onto the branch (PR→merge), then tell the
+developer to run the deploy script manually — do not expect a merge to deploy.
 
 Notes:
 - Supabase migrations: apply to the **staging** project (`qjqkpockmujecjgmdple`); the
