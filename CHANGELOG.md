@@ -8,6 +8,17 @@ All changes deployed to staging are logged here automatically.
 
 Even with both migrations applied, "View batch KPIs" still 404'd ("Batch not found") for a real batch (GS-0313, confirmed present in `production.batches` with valid `v_batch_360` data). Root cause: this was the only dynamic API route left in the whole codebase still typed as `{ params }: { params: { key: string } }` and reading `params.key` directly — every other `[id]`/`[key]`/`[token]` route already uses `{ params: Promise<{...}> }` + `await params`, per Next.js 15/16's breaking change making route params async. Next actually hands the route a `Promise`, so `params.key` was always `undefined`, `decodeURIComponent(undefined)` stringified to `"undefined"`, and the query ran for the literal batch key `UNDEFINED` — meaning this endpoint has never worked for *any* real batch on either environment, independent of the migration issue. Fixed by awaiting `params` like every other route does.
 
+## 2026-08-20 — Alyssa (Re-bag: capture real history when registering an untracked bag)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Follow-up to yesterday's "Not on the system yet" onboarding option: it only captured today's weight, losing the bag's real history. Registering a legacy bag now asks for its **original date and weight**, plus any number of **later known weight changes (date + weight each)** — its true history, not today's snapshot.
+
+- Each entry backdates a real `scan_events` row (`action: 'stock_count'`) to its actual date: the original weight as the bag's first-ever event, each later change logged as a delta from the previous known point. `bag_tags.created_at` is set to the real original date too, so "originally bagged" on the confirm screen shows the true date, not today.
+- The bag's current weight is computed from this history (original + all later changes), not re-entered — shown as a running total before saving.
+- Only once this baseline is saved and labelled does the actual re-bag/top-up transaction (choosing a target, moving weight, printing) proceed as its own separate step, exactly as before.
+- Validation: every weight change must fall on or after the original date (the delta math and "earliest event" lookup both assume chronological order); dates can't be in the future.
+
 ## 2026-08-20 — Alyssa (Fix: 20260805_002 migration failed to run — view column reorder)
 
 **Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`
