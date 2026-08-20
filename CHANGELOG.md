@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Fix: a stale bag serial blocked saving an In-Process sieving run)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported as: an In-Process run refused to save, complaining the serial number belonged to Fine Leaf / couldn't be used — but In-Process QC samples the batch as a whole and has no serial number at all, so that error should never apply to it.
+
+Root cause: `validate()` ran the serial/tab mismatch check (`serialTabMismatch()`) **unconditionally**, on a field that In-Process neither shows nor saves. The serial input only renders for `runType==='final'` (it lives inside the Final-QC bag-picker block), and `addRun()` explicitly discards it for In-Process (`serial_number: form.runType==='final' ? … : null`). So a serial left in form state by an earlier Final QC — "Sample now →" pre-fills one, and the product-tab handler closed the form *without* resetting it — refused the In-Process save with `STFL-… is a Fine Leaf bag — it can't be used on the … tab`, naming a bag the QC could neither see nor clear, over a value that would never have been written. Only the summary error banner surfaced it, so it read as a stuck, unclearable error.
+
+- `validate()`: the mismatch check is now gated on `runType === 'final'`.
+- `InlineEditForm`: same guard, via a single `editSerialMismatch` value shared by the save guard and the inline warning so the two can't drift apart. This also unblocks *editing* legacy In-Process rows — before PR #646 In-Process auto-filled a serial, so those stored rows were previously impossible to save an edit to at all.
+- Product tabs: switching sieve now clears `serialNumber`/`baggingId` and the bag linkage (selected bag, lot message, tag-lookup state, errors), so a serial can't survive onto another product's tab in the first place. A serial belongs to exactly one product, so carrying one across tabs is always wrong.
+
+Same class of bug as the hidden Leaf Shade range check fixed via `fieldShown()` in PR #722 — a value the QC can't see must never be able to block the save. Merged via [PR #756](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/756).
+
 ## 2026-08-20 — Alyssa (Fix: Sieving Quality overview silently dropped freshly-saved in-process runs)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
