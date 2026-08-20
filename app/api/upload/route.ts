@@ -68,9 +68,26 @@ const WORKFLOW_TEXT_LIMIT: Record<string, number> = {
 }
 
 // ─── Rate limiter (simple in-process queue) ───────────────────────────────────
-// Prevents Gemini 429s on the free tier (15 RPM)
-
-const GEMINI_MIN_GAP_MS = 4500
+// Paces calls so concurrent uploads can't burst the Gemini API. The gap was
+// 4500ms — sized for the FREE tier's 15 requests/minute — which caps this queue
+// at ~13 requests/minute no matter what the key is actually entitled to. On the
+// paid key that is a pure bottleneck: because the queue is strictly serial, a
+// 10-PDF batch upload spent ~45s idling in the gap alone, on top of extraction.
+//
+// 500ms (~120 req/min) is still far below any paid-tier limit but no longer the
+// binding constraint on a batch upload. Overridable without a code change via
+// GEMINI_MIN_GAP_MS — set it back to 4500 if the key ever reverts to free tier.
+// A 429 is no longer catastrophic either way: callGeminiWithRetry() backs off
+// and honours Retry-After, so a too-aggressive value self-corrects.
+// Parsed defensively: an unset, empty or malformed env value must fall back to
+// the default, not to NaN/0 — both of which would silently remove the pacing
+// altogether (Number('') === 0, Number('abc') === NaN).
+const GEMINI_MIN_GAP_MS = (() => {
+  const raw = (process.env.GEMINI_MIN_GAP_MS ?? '').trim()
+  if (!raw) return 500                       // unset or blank — Number('') is 0, not a value
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : 500
+})()
 let lastGeminiCall = 0
 const geminiQueue: { fn: () => Promise<any>; resolve: (v: any) => void; reject: (e: any) => void }[] = []
 let queueRunning = false
