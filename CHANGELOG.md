@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (COA: fix signature resize distortion, screen/print layout mismatch, and add a "Ready to print" queue + Lab Manager notification)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+
+Three separate reports on the COA generator:
+
+1. **Signature resize handle only made signatures taller, not wider.** `DraggableSignature` set an explicit `height` and `width: 'auto'` with a fixed `maxWidth: 260` on the `<img>`. Past the scale where the aspect-correct width would exceed 260px, the browser clamped width there but kept growing the explicit height — a silent squash, not a stop, so dragging the resize handle further only stretched the signature taller. Fixed by measuring the image's real width:height ratio on load and deriving both dimensions from `baseH * scale`, so there is no separate width ceiling left to hit — both directions scale together by construction.
+2. **The on-screen preview cut content off that printed/exported fine.** Root cause: `app/(app)/layout.tsx`'s `<main>` is `overflow-x-hidden` app-wide (deliberate, so no page can put a stray scrollbar on the whole shell) — anything in the COA preview wider than the sidebar-shrunk viewport was silently clipped with no scrollbar to reveal it. Printing was unaffected because the print stylesheet takes `.coa-print` out of flow (`position: absolute`), escaping the shell's clipping entirely; the on-screen version had no such escape. Fixed by wrapping the preview in its own `overflow-x: auto` container with a `minWidth: 720` matching the real PDF content box (A4 minus margins, ~687px) — a descendant's own overflow handling isn't overridden by an ancestor's `overflow-x: hidden`, so the preview now either fits or scrolls, never clips invisibly, and can't differ from the print/PDF layout by being squeezed narrower than the export ever uses.
+3. **No signal when a COA was fully signed and ready to print.** The lab → QA hand-off already notified the QA manager when the lab manager signed (`notifyQaManager`); signing the other direction had no equivalent. Added `notifyLabManager()` (mirrors the existing function) fired when the QA manager signs, and a new **"🖨 Ready to print"** tab next to the existing "Awaiting QA sign-off" one, listing every `coa_signoffs` row with a QA signature that has no `coa_generated` entry (the existing Print/Export log, unchanged) logged after that signature — i.e. genuinely not yet printed/exported since being signed. No new table: derived from what Print/Export already writes to `qms.coa_generated` for History. Printing or exporting a batch drops it off this list immediately (`logGeneration()` now also refreshes the queue), not on next reload.
+
 ## 2026-08-21 — Gustav (Lab Results upload: explain billing / key / permission failures instead of dumping JSON)
 
 **Files changed:** `app/api/upload/route.ts`

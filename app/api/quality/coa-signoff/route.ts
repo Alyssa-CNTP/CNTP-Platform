@@ -33,6 +33,27 @@ async function notifyQaManager(admin: any, batchNo: string, labName: string | nu
   } catch { /* best-effort */ }
 }
 
+// Notify the Staff-Directory Lab manager that the QA manager has signed — the
+// COA is now fully signed and ready to be printed/exported. Mirrors
+// notifyQaManager() above; this leg simply didn't exist before, so a fully
+// signed COA gave no signal to anyone that it was ready.
+async function notifyLabManager(admin: any, batchNo: string, qaName: string | null) {
+  try {
+    const { lab } = await resolveCoaManagers(admin)
+    if (!lab?.employeeId) return
+    const { data: roleRow } = await admin.schema('shared').from('app_roles')
+      .select('user_id').eq('employee_id', lab.employeeId).maybeSingle()
+    if (!roleRow?.user_id) return
+    const recipients = await resolveRecipients([roleRow.user_id])
+    if (recipients.length) await notify({
+      recipients, kind: 'coa_signoff',
+      title: `COA fully signed — ready to print — ${batchNo}`,
+      body: `${qaName || 'The Quality manager'} has signed the COA for batch ${batchNo}. Open the COA Generator's "Ready to print" list to export or print it.`,
+      url: '/quality/coa', channels: ['inApp'],
+    })
+  } catch { /* best-effort */ }
+}
+
 // Resolve the caller: their employee id, name, COA role (lab/qa/null) and their
 // own on-file signature.
 async function caller(admin: any) {
@@ -112,6 +133,10 @@ export async function POST(req: NextRequest) {
   }
   await admin.schema('qms').from('coa_signoffs').upsert(patch, { onConflict: 'batch_no' })
   if (slot === 1) await notifyQaManager(admin, batch_no, me.name)
+  // Slot 2 is the QA sign-off — the COA is now fully signed. The lab manager
+  // previously got no signal at all that it was done; this is what tells them
+  // it's ready to print/export.
+  if (slot === 2) await notifyLabManager(admin, batch_no, me.name)
 
   const { data: updated } = await admin.schema('qms').from('coa_signoffs').select('*').eq('batch_no', batch_no).maybeSingle()
   return NextResponse.json({ signoff: updated })
