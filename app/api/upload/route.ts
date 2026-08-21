@@ -187,6 +187,32 @@ class GeminiTransient extends Error {
 // than being retried six times behind a misleading "overloaded" message.
 const GEMINI_RETRYABLE = new Set([429, 500, 502, 503, 504])
 
+// Turns a non-retryable Gemini failure into something a QC can act on, instead
+// of a truncated JSON dump. Ordered most-specific first, since a billing error
+// also mentions "project" and a disabled-API error also mentions "permission".
+function explainFatalGeminiError(status: number, body: string): string {
+  const b = body.slice(0, 1500)
+  const msg = /"message"\s*:\s*"([^"]+)"/.exec(b)?.[1] ?? b.replace(/\s+/g, ' ').trim().slice(0, 220)
+
+  // Billing disabled / delinquent / credits exhausted with no valid payment.
+  if (/billing|FAILED_PRECONDITION|BILLING_DISABLED/i.test(b)) {
+    return `Gemini rejected the request because of a BILLING problem on the Google project — typically credit exhausted, a lapsed card, or billing switched off. This is not a quota that resets and retrying will not help; the billing account for the GEMINI_API_KEY project needs attention in Google Cloud Console. Google said: ${msg}`
+  }
+  if (/API_KEY_INVALID|API key not valid|api key expired/i.test(b)) {
+    return `Gemini rejected the API key itself (invalid, expired or revoked) — check GEMINI_API_KEY on the VPS. Google said: ${msg}`
+  }
+  if (/SERVICE_DISABLED|has not been used in project|is disabled/i.test(b)) {
+    return `The Generative Language API is not enabled on the GEMINI_API_KEY project. Google said: ${msg}`
+  }
+  if (status === 403) {
+    return `Gemini denied permission for this key (403) — the key may be restricted to other APIs/referrers, or the project lacks access to this model. Google said: ${msg}`
+  }
+  if (status === 404) {
+    return `Gemini has no such model for this key (404) — a model name may have been retired, or the key's project lacks access to it. Google said: ${msg}`
+  }
+  return `Gemini API error: ${msg}`
+}
+
 // One request to one model. Throws GeminiTransient for retryable statuses.
 async function geminiOnce(
   model: string,
@@ -216,7 +242,13 @@ async function geminiOnce(
   }
   if (!res.ok) {
     const err = await res.text()
-    throw new Error(`Gemini API error (${res.status}) on ${model}: ${err.slice(0, 200)}`)
+    // Deliberately NOT retried — a billing, key or permission problem is not
+    // transient, and hammering it six times only delays a message the QC needs
+    // now. But the raw JSON dump told them nothing, so name the common causes.
+    // Billing lapses show up as 400 FAILED_PRECONDITION ("billing account ...
+    // is not found or has been disabled") or 403, never as a 429, so they never
+    // reach the quota path above.
+    throw new Error(`${explainFatalGeminiError(res.status, err)} [${res.status} on ${model}]`)
   }
   const data    = await res.json()
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text
