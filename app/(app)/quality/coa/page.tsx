@@ -220,6 +220,11 @@ export default function CoaGeneratorPage() {
   // Queue of COAs the lab manager has signed that still need the QA sign-off.
   const [showQueue, setShowQueue]   = useState(false)
   const [queue, setQueue]           = useState<any[]>([])
+  // Queue of fully-signed COAs (both lab + QA) that haven't been printed or
+  // exported yet since the QA sign-off — what the lab manager gets notified
+  // about (notifyLabManager() in coa-signoff/route.ts) and comes here to act on.
+  const [showPrintQueue, setShowPrintQueue] = useState(false)
+  const [printQueue, setPrintQueue]         = useState<any[]>([])
   // Persisted sign-off row for the current batch (loaded from the server) — this
   // is what makes the lab → QA hand-off work across separate logins/sessions.
   const [signoff, setSignoff] = useState<any>(null)
@@ -335,6 +340,32 @@ export default function CoaGeneratorPage() {
   }, [db])
   // Keep the pending count fresh on load and after each sign-off action.
   useEffect(() => { loadQueue() }, [loadQueue, signoff])
+
+  // Fully-signed COAs still waiting to be printed/exported. "Not yet printed"
+  // isn't a column on coa_signoffs — it's derived by checking whether
+  // coa_generated (written by logGeneration(), see Print/Export buttons below)
+  // has an entry for that batch created AFTER the QA sign-off. No new schema
+  // needed: printing/exporting already logs there for History, this just also
+  // reads that log to know what still needs doing.
+  const loadPrintQueue = useCallback(async () => {
+    const { data: signed } = await db.schema('qms').from('coa_signoffs').select('*')
+      .not('qa_signed_at', 'is', null)
+      .order('qa_signed_at', { ascending: false }).limit(200)
+    const rows = signed ?? []
+    if (!rows.length) { setPrintQueue([]); return }
+    const { data: generated } = await db.schema('qms').from('coa_generated')
+      .select('batch_no, generated_at').in('batch_no', rows.map((r: any) => r.batch_no))
+    const lastPrintedAt = new Map<string, string>()
+    for (const g of (generated ?? [])) {
+      const prev = lastPrintedAt.get(g.batch_no)
+      if (!prev || g.generated_at > prev) lastPrintedAt.set(g.batch_no, g.generated_at)
+    }
+    setPrintQueue(rows.filter((r: any) => {
+      const printedAt = lastPrintedAt.get(r.batch_no)
+      return !printedAt || printedAt < r.qa_signed_at
+    }))
+  }, [db])
+  useEffect(() => { loadPrintQueue() }, [loadPrintQueue, signoff])
 
   const lookup = useCallback(async (batchRaw: string) => {
     const batch = batchRaw.trim()
@@ -472,6 +503,7 @@ export default function CoaGeneratorPage() {
         snapshot: { header: m.header, micro: m.micro, cutLength: m.cutLength, other: m.other, sections: m.sections, isOrganic: m.isOrganic },
       })
       clearDraft(draftKey)
+      loadPrintQueue()   // this batch just got printed/exported — drop it off "Ready to print" now, not on next reload
     } catch { /* non-blocking */ }
   }
 
@@ -553,11 +585,52 @@ export default function CoaGeneratorPage() {
           className="px-4 py-2 rounded-lg border text-[13px] font-semibold whitespace-nowrap" style={{ borderColor: showQueue ? '#7c3aed' : '#e5e7eb', background: showQueue ? '#f3e8ff' : '#fff', color: showQueue ? '#6b21a8' : '#374151' }}>
           🖊️ Awaiting QA sign-off{queue.length ? ` (${queue.length})` : ''}
         </button>
+        <button onClick={() => setShowPrintQueue(q => !q)}
+          className="px-4 py-2 rounded-lg border text-[13px] font-semibold whitespace-nowrap" style={{ borderColor: showPrintQueue ? '#166534' : '#e5e7eb', background: showPrintQueue ? '#dcfce7' : '#fff', color: showPrintQueue ? '#166534' : '#374151' }}>
+          🖨 Ready to print{printQueue.length ? ` (${printQueue.length})` : ''}
+        </button>
         <button onClick={() => setShowHistory(h => !h)}
           className="px-4 py-2 rounded-lg border text-[13px] font-semibold" style={{ borderColor: showHistory ? '#d97706' : '#e5e7eb', background: showHistory ? '#fef3c7' : '#fff', color: showHistory ? '#92400e' : '#374151' }}>
           🕘 History
         </button>
       </div>
+
+      {/* Ready to print — both managers have signed, nobody has printed/exported
+          it since. The lab manager gets an in-app notification the moment the
+          QA manager signs (notifyLabManager(), coa-signoff/route.ts); this is
+          where they come to act on it. */}
+      {showPrintQueue && (
+        <div className="mb-4 no-print border border-green-200 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-green-50 text-[11px] font-bold uppercase text-green-800 flex items-center justify-between">
+            <span>🖨 Fully signed — ready to print or export</span>
+            <button onClick={loadPrintQueue} className="text-[10px] font-semibold text-green-700 hover:underline">↻ Refresh</button>
+          </div>
+          {printQueue.length === 0 ? (
+            <div className="p-4 text-center text-[12px] text-gray-400">Nothing waiting. Once the Quality Manager signs a COA, it appears here until it's printed or exported.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
+                <thead><tr className="bg-gray-100">{['Batch','Customer','Grade','Signed by (QA)','Signed on',''].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <tbody>
+                  {printQueue.map((q, i) => (
+                    <tr key={q.batch_no} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
+                      <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{q.batch_no}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.customer || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.grade || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.qa_name || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap text-gray-500">{String(q.qa_signed_at || '').slice(0, 10)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <button onClick={() => { setBatchInput(q.batch_no); setShowPrintQueue(false); lookup(q.batch_no) }}
+                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#166534' }}>Open to print</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Awaiting QA sign-off — COAs the lab manager has signed, ready for the Quality manager */}
       {showQueue && (
@@ -784,8 +857,24 @@ export default function CoaGeneratorPage() {
             <button onClick={() => { logGeneration(model); exportPdf(model, description, outputSigs, sigAdjust) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
           </div>
 
-          {/* ── COA preview (editable) ── */}
-          <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>
+          {/* ── COA preview (editable) ──
+              The app shell's <main> is overflow-x-hidden (app/(app)/layout.tsx,
+              deliberate everywhere else so no page can put a stray horizontal
+              scrollbar on the whole app), so anything here wider than the
+              sidebar-shrunk viewport used to be silently clipped with no way
+              to see the rest — invisible, not just squeezed, since it never
+              got its own scrollbar either. Print looked fine regardless,
+              because the print stylesheet below takes .coa-print out of flow
+              (position: absolute) so the shell's clipping never applied to
+              it. This wrapper gives the preview its OWN scroll container —
+              overflow-x:hidden on an ancestor never overrides a descendant
+              managing its own overflow — and coa-print gets a real minimum
+              width matching the actual PDF content box (A4 minus margins,
+              515pt ≈ 687px, rounded up for breathing room) so the on-screen
+              layout can no longer differ from print/PDF by being squeezed
+              into less width than the export ever uses. */}
+          <div style={{ overflowX: 'auto' }}>
+            <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111', minWidth: 720 }}>
             {/* Logo + title */}
             <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -862,6 +951,7 @@ export default function CoaGeneratorPage() {
                 <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
               ))}
             </div>
+          </div>
           </div>
         </>
       )}
@@ -951,6 +1041,15 @@ function DraggableSignature({ src, adjust, onChange }: {
   const drag = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null)
   const rez  = useRef<{ x: number; scale: number } | null>(null)
   const baseH = 40
+  // The image's real width:height ratio, measured once it loads. Sizing with
+  // height + width:'auto' + a fixed maxWidth looked right only up to the
+  // scale where the computed width hit that cap — past it, the browser kept
+  // growing the explicit height while clamping width, so the signature got
+  // taller without ever getting wider (a squash, not a stop). Deriving width
+  // from the measured ratio and scaling both by the same factor removes that
+  // hidden ceiling — there is no separate width constraint left to hit.
+  const [ratio, setRatio] = useState(3) // plausible default before onLoad fires
+  useEffect(() => { setRatio(3) }, [src])
 
   const onImgDown = (e: React.PointerEvent) => {
     e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId)
@@ -978,8 +1077,12 @@ function DraggableSignature({ src, adjust, onChange }: {
       <div style={{ position: 'absolute', left: adjust.dx, bottom: adjust.dy }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={src} alt="signature" draggable={false}
+          onLoad={e => {
+            const el = e.currentTarget
+            if (el.naturalWidth && el.naturalHeight) setRatio(el.naturalWidth / el.naturalHeight)
+          }}
           onPointerDown={onImgDown} onPointerMove={onImgMove} onPointerUp={endImg} onPointerCancel={endImg}
-          style={{ display: 'block', height: baseH * adjust.scale, width: 'auto', maxWidth: 260, cursor: 'move', touchAction: 'none', userSelect: 'none' }} />
+          style={{ display: 'block', height: baseH * adjust.scale, width: baseH * adjust.scale * ratio, cursor: 'move', touchAction: 'none', userSelect: 'none' }} />
         <div className="no-print" title="Drag to resize"
           onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={endHandle} onPointerCancel={endHandle}
           style={{ position: 'absolute', right: -6, top: -6, width: 12, height: 12, background: '#1f4e79', border: '2px solid #fff', borderRadius: 3, cursor: 'nesw-resize', touchAction: 'none' }} />
