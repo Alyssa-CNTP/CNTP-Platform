@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
     })
     return NextResponse.json({ ok: true, document: doc })
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? 'Could not write the note' }, { status: 500 })
+    const status = e?.message?.startsWith('Missing required fields:') ? 400 : 500
+    return NextResponse.json({ error: e?.message ?? 'Could not write the note' }, { status })
   }
 }

@@ -11,6 +11,7 @@ import { getAdminClient } from '@/lib/auth/server-helpers'
 import {
   type DocType, type NotebookDoc, type NotebookLine, type NotebookDocWithLines,
   type NotebookLocation,
+  REQUIRED_HEADER_FIELDS, REQUIRED_LINE_FIELDS,
 } from './types'
 
 const DOCS   = 'notebook_documents'
@@ -30,7 +31,7 @@ const PLACES = 'notebook_locations'
 const EDITABLE_HEADER_FIELDS = [
   'party_name', 'party_address', 'delivered_at_store', 'purchase_order_no',
   'weighbridge_no', 'weighbridge_weight_kg',
-  'lot_no', 'batch_no', 'producer_lot_no', 'season_year', 'farmer_name',
+  'batch_no', 'producer_lot_no', 'season_year', 'farmer_name',
   'vehicle_reg', 'transporter_company', 'driver_name',
   'cert_organic_nop', 'cert_organic_jas', 'cert_organic_eu',
   'cert_rainforest_alliance', 'cert_fairtrade',
@@ -40,7 +41,7 @@ const EDITABLE_HEADER_FIELDS = [
 ] as const
 
 const EDITABLE_LINE_FIELDS = [
-  'qty', 'weight_kg', 'description', 'variant', 'lot_no', 'batch_no', 'farmer_name', 'notes',
+  'qty', 'weight_kg', 'description', 'variant', 'batch_no', 'farmer_name', 'notes',
 ] as const
 
 export interface LineInput {
@@ -48,10 +49,45 @@ export interface LineInput {
   weight_kg?: number | null
   description?: string | null
   variant?: string | null
-  lot_no?: string | null
   batch_no?: string | null
   farmer_name?: string | null
   notes?: string | null
+}
+
+// Mirrors validateNote() in components/notebooks/note-draft.ts, against the
+// already-converted payload shape rather than the in-form string drafts —
+// this is the guarantee that holds even if a request is built by hand rather
+// than through the form. Returns a single message listing everything still
+// missing, or null when the note is complete enough to save.
+// `lines: null` means this call isn't touching the goods table at all (an
+// update that only patches lines through), so line completeness is skipped —
+// it was already enforced when this draft (or its last successful edit) was
+// created.
+function missingFieldsMessage(header: Record<string, unknown>, lines: LineInput[] | null, docType: DocType): string | null {
+  const missing: string[] = []
+
+  for (const f of REQUIRED_HEADER_FIELDS) {
+    const v = header[f.key]
+    if (v == null || (typeof v === 'string' && v.trim() === '')) missing.push(f.label(docType))
+  }
+
+  if (lines !== null) {
+    if (lines.length === 0) {
+      missing.push('at least one line describing the goods')
+    } else {
+      for (const l of lines) {
+        for (const f of REQUIRED_LINE_FIELDS) {
+          const v = (l as Record<string, unknown>)[f.key]
+          if (v == null || (typeof v === 'string' && v.trim() === '')) {
+            missing.push(`${f.label} on every goods line`)
+          }
+        }
+      }
+    }
+  }
+
+  if (missing.length === 0) return null
+  return `Missing required fields: ${Array.from(new Set(missing)).join(', ')}.`
 }
 
 export interface ListFilter {
@@ -107,7 +143,7 @@ export async function listDocuments(f: ListFilter): Promise<ListResult> {
       q = q.or(
         `doc_no.ilike.*${term}*,party_name.ilike.*${term}*,` +
         `purchase_order_no.ilike.*${term}*,weighbridge_no.ilike.*${term}*,` +
-        `lot_no.ilike.*${term}*,batch_no.ilike.*${term}*`
+        `batch_no.ilike.*${term}*`
       )
     }
   }
@@ -175,6 +211,9 @@ export interface CreateInput {
 // gap, which is the honest outcome — the alternative (handing the same number
 // out twice) is the one thing the book must never do.
 export async function createDocument(input: CreateInput): Promise<NotebookDocWithLines> {
+  const missing = missingFieldsMessage(input.header, input.lines, input.docType)
+  if (missing) throw new Error(missing)
+
   const admin = getAdminClient() as any
 
   const { data: numbered, error: numErr } = await admin.rpc('notebook_next_doc_no', {
@@ -206,7 +245,11 @@ export async function updateDocument(
   id: string,
   header: Record<string, unknown>,
   lines: LineInput[] | null,
+  docType: DocType,
 ): Promise<NotebookDocWithLines | null> {
+  const missing = missingFieldsMessage(header, lines, docType)
+  if (missing) throw new Error(missing)
+
   const admin = getAdminClient() as any
 
   const patch = pick(header, EDITABLE_HEADER_FIELDS)

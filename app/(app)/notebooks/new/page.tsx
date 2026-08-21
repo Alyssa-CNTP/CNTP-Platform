@@ -14,7 +14,7 @@ import { ArrowLeft, Loader2, BookOpen } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import NoteFields, { emptyLine } from '@/components/notebooks/NoteFields'
 import {
-  emptyHeader, toHeaderPayload, toLinesPayload,
+  emptyHeader, toHeaderPayload, toLinesPayload, validateNote,
   type NoteHeaderDraft, type LineDraft,
 } from '@/components/notebooks/note-draft'
 import {
@@ -47,6 +47,9 @@ function NewNoteForm() {
   const [lines, setLines]   = useState<LineDraft[]>([emptyLine()])
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState<string | null>(null)
+  // Absent until the first save attempt — NoteFields only shows the red
+  // "this is why it was rejected" state once this is populated.
+  const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
     fetch('/api/notebooks/locations')
@@ -55,8 +58,12 @@ function NewNoteForm() {
       .catch(() => setLocations([]))
   }, [])
 
+  const validation = validateNote(header, lines, docType)
+
   async function save() {
     if (!locationCode) { setError('Pick the site this note is being written at.'); return }
+    setSubmitted(true)
+    if (!validation.isValid) return
     setSaving(true); setError(null)
     try {
       const res = await fetch('/api/notebooks/documents', {
@@ -158,7 +165,22 @@ function NewNoteForm() {
         onHeader={patch => setHeader(h => ({ ...h, ...patch }))}
         onLines={setLines}
         disabled={saving}
+        headerErrors={submitted ? validation.headerErrors : undefined}
+        lineErrors={submitted ? validation.lineErrors : undefined}
+        tabErrorCount={submitted ? validation.tabErrorCount : undefined}
       />
+
+      {submitted && !validation.isValid && (
+        <div className="mt-4 text-[12px] text-err bg-err-bg border border-err/20 rounded-lg px-3 py-2">
+          <p className="font-medium mb-1">
+            This note can&apos;t be saved yet — {validation.summary.length} field{validation.summary.length === 1 ? '' : 's'} still need{validation.summary.length === 1 ? 's' : ''} filling in
+            (type N/A where something genuinely doesn&apos;t apply):
+          </p>
+          <ul className="list-disc list-inside space-y-0.5">
+            {validation.summary.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        </div>
+      )}
 
       {error && (
         <div className="mt-4 text-[12px] text-err bg-err-bg border border-err/20 rounded-lg px-3 py-2">{error}</div>

@@ -21,7 +21,7 @@ import NoteFields from '@/components/notebooks/NoteFields'
 import StatusBadge from '@/components/notebooks/StatusBadge'
 import SignatureCapture, { type SignatureAudit } from '@/components/esign/SignatureCapture'
 import {
-  headerFromDoc, linesFromDoc, toHeaderPayload, toLinesPayload,
+  headerFromDoc, linesFromDoc, toHeaderPayload, toLinesPayload, validateNote,
   type NoteHeaderDraft, type LineDraft,
 } from '@/components/notebooks/note-draft'
 import {
@@ -54,6 +54,12 @@ export default function NotePage() {
   const [editing, setEditing] = useState(false)
   const [header, setHeader]   = useState<NoteHeaderDraft | null>(null)
   const [lines, setLines]     = useState<LineDraft[]>([])
+  // Absent until the first save attempt inside this editing session — reset
+  // whenever editing (re)starts, so a previous attempt's red state doesn't
+  // carry into a later edit.
+  const [submitted, setSubmitted] = useState(false)
+
+  const validation = header ? validateNote(header, lines, doc?.doc_type ?? 'GRN') : null
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -78,10 +84,13 @@ export default function NotePage() {
     setHeader(headerFromDoc(doc))
     setLines(linesFromDoc(doc.lines))
     setEditing(true)
+    setSubmitted(false)
   }
 
   async function saveDraft() {
     if (!header) return
+    setSubmitted(true)
+    if (!validation?.isValid) return
     setBusy(true); setError(null)
     try {
       const res = await fetch(`/api/notebooks/documents/${id}`, {
@@ -260,7 +269,7 @@ export default function NotePage() {
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white text-[13px] hover:opacity-90 transition disabled:opacity-50">
                   {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
                 </button>
-                <button onClick={() => setEditing(false)} disabled={busy}
+                <button onClick={() => { setEditing(false); setSubmitted(false) }} disabled={busy}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-surface-rule bg-white text-[13px] text-text-muted hover:text-text transition">
                   <X className="w-3.5 h-3.5" /> Cancel
                 </button>
@@ -309,7 +318,21 @@ export default function NotePage() {
             onHeader={patch => setHeader(h => (h ? { ...h, ...patch } : h))}
             onLines={setLines}
             disabled={busy}
+            headerErrors={submitted ? validation?.headerErrors : undefined}
+            lineErrors={submitted ? validation?.lineErrors : undefined}
+            tabErrorCount={submitted ? validation?.tabErrorCount : undefined}
           />
+          {submitted && validation && !validation.isValid && (
+            <div className="mt-4 text-[12px] text-err bg-err-bg border border-err/20 rounded-lg px-3 py-2">
+              <p className="font-medium mb-1">
+                This note can&apos;t be saved yet — {validation.summary.length} field{validation.summary.length === 1 ? '' : 's'} still need{validation.summary.length === 1 ? 's' : ''} filling in
+                (type N/A where something genuinely doesn&apos;t apply):
+              </p>
+              <ul className="list-disc list-inside space-y-0.5">
+                {validation.summary.map((m, i) => <li key={i}>{m}</li>)}
+              </ul>
+            </div>
+          )}
         </div>
       ) : (
         <>

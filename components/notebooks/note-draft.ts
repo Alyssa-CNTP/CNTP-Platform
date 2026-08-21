@@ -6,7 +6,8 @@
 // and not 0, and a half-typed "12." is a legal intermediate state. Coercion to
 // numbers/nulls happens once, on the way out, in toHeaderPayload/toLinePayload.
 
-import type { NotebookDocWithLines, NotebookLine } from '@/lib/notebooks/types'
+import type { DocType, NotebookDocWithLines, NotebookLine } from '@/lib/notebooks/types'
+import { REQUIRED_HEADER_FIELDS, REQUIRED_LINE_FIELDS, type NoteTab } from '@/lib/notebooks/types'
 
 export { PARTY_LABEL, CERT_ROWS, CERT_KEYS } from '@/lib/notebooks/types'
 export type { DocType } from '@/lib/notebooks/types'
@@ -15,7 +16,6 @@ export interface LineDraft {
   qty:         string
   weight_kg:   string
   description: string
-  lot_no:      string
   batch_no:    string
 }
 
@@ -29,7 +29,6 @@ export interface NoteHeaderDraft {
   purchase_order_no:  string
   weighbridge_no:     string
   weighbridge_weight_kg: string
-  lot_no:             string
   batch_no:           string
   producer_lot_no:    string
   season_year:        string
@@ -62,7 +61,7 @@ export function emptyHeader(): NoteHeaderDraft {
     doc_date: todayInSAST(),
     party_name: '', delivered_at_store: '', purchase_order_no: '',
     weighbridge_no: '', weighbridge_weight_kg: '',
-    lot_no: '', batch_no: '', producer_lot_no: '', season_year: '', farmer_name: '',
+    batch_no: '', producer_lot_no: '', season_year: '', farmer_name: '',
     vehicle_reg: '', transporter_company: '', driver_name: '',
     cert_organic_nop: false, cert_organic_jas: false, cert_organic_eu: false,
     cert_rainforest_alliance: false, cert_fairtrade: false,
@@ -81,7 +80,6 @@ export function headerFromDoc(doc: NotebookDocWithLines): NoteHeaderDraft {
     purchase_order_no:  s(doc.purchase_order_no),
     weighbridge_no:     s(doc.weighbridge_no),
     weighbridge_weight_kg: s(doc.weighbridge_weight_kg),
-    lot_no:             s(doc.lot_no),
     batch_no:           s(doc.batch_no),
     producer_lot_no:    s(doc.producer_lot_no),
     season_year:        s(doc.season_year),
@@ -103,14 +101,17 @@ export function headerFromDoc(doc: NotebookDocWithLines): NoteHeaderDraft {
 }
 
 export function linesFromDoc(lines: NotebookLine[]): LineDraft[] {
-  if (lines.length === 0) return [{ qty: '', weight_kg: '', description: '', lot_no: '', batch_no: '' }]
+  if (lines.length === 0) return [emptyLine()]
   return lines.map(l => ({
     qty:         s(l.qty),
     weight_kg:   s(l.weight_kg),
     description: s(l.description),
-    lot_no:      s(l.lot_no),
     batch_no:    s(l.batch_no),
   }))
+}
+
+export function emptyLine(): LineDraft {
+  return { qty: '', weight_kg: '', description: '', batch_no: '' }
 }
 
 const num = (v: string) => {
@@ -135,7 +136,6 @@ export function toHeaderPayload(h: NoteHeaderDraft): Record<string, unknown> {
     purchase_order_no:  txt(h.purchase_order_no),
     weighbridge_no:     txt(h.weighbridge_no),
     weighbridge_weight_kg: num(h.weighbridge_weight_kg),
-    lot_no:             txt(h.lot_no),
     batch_no:           txt(h.batch_no),
     producer_lot_no:    txt(h.producer_lot_no),
     season_year:        num(h.season_year),
@@ -158,12 +158,78 @@ export function toHeaderPayload(h: NoteHeaderDraft): Record<string, unknown> {
 
 export function toLinesPayload(lines: LineDraft[]): Record<string, unknown>[] {
   return lines
-    .filter(l => l.qty.trim() || l.weight_kg.trim() || l.description.trim())
+    .filter(l => l.qty.trim() || l.weight_kg.trim() || l.description.trim() || l.batch_no.trim())
     .map(l => ({
       qty:         num(l.qty),
       weight_kg:   num(l.weight_kg),
       description: txt(l.description),
-      lot_no:      txt(l.lot_no),
       batch_no:    txt(l.batch_no),
     }))
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+// Nothing here can be saved half-filled any more — every REQUIRED_HEADER_FIELDS
+// / REQUIRED_LINE_FIELDS entry needs a value, "N/A" being a perfectly good one
+// for the free-text fields that genuinely don't apply to a given load. This is
+// the client-side half of the check (string drafts, before conversion); the
+// API repeats it server-side in lib/notebooks/server.ts against the converted
+// payload, so a request built by hand can't skip it.
+
+export type HeaderErrors = Partial<Record<keyof NoteHeaderDraft, string>>
+export type LineErrors   = Partial<Record<keyof LineDraft, string>>
+
+export interface NoteValidation {
+  isValid:          boolean
+  headerErrors:     HeaderErrors
+  lineErrors:       LineErrors[]
+  linesGeneralError: string | null
+  summary:          string[]
+  tabErrorCount:    Record<NoteTab, number>
+}
+
+const requiredMessage = (label: string, numeric?: boolean) =>
+  numeric ? `${label} is required.` : `${label} is required — type N/A if it doesn't apply.`
+
+export function validateNote(header: NoteHeaderDraft, lines: LineDraft[], docType: DocType): NoteValidation {
+  const headerErrors: HeaderErrors = {}
+  const tabErrorCount: Record<NoteTab, number> = { weighbridge: 0, goods: 0, traceability: 0, cert: 0, comments: 0 }
+
+  for (const f of REQUIRED_HEADER_FIELDS) {
+    if (!header[f.key].trim()) {
+      headerErrors[f.key] = requiredMessage(f.label(docType), f.numeric)
+      tabErrorCount[f.tab] += 1
+    }
+  }
+
+  const lineErrors: LineErrors[] = lines.map(() => ({}))
+  let anyLineHasData = false
+  lines.forEach((l, i) => {
+    const touched = i === 0 || l.qty.trim() || l.weight_kg.trim() || l.description.trim() || l.batch_no.trim()
+    if (!touched) return
+    if (l.qty.trim() || l.weight_kg.trim() || l.description.trim() || l.batch_no.trim()) anyLineHasData = true
+    for (const f of REQUIRED_LINE_FIELDS) {
+      if (!l[f.key].trim()) {
+        lineErrors[i][f.key] = requiredMessage(f.label, f.numeric)
+        tabErrorCount.goods += 1
+      }
+    }
+  })
+
+  const linesGeneralError = anyLineHasData ? null : 'Add at least one line describing the goods.'
+  if (linesGeneralError) tabErrorCount.goods += 1
+
+  const summary = [
+    ...Object.values(headerErrors),
+    ...lineErrors.flatMap((e, i) => Object.values(e).map(msg => `Line ${i + 1}: ${msg}`)),
+    ...(linesGeneralError ? [linesGeneralError] : []),
+  ]
+
+  return {
+    isValid: summary.length === 0,
+    headerErrors,
+    lineErrors,
+    linesGeneralError,
+    summary,
+    tabErrorCount,
+  }
 }

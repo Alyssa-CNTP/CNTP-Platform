@@ -146,9 +146,8 @@ export default function NotePaper({ doc, signatures, minRows = 8 }: Props) {
           <div style={{ flex: 1 }}><Field label="Date received" value={fmtDate(doc.doc_date)} /></div>
           <div style={{ flex: 1 }}><Field label="Vehicle reg." value={doc.vehicle_reg} /></div>
         </div>
-        {(doc.lot_no || doc.batch_no || doc.producer_lot_no || doc.farmer_name || doc.season_year) && (
+        {(doc.batch_no || doc.producer_lot_no || doc.farmer_name || doc.season_year) && (
           <div style={{ display: 'flex', gap: 14 }}>
-            <div style={{ flex: 1 }}><Field label="Lot no." value={doc.lot_no} /></div>
             <div style={{ flex: 1 }}><Field label="Batch no." value={doc.batch_no} /></div>
             <div style={{ flex: 1 }}><Field label="Producer lot" value={doc.producer_lot_no} /></div>
           </div>
@@ -178,7 +177,6 @@ export default function NotePaper({ doc, signatures, minRows = 8 }: Props) {
                 <Td align="center">{l ? fmtNum(l.weight_kg, ' kg') : ''}</Td>
                 <Td>
                   {l?.description ?? ''}
-                  {l?.lot_no && <span style={{ color: MUTED }}>{'  ·  Lot '}{l.lot_no}</span>}
                   {l?.batch_no && <span style={{ color: MUTED }}>{'  ·  Batch '}{l.batch_no}</span>}
                 </Td>
               </tr>

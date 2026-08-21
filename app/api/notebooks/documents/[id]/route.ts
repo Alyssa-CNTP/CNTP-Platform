@@ -56,9 +56,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
 
     const lines: LineInput[] | null = Array.isArray(body?.lines) ? body.lines : null
-    const document = await updateDocument(id, body?.header ?? {}, lines)
+    const document = await updateDocument(id, body?.header ?? {}, lines, existing.doc_type)
     return NextResponse.json({ ok: true, document })
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? 'Could not save the note' }, { status: 500 })
+    const status = e?.message?.startsWith('Missing required fields:') ? 400 : 500
+    return NextResponse.json({ error: e?.message ?? 'Could not save the note' }, { status })
   }
 }
