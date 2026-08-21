@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Pasteuriser: date-range filter + per-batch trend graph in History, bulk density chart in Active Runs, moisture/temp colours swapped)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+Four requests off the Run Dashboard:
+
+1. **Date-range filter for History & Performance.** Added `from`/`to` date inputs next to the existing batch-number search. A batch matches if ANY of its sample dates falls inside the chosen range (`sampleDateRange()` + `inHistDateRange()`), not just its first day — so a batch that ran across several days isn't excluded just because it started before the "from" date. The batch count next to the search box now reflects the combined search+date filter instead of only the text search.
+2. **Moisture & Temperature graph per expanded history batch.** Expanding a batch row (the existing click-to-expand) now also renders the same trend chart style used in Active Runs, built from that batch's own samples (already chronological — sorted once at load). Scoped to "click a batch" specifically; a separate per-date drill-down wasn't added — the chart's x-axis carries date+time so a multi-day batch's days are still visually distinguishable without a second click target.
+3. **Bulk Density trend + spec limits in Active Runs**, directly under the Moisture & Temperature chart. Spec limits come from the same source every other spec check on this page already uses — customer override, else the matched customer spec, else `PAST_SPEC_DEFAULTS.untapped_bd` (280–340) — so the limit lines always have real numbers, not only when a customer spec happens to match.
+4. **Moisture/Temperature colours swapped** (Moisture was orange/Temp blue; now Moisture blue / Temp orange) in both the Active Runs trend chart and the new History one, for the correction requested and for consistency between the two.
+
 ## 2026-08-21 — Gustav (Note Books: dropdown sections, drop the redundant Lot no. field, every field now required — STAGING ONLY)
 
 **Files changed:** `supabase/migrations/20260821_002_notebooks_drop_redundant_lot_no.sql` (new, applied to **staging only**), `lib/notebooks/types.ts`, `lib/notebooks/server.ts`, `components/notebooks/note-draft.ts`, `components/notebooks/NoteFields.tsx`, `components/notebooks/NotePaper.tsx`, `app/(app)/notebooks/new/page.tsx`, `app/(app)/notebooks/[id]/page.tsx`, `app/api/notebooks/documents/route.ts`, `app/api/notebooks/documents/[id]/route.ts`
