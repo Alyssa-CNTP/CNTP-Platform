@@ -172,6 +172,22 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Cross-department — the books are written at the gate/store and read by
+    // Quality, Production and Management. Access is by permission only, so it
+    // can be granted to exactly the people who work a book.
+    module: 'Note Books',
+    resources: [
+      { key: 'notebooks.documents', label: 'GRN / Delivery Note books',
+        read: 'can_access_notebooks', write: 'can_create_notebook_doc',
+        manage: [
+          { key: 'can_sign_notebook_doc', label: 'Sign a note with your own signature' },
+          { key: 'can_request_external_signature', label: 'Send a driver/recipient an external signing link' },
+          { key: 'can_void_notebook_doc', label: 'Void an issued note (number is kept, never reused)' },
+        ],
+        note: 'A note keeps its number for life — a mistake is voided and rewritten, never renumbered.' },
+    ],
+  },
+  {
     module: 'Management', department: 'Management',
     resources: [
       { key: 'management.dashboard', label: 'Management dashboard & reports',
