@@ -15,6 +15,35 @@ Reported from Sieving: the red *"Your weights are saved, but the input/output ro
 - **The banner now quotes Postgres' `details` and error code**, not just `message`. `message` names the constraint but `details` names the offending key (`Key (session_id, bag_no)=(…, 3) already exists`) — without it a duplicate-key report can't be traced to the row that caused it.
 - **Known, not fixed here:** a removed (voided) bag's `prod_bagging` row is excluded from the production order (`order-detail.ts` filters voided serials) but *not* from `shift-report-builder.ts` or the dashboard row/supply routes, so its kg still counts there.
 
+## 2026-08-21 — Gustav (Lab Results upload: say WHICH Gemini quota was hit, and let a 429 slow the queue down)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Follow-up to yesterday's 503-vs-429 split. With that live, the Micro upload now fails with a *429* instead — i.e. a genuine rate-limit response, not Google capacity — even though the account is on a paid plan. The previous change could say "this is a quota", but not *which* quota, so it still couldn't distinguish "we are genuinely over a paid limit" from "the key deployed on the VPS isn't the paid one". Two gaps caused that, both fixed here:
+
+- **Google's own explanation was being thrown away.** The 429 body names the exceeded quota in a `QuotaFailure` block, and the metric contains `free_tier` when the key is billed on the free tier — the single fact that settles the question. It was captured into `GeminiTransient.detail` and then never used. It's now surfaced in the message and logged in full server-side. `quotaId` and `quotaMetric` are preferred over `message`, because the id spells out both the tier and the window (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`) whereas `message` is always the same "check your plan and billing".
+- **The detail was truncated to 200 chars**, which cut the diagnostic off entirely — Google's generic message alone is ~200 chars and the `QuotaFailure` block comes *after* it. Raised to 1500.
+- **A free-tier 429 now says so outright**, naming `GEMINI_API_KEY` on the VPS and the paid "CNTP Gemini" project as the thing to check, since no amount of retrying or pacing can fix a key on the wrong plan.
+- **Adaptive backpressure.** Yesterday's change dropped the pacing floor from 4500ms to 500ms on the assumption the key is paid — if that assumption is wrong, the floor was making 429s *more* likely, and it would have stayed wrong indefinitely. A 429 now doubles the effective gap for the whole shared queue (500→1000→2000→4000→4500, capped at the old free-tier-safe value) and each clean call halves it back toward the floor. The floor can no longer be wrong in a way that persists: the queue discovers the real limit from the first 429.
+- Verified against realistic Gemini 429 bodies by running the real source block: free-tier-per-day → the key-is-wrong message; paid-per-minute → the generic quota message plus the per-day-cap hint; 503 → unchanged; backpressure ramp/decay as above.
+
+## 2026-08-20 — Alyssa (Capture: "Bags this shift" — the whole shift's bags in and out, as a reference)
+
+**Files changed:** `components/production/capture/ShiftBagLog.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested by the afternoon shift: they want to see the entire shift's bags **inputted (debagging)** and **outputted (bagging)** while capturing, as a reference.
+
+Why it wasn't already possible: the Capture tab only ever renders the batch record open on screen, so anything captured under an earlier record on the same shift (a record submitted before "Start new batch record" opened the next one) was invisible there. Overview does list every bag, but it merges **both** shifts into one product/lot rollup and only counts sibling records whose variant/grade matches the active one — so neither screen answered "what has *this shift* put in and taken out so far", the question asked at every changeover, hand-over and stock check.
+
+- **New `ShiftBagLog`** — a collapsed one-line card between the batch card and the capture form on the Capture tab: `Bags this shift · in N bags / X kg · out N bags / Y kg`. Expanding it shows two lists, Debagged in and Bagged out, each row carrying its time (SAST), product, serial/bag number, lot and kg. Lists are capped and scroll inside the card so a reference can never push the capture form off a tablet screen; the card hides itself entirely until the shift has captured something.
+- **Scope is the whole shift on that line**, all batch records, whatever each was running — that's what "the entire shift's bags" means. Each record is listed under its own heading with its variant/grade and a `current` chip, so a record on another grade explains itself rather than looking like a stray total. The panel shows **no in-vs-out variance**: it is a bag list, not a second mass balance, and it deliberately can't be misread as one.
+- **Every section is read through an explicit `sectionId` switch** (sieving, refining1/2, granule, blender/smallblender, pasteuriser) rather than by duck-typing the shared `inputs`/`outputs`/`debag` field names — the lines are independent processes that happen to reuse those names. Pasteuriser pallet lines count as their many physical bags (`bags × kg/bag`, the same figure `prod_bagging` stores); granule dust rows likewise. Sieving's bucket-elevator and machine spillage are excluded: they're carry-over/loss figures, not bags, and already read on the mass balance.
+- **Data comes from the same place the screen already trusts** — the live in-memory records for the open session, plus the `draft_data` of the shift's other `prod_sessions` rows (already fetched by the existing load, now also kept **unfiltered** for this panel in `shiftOtherProductions`). No new query, and no reading of `prod_debagging`/`prod_bagging`, whose rows lag the screen by up to an autosave.
+- **`siblingProductions` is unchanged.** The variant/grade match filter on that set guards the mass balance from combining two different grades' or blends' balances; only the new unfiltered set feeds the bag log.
+- **`startNewProduction()` now hands the closing record to the bag log** before clearing local state. Without it, submitting a batch and starting the next one dropped "Bags this shift" to zero until a page reload, since sibling session rows are only re-read on load. It is deliberately *not* added to the mass-balance set, for the reason above.
+
+Verified: renders and totals correct against representative sieving data across two batch records on different grades (in 4 bags/1997.4 kg excluding the 120 kg elevator figure, out 4 bags/781.3 kg), SAST times correct from UTC instants, single-row header on tablet and a wrapped two-row header on a phone with no horizontal overflow, no console errors. Typecheck and lint clean on both files.
+
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)
