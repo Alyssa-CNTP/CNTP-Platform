@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Alyssa (Capture: bagging rows stop saving after an output bag is removed — duplicate bag_no)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported from Sieving: the red *"Your weights are saved, but the input/output row list didn't save"* banner, repeating on every save (and every 30s autosave), with `bags: duplicate key value violates unique constraint "prod_bagging_session_bag_uidx"`. The mass balance kept saving correctly the whole time, so the production order and shift report showed a correct total over a frozen row list.
+
+- **Cause: `bag_no` is renumbered from 1 on every save, but the deletes before the insert deliberately don't clear every row.** Since #635 the bagging write only clears the no-serial rows plus the specific serials it's about to rewrite — a serialed bag that's dropped out of `draft_data` is left alone on purpose, because blanket-deleting them is how 44% of Fine/Coarse Leaf bags went missing. Removing an output bag on the capture screen (which voids its `bag_tags` row but keeps its `prod_bagging` row) therefore leaves a row still holding, say, `bag_no` 3, while the four bags left on screen renumber to 1–4 — and production carries a unique index `prod_bagging_session_bag_uidx` over `(session_id, bag_no)` (DB-only; not in `supabase/migrations`), so the insert collides and the whole row list is lost. Every subsequent save collides identically.
+- **Fix:** after the deletes, read the `bag_no` values still held by that session and hand the payload the numbers that are actually free, in captured order. Nothing reads `bag_no` as a dense 1..N — `lib/production/order-detail.ts` renumbers rows for display — so a gap costs nothing, where a collision costs the entire row list.
+- **Blank serials are now stored as `NULL`, not `''`.** Refining and Granule-dust output bags start life as `serial: ''`, and the autosave stored that empty string as a real value: the "clear the no-serial rows" delete is an `IS NULL` and so never matched it again, `(session_id, bag_serial_no)` uniqueness read two untagged bags as the same bag, and on `prod_debagging` a blank fails the `bag_serial_no` FK outright. Normalised for both input and output rows.
+- **The same serial twice in one session** (one physical bag captured twice) no longer takes the whole insert down on `prod_bagging_session_serial_uniq` — the first row keeps the serial, the duplicate keeps its weight without one, so the row list still adds up to the mass balance the operator signed.
+- **The banner now quotes Postgres' `details` and error code**, not just `message`. `message` names the constraint but `details` names the offending key (`Key (session_id, bag_no)=(…, 3) already exists`) — without it a duplicate-key report can't be traced to the row that caused it.
+- **Known, not fixed here:** a removed (voided) bag's `prod_bagging` row is excluded from the production order (`order-detail.ts` filters voided serials) but *not* from `shift-report-builder.ts` or the dashboard row/supply routes, so its kg still counts there.
+
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)
