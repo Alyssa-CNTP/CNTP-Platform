@@ -30,10 +30,15 @@ export function ReopenRequestsPanel({ onCountChange }: { onCountChange?: (n: num
 
   async function load() {
     setLoading(true)
+    // Archiving a session auto-declines any pending request against it, but a
+    // request created before that guard existed can still be sitting here
+    // pointing at a record that's gone from every other queue — filter those
+    // out defensively rather than trust the auto-decline alone.
     const { data } = await getDb().schema('production').from('po_reopen_requests')
-      .select('id,session_id,section_id,date,shift,requested_by_name,reason,status,created_at')
+      .select('id,session_id,section_id,date,shift,requested_by_name,reason,status,created_at,prod_sessions(deleted_at)')
       .eq('status', 'pending').order('created_at', { ascending: true })
-    const rows = (data as ReopenReq[]) ?? []
+    const rows = ((data as (ReopenReq & { prod_sessions: { deleted_at: string | null } | null })[]) ?? [])
+      .filter(r => !r.prod_sessions?.deleted_at)
     setReqs(rows)
     onCountChange?.(rows.length)
     setLoading(false)

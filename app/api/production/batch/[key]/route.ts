@@ -17,9 +17,10 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { key: string } }) {
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ key: string }> }) {
   try {
-    const key = normalizeBatch(decodeURIComponent(params.key))
+    const { key: rawKey } = await params
+    const key = normalizeBatch(decodeURIComponent(rawKey))
     if (!key) return NextResponse.json({ error: 'Invalid batch key' }, { status: 400 })
 
     const db = await createServerSupabaseClient()

@@ -60,6 +60,10 @@ export interface RosteredPerson {
 
 export interface PresentPerson {
   personName: string
+  /** Only set when this name matches someone on the roster for this shift —
+   *  neither the timesheet nor the capture session carries an employee id of
+   *  its own, so an unrostered swap nobody wrote down can't be linked. */
+  employeeId: string | null
   sectionIds: string[]
   workedMinutes: number
   firstIn: string | null       // ISO
@@ -70,6 +74,7 @@ export interface PresentPerson {
 
 export interface AbsentPerson {
   personName: string
+  employeeId: string | null
   roleName: string
   /** 'leave' — an approved leave period covers this date; 'no_record' — rostered
    *  but nothing (no timesheet, no capture) shows them on the floor. */

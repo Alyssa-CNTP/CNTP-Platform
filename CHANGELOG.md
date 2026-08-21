@@ -2,6 +2,237 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)
+
+Reported as: on most production orders the Debagging — inputs panel pulls nothing from the database, but the mass balance is right.
+
+Root cause: `persist()` wrote the input rows as one multi-row `prod_debagging` insert **whose result was never checked**. One unacceptable value in any row therefore lost every input row for that session — while `draft_data` (written before) and `prod_mass_balance` (written after, and computed from `draft_data`, not from these rows) both saved normally. So the order read "No inputs recorded" under a perfectly correct total, with nothing in the capture UI, the console or the DB saying why. Three separate causes were confirmed against the staging database by replaying the exact payloads capture sends:
+
+- **`22008 date/time field value out of range`** — Refining stores the delivery date the way the floor writes it on a bag tag, `DD-MM-YY` (`todayDelivery()` in `RefiningCapture`, and the same conversion in its system-pick and scan handlers). Postgres rejects that on a `date` column. Every Refining order lost its inputs.
+- **`23503` FK violation on `prod_debagging_bag_serial_no_fkey`** — `bag_serial_no` was set for any row whose `inputMode` wasn't `manual`, on the assumption that scan/system rows are always in `bag_tags`. Blender's scan rows routinely carry the date written on an untagged bag (e.g. `18-11-22`), which is in no `bag_tags` row. Every Blender order lost its inputs.
+- **`PGRST204` unknown column `batch_id`** — for the window between the batch-spine code shipping and its migration reaching a database, every section's insert failed. This is what emptied Sieving and Granule records up to 2026-08-11.
+
+Fixes, all at the write layer rather than in each capture screen (same chokepoint principle as `upperCode` for lot numbers):
+
+- **New `lib/production/db-date.ts`** — `dbDate()` normalises a captured date to `yyyy-MM-dd`, or null when there's nothing usable. Accepts ISO and day-first `d-M-yy` / `d-M-yyyy` with `-`, `/` or `.`; rejects the almost-valid (31 February) by round-tripping through UTC rather than letting Postgres roll it over; drops anything unparseable rather than letting it fail the write it travels in. Verified against 19 cases including `20-08-26`, `05-03-08`, `2026-08-20T14:05:00Z`, `31-02-26`, `08/20/2026` and blank/null input.
+- **`bag_serial_no` is now verified against `bag_tags`** in one batched query before the insert; a serial that isn't a real tag is moved into `notes` (it's still the only identifier that bag has) and the FK column left null.
+- **The writes are error-checked and surfaced.** `prod_debagging` and `prod_bagging` insert/delete results are inspected, and a failure raises a red banner on the capture screen: the weights are saved, the row list isn't, here is the database message to send IT. `prod_bagging` is included because it has emptied out on production before in exactly the same silent way.
+- **`scripts/backfill-debag-rows.cjs`** rebuilds the missing rows from `draft_data` (that's where every input has been safely stored all along). Dry-run by default; only touches sessions with **zero** existing rows, so it can't overwrite a real save and is safe to re-run. Dry-run against staging finds **74 sessions / 606 recoverable input rows** (sieving 160, blender 291, granule 88, refining1 47, refining2 20) — not run yet, awaiting the go-ahead.
+
+**The repair itself hasn't been run on either database.** The code fix only stops new records losing their rows; existing orders stay empty until the backfill runs — `node scripts/backfill-debag-rows.cjs` (dry run, writes nothing) then `--apply`, on staging and, once this is promoted, on production. Nothing else about the data changes.
+## 2026-08-20 — Alyssa (Reopened production records no longer demand a shift-changeover PIN)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported as: reopening a signed-off production record still asks who is on shift, even for a user who holds the permission to reopen.
+
+Root cause: the two reopen endpoints (`app/api/production/orders/[id]/route.ts`, `.../reopen-request/route.ts`) check `can_edit_session` and then only flip `status` back to `'draft'`. The 16h00 shift-changeover gate in capture is keyed off `status` and the clock — `pastChangeover() && !(status === 'submitted' || status === 'approved')` — and nothing else. Submitted/approved suppressed it; reopening put the record straight back into the "still being captured" state, so a morning record reopened after 16h00 raised the full-screen operator-PIN overlay ("Shift changed — confirm who's capturing"). It has no role or permission exemption, so a Production Manager or IT reopening a record to fix a weight hit the same wall as a floor operator, and confirming wrote a `shift_takeovers` row for a hand-over that never happened.
+
+- A record is now recognised as **reopened** rather than live: `submitted_at` is selected with the session, and a `'draft'` that still carries one was submitted and then reopened (reopen doesn't clear it), which a genuine open morning draft never is.
+- The changeover gate is skipped for a reopened record **only** when the current user has `can_edit_session` — the same permission the reopen endpoints require. Anyone who could have reopened it can edit it after 16h00 without PINning in as the incoming operator.
+- Unchanged for everyone else: a floor operator opening a reopened record, and any live morning session past 16h00, still hit the PIN gate, so the `shift_takeovers` audit trail keeps every real hand-over. The gate is still one-shot per session (an existing takeover row suppresses it).
+- `p()` from `useAuth` is aliased to `hasPerm` in this file, since `p` is already used as the arrow-function parameter name for productions throughout it.
+
+## 2026-08-20 — Gustav (Lab Results upload: drop the free-tier Gemini throttle now we're on a paid key)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Follow-up to the "Gemini overloaded" fix below, after confirming the Gemini key is a **paid** one. The upload queue's pacing gap was `4500ms`, explicitly sized for the **free** tier's 15 requests/minute (`// Prevents Gemini 429s on the free tier (15 RPM)`). Because `enqueueGemini()` is strictly serial, that capped the whole endpoint at ~13 requests/minute regardless of what the key is entitled to — so a 10-PDF batch upload burned ~45s sitting in the gap before any extraction time. That ceiling is now the binding constraint on nothing but our own code.
+
+- Gap default is now `500ms` (~120 req/min) — still far below any paid-tier limit, but no longer the bottleneck on a batch upload.
+- Overridable via a new **`GEMINI_MIN_GAP_MS`** env var, so the tier can change without a code change. Set it back to `4500` if the key ever reverts to free tier.
+- Parsed defensively: unset, blank, malformed or negative values fall back to 500. (`Number('')` is `0`, which would have silently removed the pacing entirely — an explicit `0` is still honoured if someone sets it deliberately.) Verified across `undefined`/`''`/`'   '`/`'abc'`/`'0'`/`'250'`/`'-1'`/`' 300 '`/`'1e3'`.
+- Safe in combination with the retry ladder below: a 429 from too-aggressive pacing now backs off and honours `Retry-After` rather than failing the upload.
+- **Not changed:** `lib/axis/categorize.ts` has the same 4500ms constant, but it's a scheduled background job whose comment states the intent is to stop concurrent triggers bursting the API, and its speed doesn't affect anyone waiting on a screen. Left alone deliberately.
+
+## 2026-08-20 — Gustav (Lab Results upload: stop spurious "Gemini is temporarily overloaded" failures)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported: uploading a Micro COA PDF failed with "Gemini is temporarily overloaded. Please wait 30 seconds and try again." while the account was nowhere near its quota. The message was misleading rather than wrong: `callGemini()` mapped **both** HTTP 429 (our own rate limit) **and** HTTP 503 (Google's own "model overloaded") to the same internal `RATE_LIMIT:` tag, so a capacity problem on Google's side was reported as if it were our usage. Compounding it, the model tried *first* was `gemini-3.1-flash-lite-preview` — a preview endpoint, which gets far less serving capacity than a GA model and therefore returns 503 in bursts unrelated to anything we do.
+
+- **GA model first:** `GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']`. The stable model now leads and the preview one is the fallback (it was the other way round). `gemini-2.5-flash` is also the larger of the two, so this is a small accuracy win on dense reports as well.
+- **429 and 503 are now distinguished** via a `GeminiTransient` error carrying the status, and the final message names the real cause — "capacity on Google's side, not our usage or quota" vs "our own request quota" — so this can't be mistaken for a quota problem again.
+- **Retry ladder widened:** 6 attempts (3 rounds × 2 models) over ~20s with jittered backoff, up from 4 attempts in ~13s, since 503s arrive in bursts that outlasted the old window. Jitter prevents concurrent uploads retrying in lockstep. Honours Google's `Retry-After` header when it sends one. Deliberately capped near 20s because `enqueueGemini()` serialises calls, so a longer ladder would stall other queued uploads.
+- **Retryable set widened** to 429/500/502/503/504; anything else (e.g. a 400 bad request or a revoked key) now fails immediately instead of being retried six times behind an "overloaded" message that hid it.
+- **Scanned PDFs now retry too.** `callGeminiWithPdf()` previously made a *single* un-retried call with no model fallback, so one transient 503 failed the upload outright — the worst case, since a scanned report has no text path to fall back on. It now shares the same ladder.
+- Verified by extracting the real retry block from the source and running it against a mock transport: all-503 → 6 attempts then the capacity message; all-429 → the quota message; 400 → immediate single-attempt failure; 503-then-OK → succeeds on the fallback model; recovery on round 2 → succeeds; `Retry-After: 20` → honoured.
+
+## 2026-08-20 — Alyssa (Fix: a stale bag serial blocked saving an In-Process sieving run)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported as: an In-Process run refused to save, complaining the serial number belonged to Fine Leaf / couldn't be used — but In-Process QC samples the batch as a whole and has no serial number at all, so that error should never apply to it.
+
+Root cause: `validate()` ran the serial/tab mismatch check (`serialTabMismatch()`) **unconditionally**, on a field that In-Process neither shows nor saves. The serial input only renders for `runType==='final'` (it lives inside the Final-QC bag-picker block), and `addRun()` explicitly discards it for In-Process (`serial_number: form.runType==='final' ? … : null`). So a serial left in form state by an earlier Final QC — "Sample now →" pre-fills one, and the product-tab handler closed the form *without* resetting it — refused the In-Process save with `STFL-… is a Fine Leaf bag — it can't be used on the … tab`, naming a bag the QC could neither see nor clear, over a value that would never have been written. Only the summary error banner surfaced it, so it read as a stuck, unclearable error.
+
+- `validate()`: the mismatch check is now gated on `runType === 'final'`.
+- `InlineEditForm`: same guard, via a single `editSerialMismatch` value shared by the save guard and the inline warning so the two can't drift apart. This also unblocks *editing* legacy In-Process rows — before PR #646 In-Process auto-filled a serial, so those stored rows were previously impossible to save an edit to at all.
+- Product tabs: switching sieve now clears `serialNumber`/`baggingId` and the bag linkage (selected bag, lot message, tag-lookup state, errors), so a serial can't survive onto another product's tab in the first place. A serial belongs to exactly one product, so carrying one across tabs is always wrong.
+
+Same class of bug as the hidden Leaf Shade range check fixed via `fieldShown()` in PR #722 — a value the QC can't see must never be able to block the save. Merged via [PR #756](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/756).
+
+## 2026-08-20 — Alyssa (Fix: Sieving Quality overview silently dropped freshly-saved in-process runs)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported as: saving an In-Process run on Coarse/Fine Leaf appeared to do nothing — no error, but the run never showed up in the overview table/chart below, as if it hadn't saved. It *was* saving correctly. Root cause: saved runs are stamped with a SAST-based date (`sastDateStr()`, `Africa/Johannesburg`), but the overview table/chart's default date-range (`rangeStart`/`rangeEnd`), its 3-month fetch floor (`threeMonthsAgoISO()`), and the date-picker's `maxDate` all used `isoDate(new Date())`, which reads the **device's local system timezone** instead. On any device not set to SAST, a freshly-saved run's SAST date could fall outside that default window and get silently filtered out of `rangeRuns`/`filteredRuns` — and the date-picker's `maxDate` being stuck on the device's "yesterday" meant the user couldn't even manually widen the range to find it. Fixed by using `sastDateStr()` consistently everywhere the default window/bounds are computed, so the table/chart's "today" always matches the "today" runs are actually saved under. Merged via [PR #752](https://github.com/Alyssa-CNTP/CNTP-Platform/pull/752).
+
+## 2026-08-20 — Alyssa (Fix: batch KPI route never read the batch key — Next.js 16 async `params`)
+
+**Files changed:** `app/api/production/batch/[key]/route.ts`
+
+Even with both migrations applied, "View batch KPIs" still 404'd ("Batch not found") for a real batch (GS-0313, confirmed present in `production.batches` with valid `v_batch_360` data). Root cause: this was the only dynamic API route left in the whole codebase still typed as `{ params }: { params: { key: string } }` and reading `params.key` directly — every other `[id]`/`[key]`/`[token]` route already uses `{ params: Promise<{...}> }` + `await params`, per Next.js 15/16's breaking change making route params async. Next actually hands the route a `Promise`, so `params.key` was always `undefined`, `decodeURIComponent(undefined)` stringified to `"undefined"`, and the query ran for the literal batch key `UNDEFINED` — meaning this endpoint has never worked for *any* real batch on either environment, independent of the migration issue. Fixed by awaiting `params` like every other route does.
+
+## 2026-08-20 — Alyssa (Re-bag: capture real history when registering an untracked bag)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Follow-up to yesterday's "Not on the system yet" onboarding option: it only captured today's weight, losing the bag's real history. Registering a legacy bag now asks for its **original date and weight**, plus any number of **later known weight changes (date + weight each)** — its true history, not today's snapshot.
+
+- Each entry backdates a real `scan_events` row (`action: 'stock_count'`) to its actual date: the original weight as the bag's first-ever event, each later change logged as a delta from the previous known point. `bag_tags.created_at` is set to the real original date too, so "originally bagged" on the confirm screen shows the true date, not today.
+- The bag's current weight is computed from this history (original + all later changes), not re-entered — shown as a running total before saving.
+- Only once this baseline is saved and labelled does the actual re-bag/top-up transaction (choosing a target, moving weight, printing) proceed as its own separate step, exactly as before.
+- Validation: every weight change must fall on or after the original date (the delta math and "earliest event" lookup both assume chronological order); dates can't be in the future.
+
+## 2026-08-20 — Alyssa (Fix: 20260805_002 migration failed to run — view column reorder)
+
+**Files changed:** `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`
+
+Running `20260805_002` in the Supabase SQL Editor (staging) failed with `42P16: cannot change name of view column "has_quality" to "granule_moisture_latest"` — this is why it was never actually applied back on 2026-08-05 despite the changelog note asking for it. `CREATE OR REPLACE VIEW` only allows appending trailing columns; the migration's `v_batch_360` SELECT inserted the new granule/pasteuriser/lab columns *before* `has_quality`, shifting its position, which Postgres treats as a rename. Fixed by adding `DROP VIEW IF EXISTS production.v_batch_360;` before its `CREATE VIEW` (nothing else in the schema depends on it), and wrapping the whole migration in `BEGIN`/`COMMIT`. `v_batch_quality`'s own `CREATE OR REPLACE` only ever appended columns and was never the problem. Re-run `20260805_002` then `20260820_001` in that order in the Supabase SQL Editor — staging first, then production once promoted.
+
+## 2026-08-20 — Gustav (Pasteuriser: Reload Spec button to re-check a run against an updated Specifications entry)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+Requested: a customer spec edited in the Specifications tab after a Pasteuriser run was already started never reached that run — `_spec` (the matched spec row) and `batch_specs` (its flattened min/max values, which every in-spec check actually reads) are both snapshotted once at batch creation, so there was no way to see whether already-recorded samples were still in spec against the new numbers without deleting and recreating the run.
+
+- New "🔄 Reload Spec" button next to the batch's spec badge (hidden once the batch is finalised). Re-runs the same customer-vs-generic spec match used at creation for this batch's product family/grade/variant, confirms with the QC (since it overwrites this batch's current spec values), then overwrites both `_spec` and `batch_specs` and saves — every sample's pass/fail re-evaluates immediately because those checks already read live off the batch, not a cached result.
+- If no matching spec exists any more, it says so and changes nothing.
+
+## 2026-08-20 — Alyssa (Fix: "View batch KPIs" broken — missing migration + Sieving multi-lot session gap)
+
+**Files changed:** `supabase/migrations/20260820_001_fix_multi_lot_session_batch_kpis.sql` (new), `app/api/production/yield-analytics/route.ts`
+
+**⚠ Requires running, in this order, in the Supabase SQL Editor (staging first, then production once promoted):**
+**1. `supabase/migrations/20260805_002_batch_quality_granule_pasteuriser_lab.sql`** — written 2026-08-05, flagged then as requiring a manual run, but never actually applied to staging (confirmed live: `v_batch_360` is still missing `granule_moisture_latest` and the other columns that migration adds).
+**2. `supabase/migrations/20260820_001_fix_multi_lot_session_batch_kpis.sql`** — the new fix below.
+
+Reported as "batch KPIs don't work for Fine/Coarse Leaf." Investigation found two separate bugs:
+
+- **Bug 1 (universal, currently 500s for every batch, not just Fine/Coarse Leaf):** `/api/production/batch/[key]` selects `granule_moisture_latest` and other columns from `production.v_batch_360` that `20260805_002_batch_quality_granule_pasteuriser_lab.sql` was supposed to add — but that migration was never run on staging (its own CHANGELOG entry flagged the manual step and it was missed). Reproduced live: every `/api/production/batch/<lot>` call currently returns `{"error":"column v_batch_360.granule_moisture_latest does not exist"}`. No code fix needed — just run the migration that's already sitting in the repo.
+- **Bug 2 (Fine/Coarse Leaf specifically, and any batch that hasn't left Sieving yet):** Sieving Tower debags several different raw-material lots into one shift session, so it has no single session-level lot — `production.prod_sessions.batch_id`/`lot_number` are `NULL` for every Sieving session (confirmed live for the 10 most recent). `v_output_stream` and `v_batch_360`'s rollup both keyed off that session-level `batch_id`, so a batch that's only been through Sieving got zero rows in "Output mix" and blank Yield/Output/Input tiles, even once Bug 1 is fixed. The bag rows themselves (`prod_debagging`/`prod_bagging`) already carry the correct per-row `batch_id` (set by `resolveBatchIds()` from each bag's own lot); `20260820_001` rewrites `v_output_stream` to key off that instead, and adds a bag-sourced fallback to `v_batch_360`'s rollup for any batch the session-based rollup finds nothing for — additive only, doesn't change any already-working figure. `yield-analytics/route.ts`'s "recent batches" list now also unions batch keys discovered via `v_output_stream`, so a Sieving-only batch shows up there too.
+
+## 2026-08-20 — Alyssa (Re-bag: distinct color + allow registering untracked source bags)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Follow-up to the re-bagging feature below: the button/modal now use a distinct violet accent instead of the brand green, so re-bagging reads as a different category of action from ordinary capture (feedback: it blended in too much).
+
+- Third source option alongside scanning an existing bag: **"Not on the system yet"** — not all floor material is tracked yet during the transition to this system. Reuses `OutputPicker` to pick what it is and weigh it, generates a real serial, prints a label for it (it never had a system barcode before), and logs it as a `stock_count` scan_events row rather than `bagging_out` — this is old material entering tracking today, not fresh production, so it must never count toward today's output (the existing `bagging_out`-only production sums already exclude it with zero further changes).
+- Once registered, that bag is treated exactly like any existing tracked bag for the rest of the flow (target selection, confirmation, transfer, printing).
+
+## 2026-08-20 — Alyssa (Re-bagging: capture-page material transfer, cross-SKU, existing or brand-new target)
+
+**Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/RebagModal.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`
+
+Generalizes the shipped bag-weight top-up feature into full re-bagging: a bold "Re-bag material" button on the capture page (not the separate Tags page) lets an operator move weight out of an existing bag into either another existing bag or a **brand-new** one — including across different product types/SKUs, a first-class case here rather than just a warned mismatch.
+
+- New `createBagFromTransfer()` in `scan-utils.ts`: same source-side draw-down (reduce or void) as the existing `transferBagWeight()`, but the target side is an INSERT — a new physical bag born from material moved out of an existing one. Its first-ever `scan_events` row is `'topped_up'` (not `'bagging_out'`), which is what keeps it out of every `'bagging_out'`-only production sum — the kg was already counted as production on the day the source bag was first bagged. No new migration needed: the existing action list and `related_serial_number` column already cover this.
+- New `originalBagEvent()`: recovers a bag's starting weight from its earliest `scan_events` row (`bag_tags.weight_kg` gets overwritten in place on every top-up/re-bag, so it can't tell you what a bag started at).
+- `RebagModal.tsx` (new): scan/type the source bag → choose an existing target or pick a brand-new one (reusing `OutputPicker` unmodified, so the Fine/Coarse Leaf batch requirement comes along for free) → a confirmation screen showing, for every existing bag involved, its current weight, original bagging date/weight, full history, both resulting weights as explicit labelled fields, and both serials, before printing.
+- **Printing rule, deliberately not a blanket force**: the source bag (always) and an existing target both get an unconditional forced reprint — their physical label is now stale the moment the weight changes, same as the shipped top-up feature. A brand-new target bag has no prior label, so it gets the ordinary "Print label" / "Write on tag" choice every other freshly bagged output already gets, instead of a forced print — several sections share one physical printer, and forcing a print job on every re-bagged new bag would add contention for no safety benefit.
+- **Production Orders fix**: creating a new bag via re-bag would otherwise inflate that day's "Bagging — outputs" total with kg already counted as output on whichever earlier day the source bag was first produced (Production Orders reads a live `bag_tags` snapshot, not an event ledger, so it never had this problem before — top-up only ever updated existing rows). `order-detail.ts` now batches each active bag's earliest `scan_events` row to tell a bag *born* via re-bag apart from an ordinary bag merely topped up later, excludes the former from `bagsOutputKg` (both per-shift and whole-day), and surfaces it instead in a new informational "Re-bagged in" panel with its item ID and source bag, never summed into any output total.
+- Pasteuriser excluded, same reason as the top-up feature (no per-bag records today). Acumatica ERP stock adjustments are explicitly out of scope for this build — today's integration is read-only; transactions are recorded locally for now.
+
+## 2026-08-20 — Alyssa (Roster: surface save/submit failures. Shift Report: collapsible + linked attendance)
+
+**Files changed:** `app/(app)/supervisor/roster/page.tsx`, `app/(app)/supervisor/report/page.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`
+
+Reported: rostering people "isn't working as well," and the supervisor's save-then-send-to-Production-Manager flow doesn't seem to work.
+
+- **Roster (Staffing tab) — real bug fixed:** three Supabase writes in `saveDraft()`/`submit()` (the `roster_entries` delete, and both `roster_section_status` upserts) never checked their `{error}` — Supabase-js returns errors rather than throwing, so a failed write still fell through to the success path: the UI said "Saved" or "Confirmed" while the status row (what the Production Manager and the page's own badge actually read) silently didn't persist. A failed delete ahead of the insert that follows it would also have duplicated every row instead of replacing them. All three now check their error and throw into the existing catch block; the error banner is upgraded from a bare line of red text to the same alert-box style used elsewhere in the hub.
+- **Roster send-to-PM — investigated, not a bug:** traced the flow end to end; the code works correctly. The Send/"Confirm roster" button is gated on `can_submit_roster_production`, which was deliberately moved off `production_supervisor` onto a `production_manager` role in an earlier change (the supervisor's draft is only official once a manager signs off) — confirmed with Alyssa this model stays as-is. If nobody is actually signed in as `production_manager`, a supervisor's saved draft will look stuck with no Send button — that's a role-assignment gap to check, not a code fix.
+- **Shift Report "Who was here":** the present/absent/unrostered tables are now wrapped in the existing `Collapse` component (open by default — this is the section's main content). Threaded an `employeeId` through `PresentPerson`/`AbsentPerson` (`lib/production/shift-report.ts`, `shift-report-builder.ts`) so a name links to their Staff Directory profile whenever it matches a rostered person for that shift — the only data source that carries an id; an unrostered swap has none to link to and stays plain text. Links fall back to plain text on print.
+
+**Also investigated (no code change yet, pending your input):**
+- **Capture ratings "not working":** the feature is fully built, not stubbed. Confirmed the underlying tables (`capture_ratings`, `capture_rating_audit`, `v_capture_scoreboard`) exist on the staging Supabase project. Given this repo's migration pipeline is manual-only, the strongest remaining lead if it's still not working live is that migration `20260730_001` was never run against the production database — worth confirming directly (the Team tab already shows an explicit "not available yet" banner rather than failing silently, if that's the case).
+- **Timesheets "same for both people on a shift":** held off pending more detail from Alyssa — her clarification (shared-per-section timesheet when either operator signs in; breakdown/maintenance visibility; suggested pre-filled activity types like Deep Clean/Breakdown) is a real feature to scope properly, not a quick fix, especially since forcing identical shift windows would reverse the PR #408 fix that intentionally kept per-operator break accuracy.
+
+## 2026-08-20 — Alyssa (Supervisor Hub Dashboard: line filter, mass balance input/output)
+
+**Files changed:** `app/(app)/supervisor/page.tsx`
+
+Requested: the Dashboard tab filterable by line, showing mass balance input and output.
+
+- Added a line filter on "Lines this shift" — lists only the sections actually running this shift (not the full 7-section list), defaulting to All lines.
+- Added a mass balance summary strip (kg in, kg out, net balance) above the line list, which reacts to the filter — pick one line to see just its balance, or leave it on All lines for the shift total.
+- Each line row now shows input kg alongside output kg (was output-only); the output figure still turns amber when that line's mass balance is outside tolerance.
+- The underlying report data (`lib/production/shift-report.ts`'s `LineReport`) already carried `inputKg` — it just wasn't surfaced on this page. No API or data changes needed.
+- The line filter is display-only (it narrows what renders, nothing else) — doesn't conflict with the dashboard's standing rule of holding no sign/edit/approve controls of its own.
+
+## 2026-08-20 — Alyssa (Supervisor Hub: today's records first by default, Sort + Section filters on Sign-off)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`
+
+Requested: today's records should show first, and let the supervisor choose their own filters.
+
+- Default order flipped to newest-first — today's shift now shows at the top of "Waiting for your signature" instead of being buried under weeks of oldest-first backlog.
+- Added a **Sort** toggle (Newest first / Oldest first) — a supervisor working through a real backlog still wants oldest-first, so this is a viewer choice, not a fixed order.
+- Added a **Section** filter (All sections or one specific line), alongside the existing 7/30/all-time **Show** window from the prior pass.
+- A **Reset** link appears once any control has been moved away from the defaults (7 days / newest first / all sections).
+- Reopen requests and job-card approvals stay unfiltered by Sort/Section, same reasoning as the existing Show window: a pending decision doesn't get less relevant with age or by which line it's on.
+
+## 2026-08-20 — Alyssa (Supervisor Hub: filterable 7/30/all-time window on Sign-off, softer age badges)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`
+
+Follow-up to the redesign below, after seeing it live on staging with real backlog (74 outstanding items, some 60+ days old): the queue has no natural ceiling, so unfiltered it read as weeks of noise burying anything current, and almost every row's "Xd old" badge was rendering red with a warning triangle — the whole page looked like it was on fire.
+
+- Added a Show: **7 days / 30 days / All time** filter, defaulting to 7 days. Applies to the two date-bearing sections (capture records + shift reports waiting for signature, and records still open from a finished shift). Filtering never deletes data — switching to "All time" is one click and the header subtitle always states how many more are further back.
+- Reopen requests and job-card approvals are deliberately **not** windowed — a pending decision doesn't get less urgent with age, so hiding an old one would be the wrong instinct.
+- Re-tiered the age badge: red + warning triangle now only at 30+ days, amber at a week or more, plain neutral under that (was: red past 3 days).
+
+## 2026-08-20 — Alyssa (Supervisor Hub: redesign Sign-off queue, fix archived orders leaking through reopen requests)
+
+**Files changed:** `app/(app)/supervisor/signoff/page.tsx`, `app/api/production/orders/[id]/route.ts`, `components/supervisor/ReopenRequestsPanel.tsx`
+
+Reported: the Sign-off tab was "very messy" and kept surfacing production orders that had already been archived on Production Orders.
+
+Retiered the queue by how much it's actually the viewer's job, instead of stacking every queue as an equally loud colored box:
+1. **Waiting for your signature** — submitted capture records and shift reports needing this viewer's action, merged into one card with sub-grouped headings instead of two separate boxes.
+2. **Needs a decision** — reopen requests, pasteuriser job-card approvals (unchanged components, just repositioned).
+3. **Records still open from a finished shift** — demoted to a quiet, muted flag at the bottom: it isn't the viewer's signature to give, just a heads-up that someone else's record needs finishing or archiving.
+
+Root cause of the archived-orders leak: archiving a session (`action: 'delete'` on `/api/production/orders/[id]`) sets `prod_sessions.deleted_at` but never touched any pending `po_reopen_requests` row against that session — so a reopen request created before the archive kept showing up on the decision queue forever, pointing at a record gone from every other list.
+
+- Archiving a session now auto-declines any pending reopen request for it (`decision_note: 'Auto-declined — record archived'`).
+- `ReopenRequestsPanel` additionally joins `prod_sessions.deleted_at` and filters out any request whose session is already archived, defensively covering requests created before this fix shipped.
+
+## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
+
+**Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
+
+Requested: raw-material leaf shade (from `qms.leaf_shade_predictions`, graded at intake) and the QC's own leaf shade at Sieving can legitimately differ for the same lot — the sieve run is the final truth, the raw-material figure is only a suggestion. Until now that suggestion was written straight into `sd_runs.leaf_shade` as the pre-filled value, so a saved run couldn't tell "the QC typed this" apart from "the QC left the suggestion unchanged" — losing the comparison the moment it was saved. Also flagged: a lot of raw material intake has no shade prediction on record yet, so the suggestion is often simply absent — expected, not a bug.
+
+- New nullable `qms.sd_runs.raw_material_leaf_shade` column, independent of `leaf_shade`.
+- Every place the raw-material shade gets suggested into the form (`lookupLot()` on typing a lot number, and `applyBagToForm()` on "Sample now") now also stamps this new column on save — capturing the suggestion whether or not the QC changed it, and even on In-Process runs where Leaf Shade has no visible input at all (Fine Leaf/Coarse Leaf).
+- `leaf_shade` keeps meaning exactly what it always has: the QC's own final entry. Nothing about validation or the save flow changed.
+- The edit-run save path is untouched, so editing a run never overwrites the raw-material snapshot captured at creation.
+
+## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+Reported: clicking "Sample now →" on a pending Fine Leaf/Coarse Leaf bag card (e.g. STFL-190826-004) alerted "was already sampled — nothing to do", even though the runs table showed no Final QC for that serial and the DB confirmed the bag was genuinely still pending (`qms.v_pending_bag_qc` had it, `qc_done: false`).
+
+Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the clicked card's `bagging_id` only. `production.prod_bagging` is a mirror row rewritten by `persist()` on every save (see migration `20260813_007`'s comment), so its `id` — our `bagging_id` — is not guaranteed to stay the same between when a card renders and when it's clicked. If the bag's mirror row got rewritten in between, the old id no longer matched anything in the fresh list, and the code treated "not found by that id" as "already sampled" instead of checking the bag's permanent serial number.
+
+- `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
+- Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
+
 ## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
@@ -37,28 +268,6 @@ The production order is now **one report per production day** — the morning (0
 - **AI checks summary**, **handover & operator notes**, and the **timesheet** (hours worked per operator) print on the report's later pages.
 - Read **live** across all the day's sessions (realtime + poll).
 - Repo cleanup: `.claude/worktrees/` is now git-ignored and the two stray committed worktree gitlinks removed.
-
-## 2026-08-19 — Gustav (Sieving: record the raw-material leaf shade suggestion separately from the QC's own entry)
-
-**Files changed:** `supabase/migrations/20260819_001_sd_runs_raw_material_leaf_shade.sql`, `app/(app)/quality/sieving/page.tsx`
-
-Requested: raw-material leaf shade (from `qms.leaf_shade_predictions`, graded at intake) and the QC's own leaf shade at Sieving can legitimately differ for the same lot — the sieve run is the final truth, the raw-material figure is only a suggestion. Until now that suggestion was written straight into `sd_runs.leaf_shade` as the pre-filled value, so a saved run couldn't tell "the QC typed this" apart from "the QC left the suggestion unchanged" — losing the comparison the moment it was saved. Also flagged: a lot of raw material intake has no shade prediction on record yet, so the suggestion is often simply absent — expected, not a bug.
-
-- New nullable `qms.sd_runs.raw_material_leaf_shade` column, independent of `leaf_shade`.
-- Every place the raw-material shade gets suggested into the form (`lookupLot()` on typing a lot number, and `applyBagToForm()` on "Sample now") now also stamps this new column on save — capturing the suggestion whether or not the QC changed it, and even on In-Process runs where Leaf Shade has no visible input at all (Fine Leaf/Coarse Leaf).
-- `leaf_shade` keeps meaning exactly what it always has: the QC's own final entry. Nothing about validation or the save flow changed.
-- The edit-run save path is untouched, so editing a run never overwrites the raw-material snapshot captured at creation.
-
-## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
-
-**Files changed:** `app/(app)/quality/sieving/page.tsx`
-
-Reported: clicking "Sample now →" on a pending Fine Leaf/Coarse Leaf bag card (e.g. STFL-190826-004) alerted "was already sampled — nothing to do", even though the runs table showed no Final QC for that serial and the DB confirmed the bag was genuinely still pending (`qms.v_pending_bag_qc` had it, `qc_done: false`).
-
-Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the clicked card's `bagging_id` only. `production.prod_bagging` is a mirror row rewritten by `persist()` on every save (see migration `20260813_007`'s comment), so its `id` — our `bagging_id` — is not guaranteed to stay the same between when a card renders and when it's clicked. If the bag's mirror row got rewritten in between, the old id no longer matched anything in the fresh list, and the code treated "not found by that id" as "already sampled" instead of checking the bag's permanent serial number.
-
-- `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
-- Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
 
 ## 2026-08-19 — Alyssa (Capture: self-heal bag_tags so a captured bag can't stay missing from the ledger/UI — promoted to production)
 

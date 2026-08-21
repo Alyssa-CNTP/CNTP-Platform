@@ -7,7 +7,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, ArrowRight, RefreshCw,
+  FileText, Check, ArrowRight, RefreshCw, Scale,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -34,7 +34,9 @@ import {
   PasteuriserCapture, emptyPasteuriserData, pasteuriserTotals,
   type PasteuriserData,
 } from '@/components/production/capture/PasteuriserCapture'
+import { RebagModal } from '@/components/production/capture/RebagModal'
 import { upperCode } from '@/lib/production/normalize-code'
+import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
@@ -135,7 +137,7 @@ function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
   const router = useRouter()
-  const { user, role, isSupervisor, isIT, signOut, displayName } = useAuth()
+  const { user, role, isSupervisor, isIT, signOut, displayName, p: hasPerm } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
   // Refining 1/2 and Blender have no machine checks configured (nothing on the
@@ -167,6 +169,10 @@ function CaptureScreen() {
   const dateParam = sp.get('date')  ?? nowFallback.date
   const meta      = sectionMeta(sectionId)
   const canApprove = isSupervisor || isIT || role === 'admin'
+  // Same permission the reopen endpoints check (app/api/production/orders/[id]).
+  // Whoever may reopen a signed-off record is also trusted to edit it after
+  // 16h00 without PINning in as the incoming operator — see the changeover gate.
+  const canReopen = hasPerm('can_edit_session')
 
   // Where "back" goes. Capture is reached from several places — the capture
   // landing page, Production Orders (with filters applied), the Supervisor Hub's
@@ -235,12 +241,23 @@ function CaptureScreen() {
   const [afternoonOps, setAfternoonOps]     = useState<{ id: string; name: string; pin: string }[]>([])
   const [takenOver, setTakenOver]           = useState(false)
   const [changeoverNeeded, setChangeoverNeeded] = useState(false)
+  // A draft that still carries submitted_at was signed off and then REOPENED
+  // (the reopen endpoints only flip status back to 'draft'). That is somebody
+  // fixing a finished record, not a live shift being handed over, so it must
+  // not be treated the same as a morning session still open on the floor.
+  const [reopened, setReopened]             = useState(false)
   const [comments, setComments]   = useState('')          // operator handover note → prod_sessions.comments
   const [prevNote, setPrevNote]   = useState<{ note: string; shift: string; date: string } | null>(null)
   // Whether the last production_runs full-day rollup write failed — surfaced so
   // a supervisor never trusts a full-day total that may be stale with zero
   // visible sign anything went wrong (see persist()'s run-rollup try/catch).
   const [runRollupStale, setRunRollupStale] = useState(false)
+  // Set when a structured input/output row write failed. Those writes are
+  // separate statements from draft_data and the mass balance, so they can fail
+  // on their own and leave a production order reading "No inputs recorded"
+  // against a perfectly correct total — which is what happened, three
+  // different ways, until it was surfaced. See persist().
+  const [rowWriteError, setRowWriteError] = useState<string | null>(null)
   const [tab, setTab]             = useState<Tab>(() => {
     const t = sp.get('tab')
     if (t === 'checks' && !hasChecks) return 'production'   // stale ?tab=checks on a section with no checks
@@ -253,6 +270,7 @@ function CaptureScreen() {
   const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
   const [changeoverAsk, setChangeoverAsk] = useState(false) // early-submit "is there a changeover?" prompt
   const [gradeChangeover, setGradeChangeover] = useState(false) // Sieving: mid-shift grade/variant changeover confirm
+  const [rebagOpen, setRebagOpen] = useState(false) // Re-bag material: move weight from an existing bag into another (existing or new)
   const [error, setError]         = useState<string | null>(null)
 
   // Serial counter, seeded from existing tags for this section+date
@@ -312,7 +330,7 @@ function CaptureScreen() {
       // that happen to share a shift; their balances must never be summed
       // together just because of that coincidence.
       const { data: shiftSess } = await db.schema('production').from('prod_sessions')
-        .select('id,status,draft_data,comments,created_at')
+        .select('id,status,draft_data,comments,created_at,submitted_at')
         .eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
         .order('created_at', { ascending: false })
       const shiftRows = (shiftSess as any[]) ?? []
@@ -382,6 +400,7 @@ function CaptureScreen() {
         setSessionId(resolvedSid)
         sessionRef.current = resolvedSid   // so autosave targets this row, never creates a duplicate
         setStatus((sess as any).status)
+        setReopened((sess as any).status === 'draft' && !!(sess as any).submitted_at)
         // Best-effort run link — isolated so a missing run_id column can't break load.
         try {
           const { data: rr } = await db.schema('production').from('prod_sessions')
@@ -821,7 +840,12 @@ function CaptureScreen() {
     if (takenOver) { setChangeoverNeeded(false); return }
     const check = () => {
       const done = status === 'submitted' || status === 'approved'
-      const needed = pastChangeover() && !done
+      // Reopened records are exempt for anyone who could have reopened them:
+      // demanding an operator PIN from a manager fixing a weight after 16h00
+      // recorded a hand-over that never happened. A floor operator without the
+      // permission still PINs in, so the audit trail keeps its real cases.
+      const reopenExempt = reopened && canReopen
+      const needed = pastChangeover() && !done && !reopenExempt
       setChangeoverNeeded(was => {
         if (needed && !was) flushRef.current()
         return needed
@@ -831,7 +855,7 @@ function CaptureScreen() {
     const t = setInterval(check, 30_000)
     return () => clearInterval(t)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shift, dateParam, status, takenOver])
+  }, [shift, dateParam, status, takenOver, reopened, canReopen])
 
   // Confirm the incoming operator by PIN and stamp the audit trail.
   async function recordTakeover(op: { id: string; name: string }, rostered: boolean) {
@@ -1163,8 +1187,47 @@ function CaptureScreen() {
       draft_data: { productions: prods } as any, batch_id: sessionBatchId, updated_at: new Date().toISOString(),
     } as any).eq('id', sid)
 
-    await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
-    if (debag.length) await db.schema('production').from('prod_debagging').insert(debag as any)
+    // ── Input rows: normalise, then write with the result checked ───────────
+    // These rows travel as ONE multi-row insert, so a single unacceptable value
+    // in any of them loses every input row for the session — and since the mass
+    // balance below is computed from draft_data, not from these rows, the
+    // production order then shows "No inputs recorded" under a correct total,
+    // with nothing anywhere saying why. Two real causes, both fixed here at the
+    // write layer rather than in each capture screen:
+    //
+    //   • delivery_date arriving as the floor writes it on a bag tag, DD-MM-YY.
+    //     Postgres rejects that on a `date` column (22008 date/time field value
+    //     out of range) — this silently emptied every Refining order's
+    //     debagging panel.
+    //   • bag_serial_no carrying a serial that isn't in bag_tags, which the FK
+    //     prod_debagging_bag_serial_no_fkey rejects with 23503. Only manual
+    //     entry was assumed to produce untagged serials, but Blender's scan
+    //     rows routinely hold the date written on an untagged bag, so Blender
+    //     orders lost their inputs the same way.
+    for (const r of debag) r.delivery_date = dbDate(r.delivery_date)
+
+    const claimedSerials = [...new Set(debag.map((r: any) => r.bag_serial_no).filter(Boolean))]
+    if (claimedSerials.length) {
+      const { data: knownTags } = await db.schema('production').from('bag_tags')
+        .select('serial_number').in('serial_number', claimedSerials)
+      const tagged = new Set(((knownTags as any[]) ?? []).map(t => t.serial_number))
+      for (const r of debag as any[]) {
+        if (r.bag_serial_no && !tagged.has(r.bag_serial_no)) {
+          // Keep what the operator entered — for an untagged bag it's the only
+          // identifier it has — just not in the FK column.
+          r.notes = [r.notes, r.bag_serial_no].filter(Boolean).join(' · ')
+          r.bag_serial_no = null
+        }
+      }
+    }
+
+    const rowErrors: string[] = []
+    const delDebag = await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
+    if (delDebag.error) rowErrors.push(`inputs: ${delDebag.error.message}`)
+    if (debag.length) {
+      const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      if (insDebag.error) rowErrors.push(`inputs: ${insDebag.error.message}`)
+    }
 
     // Serialed bags are physical, already-tagged bags (bag_tags has the same
     // serial) — never blanket-delete those, or a save that races the bag being
@@ -1190,8 +1253,18 @@ function CaptureScreen() {
         .delete().eq('session_id', sid)
         .in('bag_serial_no', bagWithSerial.map((r: any) => r.bag_serial_no))
     }
-    if (bagNoSerial.length)   await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
-    if (bagWithSerial.length) await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
+    if (bagNoSerial.length) {
+      const ins = await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
+      if (ins.error) rowErrors.push(`bags: ${ins.error.message}`)
+    }
+    if (bagWithSerial.length) {
+      const ins = await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
+      if (ins.error) rowErrors.push(`bags: ${ins.error.message}`)
+    }
+    // Same failure class as the input rows above: prod_bagging has emptied out
+    // on production before with the capture screen showing no sign of it.
+    setRowWriteError(rowErrors.length ? rowErrors.join(' · ') : null)
+    if (rowErrors.length) console.error('structured row write failed', rowErrors)
 
     // ── Self-heal bag_tags ─────────────────────────────────────────────────────
     // Every output bag is registered in bag_tags by its own atomic write the
@@ -1624,6 +1697,23 @@ function CaptureScreen() {
         />
       )}
 
+      {/* Re-bag material — move weight out of an existing bag into another
+          bag (existing or brand new), from this capture page directly
+          instead of the separate Tags page. Source scope stays bag-to-bag
+          only (no untracked bulk/farm lots — there's no local weight
+          record for those); Pasteuriser is excluded, same reason it was
+          excluded from the top-up feature (no per-bag records today). */}
+      {rebagOpen && !locked && (
+        <RebagModal
+          sectionId={sectionId} sessionId={sessionId}
+          operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+          variantWord={active?.variant || ''} gradeLetter={active?.grade || 'A'}
+          genSerial={genSerial}
+          onDone={() => setRebagOpen(false)}
+          onClose={() => setRebagOpen(false)}
+        />
+      )}
+
       {/* Mid-shift grade/variant changeover confirm — shows the leftover mass
           balance before switching, since it's the operator's cue to bag it out
           as Blocks/Sticks under the new grade (or, if organic, that it must be
@@ -1798,6 +1888,17 @@ function CaptureScreen() {
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--color-surface)' }}>
         <div className="px-4 py-5 max-w-[800px] space-y-5">
+          {rowWriteError && tab !== 'messages' && !cleanerActor && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl text-[12px] text-red-800">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>
+                <strong>Your weights are saved, but the input/output row list didn&apos;t save</strong> — the
+                production order and shift report will show this record as having no
+                debagging or bagging rows even though the mass balance above is right.
+                Try Save draft again; if it keeps failing, send this to IT: <span className="font-mono">{rowWriteError}</span>
+              </span>
+            </div>
+          )}
           {/* The full-day rollup write failed on the last save — the per-shift
               mass balance above is still correct and safely saved, but the
               combined full-day total (production_runs) may be stale until the
@@ -2057,6 +2158,12 @@ function CaptureScreen() {
                         sessionId={sessionId}
                       />
                   }
+                  {!locked && !isPasteuriser(sectionId) && (
+                    <button onClick={() => setRebagOpen(true)}
+                      className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 text-white font-medium text-[14px] hover:bg-violet-700 transition-colors">
+                      <Scale size={16} /> Re-bag material
+                    </button>
+                  )}
                   {!locked && (
                     <button onClick={saveDraft} disabled={saving}
                       className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
