@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Alyssa (Production schema drift: the 404s/400 in the live console, audited and closed)
+
+**Files changed:** `supabase/migrations/20260821_001_count_drafts.sql` (new), `docs/ops/prod-drift-audit.sql` (new), `docs/ops/prod-drift-catchup.md` (new)
+
+The production site's console carries five PostgREST failures against objects the app queries — `count_drafts` (404), `employee_leave_active` (404), `roster_change_log` (404), `shift_reports` (404) and `job_cards_pasteuriser` (400). Every one is swallowed by a best-effort `catch`, so the features render empty instead of failing visibly.
+
+- **All five are database drift, not client bugs.** Checked each call site first: the three `production`-schema 404s come from `getDb().schema('production')` helpers (`supervisor/roster/page.tsx:102`/`:110`, `supervisor/signoff/page.tsx:130`), so the schema being sent is right and the object genuinely isn't reachable on production.
+- **`public.count_drafts` was never in the repo at all.** `lib/store/countStore.ts` has persisted the stock-count draft to it since it was written, so it only exists where somebody created it by hand — and not on production, where every draft load/save 404s and a counter's work therefore lives in browser memory only, lost on reload or device swap. Added as a real migration (`20260821_001`), shape derived from the three calls the store makes: PK `(user_id, date, role)` for its `onConflict`, `state_json` jsonb, and — unlike the app's usual `USING (true)` — an owner-scoped RLS policy, since a count draft is personal working state that nothing else reads. Applies to **both** databases.
+- **`docs/ops/prod-drift-audit.sql`** (read-only) reports existence *and* the `authenticated`/`service_role` SELECT privilege per object, because a PostgREST 404 is equally "table missing" and "table exists but no API role can see it, so it never enters the schema cache" — those have different fixes. Section 2 checks the nine `job_cards_pasteuriser` workflow columns behind the 400 (one missing column 400s the whole select, taking out the pasteuriser approval queue). Sections 3 and 4 dump every object and column in `public`/`production`/`qms`/`sales`/`hr` for a staging↔production diff, to catch drift nobody has hit in a browser yet.
+- **`docs/ops/prod-drift-catchup.md`** maps each symptom to what it costs while broken and the existing migration that closes it (`20260623_003`, `20260730_001`, `20260730_002`, `20260729_002` — all idempotent), in dependency order with the prerequisites each needs present first, plus the grant-only fix for the present-but-invisible case: `20260623_003` predates the grant convention and issues none, and its view needs its own grant since `20260611_005`'s `ALTER DEFAULT PRIVILEGES` only covers tables created by the role that ran it.
+- **Separate finding, not fixed:** `shift-report-generate.yml` pings `vars.SHIFT_REPORT_CRON_URL` and falls back to the *staging* URL. The repo has no Actions variables set, so the 16:00/01:00 SAST shift-report generation has only ever run against staging — creating `production.shift_reports` won't change that. Closing it is a decision (repoint the var, or add a production variant like `roster-rotate-production.yml`), so it's written up rather than done.
+
 ## 2026-08-21 — Alyssa (Capture: bagging rows stop saving after an output bag is removed — duplicate bag_no)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
