@@ -60,7 +60,6 @@ export interface NotebookLine {
   weight_kg:   number | null
   description: string | null
   variant:     string | null
-  lot_no:      string | null
   batch_no:    string | null
   farmer_name: string | null
   notes:       string | null
@@ -81,7 +80,6 @@ export interface NotebookDoc {
   weighbridge_no:     string | null
   weighbridge_weight_kg: number | null
 
-  lot_no:          string | null
   batch_no:        string | null
   producer_lot_no: string | null
   season_year:     number | null
@@ -231,3 +229,62 @@ export function signBlockFromSubjectId(subjectId: string): SignBlock | null {
   const suffix = subjectId.split(':')[1]
   return suffix === 'received' || suffix === 'transporter' ? suffix : null
 }
+
+// ─── What must be captured before a note can be saved ───────────────────────
+// A draft used to be writable with everything blank. Now every one of these
+// needs a value before create or edit will go through — literally the text
+// "N/A" where a field genuinely doesn't apply (e.g. Control Union no. on a
+// conventional load), since that is still a captured answer rather than a
+// gap in the record. The stamp tick-boxes and the free-text Comments box are
+// deliberately not in this list: "nothing ticked" already means something
+// (conventional tea), and Comments is open remarks, not a specific figure off
+// the paper book.
+//
+// One shared list drives three places: the client-side draft check (string
+// values, before conversion — components/notebooks/note-draft.ts), the
+// server-side payload check (already-converted values — lib/notebooks/server.ts),
+// and the tab a field lives in for the capture form's error badges. Same list
+// so the three can't quietly drift apart.
+export type RequiredHeaderKey =
+  | 'weighbridge_no' | 'weighbridge_weight_kg' | 'vehicle_reg'
+  | 'party_name' | 'delivered_at_store' | 'purchase_order_no'
+  | 'batch_no' | 'producer_lot_no' | 'farmer_name' | 'season_year' | 'transporter_company'
+  | 'cert_control_union_no' | 'cert_eu_org_code'
+  | 'received_by_name' | 'transporter_name' | 'driver_name'
+
+export type NoteTab = 'weighbridge' | 'goods' | 'traceability' | 'cert' | 'comments'
+
+export interface RequiredHeaderField {
+  key:     RequiredHeaderKey
+  tab:     NoteTab
+  numeric?: boolean
+  label:   (docType: DocType) => string
+}
+
+export const REQUIRED_HEADER_FIELDS: RequiredHeaderField[] = [
+  { key: 'weighbridge_no',         tab: 'weighbridge',  label: () => 'Weighbridge no.' },
+  { key: 'weighbridge_weight_kg',  tab: 'weighbridge',  label: () => 'Weight (from weighbridge)', numeric: true },
+  { key: 'vehicle_reg',            tab: 'weighbridge',  label: () => 'Vehicle registration' },
+  { key: 'party_name',             tab: 'goods',        label: t => PARTY_LABEL[t] },
+  { key: 'delivered_at_store',     tab: 'goods',        label: () => 'Name of store goods delivered at' },
+  { key: 'purchase_order_no',      tab: 'goods',        label: () => 'Our purchase order no.' },
+  { key: 'batch_no',               tab: 'traceability', label: () => 'Batch no.' },
+  { key: 'producer_lot_no',        tab: 'traceability', label: () => 'Producer lot no.' },
+  { key: 'farmer_name',            tab: 'traceability', label: () => FIELD_NAME_LABEL },
+  { key: 'season_year',            tab: 'traceability', label: () => PLANT_YEAR_LABEL, numeric: true },
+  { key: 'transporter_company',    tab: 'traceability', label: () => 'Transporter company' },
+  { key: 'cert_control_union_no',  tab: 'cert',          label: () => 'Control Union no.' },
+  { key: 'cert_eu_org_code',       tab: 'cert',          label: () => 'EU organic code' },
+  { key: 'received_by_name',       tab: 'comments',      label: t => SIGN_BLOCK_LABELS[t].received },
+  { key: 'transporter_name',       tab: 'comments',      label: t => SIGN_BLOCK_LABELS[t].transporter },
+  { key: 'driver_name',            tab: 'comments',      label: () => 'Driver' },
+]
+
+export type RequiredLineKey = 'qty' | 'weight_kg' | 'description' | 'batch_no'
+
+export const REQUIRED_LINE_FIELDS: { key: RequiredLineKey; label: string; numeric?: boolean }[] = [
+  { key: 'qty',         label: 'Qty',          numeric: true },
+  { key: 'weight_kg',   label: 'Weight (kg)',  numeric: true },
+  { key: 'description', label: 'Description' },
+  { key: 'batch_no',    label: 'Batch no.' },
+]

@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Note Books: dropdown sections, drop the redundant Lot no. field, every field now required — STAGING ONLY)
+
+**Files changed:** `supabase/migrations/20260821_002_notebooks_drop_redundant_lot_no.sql` (new, applied to **staging only**), `lib/notebooks/types.ts`, `lib/notebooks/server.ts`, `components/notebooks/note-draft.ts`, `components/notebooks/NoteFields.tsx`, `components/notebooks/NotePaper.tsx`, `app/(app)/notebooks/new/page.tsx`, `app/(app)/notebooks/[id]/page.tsx`, `app/api/notebooks/documents/route.ts`, `app/api/notebooks/documents/[id]/route.ts`
+
+Follow-up feedback on the capture form: the five-tab strip took up space better spent on the fields themselves, Lot no. and Batch no. were two boxes for the one answer, and it was too easy to issue a note with gaps left in it.
+
+- **Section tabs replaced with a dropdown.** The same five sections (Weighbridge, Supplier & Goods, Traceability, Certification, Comments) are now picked from one `<select>` instead of a row of buttons — one control instead of five competing for attention, and it carries an "N to fix" count per section once a save has been attempted, so a problem hiding in a section you're not looking at doesn't go unnoticed.
+- **Lot no. is gone — Batch no. is the one field.** In this book's actual use the two never meant different things, so having both was just an extra box to fill in (or leave inconsistently blank). Removed from the header Traceability tab and from every goods line; `notebooks.documents.lot_no` and `notebooks.document_lines.lot_no` are dropped by the new migration (both `public.notebook_*` views recreated to match, per the lesson in `20260819_002`). Nothing has shipped to production yet and the module's own test rows were already gone, so there was no data to carry over. `Producer lot no.` is untouched — that's the farmer's own number, a different concept from our batch no.
+- **Every field the physical book captures is now required to save — literally "N/A" is an accepted answer** where a field genuinely doesn't apply (e.g. Control Union no. on a conventional load). A required-and-empty field shows a rounded amber outline the moment it's blank, before any save is even attempted, so what's left to fill in is visible at a glance rather than a surprise at submit time; trying to save with gaps still open turns those red, lists every one of them in a banner above Save, and blocks the request. The stamp tick-boxes stay optional (ticking nothing already means "conventional") and so does the free-text Comments box (open remarks, not a specific figure off the paper book).
+- The same requirement is enforced again server-side in `lib/notebooks/server.ts` (`createDocument`/`updateDocument`), against the already-converted payload rather than the in-form drafts — a request built by hand can't skip it either. Returns 400, not 500, when it's the reason a save was refused.
+- `npm run build` and `npx tsc --noEmit` both clean against current `staging` — zero errors in any notebooks file (the pre-existing unrelated errors elsewhere are untouched).
+- Full interactive click-through wasn't possible from this session (no path to sign in against staging), so this was verified by build + typecheck + a careful read of the rendered JSX, not by driving it in a browser — flagging that rather than claiming an interactive check that didn't happen.
+
 ## 2026-08-21 — Alyssa (Production schema drift: the 404s/400 in the live console, audited and closed)
 
 **Files changed:** `supabase/migrations/20260821_001_count_drafts.sql` (new), `docs/ops/prod-drift-audit.sql` (new), `docs/ops/prod-drift-catchup.md` (new)
