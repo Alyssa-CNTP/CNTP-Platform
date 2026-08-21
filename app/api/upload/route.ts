@@ -88,6 +88,23 @@ const GEMINI_MIN_GAP_MS = (() => {
   const n = Number(raw)
   return Number.isFinite(n) && n >= 0 ? n : 500
 })()
+// Adaptive backpressure on top of the floor above. The floor is a guess about
+// what the key is entitled to; this is what the API actually tells us. Every
+// 429 doubles the effective gap (capped at the old free-tier-safe 4500ms), and
+// each clean call decays it back toward the floor. So if the deployed key turns
+// out to be more limited than the floor assumes, the queue discovers that from
+// the first 429 and slows itself down instead of re-hitting the limit on every
+// subsequent upload — the floor can no longer be wrong in a way that persists.
+const GEMINI_GAP_CEILING_MS = 4500
+let geminiGapMs = GEMINI_MIN_GAP_MS
+
+function noteGeminiRateLimited() {
+  geminiGapMs = Math.min(GEMINI_GAP_CEILING_MS, Math.max(GEMINI_MIN_GAP_MS, geminiGapMs * 2) || 1000)
+}
+function noteGeminiOk() {
+  if (geminiGapMs > GEMINI_MIN_GAP_MS) geminiGapMs = Math.max(GEMINI_MIN_GAP_MS, Math.floor(geminiGapMs / 2))
+}
+
 let lastGeminiCall = 0
 const geminiQueue: { fn: () => Promise<any>; resolve: (v: any) => void; reject: (e: any) => void }[] = []
 let queueRunning = false
@@ -103,7 +120,7 @@ async function drainQueue() {
   queueRunning = true
   while (geminiQueue.length > 0) {
     const { fn, resolve, reject } = geminiQueue.shift()!
-    const wait = Math.max(0, lastGeminiCall + GEMINI_MIN_GAP_MS - Date.now())
+    const wait = Math.max(0, lastGeminiCall + geminiGapMs - Date.now())
     if (wait > 0) await sleep(wait)
     lastGeminiCall = Date.now()
     try { resolve(await fn()) } catch (e) { reject(e) }
@@ -140,6 +157,28 @@ class GeminiTransient extends Error {
     readonly detail: string,
   ) { super(`GEMINI_TRANSIENT:${status}:${model}`) }
   get isQuota() { return this.status === 429 }
+
+  // Google's 429 body names the quota that was exceeded, and the metric name
+  // contains "free_tier" when the key is billed on the free tier. That single
+  // fact decides whether a 429 means "we are genuinely over a paid limit" or
+  // "this key is not the paid one we think it is" — so it must reach the user
+  // instead of being swallowed, which is what left the last round guessing.
+  get looksFreeTier() { return /free[_ -]?tier/i.test(this.detail) }
+
+  // quotaId first, then quotaMetric, and only then the generic message. That
+  // order is deliberate: quotaId is the actionable one (it spells out both the
+  // tier and the window, e.g. "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  // — a per-DAY cap behaves completely differently from a per-minute one),
+  // whereas "message" is always the same unhelpful "check your plan and billing".
+  get quotaHint() {
+    const id = /"quotaId"\s*:\s*"([^"]+)"/.exec(this.detail)?.[1]
+    const metric = /"quotaMetric"\s*:\s*"([^"]+)"/.exec(this.detail)?.[1]
+    const msg = /"message"\s*:\s*"([^"]+)"/.exec(this.detail)?.[1]
+    const hint = [id, metric].filter(Boolean).join(' / ')
+      || msg
+      || this.detail.replace(/\s+/g, ' ').trim()
+    return hint.slice(0, 260)
+  }
 }
 
 // Anything here is worth another go: quota (429), Google's own capacity/edge
@@ -169,7 +208,11 @@ async function geminiOnce(
     // Google sends Retry-After on some 429s; honour it rather than guessing.
     const ra = res.headers.get('retry-after')
     const raMs = ra && /^\d+$/.test(ra.trim()) ? Number(ra.trim()) * 1000 : null
-    throw new GeminiTransient(res.status, model, raMs, detail.slice(0, 200))
+    // Keep 1500 chars, not 200: Google's generic "You exceeded your current
+    // quota..." message alone is ~200 chars, and the QuotaFailure block that
+    // actually names the metric (and carries the "free_tier" marker) comes
+    // after it. Truncating at 200 threw away the only diagnostic that matters.
+    throw new GeminiTransient(res.status, model, raMs, detail.slice(0, 1500))
   }
   if (!res.ok) {
     const err = await res.text()
@@ -205,21 +248,36 @@ async function callGeminiWithRetry(
     for (const model of GEMINI_MODELS) {
       try {
         const r = await geminiOnce(model, parts, maxTokens, extraConfig)
+        noteGeminiOk()   // a clean call decays the gap back toward the floor
         return { ...r, model_used: r.model_used + modelSuffix }
       } catch (err: any) {
-        if (err instanceof GeminiTransient) { last = err; continue }
+        if (err instanceof GeminiTransient) {
+          last = err
+          // Let a 429 slow the shared queue down for everything that follows,
+          // not just this request's own retries.
+          if (err.isQuota) noteGeminiRateLimited()
+          continue
+        }
         throw err
       }
     }
   }
 
   const attempts = ROUNDS * GEMINI_MODELS.length
-  // Name the actual cause. A 503 is Google's capacity, not our usage — saying
-  // so stops this being mistaken for a quota problem again.
+  // Name the actual cause, and quote Google's own explanation. A 429 that says
+  // "free_tier" is not a usage problem at all — it means the deployed
+  // GEMINI_API_KEY is not the paid key, which no amount of pacing can fix.
+  if (last?.isQuota) {
+    // Server log keeps the full body for whoever debugs this next.
+    console.error('[upload] Gemini 429 exhausted retries. Google said:', last.detail)
+    throw new Error(
+      last.looksFreeTier
+        ? `Gemini refused the request as over the FREE-tier quota (429), so the API key deployed on this server is not the paid key — check GEMINI_API_KEY on the VPS against the paid "CNTP Gemini" project. Google said: ${last.quotaHint}`
+        : `Gemini rate limit (429) after ${attempts} attempts over ~20s. Google said: ${last.quotaHint}. If this persists while usage is low, check the API key's project and quotas in Google AI Studio — a per-day cap keeps returning 429 until it resets, regardless of how slowly we retry.`
+    )
+  }
   throw new Error(
-    last?.isQuota
-      ? `Gemini rate limit (429) after ${attempts} attempts across ${GEMINI_MODELS.length} models. This is our own request quota — wait a minute, or upload fewer PDFs at once.`
-      : `Google's Gemini service is temporarily unavailable (${last?.status ?? 503}) — this is capacity on Google's side, not our usage or quota. Retried ${attempts} times over ~20s across ${GEMINI_MODELS.length} models. Please try again shortly.`
+    `Google's Gemini service is temporarily unavailable (${last?.status ?? 503}) — this is capacity on Google's side, not our usage or quota. Retried ${attempts} times over ~20s across ${GEMINI_MODELS.length} models. Please try again shortly.`
   )
 }
 
