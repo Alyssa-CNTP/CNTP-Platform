@@ -59,6 +59,13 @@ type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'mess
 // Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
+// What the operator copies to IT when a structured row write fails. Postgres puts
+// the constraint name in `message` but the offending key in `details` ("Key
+// (session_id, bag_no)=(…, 3) already exists"), and without that second half a
+// duplicate-key report can't be traced to the row that caused it.
+const rowErrText = (e: { message?: string; details?: string | null; code?: string | null }) =>
+  [e.message, e.details, e.code ? `[${e.code}]` : null].filter(Boolean).join(' — ')
+
 // The capture screen reads as the real-world process the operators follow:
 // machine checks → capture (debag/bag) → cleaning → overview → sign-off.
 // Messages sits outside the flow (header icon) since it isn't a production step.
@@ -1168,6 +1175,35 @@ function CaptureScreen() {
     for (const r of debag) r.lot_number = upperCode(r.lot_number)
     for (const r of bag)   r.lot_number = upperCode(r.lot_number)
 
+    // A serial column holds a real bag serial or nothing — never ''. An output
+    // bag that's been added but not tagged yet starts life as serial: '' on the
+    // Refining and Granule-dust screens, and the 30s autosave happily stores
+    // that blank as a *value*: the "clear the no-serial rows" delete below is an
+    // IS NULL and never matches it again, while prod_bagging's
+    // (session_id, bag_serial_no) uniqueness reads two blank bags as the same
+    // bag. On the input side a blank fails the bag_serial_no FK outright.
+    const blankSerialToNull = (r: any) => {
+      if (!r.bag_serial_no || !String(r.bag_serial_no).trim()) r.bag_serial_no = null
+    }
+    debag.forEach(blankSerialToNull)
+    bag.forEach(blankSerialToNull)
+
+    // The same serial on two output rows is one physical bag captured twice.
+    // Inserting both breaks the (session_id, bag_serial_no) uniqueness and takes
+    // the whole row list down with it, so the first row keeps the serial and the
+    // duplicate keeps only its weight — draft_data counts that weight in the
+    // mass balance, so the row list has to carry it too.
+    const seenSerials = new Set<string>()
+    for (const r of bag as any[]) {
+      if (!r.bag_serial_no) continue
+      if (seenSerials.has(r.bag_serial_no)) {
+        console.warn('duplicate output serial in one session, saved without the serial', r.bag_serial_no)
+        r.bag_serial_no = null
+        continue
+      }
+      seenSerials.add(r.bag_serial_no)
+    }
+
     // Canonical batch identity — one batch_id shared across the session, its
     // input/output rows and the run, so quality/bags/orders all join on it.
     const sessionLot = prods[0]?.lot || assignment?.lot_number || null
@@ -1222,10 +1258,10 @@ function CaptureScreen() {
 
     const rowErrors: string[] = []
     const delDebag = await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
-    if (delDebag.error) rowErrors.push(`inputs: ${delDebag.error.message}`)
+    if (delDebag.error) rowErrors.push(`inputs: ${rowErrText(delDebag.error)}`)
     if (debag.length) {
       const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
-      if (insDebag.error) rowErrors.push(`inputs: ${insDebag.error.message}`)
+      if (insDebag.error) rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
     }
 
     // Serialed bags are physical, already-tagged bags (bag_tags has the same
@@ -1252,13 +1288,34 @@ function CaptureScreen() {
         .delete().eq('session_id', sid)
         .in('bag_serial_no', bagWithSerial.map((r: any) => r.bag_serial_no))
     }
+    // bag_no is numbered 1..N straight off this instant's draft_data, but the
+    // deletes above deliberately leave earlier rows standing — a bag the
+    // operator has since removed from the screen keeps both its row and its
+    // bag_no. Renumbering from 1 then walks right onto that number, which
+    // production rejects (unique index prod_bagging_session_bag_uidx over
+    // (session_id, bag_no)): remove bag 3 of 5 and every save from then on dies
+    // with `duplicate key value violates unique constraint`, leaving the row
+    // list frozen behind a mass balance that keeps updating correctly. So hand
+    // out the numbers that are actually free once the deletes have run, keeping
+    // the rows in their captured order — bag_no is a per-session label, nothing
+    // reads it as a dense 1..N sequence (the production order renumbers rows
+    // for display in lib/production/order-detail.ts).
+    const { data: heldRows } = await db.schema('production').from('prod_bagging')
+      .select('bag_no').eq('session_id', sid)
+    const heldBagNos = new Set(((heldRows as any[]) ?? []).map(r => Number(r.bag_no)))
+    let nextBagNo = 1
+    for (const r of bag as any[]) {
+      while (heldBagNos.has(nextBagNo)) nextBagNo++
+      r.bag_no = nextBagNo++
+    }
+
     if (bagNoSerial.length) {
       const ins = await db.schema('production').from('prod_bagging').insert(bagNoSerial as any)
-      if (ins.error) rowErrors.push(`bags: ${ins.error.message}`)
+      if (ins.error) rowErrors.push(`bags: ${rowErrText(ins.error)}`)
     }
     if (bagWithSerial.length) {
       const ins = await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
-      if (ins.error) rowErrors.push(`bags: ${ins.error.message}`)
+      if (ins.error) rowErrors.push(`bags: ${rowErrText(ins.error)}`)
     }
     // Same failure class as the input rows above: prod_bagging has emptied out
     // on production before with the capture screen showing no sign of it.
