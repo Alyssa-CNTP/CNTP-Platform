@@ -15,6 +15,16 @@ Reported from Sieving: the red *"Your weights are saved, but the input/output ro
 - **The banner now quotes Postgres' `details` and error code**, not just `message`. `message` names the constraint but `details` names the offending key (`Key (session_id, bag_no)=(…, 3) already exists`) — without it a duplicate-key report can't be traced to the row that caused it.
 - **Known, not fixed here:** a removed (voided) bag's `prod_bagging` row is excluded from the production order (`order-detail.ts` filters voided serials) but *not* from `shift-report-builder.ts` or the dashboard row/supply routes, so its kg still counts there.
 
+## 2026-08-21 — Gustav (Lab Results upload: explain billing / key / permission failures instead of dumping JSON)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Asked whether uploads still behave sensibly if the Gemini credits run out. They fail *safely* — a billing problem comes back as 400 `FAILED_PRECONDITION` or 403, neither of which is in the retryable set, so it fails on the first attempt rather than retrying six times against something retrying cannot fix, and it never touches the 429 backpressure. But the message was a raw truncated JSON dump (`Gemini API error (403) on gemini-2.5-flash: {"error":...`), which tells a QC nothing about what to do.
+
+- New `explainFatalGeminiError()` translates the non-retryable failures into plain language, most-specific first (a billing error also mentions "project"; a disabled-API error also mentions "permission"): **billing disabled / credit exhausted**, **invalid or revoked API key**, **Generative Language API not enabled on the project**, generic 403 permission/referrer restriction, and 404 retired-or-inaccessible model. Each quotes Google's own `message` and states plainly whether retrying can help.
+- Billing failures in particular now say outright that this is not a quota that resets and that the billing account for the `GEMINI_API_KEY` project needs attention — the opposite advice from a 429, which *does* reset.
+- Verified against realistic Google bodies for all six cases: each produces its intended message, takes exactly **one** attempt (confirming no retry), and leaves the pacing gap untouched. The 429 and 503 paths were re-run unchanged.
+
 ## 2026-08-21 — Gustav (Lab Results upload: say WHICH Gemini quota was hit, and let a 429 slow the queue down)
 
 **Files changed:** `app/api/upload/route.ts`
