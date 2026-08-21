@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Alyssa (Shift roster: pins never silently lost on save, and pinned people read at the top)
+
+**Files changed:** `app/(app)/production/roster/page.tsx`
+
+Production reported "the pins aren't working." Investigation against production found the pins **are** working — every pinned person had held their shift across Weeks 31→36, and the one week that looked wrong (a draft "Week 36" that carried only 6 of 13 pins) was simply generated *before* the 7 production pins were added to the prior week, so it never saw them. A pin only flows into weeks generated after it's set. That stale draft was deleted and the current latest week already carries all 13 pins, so no data fix was needed. Two robustness improvements came out of it:
+
+- **`saveDepartment` no longer silently drops pins.** The per-section Save deletes + re-inserts that section's rows; its insert had a fallback that, on **any** error, retried while stripping the `pinned`/`days` columns — which would persist everyone as unpinned without a word. New `isMissingColumnError()` gates that fallback to the genuine "column not migrated yet" error (Postgres `42703` / PostgREST "could not find the column"); any other error now throws, the section stays dirty (nothing lost), and a red banner tells the user the save failed. The same gate is applied to the entries **load** fallback, so a transient load error can't degrade local state to unpinned and let the next Save write it back.
+- **Pinned people float to the top of their cell** (like a pinned chat), in the interactive grid, the print view (both via `cellEntries`), and the "Generate next week" rotation preview — where pinned people are now also marked with the pin icon so a supervisor can confirm at a glance that pins held while everyone else flipped day↔night.
+
+Verified: the Generate-next-week preview mirrors the real `rotateEntries` rule (pinned + structurally day-only roles keep their shift, everyone else flips), pins carry into the generated period, and pinned entries sort first. Typecheck clean on the file. Not merged — awaiting review before promotion to `main`.
+
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/production/db-date.ts` (new), `scripts/backfill-debag-rows.cjs` (new)

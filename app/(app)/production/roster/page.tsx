@@ -27,6 +27,20 @@ const ENTRY_SELECT = 'id,period_id,role_key,shift,employee_id,operator_id,person
 // Same, minus `days`/`pinned` — a graceful fallback if those columns aren't migrated yet.
 const ENTRY_SELECT_BASE = 'id,period_id,role_key,shift,employee_id,operator_id,person_name,tags,sort_order'
 
+// The `days`/`pinned` column-less fallback must ONLY fire when those columns are
+// genuinely not migrated yet. Falling back on any other (e.g. transient) error is
+// dangerous: it strips `pinned` from what we load/insert, and a subsequent Save
+// would then persist everyone as unpinned — silently unpinning people. So gate
+// the fallback on the specific Postgres "column does not exist" error (42703 /
+// PostgREST "could not find the 'pinned' column").
+function isMissingColumnError(err: any): boolean {
+  if (!err) return false
+  if (err.code === '42703') return true
+  const msg = (err.message ?? '').toLowerCase()
+  return (msg.includes('days') || msg.includes('pinned')) &&
+    (msg.includes('column') || msg.includes('does not exist') || msg.includes('could not find'))
+}
+
 interface Period {
   id: string; name: string; start_date: string; end_date: string
   day_label: string; night_label: string; notes: string | null
@@ -259,10 +273,16 @@ export default function RosterPage() {
     db().from('roster_entries').select(ENTRY_SELECT)
       .eq('period_id', periodId).order('sort_order')
       .then(({ data, error }: any) => {
-        if (error) {
+        if (error && isMissingColumnError(error)) {
           db().from('roster_entries').select(ENTRY_SELECT_BASE)
             .eq('period_id', periodId).order('sort_order')
             .then(({ data: d2 }: any) => mapEntries((d2 as any[]) ?? []))
+        } else if (error) {
+          // Don't degrade to a column-less load on a transient error — that would
+          // drop `pinned` locally and the next Save would persist people unpinned.
+          // Leave the prior entries as-is and surface the failure.
+          console.error('Roster entries load failed', error)
+          setActionError(`Couldn't load this period's roster: ${error.message ?? 'unknown error'}. Try reloading before making changes.`)
         } else mapEntries((data as any[]) ?? [])
       })
     // Per-section submission status (graceful if the table isn't migrated yet).
@@ -319,7 +339,9 @@ export default function RosterPage() {
   function cellEntries(roleKey: string, shift: RosterShift) {
     return entries
       .filter(e => e.role_key === roleKey && e.shift === shift)
-      .sort((a, b) => a.sort_order - b.sort_order)
+      // Pinned people float to the top of the cell (like a pinned chat), so the
+      // "stays put every week" crew reads first; ties keep their sort_order.
+      .sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1) || (a.sort_order - b.sort_order))
   }
 
   // Stage locally — no DB write
@@ -398,9 +420,11 @@ export default function RosterPage() {
         }))
       let fresh: Entry[] = []
       if (toInsert.length > 0) {
-        // Tolerant of the `days`/`pinned` columns not being migrated yet.
+        // Tolerant of the `days`/`pinned` columns not being migrated yet — but ONLY
+        // strip them on the genuine "column doesn't exist" error. Retrying without
+        // `pinned` on any other error would silently persist everyone as unpinned.
         let res = await db().from('roster_entries').insert(toInsert as any).select(ENTRY_SELECT)
-        if (res.error) {
+        if (res.error && isMissingColumnError(res.error)) {
           res = await db().from('roster_entries')
             .insert(toInsert.map(({ days, pinned, ...rest }) => rest) as any).select(ENTRY_SELECT_BASE)
         }
@@ -436,8 +460,12 @@ export default function RosterPage() {
                    { onConflict: 'period_id,section' })
         setSectionStatus(s => ({ ...s, [categoryKey]: { section: categoryKey, status: 'draft', submitted_by: null, submitted_at: null } }))
       } catch { /* table may not be migrated yet */ }
-    } catch (err) {
+    } catch (err: any) {
+      // Surface the failure instead of leaving the section looking saved. The
+      // section stays dirty (we never cleared it), so pins/edits aren't lost —
+      // the user can retry rather than unknowingly persisting a bad state.
       console.error('saveDepartment failed', err)
+      setActionError(`Couldn't save ${categoryKey}: ${err?.message ?? 'unknown error'}. Your changes weren't saved — try again.`)
     } finally {
       setSavingCategory(null)
     }
@@ -2166,7 +2194,10 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
           </div>
           <div className="grid grid-cols-2 divide-x divide-stone-100">
             {(['day', 'night'] as RosterShift[]).map(s => {
+              // Pinned people float to the top so it's obvious at a glance that
+              // they held their shift while everyone else flipped.
               const people    = rotated.filter(e => e.newShift === s)
+                .sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1) || (a.sort_order - b.sort_order))
               const shiftName = s === 'day' ? nextDayLabel : nextNightLabel
               return (
                 <div key={s} className="p-3 space-y-1.5">
@@ -2179,6 +2210,7 @@ function GenerateModal({ currentPeriod, currentEntries, employees, generating, o
                     const onLeave = !!e.employee_id && newLeaveIds.has(e.employee_id)
                     return (
                       <div key={e.id} className={`text-[11px] flex items-center gap-1 ${onLeave ? 'text-amber-600' : 'text-stone-700'}`}>
+                        {e.pinned && <Pin size={10} className="text-brand fill-brand/20 shrink-0" title="Pinned — held this shift" />}
                         {onLeave && <span title="On leave">✈</span>}
                         {e.person_name}
                       </div>
