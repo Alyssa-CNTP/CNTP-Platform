@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Lab Results upload: say WHICH Gemini quota was hit, and let a 429 slow the queue down)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Follow-up to yesterday's 503-vs-429 split. With that live, the Micro upload now fails with a *429* instead — i.e. a genuine rate-limit response, not Google capacity — even though the account is on a paid plan. The previous change could say "this is a quota", but not *which* quota, so it still couldn't distinguish "we are genuinely over a paid limit" from "the key deployed on the VPS isn't the paid one". Two gaps caused that, both fixed here:
+
+- **Google's own explanation was being thrown away.** The 429 body names the exceeded quota in a `QuotaFailure` block, and the metric contains `free_tier` when the key is billed on the free tier — the single fact that settles the question. It was captured into `GeminiTransient.detail` and then never used. It's now surfaced in the message and logged in full server-side. `quotaId` and `quotaMetric` are preferred over `message`, because the id spells out both the tier and the window (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`) whereas `message` is always the same "check your plan and billing".
+- **The detail was truncated to 200 chars**, which cut the diagnostic off entirely — Google's generic message alone is ~200 chars and the `QuotaFailure` block comes *after* it. Raised to 1500.
+- **A free-tier 429 now says so outright**, naming `GEMINI_API_KEY` on the VPS and the paid "CNTP Gemini" project as the thing to check, since no amount of retrying or pacing can fix a key on the wrong plan.
+- **Adaptive backpressure.** Yesterday's change dropped the pacing floor from 4500ms to 500ms on the assumption the key is paid — if that assumption is wrong, the floor was making 429s *more* likely, and it would have stayed wrong indefinitely. A 429 now doubles the effective gap for the whole shared queue (500→1000→2000→4000→4500, capped at the old free-tier-safe value) and each clean call halves it back toward the floor. The floor can no longer be wrong in a way that persists: the queue discovers the real limit from the first 429.
+- Verified against realistic Gemini 429 bodies by running the real source block: free-tier-per-day → the key-is-wrong message; paid-per-minute → the generic quota message plus the per-day-cap hint; 503 → unchanged; backpressure ramp/decay as above.
+
 ## 2026-08-20 — Alyssa (Capture: "Bags this shift" — the whole shift's bags in and out, as a reference)
 
 **Files changed:** `components/production/capture/ShiftBagLog.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
