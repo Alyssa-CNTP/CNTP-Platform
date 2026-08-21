@@ -1136,6 +1136,18 @@ function RunsOverview({ batches, activeBatch }: { batches: Batch[]; activeBatch:
     Temp:     !isNaN(parseFloat(s.hourly_temp as any)) ? parseFloat(s.hourly_temp as any) : null,
   })).filter(d => d.Moisture!=null || d.Temp!=null)
 
+  // Bulk density trend + its spec limits — same source pattern as the sieve
+  // fraction checks elsewhere on this page (customer override, else the
+  // matched spec, else PAST_SPEC_DEFAULTS.untapped_bd), so "clear spec limit
+  // in the graph" always has real numbers to draw, not just when a customer
+  // spec happens to be matched.
+  const bdSpec = getPastSpec(activeBatch?.customer || '', 'untapped_bd', activeBatch?._spec, activeBatch?.batch_specs)
+  const bdUnit = pastBdUnit(activeBatch?.product_family)
+  const bdTrend = (activeBatch?.samples || []).map((s,i) => ({
+    name: s.time || `#${i+1}`,
+    BD: !isNaN(parseFloat(s.untapped_bd as any)) ? parseFloat(s.untapped_bd as any) : null,
+  })).filter(d => d.BD!=null)
+
   const cards: Array<{label:string,value:string|number,color:string}> = [
     { label:'Active Runs',    value: active.length,                                  color:'text-brand' },
     { label:'Samples (live)', value: activeSamples.length,                           color:'text-text' },
@@ -1174,8 +1186,32 @@ function RunsOverview({ batches, activeBatch }: { batches: Batch[]; activeBatch:
                 <Tooltip />
                 <Legend wrapperStyle={{ fontSize:11 }} />
                 <ReferenceLine yAxisId="m" y={8.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value:'Moisture max', fontSize:9, fill:'#ef4444' }} />
-                <Line yAxisId="m" type="monotone" dataKey="Moisture" stroke="#f97316" strokeWidth={2} connectNulls dot={{ r:3 }} />
-                <Line yAxisId="t" type="monotone" dataKey="Temp"     stroke="#0ea5e9" strokeWidth={2} connectNulls dot={{ r:3 }} />
+                {/* Moisture blue, Temp orange — swapped from the original
+                    orange/blue so it's consistent with the bulk density
+                    chart below and every other pasteuriser chart. */}
+                <Line yAxisId="m" type="monotone" dataKey="Moisture" stroke="#0ea5e9" strokeWidth={2} connectNulls dot={{ r:3 }} />
+                <Line yAxisId="t" type="monotone" dataKey="Temp"     stroke="#f97316" strokeWidth={2} connectNulls dot={{ r:3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+      {bdTrend.length >= 2 && (
+        <div>
+          <div className="text-[11px] font-semibold text-text-muted mb-1">
+            {activeBatch?.batch_number} — Bulk Density trend ({bdUnit})
+          </div>
+          <div style={{ width:'100%', height:160 }}>
+            <ResponsiveContainer>
+              <LineChart data={bdTrend} margin={{ top:5, right:10, left:-15, bottom:0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                <XAxis dataKey="name" tick={{ fontSize:10 }} />
+                <YAxis tick={{ fontSize:10 }} domain={['auto','auto']} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize:11 }} />
+                {bdSpec?.min!=null && <ReferenceLine y={bdSpec.min} stroke="#ef4444" strokeDasharray="4 4" label={{ value:`BD min (${bdSpec.min})`, fontSize:9, fill:'#ef4444' }} />}
+                {bdSpec?.max!=null && <ReferenceLine y={bdSpec.max} stroke="#ef4444" strokeDasharray="4 4" label={{ value:`BD max (${bdSpec.max})`, fontSize:9, fill:'#ef4444' }} />}
+                <Line type="monotone" dataKey="BD" stroke="#14b8a6" strokeWidth={2} connectNulls dot={{ r:3 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -1203,6 +1239,13 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   const [dbLoading,     setDbLoading]      = useState(true)
   const [dbSaving,      setDbSaving]       = useState(false)
   const [historySearch, setHistorySearch]  = useState('')
+  // Date-range filter for the History & Performance table — 'YYYY-MM-DD' or ''
+  // (unbounded on that side). Compared against each batch's own sample-date
+  // span (see sampleDateRange below), not just its earliest date, so a batch
+  // that ran across several days matches the filter if ANY of its days fall
+  // inside the chosen range, not only if its first day does.
+  const [histDateFrom, setHistDateFrom]    = useState('')
+  const [histDateTo,   setHistDateTo]      = useState('')
   const [expandedHistId,setExpandedHistId] = useState<string|null>(null)
   const [editingField,  setEditingField]   = useState<string|null>(null)
   const [qcDraft,       setQcDraft]        = useState('')
@@ -1513,6 +1556,22 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     const ds = [...new Set((b.samples||[]).map(s=>s.date).filter(Boolean))].sort()
     return ds[0] || b.production_date || ''
   }
+  // [min,max] of this batch's own sample dates (or its production date if it
+  // has no dated samples) — used both by the date-range filter below and by
+  // the "Date" column's existing single-day-vs-span display.
+  const sampleDateRange = (b: Batch): [string,string] => {
+    const ds = [...new Set((b.samples||[]).map(s=>s.date).filter(Boolean))].sort()
+    if (ds.length) return [ds[0], ds[ds.length-1]]
+    return [b.production_date||'', b.production_date||'']
+  }
+  const inHistDateRange = (b: Batch) => {
+    if (!histDateFrom && !histDateTo) return true
+    const [lo, hi] = sampleDateRange(b)
+    if (!lo && !hi) return false   // no date on record at all — can't match a range filter
+    if (histDateFrom && hi < histDateFrom) return false
+    if (histDateTo   && lo > histDateTo)   return false
+    return true
+  }
   const sortKeyVal = (b: Batch, key: string): string|number => {
     switch (key) {
       case 'batch':    return (b.batch_number||'').toLowerCase()
@@ -1531,6 +1590,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     setHistSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
   const histSorted = [...completedBatches]
     .filter(b => !historySearch || b.batch_number.toLowerCase().includes(historySearch.toLowerCase()))
+    .filter(inHistDateRange)
     .sort((a,b) => {
       const va = sortKeyVal(a, histSort.key), vb = sortKeyVal(b, histSort.key)
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
@@ -1954,10 +2014,18 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
             ))}
           </div>
 
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-2 items-center flex-wrap">
             <input value={historySearch} onChange={e => setHistorySearch(e.target.value)}
               placeholder="🔍 Search batch number…" className={`${inp} flex-1 max-w-xs`} />
-            <span className="text-[11px] text-text-muted">{completedBatches.filter(b=>!historySearch||b.batch_number.toLowerCase().includes(historySearch.toLowerCase())).length} batches</span>
+            <span className="text-[11px] text-text-muted">from</span>
+            <input type="date" value={histDateFrom} onChange={e => setHistDateFrom(e.target.value)} className={inp} />
+            <span className="text-[11px] text-text-muted">to</span>
+            <input type="date" value={histDateTo} onChange={e => setHistDateTo(e.target.value)} className={inp} />
+            {(histDateFrom || histDateTo) && (
+              <button onClick={() => { setHistDateFrom(''); setHistDateTo('') }}
+                className="text-[11px] text-text-muted hover:text-text underline">Clear dates</button>
+            )}
+            <span className="text-[11px] text-text-muted">{histSorted.length} batches</span>
             <button
               onClick={() => setShowPubHistory(h => !h)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] transition-colors ${showPubHistory ? 'border-warn/40 bg-warn/8 text-warn' : 'border-surface-rule text-text-muted hover:text-text'}`}
@@ -2059,6 +2127,37 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
                                       className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
                                   </div>
+                                  {(() => {
+                                    // Chronological already (samples are sorted at load — see parseRec()
+                                    // above). Date+time in the label so a multi-day batch doesn't collide
+                                    // two different days' "14:00" samples into one x-axis tick.
+                                    const histTrend = samples.map((s,i) => ({
+                                      name: [s.date, s.time].filter(Boolean).join(' ') || `#${i+1}`,
+                                      Moisture: !isNaN(parseFloat(s.moisture as any))    ? parseFloat(s.moisture as any)    : null,
+                                      Temp:     !isNaN(parseFloat(s.hourly_temp as any)) ? parseFloat(s.hourly_temp as any) : null,
+                                    })).filter(d => d.Moisture!=null || d.Temp!=null)
+                                    if (histTrend.length < 2) return null
+                                    return (
+                                      <div onClick={e => e.stopPropagation()}>
+                                        <div className="text-[11px] font-semibold text-text-muted mb-1">{b.batch_number} — Moisture & Temperature trend</div>
+                                        <div style={{ width:'100%', height:180 }}>
+                                          <ResponsiveContainer>
+                                            <LineChart data={histTrend} margin={{ top:5, right:10, left:-15, bottom:0 }}>
+                                              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                                              <XAxis dataKey="name" tick={{ fontSize:9 }} />
+                                              <YAxis yAxisId="m" tick={{ fontSize:10 }} domain={['auto','auto']} />
+                                              <YAxis yAxisId="t" orientation="right" tick={{ fontSize:10 }} domain={['auto','auto']} />
+                                              <Tooltip />
+                                              <Legend wrapperStyle={{ fontSize:11 }} />
+                                              <ReferenceLine yAxisId="m" y={8.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value:'Moisture max', fontSize:9, fill:'#ef4444' }} />
+                                              <Line yAxisId="m" type="monotone" dataKey="Moisture" stroke="#0ea5e9" strokeWidth={2} connectNulls dot={{ r:3 }} />
+                                              <Line yAxisId="t" type="monotone" dataKey="Temp"     stroke="#f97316" strokeWidth={2} connectNulls dot={{ r:3 }} />
+                                            </LineChart>
+                                          </ResponsiveContainer>
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
                                   {samples.length > 0 && histRowView === 'daily' && (() => {
                                     const byDate: Record<string, BatchSample[]> = {}
                                     samples.forEach(s => { const d = s.date || 'Unknown'; (byDate[d] = byDate[d] || []).push(s) })
