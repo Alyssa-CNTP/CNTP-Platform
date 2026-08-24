@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-24 — Gustav (Lab Results: live "Test Gemini now" call, since the masked-key check can't prove the key actually works right now)
+
+**Files changed:** `app/api/quality/gemini-key-check/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+The deployed `GEMINI_API_KEY` was confirmed to match the funded "CNTP Ops Platform" project (masked-key check against AI Studio's own key list) — a paid tier, $28.54 balance, usage nowhere near quota — yet uploads still 429'd with "prepayment credits are depleted." At the same time, Google's own usage dashboard showed **zero requests for the current day**, right after a failed upload. Two possible readings of that, and no way to tell them apart from the outside: either the dashboard is simply lagging (it's already known to lag up to 24h for cost data), or requests genuinely aren't reaching Google at all — in which case the "credits depleted" message on screen could be a stale, already-superseded queue row rather than a fresh result.
+
+- New `POST /api/quality/gemini-key-check` — same admin gate as the masked-key check, but instead of reading the key it **uses** it: one cheap, tiny live call (`maxOutputTokens: 5`) to `gemini-2.5-flash`, made at the moment of the click, returning the exact HTTP status and full response body Google sends back right now. Not a hint, not a summary — the actual current answer.
+- New **"🧪 Test Gemini now"** button next to the existing key check, admin-only. A success means the key can serve requests right now, so a still-failing upload points somewhere else (a different model in the fallback chain, a momentary blip, a since-reset per-day cap). A failure shows Google's real, current error verbatim, settling what's actually happening instead of reasoning from a UI banner or a delayed dashboard.
+
 ## 2026-08-24 — Gustav (Lab Results: manual entry, for when PDF upload/Gemini isn't available)
 
 **Files changed:** `app/(app)/quality/lab-results/page.tsx`
