@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Fix "model no longer available" errors — drop retired Gemini model fallbacks across the app)
+
+**Files changed:** `lib/intelligence/gemini.ts`, `app/api/sales/health/route.ts`, `app/api/production/verify-clean/route.ts`, `app/api/production/read-value/route.ts`, `app/api/ocr-tag/route.ts`
+
+Reported: "This model models/gemini-2.0-flash is no longer available." Traced it — it is **not** the Lab Results upload path (`app/api/upload/route.ts`); that file's model list (`gemini-2.5-flash`, `gemini-3.1-flash-lite-preview`) never referenced `gemini-2.0-flash` on either staging or production. The retired model was hardcoded as a fallback in five *other*, unrelated Gemini call sites across the app — the Alara intelligence engine, the sales health check, the cleaning-verification and gauge-reading photo checks (Production capture), and the bag-tag OCR reader — none of which had been touched by the earlier Lab Results fixes.
+
+- Replaced every occurrence of the retired `gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-1.5-flash` and `gemini-1.5-flash-8b` with `gemini-3.6-flash` (Google's own suggested replacement, quoted in the error) and `gemini-2.5-flash-lite` as a lighter fallback — already in active use elsewhere in the app, so a known-current model rather than a guess.
+- `gemini-2.5-flash` stays the primary everywhere it already was — it's the model actually reporting this error's *fallback* target, not itself flagged as retired.
+- Same lesson as the earlier Lab Results fix, applied everywhere it had been missed: a fallback chain is only as good as its last entry — if every model in the chain is dead, there's nothing left to fall back to, and the failure is total instead of just slower.
+
 ## 2026-08-21 — Gustav (Lab Results: admin tool to identify which Google account a deployed Gemini key belongs to)
 
 **Files changed:** `app/api/quality/gemini-key-check/route.ts` (new), `app/(app)/quality/lab-results/page.tsx`
