@@ -2,6 +2,53 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Lab Results: admin tool to identify which Google account a deployed Gemini key belongs to)
+
+**Files changed:** `app/api/quality/gemini-key-check/route.ts` (new), `app/(app)/quality/lab-results/page.tsx`
+
+Reported: uploads still 429 with "Your prepayment credits are depleted" after topping up Google billing. That wording is specific — it's Google AI Studio's own **prepay credit wallet**, a separate balance from a full Cloud Billing account (card/invoice). If billing was topped up on one Google account/project but `GEMINI_API_KEY` on the VPS was issued from a *different* one's prepay flow, the top-up never reaches this key's balance at all — a very easy mismatch across multiple Google accounts.
+
+There is no API that maps a bare key back to its owning account (deliberate, on Google's side) — the only place that mapping is ever visible is Google AI Studio's own key list (aistudio.google.com/apikey) under whichever account is signed in. So the fix isn't code — it's identifying the deployed key so it can be matched there by eye.
+
+- New admin-only **"🔧 Check Gemini key"** button on Lab Results, gated the same way as the page's existing admin actions (`can_delete_lab_results`). Calls a new `/api/quality/gemini-key-check` route that reads the live `process.env.GEMINI_API_KEY` server-side and returns only a masked form (`AIzaSy…567890` for a 37-char key) plus its length — enough to visually match against AI Studio's own truncated key display, nowhere near enough to reconstruct the real key.
+- No change to the upload/retry logic itself — this is purely a "which account is this" diagnostic for the person who can actually check billing.
+
+## 2026-08-21 — Gustav (Pasteuriser: date-range filter + per-batch trend graph in History, bulk density chart in Active Runs, moisture/temp colours swapped)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+Four requests off the Run Dashboard:
+
+1. **Date-range filter for History & Performance.** Added `from`/`to` date inputs next to the existing batch-number search. A batch matches if ANY of its sample dates falls inside the chosen range (`sampleDateRange()` + `inHistDateRange()`), not just its first day — so a batch that ran across several days isn't excluded just because it started before the "from" date. The batch count next to the search box now reflects the combined search+date filter instead of only the text search.
+2. **Moisture & Temperature graph per expanded history batch.** Expanding a batch row (the existing click-to-expand) now also renders the same trend chart style used in Active Runs, built from that batch's own samples (already chronological — sorted once at load). Scoped to "click a batch" specifically; a separate per-date drill-down wasn't added — the chart's x-axis carries date+time so a multi-day batch's days are still visually distinguishable without a second click target.
+3. **Bulk Density trend + spec limits in Active Runs**, directly under the Moisture & Temperature chart. Spec limits come from the same source every other spec check on this page already uses — customer override, else the matched customer spec, else `PAST_SPEC_DEFAULTS.untapped_bd` (280–340) — so the limit lines always have real numbers, not only when a customer spec happens to match.
+4. **Moisture/Temperature colours swapped** (Moisture was orange/Temp blue; now Moisture blue / Temp orange) in both the Active Runs trend chart and the new History one, for the correction requested and for consistency between the two.
+
+## 2026-08-21 — Gustav (Note Books: dropdown sections, drop the redundant Lot no. field, every field now required — STAGING ONLY)
+
+**Files changed:** `supabase/migrations/20260821_002_notebooks_drop_redundant_lot_no.sql` (new, applied to **staging only**), `lib/notebooks/types.ts`, `lib/notebooks/server.ts`, `components/notebooks/note-draft.ts`, `components/notebooks/NoteFields.tsx`, `components/notebooks/NotePaper.tsx`, `app/(app)/notebooks/new/page.tsx`, `app/(app)/notebooks/[id]/page.tsx`, `app/api/notebooks/documents/route.ts`, `app/api/notebooks/documents/[id]/route.ts`
+
+Follow-up feedback on the capture form: the five-tab strip took up space better spent on the fields themselves, Lot no. and Batch no. were two boxes for the one answer, and it was too easy to issue a note with gaps left in it.
+
+- **Section tabs replaced with a dropdown.** The same five sections (Weighbridge, Supplier & Goods, Traceability, Certification, Comments) are now picked from one `<select>` instead of a row of buttons — one control instead of five competing for attention, and it carries an "N to fix" count per section once a save has been attempted, so a problem hiding in a section you're not looking at doesn't go unnoticed.
+- **Lot no. is gone — Batch no. is the one field.** In this book's actual use the two never meant different things, so having both was just an extra box to fill in (or leave inconsistently blank). Removed from the header Traceability tab and from every goods line; `notebooks.documents.lot_no` and `notebooks.document_lines.lot_no` are dropped by the new migration (both `public.notebook_*` views recreated to match, per the lesson in `20260819_002`). Nothing has shipped to production yet and the module's own test rows were already gone, so there was no data to carry over. `Producer lot no.` is untouched — that's the farmer's own number, a different concept from our batch no.
+- **Every field the physical book captures is now required to save — literally "N/A" is an accepted answer** where a field genuinely doesn't apply (e.g. Control Union no. on a conventional load). A required-and-empty field shows a rounded amber outline the moment it's blank, before any save is even attempted, so what's left to fill in is visible at a glance rather than a surprise at submit time; trying to save with gaps still open turns those red, lists every one of them in a banner above Save, and blocks the request. The stamp tick-boxes stay optional (ticking nothing already means "conventional") and so does the free-text Comments box (open remarks, not a specific figure off the paper book).
+- The same requirement is enforced again server-side in `lib/notebooks/server.ts` (`createDocument`/`updateDocument`), against the already-converted payload rather than the in-form drafts — a request built by hand can't skip it either. Returns 400, not 500, when it's the reason a save was refused.
+- `npm run build` and `npx tsc --noEmit` both clean against current `staging` — zero errors in any notebooks file (the pre-existing unrelated errors elsewhere are untouched).
+- Full interactive click-through wasn't possible from this session (no path to sign in against staging), so this was verified by build + typecheck + a careful read of the rendered JSX, not by driving it in a browser — flagging that rather than claiming an interactive check that didn't happen.
+
+## 2026-08-21 — Alyssa (Production schema drift: the 404s/400 in the live console, audited and closed)
+
+**Files changed:** `supabase/migrations/20260821_001_count_drafts.sql` (new), `docs/ops/prod-drift-audit.sql` (new), `docs/ops/prod-drift-catchup.md` (new)
+
+The production site's console carries five PostgREST failures against objects the app queries — `count_drafts` (404), `employee_leave_active` (404), `roster_change_log` (404), `shift_reports` (404) and `job_cards_pasteuriser` (400). Every one is swallowed by a best-effort `catch`, so the features render empty instead of failing visibly.
+
+- **All five are database drift, not client bugs.** Checked each call site first: the three `production`-schema 404s come from `getDb().schema('production')` helpers (`supervisor/roster/page.tsx:102`/`:110`, `supervisor/signoff/page.tsx:130`), so the schema being sent is right and the object genuinely isn't reachable on production.
+- **`public.count_drafts` was never in the repo at all.** `lib/store/countStore.ts` has persisted the stock-count draft to it since it was written, so it only exists where somebody created it by hand — and not on production, where every draft load/save 404s and a counter's work therefore lives in browser memory only, lost on reload or device swap. Added as a real migration (`20260821_001`), shape derived from the three calls the store makes: PK `(user_id, date, role)` for its `onConflict`, `state_json` jsonb, and — unlike the app's usual `USING (true)` — an owner-scoped RLS policy, since a count draft is personal working state that nothing else reads. Applies to **both** databases.
+- **`docs/ops/prod-drift-audit.sql`** (read-only) reports existence *and* the `authenticated`/`service_role` SELECT privilege per object, because a PostgREST 404 is equally "table missing" and "table exists but no API role can see it, so it never enters the schema cache" — those have different fixes. Section 2 checks the nine `job_cards_pasteuriser` workflow columns behind the 400 (one missing column 400s the whole select, taking out the pasteuriser approval queue). Sections 3 and 4 dump every object and column in `public`/`production`/`qms`/`sales`/`hr` for a staging↔production diff, to catch drift nobody has hit in a browser yet.
+- **`docs/ops/prod-drift-catchup.md`** maps each symptom to what it costs while broken and the existing migration that closes it (`20260623_003`, `20260730_001`, `20260730_002`, `20260729_002` — all idempotent), in dependency order with the prerequisites each needs present first, plus the grant-only fix for the present-but-invisible case: `20260623_003` predates the grant convention and issues none, and its view needs its own grant since `20260611_005`'s `ALTER DEFAULT PRIVILEGES` only covers tables created by the role that ran it.
+- **Separate finding, not fixed:** `shift-report-generate.yml` pings `vars.SHIFT_REPORT_CRON_URL` and falls back to the *staging* URL. The repo has no Actions variables set, so the 16:00/01:00 SAST shift-report generation has only ever run against staging — creating `production.shift_reports` won't change that. Closing it is a decision (repoint the var, or add a production variant like `roster-rotate-production.yml`), so it's written up rather than done.
+
 ## 2026-08-21 — Alyssa (Capture: bagging rows stop saving after an output bag is removed — duplicate bag_no)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
