@@ -1162,6 +1162,29 @@ export default function LabResultsPage() {
             🔧 Check Gemini key
           </button>
           )}
+          {/* Admin-only: an actual live call, made right now, with the real
+              deployed key — the masked-key check only proves which key is
+              deployed, not whether it can currently serve a request. Needed
+              because Google's own usage dashboard visibly lags (showed zero
+              requests for "today" right after a failed upload), and an old,
+              still-displayed queue row isn't proof of what's happening now. */}
+          {isAdmin && (
+            <button onClick={async () => {
+              try {
+                const res = await fetch('/api/quality/gemini-key-check', { method: 'POST' })
+                const d = await res.json()
+                if (res.status === 403) { alert(d.error || 'Permission denied'); return }
+                if (!d.configured) { alert('GEMINI_API_KEY is not set on this server at all.'); return }
+                const summary = d.ok
+                  ? `✅ LIVE call succeeded just now (${d.startedAt}) on ${d.model}.\n\nThe key can serve requests right now — if uploads are still failing, something else is wrong (a different model in the fallback chain, a transient blip at the exact moment of upload, or a per-day cap that's since reset).`
+                  : `❌ LIVE call FAILED just now (${d.startedAt}) on ${d.model} — HTTP ${d.status}.\n\nGoogle's exact response:\n${JSON.stringify(d.body ?? d.error, null, 2).slice(0, 1500)}`
+                alert(summary)
+              } catch (e: any) { alert('Test call failed: ' + e.message) }
+            }}
+              style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', color:'#374151', fontSize:11, cursor:'pointer' }}>
+            🧪 Test Gemini now
+          </button>
+          )}
         </div>
       </div>
 
