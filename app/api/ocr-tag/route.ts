@@ -58,12 +58,12 @@ READING RULES:
 Return ONLY this JSON, no markdown:
 {"lot_number":null,"serial_number":null,"product_type":null,"variant":null,"weight_kg":null,"tag_date":null,"leaf_shade":null}`
 
-// gemini-2.0-flash-lite and gemini-1.5-flash were retired by Google
-// ("This model ... is no longer available") — see lib/intelligence/gemini.ts.
+// gemini-2.0-flash-lite, gemini-1.5-flash and (later) gemini-2.5-flash-lite
+// were all retired by Google — see lib/intelligence/gemini.ts for the same fix.
 const MODELS = [
   'gemini-2.5-flash',
   'gemini-3.6-flash',
-  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash-lite',
 ]
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
