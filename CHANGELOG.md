@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Lab Results: admin tool to identify which Google account a deployed Gemini key belongs to)
+
+**Files changed:** `app/api/quality/gemini-key-check/route.ts` (new), `app/(app)/quality/lab-results/page.tsx`
+
+Reported: uploads still 429 with "Your prepayment credits are depleted" after topping up Google billing. That wording is specific — it's Google AI Studio's own **prepay credit wallet**, a separate balance from a full Cloud Billing account (card/invoice). If billing was topped up on one Google account/project but `GEMINI_API_KEY` on the VPS was issued from a *different* one's prepay flow, the top-up never reaches this key's balance at all — a very easy mismatch across multiple Google accounts.
+
+There is no API that maps a bare key back to its owning account (deliberate, on Google's side) — the only place that mapping is ever visible is Google AI Studio's own key list (aistudio.google.com/apikey) under whichever account is signed in. So the fix isn't code — it's identifying the deployed key so it can be matched there by eye.
+
+- New admin-only **"🔧 Check Gemini key"** button on Lab Results, gated the same way as the page's existing admin actions (`can_delete_lab_results`). Calls a new `/api/quality/gemini-key-check` route that reads the live `process.env.GEMINI_API_KEY` server-side and returns only a masked form (`AIzaSy…567890` for a 37-char key) plus its length — enough to visually match against AI Studio's own truncated key display, nowhere near enough to reconstruct the real key.
+- No change to the upload/retry logic itself — this is purely a "which account is this" diagnostic for the person who can actually check billing.
+
 ## 2026-08-21 — Gustav (Pasteuriser: date-range filter + per-batch trend graph in History, bulk density chart in Active Runs, moisture/temp colours swapped)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`

@@ -1042,6 +1042,25 @@ export default function LabResultsPage() {
             style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:`1px solid ${showHistory?'#d97706':'#e5e7eb'}`, background:showHistory?'#fef3c7':'#fff', color:showHistory?'#92400e':'#374151', fontSize:11, cursor:'pointer' }}>
             📜 Historical
           </button>
+          {/* Admin-only: identify WHICH Google account the deployed key belongs
+              to, without ever showing the full secret. There's no API that maps
+              a bare key back to an account (deliberate on Google's side) — the
+              masked value here is only for visually matching against each
+              candidate account's own key list at aistudio.google.com/apikey. */}
+          {isAdmin && (
+            <button onClick={async () => {
+              try {
+                const res = await fetch('/api/quality/gemini-key-check')
+                const d = await res.json()
+                if (!res.ok) { alert(d.error || 'Could not check the key'); return }
+                if (!d.configured) { alert('GEMINI_API_KEY is not set on this server at all.'); return }
+                alert(`Deployed GEMINI_API_KEY: ${d.masked} (${d.length} chars)\n\nSign into aistudio.google.com/apikey with each Google account that might have created a Gemini key, and match this masked value against the key list shown there — that page is the only place the account/project behind a key is ever visible.`)
+              } catch (e: any) { alert('Check failed: ' + e.message) }
+            }}
+              style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', color:'#374151', fontSize:11, cursor:'pointer' }}>
+            🔧 Check Gemini key
+          </button>
+          )}
         </div>
       </div>
 
