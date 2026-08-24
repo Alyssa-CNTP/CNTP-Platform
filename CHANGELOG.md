@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-24 — Gustav (Lab Results: manual entry, for when PDF upload/Gemini isn't available)
+
+**Files changed:** `app/(app)/quality/lab-results/page.tsx`
+
+Requested while diagnosing the Gemini billing issue: a way to record Final Lab Results without depending on PDF upload/Gemini extraction at all — a Google-side billing or quota problem shouldn't be able to block recording a result that already exists on paper or came in by phone/email.
+
+- New **"✍️ Enter results manually"** button next to the PDF drop zone on every tab. Opens the exact same review form a PDF extraction would (`ReviewPanel`), just starting blank instead of pre-filled — same save path, same duplicate-batch check, same COA/history behaviour, nothing test-type-specific to special-case downstream.
+- **The analytes and compound tables — previously read-only, even for a normal PDF review** — now have editable inputs, a status picker and add/remove-row controls when a record is a manual entry (`pending._manual`), so a QC can type in analyte name, result and MRL/spec directly instead of only being able to correct values Gemini had already extracted. Micro's tab already had editable inputs for its flat result fields; those needed no changes.
+- Scoped tightly to manual entries only — every existing PDF-extraction review path renders exactly the same JSX as before (diffed to confirm every changed line is inside the new manual/non-manual branch, not a change to the original behaviour).
+
 ## 2026-08-21 — Gustav (Fix: gemini-2.5-flash-lite retirement broke Lab Results upload — this time found the actual quality-upload culprit)
 
 **Files changed:** `app/api/upload/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/intelligence/gemini.ts`, `app/api/sales/health/route.ts`, `app/api/production/verify-clean/route.ts`, `app/api/production/read-value/route.ts`, `app/api/ocr-tag/route.ts`
