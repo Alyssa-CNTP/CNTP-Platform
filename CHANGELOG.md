@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (Fix: gemini-2.5-flash-lite retirement broke Lab Results upload — this time found the actual quality-upload culprit)
+
+**Files changed:** `app/api/upload/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/intelligence/gemini.ts`, `app/api/sales/health/route.ts`, `app/api/production/verify-clean/route.ts`, `app/api/production/read-value/route.ts`, `app/api/ocr-tag/route.ts`
+
+Reported: "gemini-2.5-flash-lite is no longer available to new users" AND Lab Results uploads themselves failing outright. The earlier same-day fix swapped the *previous* round of retired models (`gemini-2.0-flash` etc.) for `gemini-2.5-flash-lite` in five files that don't touch the Lab Results upload path — and concluded `app/api/upload/route.ts` (the actual quality-upload endpoint) was unaffected, since its fallback was `gemini-3.1-flash-lite-preview`, not `2.5-flash-lite`, by name.
+
+That conclusion was wrong: `gemini-3.1-flash-lite-preview` is a preview alias **built on** `gemini-2.5-flash-lite`, so once Google retired the underlying model, calls through the preview name started failing too — citing the underlying model in the error, not the alias actually requested. That preview alias is the *second and only remaining* model in the Lab Results upload's fallback list, so once the primary (`gemini-2.5-flash`) hit any transient 429/503 and fell through to it, the whole upload failed outright with no working fallback left — this is what "I also can't upload the quality records" actually was.
+
+- `app/api/upload/route.ts`: `gemini-3.1-flash-lite-preview` → `gemini-3.5-flash-lite` (Google's own suggested replacement for the retired `2.5-flash-lite`). `gemini-2.5-flash` stays primary, unaffected.
+- Same swap in `app/api/maintenance/transcribe/route.ts` (same suspect alias as its fallback) and in the five files fixed earlier today that had `gemini-2.5-flash-lite` explicitly, which is exactly what just got retired.
+- Swept the whole repo for every remaining reference to `gemini-2.0-flash`, `gemini-1.5-flash`(-8b), `gemini-2.5-flash-lite` and `gemini-3.1-flash-lite-preview` in live code — none left; only explanatory comments mention the retired names now.
+
 ## 2026-08-21 — Gustav (Fix "model no longer available" errors — drop retired Gemini model fallbacks across the app)
 
 **Files changed:** `lib/intelligence/gemini.ts`, `app/api/sales/health/route.ts`, `app/api/production/verify-clean/route.ts`, `app/api/production/read-value/route.ts`, `app/api/ocr-tag/route.ts`

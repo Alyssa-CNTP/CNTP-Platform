@@ -12,13 +12,16 @@ const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 // gemini-2.0-flash, gemini-2.0-flash-lite and gemini-1.5-flash-8b were
 // retired by Google ("This model ... is no longer available") — every call
 // that reached one of them failed outright with no more fallbacks to try.
-// See app/api/upload/route.ts for the same lesson learned on the Lab
-// Results upload path: don't lead with (or fall back to) anything but a
-// currently-supported model.
+// gemini-2.5-flash-lite was retired next ("no longer available to new
+// users"), so this chain broke a second time within the same session. See
+// app/api/upload/route.ts for the same lesson learned on the Lab Results
+// upload path: don't lead with (or fall back to) anything but a
+// currently-supported model — and expect this list to need revisiting again
+// as Google keeps retiring generations.
 const MODEL_CHAIN = [
   'gemini-2.5-flash',           // primary — best quality, paid tier
   'gemini-3.6-flash',           // fallback 1 — Google's suggested replacement for the retired 2.0-flash
-  'gemini-2.5-flash-lite',      // fallback 2 — lightest, rarely overloaded, still current
+  'gemini-3.5-flash-lite',      // fallback 2 — Google's suggested replacement for the retired 2.5-flash-lite
 ]
 
 const CNTP_SYSTEM_PROMPT = `You are the Alara Intelligence Engine — a private, secure sales and market intelligence platform for a South African botanical export company.
