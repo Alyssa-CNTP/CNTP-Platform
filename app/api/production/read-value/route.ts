@@ -5,9 +5,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 
-// gemini-2.0-flash-lite and gemini-1.5-flash were retired by Google
-// ("This model ... is no longer available") — see lib/intelligence/gemini.ts.
-const MODELS = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-2.5-flash-lite']
+// gemini-2.0-flash-lite, gemini-1.5-flash and (later) gemini-2.5-flash-lite
+// were all retired by Google — see lib/intelligence/gemini.ts for the same fix.
+const MODELS = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 export async function GET() {

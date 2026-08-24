@@ -31,7 +31,14 @@ import { loadMrlMap, applyEuMrl }    from '@/lib/quality/eu-mrl'
 // with "Gemini is temporarily overloaded" while we were nowhere near any limit.
 // gemini-2.5-flash is also the larger of the two, so leading with it is a small
 // accuracy win on dense lab reports; the flash-lite preview stays as fallback.
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite-preview']
+//
+// gemini-3.1-flash-lite-preview was later retired too ("This model ... is no
+// longer available to new users") — this is the actual cause of Lab Results
+// uploads failing outright, since it's the second (and only remaining) model
+// in this list once gemini-2.5-flash itself hits a transient 429/503 and
+// falls through to it. Replaced with gemini-3.5-flash-lite (Google's own
+// suggested replacement for the retired 2.5-flash-lite it's built on).
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-3.5-flash-lite']
 const GEMINI_FLASH    = GEMINI_MODELS[0]
 const GEMINI_FLASH_8B = GEMINI_MODELS[1]
 
