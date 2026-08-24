@@ -8,12 +8,17 @@
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
-// Fallback chain — tries each in order until one succeeds
+// Fallback chain — tries each in order until one succeeds.
+// gemini-2.0-flash, gemini-2.0-flash-lite and gemini-1.5-flash-8b were
+// retired by Google ("This model ... is no longer available") — every call
+// that reached one of them failed outright with no more fallbacks to try.
+// See app/api/upload/route.ts for the same lesson learned on the Lab
+// Results upload path: don't lead with (or fall back to) anything but a
+// currently-supported model.
 const MODEL_CHAIN = [
   'gemini-2.5-flash',           // primary — best quality, paid tier
-  'gemini-2.0-flash',           // fallback 1 — fast, unlimited RPD on paid
-  'gemini-2.0-flash-lite',      // fallback 2 — lightest, rarely overloaded
-  'gemini-1.5-flash-8b',        // fallback 3 — always available last resort
+  'gemini-3.6-flash',           // fallback 1 — Google's suggested replacement for the retired 2.0-flash
+  'gemini-2.5-flash-lite',      // fallback 2 — lightest, rarely overloaded, still current
 ]
 
 const CNTP_SYSTEM_PROMPT = `You are the Alara Intelligence Engine — a private, secure sales and market intelligence platform for a South African botanical export company.
