@@ -2,7 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
-## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
+## 2026-08-25 — Alyssa (Fix networked labels printing with random content missing/cut off — Sieving QC label and every direct-print bag label)
+
+**Files changed:** `lib/production/print-socket.ts`
+
+Reported (with a photo): the Sieving Final QC label printed at the lab's Intermec came out almost blank — just the "OUT OF SPEC" warning band, missing the header, barcode, and metrics grid that should also be on it. Described as happening "randomly," not on a specific field every time — pointing at a transmission problem, not a data bug (the label's actual template/data build looked correct on inspection).
+
+Root cause: `sendToPrinter()` (the shared TCP-socket helper used by every direct-print path — QC labels, production bag labels, and the test-print route) called `socket.destroy()` immediately after `socket.write()`'s callback fired. That callback only confirms the OS accepted the bytes into its own send buffer, not that the printer actually received and processed them — `destroy()` is an abrupt close that can send a TCP RST, cutting the stream off mid-transmission under any network jitter. That explains the "random" part: it depends on timing, so it doesn't reproduce the same way twice.
+
+- Now calls `socket.end()` (a graceful half-close/FIN, sent only once everything queued has actually gone out) instead of `destroy()`, and resolves the promise on the socket's `'close'` event rather than immediately after the write callback — so the connection isn't torn down until the transfer has genuinely finished.
+- The 5s timeout and error handling are unchanged; this only changes when a *successful* send is considered done.
+- This is a shared low-level fix — it should also apply to any other direct-print section (Refining/Granule/Blender/Pasteuriser bag labels) that has seen occasional print corruption, not just Sieving.
 
 **Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`
 
