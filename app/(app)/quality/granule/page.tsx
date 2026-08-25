@@ -463,7 +463,10 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
   // banner can re-attach the restored draft to the right run.
   useDraftAutosave(GRANULE_DRAFT_KEYS.sample, { form, grams, runId: run.id, batchNumber: run.batch_number }, { enabled: true })
 
-  const isAfterShift = (() => { const [hh] = (form.sample_time || '').split(':').map(Number); return !isNaN(hh) && hh >= 16 })()
+  // Afternoon/Night shift runs 16h00-01h00 (see lib/production/shifts.ts), so
+  // the 00h00-00h59 tail still counts as "after shift change" — hh >= 16 alone
+  // missed that hour and silently treated it as the morning shift.
+  const isAfterShift = (() => { const [hh] = (form.sample_time || '').split(':').map(Number); return !isNaN(hh) && (hh >= 16 || hh < 1) })()
 
   // ── Variation / outlier detection vs the other samples in this run ──
   // Flags moisture/BD/temp only when this run already has real spread AND
@@ -545,8 +548,12 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
       else if (!allFilled) errs.push('Sieve Data (all fractions required)')
     }
     if (lastSample && form.sample_time && lastSample.sample_time) {
-      const toMins = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m }
-      if (toMins(form.sample_time) <= toMins(lastSample.sample_time))
+      // Compare full sample_date+sample_time, not bare HH:MM — the Afternoon/
+      // Night shift runs 16h00-01h00, so a 00:15 sample logged the morning
+      // after a 23:50 one is later, even though "00:15" <= "23:50" as clock
+      // time. Same key shape as sortSamples() above.
+      const key = (s: { sample_date?: string; sample_time?: string }) => `${s.sample_date || ''}${s.sample_time || ''}`
+      if (key(form) <= key(lastSample))
         warns.push(`Time ${form.sample_time} is not after previous sample time ${lastSample.sample_time}`)
     }
     if (lastSample && form.bulk_bag_serial !== '') {
