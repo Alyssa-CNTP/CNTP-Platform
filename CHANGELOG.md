@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Capture Overview: stop silently under-counting a shift's total when a mid-shift grade/variant changeover opened a separate batch record)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: the Sieving Tower Overview screen showed fewer bags/kg for a shift than the Production Order detail page for the exact same run (e.g. Overview said "6 bags, 1412.0 kg" of Indent Sticks and no Rolsiev Sticks at all, while Production Orders — which reads live from `bag_tags` — showed 7 bags/1460.0 kg and a Rolsiev Sticks bag Overview never mentioned), with a false "446.0 kg still to bag out" mass-balance warning telling the operator to keep bagging material that was already done.
+
+Root cause: Overview's totals and mass balance are built from `[...productions, ...siblingProductions]` — this session's own in-progress data plus every *other* `prod_sessions` row for the same section/date/shift, but `siblingProductions` is deliberately filtered down to only sessions running the exact same variant+grade (`productionMatchKey`, `app/(app)/production/capture/[section]/page.tsx:100`) — by design, so two genuinely different runs sharing a shift by coincidence never get their mass balances summed together. A mid-shift "Changeover — switch grade/variant" (`startNewProduction()`) opens a brand-new `prod_sessions` row for the new grade/variant; its bags are real, correctly saved to `bag_tags`, and correctly shown on Production Orders (which has no such filter) — but they were **silently** excluded from Overview/mass-balance with no indication anything was left out, since they don't match the currently-open session's variant/grade key.
+
+Fix: kept the balance-combining rule exactly as-is (still never sums different variant/grade balances), but Overview now surfaces a note whenever `shiftOtherProductions` (the unfiltered "everything this shift" set already used for the "Bags this shift" reference log) contains a batch record that `siblingProductions` excluded — showing its own in/out kg and variant/grade under the mass balance, so an excluded batch is visible instead of silently making the shown total look incomplete/wrong.
+
 ## 2026-08-25 — Alyssa (Re-bag: ask "add or remove" upfront, so top-ups don't get mis-cast as an over-draw)
 
 **Files changed:** `components/production/capture/RebagModal.tsx`
