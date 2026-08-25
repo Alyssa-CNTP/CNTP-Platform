@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Re-bag: ask "add or remove" upfront, so top-ups don't get mis-cast as an over-draw)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Reported: topping up a bag would get blocked with "can't move more than the source has" even though the operator wasn't trying to remove anything. Root cause: the modal always asked "where's the material coming from" first — for a genuine top-up, the operator's instinct is to name the bag they want to top up *first* (since that's the one they're actually focused on), which the modal then cast as the **source** — a correct over-draw block, just against the wrong bag.
+
+- The modal now opens by asking what you're doing: **"Add material to a bag"** (picks the bag being topped up first, then where the extra material comes from) or **"Remove material from a bag"** (today's existing order, unchanged — picks the bag it's coming out of first).
+- `source`/`target` still always mean the same physical thing (source = drawn from, target = received into) — only the pick *order* changes with intent, so `transferBagWeight`/`createBagFromTransfer` and all validation are untouched.
+- The amount + "resulting product type" fields now render once both bags are known, on whichever step happens to complete that pair — previously hardcoded into the target step, which broke as soon as target could be picked first.
+
 ## 2026-08-25 — Alyssa (Stock Control: add the Quality Lab (Sieving Final QC) Intermec printer to the Printers/Print Health admin pages)
 
 **Files changed:** `lib/production/live-types.ts`, `lib/production/capture-config.ts`, `components/stock-control/PrintersModule.tsx`, `components/stock-control/PrintHealthModule.tsx`

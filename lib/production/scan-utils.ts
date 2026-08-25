@@ -163,6 +163,11 @@ export async function transferBagWeight(
   sessionId: string | null,
   operatorId?: string | null,
   closeTargetBag = false,
+  // Set only when the caller has confirmed the source's product doesn't
+  // match the target's — actually reclassifies the target row so the bag's
+  // own record reflects what it now physically contains. Left undefined for
+  // a same-product top-up, which never touches product_type.
+  reclassifyProductType?: string,
 ): Promise<void> {
   if (!sourceSerial || !targetSerial || sourceSerial === targetSerial) return
   if (!(amountKg > 0) || amountKg > sourceCurrentWeight) return
@@ -181,6 +186,7 @@ export async function transferBagWeight(
 
   const targetUpdate: Record<string, unknown> = { weight_kg: targetCurrentWeight + amountKg }
   if (closeTargetBag) targetUpdate.is_open = false
+  if (reclassifyProductType) targetUpdate.product_type = reclassifyProductType
   await getDb().schema('production').from('bag_tags').update(targetUpdate as any).eq('serial_number', targetSerial)
 
   await getDb().schema('production').from('scan_events').insert([
