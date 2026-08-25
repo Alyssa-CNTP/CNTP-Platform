@@ -1705,6 +1705,22 @@ function CaptureScreen() {
     const yieldPct = A > 0 ? (G / A) * 100 : 0
     balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
   }
+  // A batch record this shift running a genuinely different variant/grade is
+  // deliberately kept out of the combined balance above (two different runs
+  // must never have their balances summed just because they share a shift) —
+  // but a SILENT exclusion reads to the operator as "this shift's whole
+  // story", making an already-bagged batch look like it's still owed. Surface
+  // it instead of hiding it, without changing what actually gets combined.
+  const siblingIds = new Set(siblingProductions.map(p => p.id))
+  const excludedThisShift = shiftOtherProductions.filter(p => !siblingIds.has(p.id) && hasCaptureData([p]))
+  if (excludedThisShift.length > 0) {
+    const ex = sessionTotals(excludedThisShift, shiftBal)
+    const exLabels = Array.from(new Set(excludedThisShift.map(p =>
+      (VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant) || 'unspecified'
+    ))).join(', ')
+    const exNote = `Also on this shift, under a different variant/grade (${exLabels}): ${ex.totalIn.toFixed(0)} kg in, ${ex.totalOut.toFixed(0)} kg out — its own separate balance, not part of the total above.`
+    balanceNote = balanceNote ? `${balanceNote} ${exNote}` : exNote
+  }
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
   // a section/machine tablet resolves the signer from the rostered operators by PIN.
