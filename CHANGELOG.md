@@ -12,6 +12,39 @@ Reported: topping up a bag would get blocked with "can't move more than the sour
 - `source`/`target` still always mean the same physical thing (source = drawn from, target = received into) — only the pick *order* changes with intent, so `transferBagWeight`/`createBagFromTransfer` and all validation are untouched.
 - The amount + "resulting product type" fields now render once both bags are known, on whichever step happens to complete that pair — previously hardcoded into the target step, which broke as soon as target could be picked first.
 
+## 2026-08-25 — Alyssa (Stock Control: add the Quality Lab (Sieving Final QC) Intermec printer to the Printers/Print Health admin pages)
+
+**Files changed:** `lib/production/live-types.ts`, `lib/production/capture-config.ts`, `components/stock-control/PrintersModule.tsx`, `components/stock-control/PrintHealthModule.tsx`
+
+Requested: visibility into the Intermec PD (192.168.0.26) used for Sieving Final QC labels, to help diagnose it apparently needing a warm-up print from Bartender before it'll accept a print from the app again. That printer (`quality_lab` in `SECTION_PRINTER`) already existed in config but wasn't shown on either Stock Control admin page — `SECTION_ORDER`, which both pages iterate, is production capture's own section list (assignment, KPIs, shift reports, capture routing all assume every entry is a real bagging section), so `quality_lab` was deliberately never added there.
+
+- New `PRINTER_SECTIONS` constant (`SECTION_ORDER` + `quality_lab`), used only by the two printer admin pages — `SECTION_ORDER` itself is untouched, so nothing about production capture, assignment, or KPIs changes.
+- Added a `quality_lab` entry to `SECTION_CONFIG` (name/code/colour) so it renders properly, and to `KNOWN_PRINTERS` so it's pickable from the printer dropdown.
+- The Printers tab now shows its IP/port/language and has a working "Test print" button; Print Health shows its last successful print, same as every other section.
+- Possibly related: the print-socket truncation fix above (graceful `socket.end()` instead of an abrupt `destroy()`/RST) may also explain the printer needing a Bartender print to "unstick" it — a bad TCP close could plausibly leave the printer's receive buffer in a stuck state until something else resets it. Worth re-testing now that fix is live.
+
+## 2026-08-25 — Alyssa (Fix networked labels printing with random content missing/cut off — Sieving QC label and every direct-print bag label)
+
+**Files changed:** `lib/production/print-socket.ts`
+
+Reported (with a photo): the Sieving Final QC label printed at the lab's Intermec came out almost blank — just the "OUT OF SPEC" warning band, missing the header, barcode, and metrics grid that should also be on it. Described as happening "randomly," not on a specific field every time — pointing at a transmission problem, not a data bug (the label's actual template/data build looked correct on inspection).
+
+Root cause: `sendToPrinter()` (the shared TCP-socket helper used by every direct-print path — QC labels, production bag labels, and the test-print route) called `socket.destroy()` immediately after `socket.write()`'s callback fired. That callback only confirms the OS accepted the bytes into its own send buffer, not that the printer actually received and processed them — `destroy()` is an abrupt close that can send a TCP RST, cutting the stream off mid-transmission under any network jitter. That explains the "random" part: it depends on timing, so it doesn't reproduce the same way twice.
+
+- Now calls `socket.end()` (a graceful half-close/FIN, sent only once everything queued has actually gone out) instead of `destroy()`, and resolves the promise on the socket's `'close'` event rather than immediately after the write callback — so the connection isn't torn down until the transfer has genuinely finished.
+- The 5s timeout and error handling are unchanged; this only changes when a *successful* send is considered done.
+- This is a shared low-level fix — it should also apply to any other direct-print section (Refining/Granule/Blender/Pasteuriser bag labels) that has seen occasional print corruption, not just Sieving.
+
+## 2026-08-25 — Alyssa (Quality Granule: allow more than one re-test attempt on a failing sample, keep the full history)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260825_001_granule_recheck_attempts.sql`
+
+Follow-up to the moisture-ceiling fix above. Reported: after a re-check also failed, the panel dead-ended at "✗ FAIL — add new sample" — there was no way to log a second or third re-test against the same failing sample, even though that's QC's actual workflow (keep re-testing the dryer's output until moisture is back in spec, could take 2/3/4 tries).
+
+- Added `qms.granule_samples.recheck_attempts` (jsonb array — `{n, time, moisture, dryer_temp, pass}` per attempt), migration `20260825_001_granule_recheck_attempts.sql`. **Needs to be applied to the Supabase project (staging, then production) — this session has no direct DB access to run it.**
+- The re-check panel now shows every past attempt and, as long as the latest one hasn't passed, offers "Re-test #N" to log the next one — it no longer stops after a single attempt.
+- The existing single-slot columns (`recheck_done`/`recheck_moisture`/`recheck_dryer_temp`/`recheck_time`/`recheck_pass`) are kept in sync as a mirror of the latest attempt, so the run's Pass/Fail status still resolves correctly once any attempt passes (via the previous fix), and any other code reading those columns directly keeps working unchanged.
+
 ## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
 
 **Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`

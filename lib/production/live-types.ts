@@ -131,6 +131,18 @@ export const SECTION_CONFIG: Record<string, {
     inputTypes: ['Blended Batch'],
     outputTypes: ['Bulk Bag 500kg','Box 18kg','Paper Bag 18kg','By-product'],
   },
+  // Not a production bagging section (no capture screen) -- the Sieving
+  // Final QC lab's own printer, so it can show up on the Printers/Print
+  // Health admin pages the same way real sections do. See
+  // capture-config.ts's PRINTER_SECTIONS/SECTION_PRINTER for why it's kept
+  // out of SECTION_ORDER itself.
+  quality_lab: {
+    name: 'Quality Lab (Sieving Final QC)', code: 'QL',
+    colorHex: '#475569', colorClass: 'bg-slate-600',
+    inputMode: 'register',
+    inputTypes: [],
+    outputTypes: [],
+  },
 }
 
 export const VARIANT_LABELS: Record<Variant, string> = {
