@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Quality Granule: fix false "time is wrong" warning on saves crossing midnight/a day boundary) [promoted to production]
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+Reported: QC couldn't tell whether a granule sample save was actually blocked or not — the Add Sample form kept warning that the entered time wasn't after the previous sample's time, even when it clearly was (e.g. today's `09:00` sample flagged against last night's `21:00` one). Root cause: the check only ever compared bare `HH:MM` clock digits, ignoring `sample_date` entirely, so any sample logged after an overnight gap — including the routine midnight rollover of the 16:00–01:00 Afternoon/Night shift — read as numerically "earlier" than the prior sample and fired a spurious warning.
+
+- The time-order check now compares full `sample_date + sample_time` (same key shape `sortSamples()` already uses), so an overnight or cross-day sample correctly reads as later.
+- The separate "QC Name required after 16:00 shift change" check had the same class of bug (`hh >= 16` alone missed the shift's `00:00–00:59` tail) — now also treats that hour as still "after shift change."
+- Client-side validation/warning logic only — no database writes, migrations, or changes to previously saved sample times/dates.
+
 ## 2026-08-25 — Alyssa (Production capture: live cross-session refresh, fixing the UI-vs-DB lag on Capture/Overview)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
