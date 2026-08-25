@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Half-bag top-up: narrowed the operator-facing "Re-bag material" feature down to exactly that)
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx` (renamed from `RebagModal.tsx`), `app/(app)/production/capture/[section]/page.tsx`
+
+Feedback after testing the full re-bagging feature: creating a brand-new bag, and registering untracked/legacy stock into the system, should be warehouse-management functions — not something operators do from the capture page. What operators actually need is narrower: top up a bag they already have (usually a half bag left open from a previous shift) from another bag they already have, print the updated label, and log the transfer. "Removing material from a bag" (splitting one bag's contents out to feed another) is explicitly deferred to a later, separate piece of work.
+
+- Renamed the component and its trigger button from "Re-bag material" to **"Half-bag top-up"**, so the name matches exactly what it does.
+- Removed the "add or remove" intent picker, "New bag" target creation (`OutputPicker` + serial generation), and "Not on the system yet" untracked-stock registration entirely from this flow — both bags involved must already be tracked bags. `createBagFromTransfer` (the new-bag-target primitive) stays defined in `lib/production/scan-utils.ts`, unused for now — reusable when the warehouse-management version of this gets built.
+- The flow is now a fixed two-step pick: which bag you're topping up, then where the extra material is coming from — followed by amount, a safety-net "resulting product type" field on a cross-SKU mismatch, and a confirm screen showing both bags' current weight, original bagging date/weight, and full history before printing.
+- Added the same browse-by-variant-and-product-type discovery to the "which bag are you topping up" step that the source step already had (previously that step was a bare serial box with no way in if you didn't know the exact serial), plus a smart default: an "Only show open (half) bags" filter, on by default, since that's exactly what a half-bag-from-yesterday is (`is_open`) — with an easy toggle to see everything in stock.
+
 ## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`
