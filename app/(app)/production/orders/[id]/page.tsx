@@ -11,7 +11,7 @@
 // Doubles as the printable record: globals.css hides app chrome under @media
 // print and everything renders un-collapsed, so Print produces the full report.
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
@@ -39,6 +39,29 @@ const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 
 }
 
 const num = (v: number | null | undefined) => v ?? 0
+
+// Mass balance on this page reads OUTPUT − INPUT (not input − output): a
+// shortfall (the normal case — moisture, dust, spillage) is then a NEGATIVE
+// number that reads as "material lost" at a glance, instead of an ambiguous
+// positive figure whichever way round it's framed. Flagged once it's outside
+// ±1% of total input — the tolerance a real run is expected to close within.
+const MASS_BALANCE_TOLERANCE_PCT = 0.01
+function massBalanceInfo(totalOutput: number, totalInput: number) {
+  const balance = totalOutput - totalInput
+  const pct = totalInput > 0 ? (balance / totalInput) * 100 : 0
+  const toleranceKg = totalInput * MASS_BALANCE_TOLERANCE_PCT
+  const within = totalInput > 0 ? Math.abs(balance) <= toleranceKg : true
+  const tone: 'ok' | 'warn' | 'err' = within ? 'ok' : balance < 0 ? 'err' : 'warn'
+  const text = within
+    ? `${balance >= 0 ? '+' : ''}${balance.toFixed(1)} kg (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%) · within ±1%`
+    : balance < 0
+      ? `${balance.toFixed(1)} kg (${pct.toFixed(1)}%) · material lost, outside ±1% tolerance`
+      : `+${balance.toFixed(1)} kg (+${pct.toFixed(1)}%) · outside ±1% tolerance`
+  return { balance, pct, within, tone, text }
+}
+// Tailwind needs the full class name literally in source to generate it —
+// `text-${tone}` at runtime would silently produce no styling.
+const TONE_TEXT_CLASS: Record<'ok' | 'warn' | 'err', string> = { ok: 'text-ok', warn: 'text-warn', err: 'text-err' }
 
 // A debag row's material as it should READ on the order: the farm's 500kg bag
 // is a "Bulk Bag"; Bucket Elevator / Machine Spillage carry their own type.
@@ -122,6 +145,7 @@ export default function ProductionOrderDetailPage() {
   // the Bagging section below instead of the race-prone mass-balance snapshot.
   const totalOutput = bagsOutputKg + bucketCarryOverKg
   const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / num(mb.total_input_kg)) * 1000) / 10 : null
+  const wholeRunBalance = massBalanceInfo(totalOutput, num(mb?.total_input_kg))
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -171,7 +195,7 @@ export default function ProductionOrderDetailPage() {
               <Field label="Bagged output" value={`${bagsOutputKg.toFixed(1)} kg`} />
               {bucketCarryOverKg > 0 && <Field label="Bucket elevator (carried over)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
               <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />
-              <Field label="Balance"      value={`${(num(mb.total_input_kg) - totalOutput).toFixed(1)} kg`} />
+              <Field label="Balance"      value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
           </PanelBody>
@@ -449,14 +473,18 @@ function ShiftBlock({ block }: { block: OrderShiftBlock }) {
               <p className="text-[12.5px] text-text leading-relaxed">{aiSummary}</p>
             </div>
           )}
-          {mb && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <Field label="Input"   value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
-              <Field label="Output"  value={`${(num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg)).toFixed(1)} kg`} />
-              <Field label="Balance" value={`${num(mb.balance_kg).toFixed(1)} kg`} />
-              <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />
-            </div>
-          )}
+          {mb && (() => {
+            const shiftOutput = num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg)
+            const shiftBalance = massBalanceInfo(shiftOutput, num(mb.total_input_kg))
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <Field label="Input"   value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
+                <Field label="Output"  value={`${shiftOutput.toFixed(1)} kg`} />
+                <Field label="Balance" value={<span className={TONE_TEXT_CLASS[shiftBalance.tone]}>{shiftBalance.text}</span>} />
+                <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />
+              </div>
+            )
+          })()}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SignoffBlock label="Operator"   name={s.op_name_signoff}  signedAt={s.op_signed_at}  image={opSig?.signature_b64} />
             <SignoffBlock label="Supervisor" name={s.sup_name_signoff} signedAt={s.sup_signed_at} image={supSig?.signature_b64} />
@@ -468,7 +496,7 @@ function ShiftBlock({ block }: { block: OrderShiftBlock }) {
   )
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="min-w-0">
       <div className="font-mono text-[9px] uppercase tracking-[0.06em] text-text-faint">{label}</div>

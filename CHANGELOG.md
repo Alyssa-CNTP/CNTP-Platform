@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Requested: the "Balance" figure (both the whole-run one and each shift's own) read as `input − output`, an ambiguous positive number either way material moved — and there was no indication of whether a given balance was actually a problem or normal process variation.
+
+- Flipped to `output − input`, so a shortfall (the normal case — moisture, dust, spillage) reads as a plain **negative** number instead of an ambiguous positive one either way.
+- Added a tolerance verdict next to the figure: within ±1% of total input shows green ("within ±1%"); outside it and negative shows red ("material lost, outside ±1% tolerance"); outside it and positive (more output than input recorded — a measurement/weighing issue to check) shows amber. Applied to both the whole-run balance and each shift's own.
+- The whole-run balance is computed from the same "reliable ledger" total this page already used (`bagsOutputKg + bucket carry-over`, not the DB's own snapshot) — only the formula/tolerance treatment changed, not what counts as output. The per-shift balance still starts from `prod_mass_balance`'s own stored input/output columns, just displayed output-minus-input instead of the DB's generated `balance_kg` column (input-minus-output) — the underlying generated column itself was left alone, since it also feeds yield views elsewhere.
+
 ## 2026-08-25 — Alyssa (Capture Overview: stop silently under-counting a shift's total when a mid-shift grade/variant changeover opened a separate batch record)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
