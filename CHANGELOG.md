@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Quality Granule: a genuinely failing moisture reading can now be saved and re-checked, instead of being blocked outright)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+Follow-up to the granule time-order fix above. Reported: when a real dryer fault pushes moisture over 10%, QC's normal workflow — save the failing sample, then re-test until it passes — was impossible, because the save form treated *any* moisture above 10% as "almost always a typo" and hard-blocked it with no way to override. The sample never made it into the database at all, so there was nothing to re-check against.
+
+- 10–100% moisture is now a confirm-to-save warning (same "Yes, these values are correct" pattern already used for statistical outliers), not an unbypassable error — only above 100% (physically impossible) still hard-blocks as a typo.
+- The existing per-sample re-check panel (`recheck_done`/`recheck_moisture`/`recheck_pass`) could already record a passing re-test, but the run's `overall_status` was never recomputed afterward, so a resolved failure stayed flagged "Fail" forever. `handleRecheckSample` now clears the sample's moisture violation and flips the run back to "Pass" once a re-check genuinely passes (other violation types, e.g. sieve fractions, are left untouched).
+- Note: this fixes the pass/fail status at the data layer (which does feed `qms.granule_runs.overall_status` → the `granule_all_passed` batch-quality rollup). The COA document itself doesn't currently read granule data at all — it sources its Moisture figure from the Pasteuriser stage — so wiring a granule re-check result directly onto a COA would be a separate, further piece of work if needed.
+
 ## 2026-08-25 — Alyssa (Quality Granule: fix false "time is wrong" warning on saves crossing midnight/a day boundary)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`
