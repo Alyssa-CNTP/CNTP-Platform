@@ -69,13 +69,10 @@ NOTIFY pgrst, 'reload schema';
 its own grant — the `ALTER DEFAULT PRIVILEGES` in `20260611_005_grants.sql` only
 covers tables created by the same role that ran it. If audit section 1 comes
 back `present` but `auth_select` false for anything, that is the whole fault, and
-this is the fix — no re-creating required:
-
-```sql
-GRANT ALL    ON production.employee_leave        TO authenticated, service_role;
-GRANT SELECT ON production.employee_leave_active TO authenticated, service_role;
-NOTIFY pgrst, 'reload schema';
-```
+`docs/ops/prod-drift-grant-only.sql` is the fix — no re-creating required. It
+grants every object in this catch-up that actually exists, skipping the rest
+(plain `GRANT` has no `IF EXISTS`, so an unguarded script would abort on the
+first missing object), and reloads the schema cache at the end.
 
 ## After applying
 
