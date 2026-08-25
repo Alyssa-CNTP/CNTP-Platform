@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Production capture: live cross-session refresh, fixing the UI-vs-DB lag on Capture/Overview)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: capture, its Overview tab, and Production Orders all looked stale against the database. Traced it — Production Orders was already correct (its list and KPI panel both ride the same 30s poll, confirmed by reading the code; adding a realtime subscription there would actually make things worse, since it would fire on every capture screen's routine draft autosave across the whole factory). The real gap was the capture page: after its one-time load on open, nothing ever read the database again — the 2.5s/20s timers there only *write* the operator's own typing, never read back siblings, the other shift, or a supervisor approving the session elsewhere. Overview has no fetching of its own; it's derived entirely from the capture page's state, so it inherited the same staleness.
+
+- Added a realtime subscription (Supabase `postgres_changes` on `production.prod_sessions`, scoped to the open section) with a 30s poll backstop — the same push+poll pattern already used on the Production Orders detail page — that refreshes sibling sessions, the other shift's totals, the run-wide totals once a run is linked, and this session's own `status` (so a remote approve/reopen shows up here).
+- Deliberately never touches `productions` — the operator's own in-progress capture — so a live refresh from another tablet/shift can never overwrite mid-typing local state.
+- Type-checked clean; full interactive verification (two tablets on the same shift) wasn't run — needs floor-operator PIN credentials this session doesn't have.
+
 ## 2026-08-24 — Gustav (Lab Results: live "Test Gemini now" call, since the masked-key check can't prove the key actually works right now)
 
 **Files changed:** `app/api/quality/gemini-key-check/route.ts`, `app/(app)/quality/lab-results/page.tsx`

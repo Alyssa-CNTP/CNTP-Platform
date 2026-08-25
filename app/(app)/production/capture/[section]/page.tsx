@@ -481,6 +481,74 @@ function CaptureScreen() {
     load()
   }, [sectionId, dateParam, shift])
 
+  // ── Keep cross-session context live ───────────────────────────────────────
+  // `productions` is this screen's OWN in-progress capture — never overwritten
+  // by a background refresh, or an operator's mid-sentence typing would vanish
+  // under them. Everything else here is read-only reference from OTHER
+  // sessions (siblings on this shift, the other shift, or every session
+  // sharing this run) that the operator only ever *views*, never edits on this
+  // screen, plus this session's own `status` in case a supervisor
+  // approves/reopens it elsewhere — all safe to refresh without touching a
+  // single keystroke of local state. Was previously loaded once on open, so a
+  // bag captured on another tablet/shift stayed invisible until reload.
+  const refreshCrossSessionContextRef = useRef<() => Promise<void>>(async () => {})
+  refreshCrossSessionContextRef.current = async () => {
+    const sid = sessionRef.current
+    try {
+      const db = getDb()
+      const { data: shiftSess } = await db.schema('production').from('prod_sessions')
+        .select('id,status,draft_data,comments,created_at,submitted_at')
+        .eq('section_id', sectionId).eq('date', dateParam).eq('shift', shift)
+        .order('created_at', { ascending: false })
+      const shiftRows = (shiftSess as any[]) ?? []
+      const sess = sid ? (shiftRows.find(r => r.id === sid) ?? null) : (shiftRows[0] ?? null)
+      const siblingRows = shiftRows.filter(r => r.id !== sess?.id)
+      const activeMatchKeys = new Set(
+        (((sess as any)?.draft_data?.productions ?? []) as Production[]).map(p => productionMatchKey(p, sectionId))
+      )
+      const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
+      setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
+      setShiftOtherProductions(siblingProds)
+
+      // Mirror whichever source last populated otherShiftProductions: once a run
+      // is linked, that effect (below) widens it to every session sharing the
+      // run — repeating the plain "other shift" query here would fight it and
+      // flicker the combined total back down every 30s.
+      if (runIdRef.current) {
+        const { data } = await db.schema('production').from('prod_sessions')
+          .select('id,draft_data').eq('run_id', runIdRef.current)
+        setOtherShiftProductions((((data as any[]) ?? []).filter(r => r.id !== sid))
+          .flatMap(r => (r.draft_data?.productions ?? []) as Production[]))
+      } else {
+        const otherShift = shift === 'morning' ? 'afternoon' : 'morning'
+        const { data: otherSess } = await db.schema('production').from('prod_sessions')
+          .select('draft_data').eq('section_id', sectionId).eq('date', dateParam).eq('shift', otherShift)
+          .order('created_at', { ascending: false })
+        setOtherShiftProductions(((otherSess as any[]) ?? []).flatMap(r => (r.draft_data?.productions ?? []) as Production[]))
+      }
+
+      // Own session's status only — a supervisor approving/reopening this exact
+      // record from Production Orders or the Supervisor Hub while it's open here.
+      if (sess && sid && sess.id === sid && sess.status && sess.status !== status) {
+        setStatus(sess.status)
+      }
+    } catch { /* live refresh is best-effort — never blocks capture */ }
+  }
+
+  // Realtime push (instant) with a 30s poll backstop, matching the pattern
+  // already used on Production Orders — resubscribes only on a section change
+  // (a real navigation), since the handler always reads the latest
+  // date/shift/session via the ref above rather than a stale closure.
+  useEffect(() => {
+    const db = getDb()
+    const channel = db.channel(`capture-context-${sectionId}`)
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_sessions', filter: `section_id=eq.${sectionId}` },
+        () => { refreshCrossSessionContextRef.current() })
+      .subscribe()
+    const poll = setInterval(() => { refreshCrossSessionContextRef.current() }, 30_000)
+    return () => { clearInterval(poll); db.removeChannel(channel) }
+  }, [sectionId])
+
   // Keep the checks-done signal fresh as the operator moves between tabs — after
   // they sign checks (in the Checks tab) the Capture gate and stepper tick update.
   useEffect(() => {
