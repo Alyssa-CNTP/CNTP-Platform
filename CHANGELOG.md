@@ -14,6 +14,18 @@ Root cause: `sendToPrinter()` (the shared TCP-socket helper used by every direct
 - The 5s timeout and error handling are unchanged; this only changes when a *successful* send is considered done.
 - This is a shared low-level fix — it should also apply to any other direct-print section (Refining/Granule/Blender/Pasteuriser bag labels) that has seen occasional print corruption, not just Sieving.
 
+## 2026-08-25 — Alyssa (Quality Granule: allow more than one re-test attempt on a failing sample, keep the full history)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260825_001_granule_recheck_attempts.sql`
+
+Follow-up to the moisture-ceiling fix above. Reported: after a re-check also failed, the panel dead-ended at "✗ FAIL — add new sample" — there was no way to log a second or third re-test against the same failing sample, even though that's QC's actual workflow (keep re-testing the dryer's output until moisture is back in spec, could take 2/3/4 tries).
+
+- Added `qms.granule_samples.recheck_attempts` (jsonb array — `{n, time, moisture, dryer_temp, pass}` per attempt), migration `20260825_001_granule_recheck_attempts.sql`. **Needs to be applied to the Supabase project (staging, then production) — this session has no direct DB access to run it.**
+- The re-check panel now shows every past attempt and, as long as the latest one hasn't passed, offers "Re-test #N" to log the next one — it no longer stops after a single attempt.
+- The existing single-slot columns (`recheck_done`/`recheck_moisture`/`recheck_dryer_temp`/`recheck_time`/`recheck_pass`) are kept in sync as a mirror of the latest attempt, so the run's Pass/Fail status still resolves correctly once any attempt passes (via the previous fix), and any other code reading those columns directly keeps working unchanged.
+
+## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
+
 **Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`
 
 - **Grade no longer mandatory for everything**: Indent Sticks, Blocks, Dust etc. don't necessarily have a grade the way Fine/Coarse Leaf do. Registering an untracked bag now only requires Grade when the picked product is Fine or Coarse Leaf (reuses the same `LEAF` set `OutputPicker` already uses for batch tracking, now exported) — otherwise just Variant + current weight.
