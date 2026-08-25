@@ -2,6 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Stock Control: add the Quality Lab (Sieving Final QC) Intermec printer to the Printers/Print Health admin pages)
+
+**Files changed:** `lib/production/live-types.ts`, `lib/production/capture-config.ts`, `components/stock-control/PrintersModule.tsx`, `components/stock-control/PrintHealthModule.tsx`
+
+Requested: visibility into the Intermec PD (192.168.0.26) used for Sieving Final QC labels, to help diagnose it apparently needing a warm-up print from Bartender before it'll accept a print from the app again. That printer (`quality_lab` in `SECTION_PRINTER`) already existed in config but wasn't shown on either Stock Control admin page — `SECTION_ORDER`, which both pages iterate, is production capture's own section list (assignment, KPIs, shift reports, capture routing all assume every entry is a real bagging section), so `quality_lab` was deliberately never added there.
+
+- New `PRINTER_SECTIONS` constant (`SECTION_ORDER` + `quality_lab`), used only by the two printer admin pages — `SECTION_ORDER` itself is untouched, so nothing about production capture, assignment, or KPIs changes.
+- Added a `quality_lab` entry to `SECTION_CONFIG` (name/code/colour) so it renders properly, and to `KNOWN_PRINTERS` so it's pickable from the printer dropdown.
+- The Printers tab now shows its IP/port/language and has a working "Test print" button; Print Health shows its last successful print, same as every other section.
+- Possibly related: the print-socket truncation fix above (graceful `socket.end()` instead of an abrupt `destroy()`/RST) may also explain the printer needing a Bartender print to "unstick" it — a bad TCP close could plausibly leave the printer's receive buffer in a stuck state until something else resets it. Worth re-testing now that fix is live.
+
 ## 2026-08-25 — Alyssa (Fix networked labels printing with random content missing/cut off — Sieving QC label and every direct-print bag label)
 
 **Files changed:** `lib/production/print-socket.ts`

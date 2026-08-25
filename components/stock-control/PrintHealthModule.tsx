@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from 'react'
 import { getDb } from '@/lib/supabase/db'
-import { SECTION_ORDER, sectionMeta, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
+import { PRINTER_SECTIONS, sectionMeta, LABEL_PRINTING_ENABLED } from '@/lib/production/capture-config'
 import { Radio, AlertTriangle, CheckCircle2, Clock, Loader2, Info } from 'lucide-react'
 import { format, formatDistanceToNow } from 'date-fns'
 
@@ -138,7 +138,7 @@ export default function PrintHealthModule() {
           <div className="mt-6">
             <div className="text-[13px] font-semibold text-text mb-2">Last successful print per section</div>
             <div className="space-y-1.5">
-              {SECTION_ORDER.map(id => {
+              {PRINTER_SECTIONS.map(id => {
                 const meta = sectionMeta(id)
                 const last = lastDoneBySection.get(id)
                 return (
