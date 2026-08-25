@@ -5,8 +5,8 @@ import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles,
 import { getDb } from '@/lib/supabase/db'
 import { voidBagTag } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, isImplausibleWeight } from '@/lib/production/capture-config'
-import { nextStepNudge, recentBatches } from '@/lib/production/inventory'
+import { variantToShort, isImplausibleWeight, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
+import { nextStepNudge, recentBatches, debaggedBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
@@ -133,10 +133,6 @@ function sortOutputGroups(types: string[]): string[] {
   })
 }
 
-// Destination letter → raw-material local/export label, kept consistent with the
-// production's destination chosen at the top.
-const DEST_LABEL: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
-
 export type Shift = 'morning' | 'afternoon'
 
 // Mass balance for one Sieving production.
@@ -184,6 +180,20 @@ export function SievingCapture({
   useEffect(() => { recentBatches('sieving').then(setDbBatches) }, [])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
 
+  // Batches allowed onto an output bag: whatever was debagged THIS session,
+  // plus any batch debagged in an earlier session under the exact same
+  // variant + grade this run is currently consuming — that carve-out covers a
+  // lot fed in on a previous shift that's still legitimately being bagged out
+  // today, without opening the field back up to every lot ever seen at this
+  // section (which is what let a mistyped/wrong batch onto an output bag).
+  const [matchingBatches, setMatchingBatches] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    debaggedBatches(sectionId, variantWord, GRADE_TO_LOCAL_EXPORT[gradeLetter] ?? 'Export')
+      .then(list => { if (!cancelled) setMatchingBatches(list) })
+    return () => { cancelled = true }
+  }, [sectionId, variantWord, gradeLetter])
+
   const batchOptions = Array.from(new Set([
     assignment.lot_number ?? '',
     ...value.outputs.map(b => b.batch),
@@ -208,7 +218,7 @@ export function SievingCapture({
   // Adding the next bulk bag finalises the previous completed one.
   const addDebag = () => patch({ debag: [...lockCompleted(value.debag), {
     id: crypto.randomUUID(), bag_no: '', lot: assignment.lot_number ?? '',
-    gross: '', nett: '', delivery_date: '', local_export: DEST_LABEL[gradeLetter] ?? 'Export',
+    gross: '', nett: '', delivery_date: '', local_export: GRADE_TO_LOCAL_EXPORT[gradeLetter] ?? 'Export',
   }] })
   const updateDebag = (id: string, k: keyof DebagRow, v: string) =>
     patch({ debag: value.debag.map(r => r.id === id ? { ...r, [k]: v } : r) })
@@ -301,6 +311,7 @@ export function SievingCapture({
         product_type: p.productType, variant: variantWord || null, weight_kg: n(p.weight),
         lot_number: bag.lot_number || null, acumatica_id: p.code || null,
         status: 'in_stock', consumed: false, printed_at: now, is_open: !!p.leaveOpen,
+        destination: grade,
       } as any, { onConflict: 'serial_number' })
       // Event tracking — log the bagging-out once, when the bag is created.
       await getDb().schema('production').from('scan_events').insert({
@@ -628,11 +639,15 @@ export function SievingCapture({
 
           {!locked && (picking
             ? <OutputPicker sectionId="sieving" variantWord={variantWord} gradeLetter={gradeLetter}
-                // Output batches must come from what was actually debagged this run —
-                // suggest only the lot numbers captured on the Debagging tab, so a
-                // typo on an output can't introduce a batch that was never fed in.
+                // Output batches must come from what was actually debagged — either
+                // this run, or an earlier session of the exact same variant + grade
+                // — so a typo on an output can't introduce a batch that was never
+                // fed in under what's currently being consumed.
                 defaultBatch={[...value.debag].reverse().find(r => r.lot.trim())?.lot.trim() ?? ''}
-                batchHints={Array.from(new Set(value.debag.map(r => r.lot.trim()).filter(Boolean)))}
+                batchHints={Array.from(new Set([
+                  ...value.debag.map(r => r.lot.trim()).filter(Boolean),
+                  ...matchingBatches,
+                ]))}
                 onAdd={addOutput} onClose={() => setPicking(false)} />
             : <button onClick={() => setPicking(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
                 <Plus size={16} /> Add output bag

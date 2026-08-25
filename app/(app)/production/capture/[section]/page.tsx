@@ -303,6 +303,17 @@ function CaptureScreen() {
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
+  // Sieving: once any bulk bag has been locked ("Done — lock this bag") under
+  // this batch's variant/grade, that choice is what's on record for it — the
+  // Variant/Grade selects must stop being live-editable, or a change here
+  // after the fact silently relabels an already-locked bag at save time
+  // (buildDebag reads prod.variant fresh, not a per-row snapshot). Changing
+  // variant/grade mid-shift is still possible, just only through Changeover,
+  // which opens a new batch record instead of mutating this one.
+  const sievingHasSecuredDebag = sectionId === 'sieving'
+    && Array.isArray((active?.data as any)?.debag)
+    && ((active.data as any).debag as Array<{ secured?: boolean }>).some(r => r.secured)
+
   // ── Load assignment + operators + existing session ───────────────────────
   useEffect(() => {
     async function load() {
@@ -1702,6 +1713,10 @@ function CaptureScreen() {
     : rosterOps
 
   function updateActiveMeta(key: 'variant' | 'lot' | 'grade', val: string) {
+    // Belt-and-braces: the Variant/Grade selects are already disabled once a
+    // bulk bag is locked (see sievingHasSecuredDebag), but block it here too
+    // in case anything else ever calls updateActiveMeta directly.
+    if ((key === 'variant' || key === 'grade') && sievingHasSecuredDebag) return
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
     if (key === 'variant') {
       const assigned = assignment?.variant ?? ''
@@ -2110,8 +2125,8 @@ function CaptureScreen() {
                 <div className={`grid gap-2.5 ${gradeless ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</label>
-                    <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.variant ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                    <select value={active.variant} disabled={locked || sievingHasSecuredDebag} onChange={e => updateActiveMeta('variant', e.target.value)}
+                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer disabled:cursor-not-allowed disabled:opacity-70 ${active.variant ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
                       <option value="" disabled>Select variant…</option>
                       {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                     </select>
@@ -2119,14 +2134,17 @@ function CaptureScreen() {
                   {!gradeless && (
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
-                      <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                      <select value={active.grade} disabled={locked || sievingHasSecuredDebag} onChange={e => updateActiveMeta('grade', e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer disabled:cursor-not-allowed disabled:opacity-70 ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
                         <option value="" disabled>Select grade…</option>
                         {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
                     </div>
                   )}
                 </div>
+                {sievingHasSecuredDebag && !locked && (
+                  <p className="text-[11px] text-stone-400">Bulk bags are locked in under this variant/grade — use <strong className="text-stone-500">Changeover</strong> below to switch.</p>
+                )}
 
                 {/* Per-batch breakdown — a changeover (addProduction) keeps the
                     run's mass balance combined, but that combined figure alone
