@@ -2,6 +2,26 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Quality Granule: a genuinely failing moisture reading can now be saved and re-checked, instead of being blocked outright)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+Follow-up to the granule time-order fix above. Reported: when a real dryer fault pushes moisture over 10%, QC's normal workflow — save the failing sample, then re-test until it passes — was impossible, because the save form treated *any* moisture above 10% as "almost always a typo" and hard-blocked it with no way to override. The sample never made it into the database at all, so there was nothing to re-check against.
+
+- 10–100% moisture is now a confirm-to-save warning (same "Yes, these values are correct" pattern already used for statistical outliers), not an unbypassable error — only above 100% (physically impossible) still hard-blocks as a typo.
+- The existing per-sample re-check panel (`recheck_done`/`recheck_moisture`/`recheck_pass`) could already record a passing re-test, but the run's `overall_status` was never recomputed afterward, so a resolved failure stayed flagged "Fail" forever. `handleRecheckSample` now clears the sample's moisture violation and flips the run back to "Pass" once a re-check genuinely passes (other violation types, e.g. sieve fractions, are left untouched).
+- Note: this fixes the pass/fail status at the data layer (which does feed `qms.granule_runs.overall_status` → the `granule_all_passed` batch-quality rollup). The COA document itself doesn't currently read granule data at all — it sources its Moisture figure from the Pasteuriser stage — so wiring a granule re-check result directly onto a COA would be a separate, further piece of work if needed.
+
+## 2026-08-25 — Alyssa (Quality Granule: fix false "time is wrong" warning on saves crossing midnight/a day boundary)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`
+
+Reported: QC couldn't tell whether a granule sample save was actually blocked or not — the Add Sample form kept warning that the entered time wasn't after the previous sample's time, even when it clearly was (e.g. today's `09:00` sample flagged against last night's `21:00` one). Root cause: the check only ever compared bare `HH:MM` clock digits, ignoring `sample_date` entirely, so any sample logged after an overnight gap — including the routine midnight rollover of the 16:00–01:00 Afternoon/Night shift — read as numerically "earlier" than the prior sample and fired a spurious warning.
+
+- The time-order check now compares full `sample_date + sample_time` (same key shape `sortSamples()` already uses), so an overnight or cross-day sample correctly reads as later.
+- The separate "QC Name required after 16:00 shift change" check had the same class of bug (`hh >= 16` alone missed the shift's `00:00–00:59` tail) — now also treats that hour as still "after shift change."
+- Client-side validation/warning logic only — no database writes, migrations, or changes to previously saved sample times/dates.
+
 ## 2026-08-25 — Alyssa (Re-bag: simplify registering an untracked bag — own grade/variant, no backdated history)
 
 **Files changed:** `components/production/capture/RebagModal.tsx`
