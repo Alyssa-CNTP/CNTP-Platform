@@ -106,7 +106,19 @@ interface RebagModalProps {
 
 export function RebagModal({ sectionId, sessionId, operatorId, variantWord, gradeLetter, genSerial, onDone, onClose }: RebagModalProps) {
   const sectionName = sectionMeta(sectionId).name
-  const [step, setStep] = useState<'source' | 'created' | 'target' | 'confirm' | 'newBagPrint'>('source')
+  const [step, setStep] = useState<'intent' | 'source' | 'created' | 'target' | 'confirm' | 'newBagPrint'>('intent')
+
+  // What the operator is actually trying to do decides which bag gets
+  // picked FIRST. "source"/"target" always keep their fixed physical
+  // meaning below (source = drawn from, target = received into) — intent
+  // only controls step ORDER, not those roles. Without this, the modal
+  // always asked "where's the material coming from" first, which reads
+  // naturally for "empty this bag into another" but is actively misleading
+  // for "top this bag up": an operator asked to name a source FIRST tends
+  // to name the bag they actually want to top up, then gets blocked trying
+  // to move more than that (now mis-cast-as-source) bag physically holds —
+  // a correct safety block, for the wrong bag.
+  const [intent, setIntent] = useState<'add' | 'remove' | null>(null)
 
   // Batch numbers actually debagged under this variant+grade — same
   // restriction normal bagging enforces (a Leaf output's batch must trace
@@ -295,6 +307,17 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
     ? !!target && !targetVoided && !targetConsumed && !(productMismatch && !targetProductType.trim())
     : !!pickedOutput
 
+  // The amount/reclassify fields only make sense once BOTH bags are known —
+  // for the default (remove) order that's already true by the time this
+  // step renders (source was picked first), but for the "add" order (target
+  // picked first, source still being chosen) it's the source resolving that
+  // completes the pair. Gating on this — rather than always showing the
+  // amount field the moment either bag resolves — is what stops "exceeds
+  // source" from firing against a source that hasn't been picked yet
+  // (sourceKg defaults to 0 until it has).
+  const amountStageActive = !!source && !!target
+  const amountStageBlocked = amountStageActive && (!targetReady || exceedsSource || amountKg <= 0)
+
   const canSubmit = !!source && !sourceVoided && !sourceConsumed && amountKg > 0
     && !exceedsSource && !overCap && !(unusual && !confirmHeavy) && targetReady
 
@@ -377,6 +400,37 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
     onDone(); onClose()
   }
 
+  // The reclassify + amount fields — shown once both bags are known,
+  // regardless of which one was picked first (see amountStageActive).
+  function renderAmountFields() {
+    return (
+      <>
+        {productMismatch && (
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Resulting product type <span className="text-err">*</span></label>
+            <input list="rebag-product-types" value={targetProductType}
+              onChange={e => setTargetProductType(e.target.value)}
+              placeholder="Type or pick a product…"
+              className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${targetProductType.trim() ? 'border-stone-200' : 'border-amber-300'}`} />
+            <datalist id="rebag-product-types">
+              {Array.from(new Set([
+                source?.product_type, target?.product_type,
+                ...(SECTION_CONFIG[sectionId]?.outputTypes ?? []),
+              ].filter(Boolean) as string[])).map(t => <option key={t} value={t} />)}
+            </datalist>
+            {!targetProductType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
+          </div>
+        )}
+        <div className="space-y-1">
+          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to move (kg)</label>
+          <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
+          {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
+        </div>
+      </>
+    )
+  }
+
   return (
     <div className="fixed inset-0 z-[9997] flex items-center justify-center bg-black/45 p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -386,9 +440,27 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
         </div>
 
         <div className="p-4 space-y-3">
+          {step === 'intent' && (
+            <>
+              <p className="text-[12px] text-text-muted">What do you want to do?</p>
+              <button onClick={() => { setIntent('add'); setStep('target') }}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium">
+                Add material to a bag <ArrowRight size={15} />
+              </button>
+              <p className="text-[11px] text-text-faint px-1">Top up a bag you already have — pick that bag first, then say where the extra material is coming from.</p>
+              <button onClick={() => { setIntent('remove'); setStep('source') }}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 text-text font-medium text-[14px] hover:bg-stone-50">
+                Remove material from a bag <ArrowRight size={15} />
+              </button>
+              <p className="text-[11px] text-text-faint px-1">Empty some or all of a bag into another bag — pick the bag it's coming out of first.</p>
+            </>
+          )}
+
           {step === 'source' && (
             <>
-              <p className="text-[12px] text-text-muted">Where is the material coming from?</p>
+              <p className="text-[12px] text-text-muted">
+                {intent === 'add' ? "Where's the extra material coming from?" : 'Where is the material coming from?'}
+              </p>
               <div className="flex gap-2">
                 <button onClick={() => setSourceMode('existing')}
                   className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${sourceMode === 'existing' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
@@ -448,7 +520,9 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                       <div className="text-text-muted">{sourceKg.toFixed(1)}kg currently in stock</div>
                     </div>
                   )}
-                  <button onClick={() => setStep('target')} disabled={!source || sourceVoided || sourceConsumed}
+                  {amountStageActive && renderAmountFields()}
+                  <button onClick={() => setStep(intent === 'add' ? 'confirm' : 'target')}
+                    disabled={!source || sourceVoided || sourceConsumed || amountStageBlocked}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                     Next <ArrowRight size={15} />
                   </button>
@@ -530,7 +604,22 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
             </>
           )}
 
-          {step === 'created' && source && (
+          {step === 'created' && source && intent === 'add' && targetReady && (
+            <>
+              <p className="text-[12px] text-text-muted">
+                Registered and labelled. {targetMode === 'existing'
+                  ? <>Now say how much of it goes into <span className="font-mono text-text">{target?.serial_number}</span>.</>
+                  : 'Continue to review and print.'}
+              </p>
+              {targetMode === 'existing' && renderAmountFields()}
+              <button onClick={() => setStep('confirm')} disabled={amountStageBlocked}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
+                Next <ArrowRight size={15} />
+              </button>
+            </>
+          )}
+
+          {step === 'created' && source && intent !== 'add' && (
             <>
               <p className="text-[12px] text-text-muted">Registered and labelled. What now?</p>
               <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
@@ -554,6 +643,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                 setSourceInput('')
                 setSourceMode('existing')
                 setPendingOnboard(null)
+                setIntent('add')
                 setStep('source')
               }} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 text-text font-medium text-[14px] hover:bg-stone-50">
                 Add material to this bag <ArrowRight size={15} />
@@ -562,8 +652,11 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
             </>
           )}
 
-          {step === 'target' && source && (
+          {step === 'target' && (
             <>
+              {intent === 'add' && (
+                <p className="text-[12px] text-text-muted">Which bag do you want to add material to?</p>
+              )}
               <div className="flex gap-2">
                 <button onClick={() => setTargetMode('existing')}
                   className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${targetMode === 'existing' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
@@ -584,7 +677,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                       placeholder="Target bag serial…" className="flex-1 py-2.5 text-[14px] outline-none bg-transparent font-mono" />
                   </div>
                   {targetBag === 'loading' && <p className="text-[12px] text-text-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Looking up…</p>}
-                  {targetBag === 'not_found' && <p className="text-[12px] text-err">{targetInput && sanitizeSerial(targetInput) === sanitizeSerial(source.serial_number) ? "A bag can't be re-bagged into itself." : 'Serial not found.'}</p>}
+                  {targetBag === 'not_found' && <p className="text-[12px] text-err">{targetInput && source && sanitizeSerial(targetInput) === sanitizeSerial(source.serial_number) ? "A bag can't be re-bagged into itself." : 'Serial not found.'}</p>}
                   {target && targetVoided && <p className="text-[12px] text-err">That bag has already been voided.</p>}
                   {target && targetConsumed && <p className="text-[12px] text-err">That bag was already consumed downstream.</p>}
                   {target && !targetVoided && !targetConsumed && (
@@ -599,31 +692,8 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                       )}
                     </div>
                   )}
-                  {productMismatch && (
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Resulting product type <span className="text-err">*</span></label>
-                      <input list="rebag-product-types" value={targetProductType}
-                        onChange={e => setTargetProductType(e.target.value)}
-                        placeholder="Type or pick a product…"
-                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${targetProductType.trim() ? 'border-stone-200' : 'border-amber-300'}`} />
-                      <datalist id="rebag-product-types">
-                        {Array.from(new Set([
-                          source?.product_type, target?.product_type,
-                          ...(SECTION_CONFIG[sectionId]?.outputTypes ?? []),
-                        ].filter(Boolean) as string[])).map(t => <option key={t} value={t} />)}
-                      </datalist>
-                      {!targetProductType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
-                    </div>
-                  )}
-                  {target && !targetVoided && !targetConsumed && (
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to move (kg)</label>
-                      <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
-                      {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
-                    </div>
-                  )}
-                  <button onClick={() => setStep('confirm')} disabled={!targetReady || exceedsSource || amountKg <= 0}
+                  {amountStageActive && renderAmountFields()}
+                  <button onClick={() => setStep(intent === 'add' && !source ? 'source' : 'confirm')} disabled={!targetReady || amountStageBlocked}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                     Next <ArrowRight size={15} />
                   </button>
@@ -631,7 +701,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
               ) : (
                 <OutputPicker sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
                   defaultBatch="" batchHints={sessionDebagLots} confirmLabel={<>Next <ArrowRight size={16} /></>}
-                  onAdd={p => { setPickedOutput(p); setStep('confirm') }} onClose={() => setTargetMode('existing')} />
+                  onAdd={p => { setPickedOutput(p); setStep(intent === 'add' && !source ? 'source' : 'confirm') }} onClose={() => setTargetMode('existing')} />
               )}
             </>
           )}
