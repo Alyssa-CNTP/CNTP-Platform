@@ -2,7 +2,13 @@
 
 All changes deployed to staging are logged here automatically.  
 
-## 2026-08-25 — Alyssa (Re-bag: fix misleading "Add & print label" button — nothing prints until the bag's actually registered)
+## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`
+
+- **Grade no longer mandatory for everything**: Indent Sticks, Blocks, Dust etc. don't necessarily have a grade the way Fine/Coarse Leaf do. Registering an untracked bag now only requires Grade when the picked product is Fine or Coarse Leaf (reuses the same `LEAF` set `OutputPicker` already uses for batch tracking, now exported) — otherwise just Variant + current weight.
+- **New step after registering a bag**: instead of jumping straight into "pick a target," it now shows the bag's identity (serial, variant, grade, weight, batch) and asks what's next — "Remove material" (continues into the existing flow, this bag as source) or "Add material to this bag" (pre-fills it as the target and returns to source selection, so topping it up from something else doesn't require leaving the modal and starting over).
+- **"From existing stock" can now be browsed, not just typed**: it was a blank serial box with no way to see what's actually in stock. Added a variant filter (+ optional product-type text filter) that shows a live preview list of matching in-stock bags — serial, product, weight, date added — tap one to fill the serial field, or still type/scan directly if the serial's already known.
 
 **Files changed:** `components/production/capture/OutputPicker.tsx`, `components/production/capture/RebagModal.tsx`
 

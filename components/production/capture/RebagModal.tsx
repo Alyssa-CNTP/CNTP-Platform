@@ -39,6 +39,7 @@ import { sanitizeSerial, transferBagWeight, createBagFromTransfer, originalBagEv
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, sectionMeta, VARIANT_OPTIONS, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
+import { LEAF } from '@/lib/production/inventory'
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
@@ -104,7 +105,7 @@ interface RebagModalProps {
 
 export function RebagModal({ sectionId, sessionId, operatorId, variantWord, gradeLetter, genSerial, onDone, onClose }: RebagModalProps) {
   const sectionName = sectionMeta(sectionId).name
-  const [step, setStep] = useState<'source' | 'target' | 'confirm' | 'newBagPrint'>('source')
+  const [step, setStep] = useState<'source' | 'created' | 'target' | 'confirm' | 'newBagPrint'>('source')
 
   // Batch numbers actually debagged THIS session — same restriction normal
   // bagging already enforces (a Leaf output's batch must trace back to a
@@ -132,6 +133,29 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const [sourceMode, setSourceMode] = useState<'existing' | 'new'>('existing')
   const [sourceInput, setSourceInput] = useState('')
   const sourceBag = useBagLookup(sourceInput)
+
+  // "From existing stock" starts from a blank serial box with nothing to
+  // browse — an operator who doesn't already know the exact serial has no
+  // way in. Let them narrow by variant (+ optionally product type) and see
+  // an actual preview of matching in-stock bags, dated, to tap instead.
+  const [browseVariant, setBrowseVariant] = useState('')
+  const [browseProductType, setBrowseProductType] = useState('')
+  const [browsing, setBrowsing] = useState(false)
+  const [browseResults, setBrowseResults] = useState<{ serial_number: string; product_type: string; weight_kg: number; created_at: string }[]>([])
+  useEffect(() => {
+    if (!browseVariant) { setBrowseResults([]); return }
+    setBrowsing(true)
+    const t = setTimeout(async () => {
+      const base = getDb().schema('production').from('bag_tags')
+        .select('serial_number, product_type, weight_kg, created_at')
+        .eq('status', 'in_stock').eq('variant', browseVariant)
+      const withType = browseProductType.trim() ? base.ilike('product_type', `%${browseProductType.trim()}%`) : base
+      const { data } = await withType.order('created_at', { ascending: false }).limit(20)
+      setBrowseResults((data as any) ?? [])
+      setBrowsing(false)
+    }, 200)
+    return () => clearTimeout(t)
+  }, [browseVariant, browseProductType])
   const [onboardedSource, setOnboardedSource] = useState<RebagBag | null>(null)
   const [pendingOnboard, setPendingOnboard] = useState<PickedOutput | null>(null)
   const [onboardNotes, setOnboardNotes] = useState('')
@@ -158,7 +182,12 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const [onboardGrade, setOnboardGrade] = useState('')
   const [onboardWeight, setOnboardWeight] = useState('')
   const [onboardBatchRef, setOnboardBatchRef] = useState('')
-  const onboardValid = !!onboardVariant && !!onboardGrade && n(onboardWeight) > 0
+  // Grade (Export/Export Blend/Domestic) is a real, mandatory classification
+  // for Fine/Coarse Leaf — but Indent Sticks, Blocks, Dust etc. don't
+  // necessarily have one, same distinction OutputPicker already draws for
+  // batch tracking. Only require it when it actually applies.
+  const needsOnboardGrade = LEAF.has(pendingOnboard?.productType ?? '')
+  const onboardValid = !!onboardVariant && (!needsOnboardGrade || !!onboardGrade) && n(onboardWeight) > 0
 
   async function onboardSource() {
     if (!pendingOnboard || !onboardValid) return
@@ -173,7 +202,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
         serial_number: serial, section_id: sectionId, session_id: sessionId || null,
         product_type: pendingOnboard.productType, acumatica_id: pendingOnboard.code,
         variant: onboardVariant, weight_kg: weight,
-        lot_number: batchRef, destination: onboardGrade,
+        lot_number: batchRef, destination: onboardGrade || null,
         status: 'in_stock', is_open: !!pendingOnboard.leaveOpen, printed_at: now,
       } as any)
       await getDb().schema('production').from('scan_events').insert({
@@ -194,10 +223,10 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
       setOnboardedSource({
         serial_number: serial, product_type: pendingOnboard.productType, acumatica_id: pendingOnboard.code,
         variant: onboardVariant, weight_kg: weight,
-        lot_number: batchRef, destination: onboardGrade,
+        lot_number: batchRef, destination: onboardGrade || null,
         status: 'in_stock', consumed_at_section: null, created_at: now, is_open: !!pendingOnboard.leaveOpen,
       })
-      setStep('target')
+      setStep('created')
     } catch {
       setOnboardError('Could not register this bag — check the connection and try again.')
     } finally {
@@ -360,9 +389,36 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
 
               {sourceMode === 'existing' ? (
                 <>
+                  <p className="text-[11px] text-text-muted">Know the serial? Type or scan it below. Otherwise, narrow by variant to see what's actually in stock.</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={browseVariant} onChange={e => setBrowseVariant(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600">
+                      <option value="">Browse by variant…</option>
+                      {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                    </select>
+                    <input type="text" value={browseProductType} onChange={e => setBrowseProductType(e.target.value)}
+                      placeholder="Product type (optional)" className="w-full px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                  </div>
+                  {browseVariant && browsing && <p className="text-[12px] text-text-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Looking…</p>}
+                  {browseVariant && !browsing && browseResults.length === 0 && <p className="text-[12px] text-text-muted">No in-stock bags match.</p>}
+                  {browseResults.length > 0 && (
+                    <ul className="divide-y divide-stone-100 rounded-xl border border-stone-200 max-h-[160px] overflow-y-auto">
+                      {browseResults.map(r => (
+                        <li key={r.serial_number}>
+                          <button onClick={() => setSourceInput(r.serial_number)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-violet-50">
+                            <span className="font-mono text-[12px] text-text flex-1 min-w-0 truncate">{r.serial_number}</span>
+                            <span className="text-[11px] text-text-muted truncate">{r.product_type}</span>
+                            <span className="font-mono text-[11px] text-text-muted shrink-0">{r.weight_kg}kg</span>
+                            <span className="text-[10px] text-text-faint shrink-0">{new Date(r.created_at).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' })}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   <div className="flex items-center gap-2 px-3 rounded-xl border border-stone-200">
                     <Search size={16} className="text-stone-400" />
-                    <input autoFocus value={sourceInput} autoCapitalize="characters"
+                    <input value={sourceInput} autoCapitalize="characters"
                       onChange={e => setSourceInput(e.target.value.toUpperCase())}
                       placeholder="Source bag serial…" className="flex-1 py-2.5 text-[14px] outline-none bg-transparent font-mono" />
                   </div>
@@ -404,15 +460,17 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
 
                   <p className="text-[11px] text-text-muted">This creates the bag in stock, as of right now, at the weight it currently has. Any drawing from it or adding to it happens afterward as its own separate step.</p>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade <span className="text-err">*</span></label>
-                      <select value={onboardGrade} onChange={e => setOnboardGrade(e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${onboardGrade ? 'border-stone-200' : 'border-amber-300'}`}>
-                        <option value="" disabled>Select grade…</option>
-                        {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                      </select>
-                    </div>
+                  <div className={`grid gap-2 ${needsOnboardGrade ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    {needsOnboardGrade && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade <span className="text-err">*</span></label>
+                        <select value={onboardGrade} onChange={e => setOnboardGrade(e.target.value)}
+                          className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${onboardGrade ? 'border-stone-200' : 'border-amber-300'}`}>
+                          <option value="" disabled>Select grade…</option>
+                          {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                      </div>
+                    )}
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant <span className="text-err">*</span></label>
                       <select value={onboardVariant} onChange={e => setOnboardVariant(e.target.value)}
@@ -422,6 +480,9 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                       </select>
                     </div>
                   </div>
+                  {!needsOnboardGrade && (
+                    <p className="text-[11px] text-text-muted">No grade needed for {pendingOnboard.productType} — only Fine/Coarse Leaf are graded.</p>
+                  )}
 
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
@@ -453,6 +514,38 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                   </div>
                 </>
               )}
+            </>
+          )}
+
+          {step === 'created' && source && (
+            <>
+              <p className="text-[12px] text-text-muted">Registered and labelled. What now?</p>
+              <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-text">{source.serial_number}</span>
+                  <span className="text-text-muted">{source.product_type}</span>
+                </div>
+                <Row label="Variant" value={source.variant || '—'} />
+                {source.destination && <Row label="Grade" value={DESTINATION_OPTIONS.find(o => o.value === source.destination)?.label ?? source.destination} />}
+                <Row label="Current weight" value={`${(source.weight_kg ?? 0).toFixed(1)} kg`} />
+                {source.lot_number && <Row label="Batch" value={source.lot_number} />}
+              </div>
+              <button onClick={() => setStep('target')}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium">
+                Remove material — feed another bag <ArrowRight size={15} />
+              </button>
+              <button onClick={() => {
+                setTargetInput(source.serial_number)
+                setTargetMode('existing')
+                setOnboardedSource(null)
+                setSourceInput('')
+                setSourceMode('existing')
+                setPendingOnboard(null)
+                setStep('source')
+              }} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 text-text font-medium text-[14px] hover:bg-stone-50">
+                Add material to this bag <ArrowRight size={15} />
+              </button>
+              <button onClick={onClose} className="w-full py-2.5 text-[12.5px] text-text-muted">Done for now</button>
             </>
           )}
 
