@@ -36,8 +36,9 @@ import {
   AlertTriangle, Printer, PenLine, FileText, Boxes, Tag, Gauge,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight } from '@/lib/production/capture-config'
+import { printFinalLabelsAuto } from '@/lib/production/label-final'
+import { PalletPanel, type PastPallet, type PalletContext } from '@/components/production/capture/PalletPanel'
+import { MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -48,7 +49,6 @@ import { isValidLot } from '@/components/production/capture/SievingCapture'
 import { upperCode } from '@/lib/production/normalize-code'
 import { variantFromSuffix } from '@/lib/production/bom'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
-import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -87,6 +87,10 @@ export interface PastOutputLine {
   tagMethod: 'printed' | 'handwritten' | null
   secured: boolean
   logged_at?: string
+  // Pallets built from this line's bag range (see PalletPanel). Optional so
+  // every draft saved before pallets existed still loads.
+  boxesPerPallet?: string        // operator override; blank = packaging spec
+  pallets?: PastPallet[]
 }
 
 export interface PastByProduct { id: string; type: string; serial: string; weight: string }
@@ -512,7 +516,7 @@ function DebagStream({ stream, title, hint, rows, total, letter, locked, onAdd, 
 
 // ── Final-product output line ─────────────────────────────────────────────────
 
-function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove, onTag }: {
+function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove }: {
   line: PastOutputLine
   lineNo: number
   color: string
@@ -520,7 +524,6 @@ function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove, 
   locked: boolean
   onEdit: () => void
   onRemove: () => void
-  onTag: (m: 'printed' | 'handwritten') => void
 }) {
   const total = n(line.bagCount) * (n(line.bagWeight) || perBag)
   return (
@@ -545,12 +548,6 @@ function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove, 
         </button>
         {!locked && <button onClick={onRemove} className="text-stone-300 hover:text-red-500 p-1 shrink-0"><Trash2 size={14} /></button>}
       </div>
-      {!line.tagMethod && !locked && (
-        <div className="flex gap-1.5 mt-2">
-          <button onClick={() => onTag('printed')} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand"><Printer size={12} /> Print label</button>
-          <button onClick={() => onTag('handwritten')} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:border-brand hover:text-brand"><PenLine size={12} /> Write on tag</button>
-        </div>
-      )}
     </div>
   )
 }
@@ -589,7 +586,6 @@ export function PasteuriserCapture({
   // closes the old silent-overwrite gap where a job card's fields stayed
   // freely editable with nothing marking them as authoritative.
   const [jobCardLocked, setJobCardLocked] = useState(false)
-  const variantShort = variantToShort(variantWord as any) as ShortVariant
 
   const patch = (p: Partial<PasteuriserData>) => onChange({ ...value, ...p })
 
@@ -722,19 +718,29 @@ export function PasteuriserCapture({
   }
   function removeLine(id: string) { patch({ outputs: value.outputs.filter(l => l.id !== id) }) }
 
-  function tagLine(id: string, method: 'printed' | 'handwritten') {
-    patch({ outputs: value.outputs.map(l => l.id === id ? { ...l, tagMethod: method } : l) })
-    const line = value.outputs.find(l => l.id === id)
-    if (method === 'printed' && line) {
-      printLabelAuto({
-        id: line.id, serial_number: line.serial,
-        product_type: line.item || value.item || 'Rooibos Final Product',
-        variant: variantShort, grade: 'A',
-        weight_kg: n(line.bagCount) * (n(line.bagWeight) || perBag),
-        lot_number: line.lot || value.batchNo || '',
-        section_id: sectionId, section_name: SECTION_CONFIG[sectionId]?.name ?? sectionId,
-        created_at: line.logged_at ?? nowISO(), printed: true,
-      } as any)
+  // Tagging is owned by PalletPanel (per pallet + per box), NOT per bagging
+  // line. A line is a bag RANGE, not a physical unit, and its `serial` is only
+  // a line identifier — persist() writes the real per-box rows as `{LOT}-{nnn}`,
+  // so the old "print label" button on a line produced a tag whose barcode had
+  // no bag_tags row at all and came back "not found" when scanned downstream.
+  // line.tagMethod is still read (older drafts carry it) but nothing sets it.
+  function updateLine(id: string, p: Partial<PastOutputLine>) {
+    patch({ outputs: value.outputs.map(l => l.id === id ? { ...l, ...p } : l) })
+  }
+
+  // Every box on this batch, across every bagging line — the "of 315" printed
+  // on each box tag. Counted over the whole production, not one line, because
+  // that is what the customer counts in.
+  const batchBagTotal = value.outputs.reduce((s, l) => s + Math.max(0, Math.floor(n(l.bagCount))), 0)
+
+  function palletCtxFor(line: PastOutputLine): PalletContext {
+    return {
+      item: line.item || value.item,
+      itemCode: line.itemCode || value.itemCode,
+      lot: upperCode(line.lot || value.batchNo || ''),
+      variant: variantWord || '',
+      packaging: value.packaging || null,
+      batchBagTotal: batchBagTotal || null,
     }
   }
 
@@ -908,8 +914,26 @@ export function PasteuriserCapture({
                     <span className="text-[11px] font-mono text-stone-500">{groupKg.toFixed(1)} kg · {rows.length} line{rows.length === 1 ? '' : 's'}</span>
                   </div>
                   {rows.map((l, i) => (
-                    <OutputLineRow key={l.id} line={l} lineNo={i + 1} color={col} perBag={perBag} locked={locked}
-                      onEdit={() => setEditLine(l)} onRemove={() => removeLine(l.id)} onTag={m => tagLine(l.id, m)} />
+                    <div key={l.id} className="space-y-2">
+                      <OutputLineRow line={l} lineNo={i + 1} color={col} perBag={perBag} locked={locked}
+                        onEdit={() => setEditLine(l)} onRemove={() => removeLine(l.id)} />
+                      {/* Pallets and tags for this line's bag range. Only Final
+                          Product is palletised and shipped — High Moisture and
+                          Refill are rework bags fed back into the line, so they
+                          get no pallet tag. */}
+                      {l.kind === 'Final Product' && (
+                        <PalletPanel
+                          boxCount={Math.max(0, Math.floor(n(l.bagCount)))}
+                          startBagNo={parseInt(l.startBag, 10) || null}
+                          boxWeightKg={n(l.bagWeight) || perBag}
+                          boxesPerPallet={l.boxesPerPallet ?? ''}
+                          pallets={l.pallets ?? []}
+                          ctx={palletCtxFor(l)}
+                          locked={locked}
+                          onChange={p => updateLine(l.id, p)}
+                        />
+                      )}
+                    </div>
                   ))}
                 </div>
               )
