@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Re-bag: simplify registering an untracked bag — own grade/variant, no backdated history)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Follow-up simplification: the previous version asked for an original date/weight plus any number of backdated weight-change entries, trying to reconstruct a bag's full pre-tracking history. Reconsidered — that's more than needed and nobody can verify those dates anyway.
+
+- The system now generates the serial and stamps the record with now() (when it entered tracking, not a claim about when it was physically made).
+- The operator supplies what actually describes the bag right now: its own **grade and variant** (mandatory — no longer silently inherited from whatever the capture session currently has open, since the untracked material is very likely something else entirely), its **current weight**, and whatever **serial/batch it's currently carrying** (a supplier tag, a handwritten note, or nothing).
+- That's enough to create it in stock at today's weight. Drawing from it or adding to it happens afterward as its own ordinary, separate top-up/re-bag — same as any other bag — not bundled into the same action.
+
 ## 2026-08-25 — Alyssa (Production capture: live cross-session refresh, fixing the UI-vs-DB lag on Capture/Overview)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
