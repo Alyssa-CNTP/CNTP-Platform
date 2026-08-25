@@ -2,6 +2,30 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
+
+Three reported issues on the Sieving Tower capture pages:
+
+- **Debagging: variant/grade weren't actually locked per bulk bag.** The batch's Variant/Grade `<select>`s stayed live-editable at any point before the whole session was locked, even after a bulk bag had been "Done — locked". Since `buildDebag` reads the *current* `prod.variant`/`.grade` for every debag row at save time (not a per-row snapshot), changing the top-level selects after locking a bag would silently relabel it on save. Fixed by disabling both selects once any bulk bag in the active batch is secured (`sievingHasSecuredDebag`), with the existing "Changeover — switch grade/variant" button as the sanctioned way to change variant/grade mid-shift (it opens a new batch record instead of mutating the locked one).
+- **Bagging: output batch suggestions weren't restricted to what was actually debagged.** The batch-number picker fell back to an unfiltered "recent lots at this section" list (from `bag_tags`, no variant/grade filter) whenever the current session's debag rows were empty — which could suggest a lot that was never fed into this run at all. Added `debaggedBatches()` (`lib/production/inventory.ts`), which queries `prod_debagging` (joined to `prod_sessions` for section scoping) for lots debagged under the *same variant + grade* currently being consumed, even from an earlier session/shift. The Bagging picker's suggestions are now always this session's debagged lots **plus** that cross-session same-variant/grade set — never an unrestricted recent-lots list.
+- **Bag Tracking profile didn't show grade.** `bag_tags.destination` (the field that carries Sieving's A/B/C grade) was never actually written when an output bag was created (`SievingCapture`'s `addOutput()` upsert omitted it), so it always showed as "—" on the `/tags` detail view regardless. Added `destination: grade` to that upsert, and relabelled the Details grid row from "Destination" to "Grade" with a friendly label (Export / Export Blend / Domestic-Local) via the existing `DESTINATION_OPTIONS` map, so a suggested batch's variant+grade can be confirmed on-screen without a database lookup.
+
+Moved the grade-letter → `local_or_export` string mapping (previously a private const duplicated where needed) into a single exported `GRADE_TO_LOCAL_EXPORT` in `capture-config.ts`.
+
+## 2026-08-25 — Alyssa (Capture Overview: stop silently under-counting a shift's total when a mid-shift grade/variant changeover opened a separate batch record) [promoted to production]
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: the Sieving Tower Overview screen showed fewer bags/kg for a shift than the Production Order detail page for the exact same run, with a false "still to bag out" mass-balance warning telling the operator to keep bagging material that was already done. Root cause: Overview's totals/mass balance are built from this session's data plus every *other* session for the same section/date/shift, filtered to only sessions running the exact same variant+grade (`productionMatchKey`) — by design, so two genuinely different runs sharing a shift by coincidence never get summed. A mid-shift grade/variant Changeover opens a brand-new session whose bags are real and correctly shown on Production Orders, but were silently excluded from Overview with no indication. Kept the combining rule as-is; added a note when a batch record was excluded, showing its own in/out kg.
+
+## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input) [promoted to production]
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+The "Balance" field read as input − output, an ambiguous positive number either way material moved, with no indication of whether it was a real problem. Flipped to output − input, so a shortfall reads as a plain negative number (material lost). Added a tolerance verdict: within ±1% of total input reads green ("within ±1%"), outside it and negative reads red ("material lost, outside ±1% tolerance"), outside it and positive reads amber (more output than input recorded — worth checking the weighing). Applied to both the whole-run balance and each shift's own.
+
 ## 2026-08-25 — Alyssa (Re-bag / Tags: let the operator actually reclassify a bag's product type on a cross-product top-up) [promoted to production]
 
 **Files changed:** `app/(app)/tags/page.tsx`, `lib/production/scan-utils.ts`

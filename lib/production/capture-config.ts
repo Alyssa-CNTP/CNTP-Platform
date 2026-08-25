@@ -101,6 +101,11 @@ export const DESTINATION_OPTIONS = [
   { value: 'C', label: 'Domestic / Local' },
 ] as const
 
+// Grade letter → the exact local_or_export string stored on prod_debagging rows
+// (and the debag row's own "Local / export" select) — matches the DB CHECK
+// constraint verbatim, so keep this the single source rather than a per-file copy.
+export const GRADE_TO_LOCAL_EXPORT: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic/Local' }
+
 // ── Serial generation ─────────────────────────────────────────────────────────
 // Phase 1 human-typed-friendly format: {CODE}-{DDMMYY}-{NNN}.
 // `seq` is seeded from the count of bags already created for this section+date

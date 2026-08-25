@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { transferBagWeight } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG } from '@/lib/production/capture-config'
+import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
 
@@ -650,7 +650,12 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
                 ['Tag date',        tag.tag_date ? format(parseISO(tag.tag_date + 'T00:00:00'), 'dd MMM yyyy') : '—'],
                 ['Acumatica ID',    tag.acumatica_id || '—'],
                 ['Session',         tag.prod_session_id || '—'],
-                ['Destination',     tag.destination || '—'],
+                // Grade-driven sections (Sieving) store the operator's letter
+                // grade (A/B/C) here — show the label an operator recognises
+                // (Export / Export Blend / Domestic-Local) instead of a bare
+                // letter, so a suggested batch's variant+grade can be checked
+                // against what's on the bag without going into the database.
+                ['Grade',           DESTINATION_OPTIONS.find(o => o.value === tag.destination)?.label ?? tag.destination ?? '—'],
                 ['Captured',        format(parseISO(tag.captured_at), 'dd MMM yyyy HH:mm')],
               ] as [string, string][]).map(([l, v]) => (
                 <div key={l} className="bg-stone-50 rounded-xl p-3 border border-stone-100">
