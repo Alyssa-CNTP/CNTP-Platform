@@ -482,6 +482,13 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
     checkField('moisture', 'Moisture', form.moisture, 0.3, '%')
     checkField('bulk_density', 'Bulk Density', form.bulk_density, 5, '')
     checkField('dryer_temp', 'Dryer Temp', form.dryer_temp, 1.0, '°C')
+    // Moisture above 10% is unusual (spec is normally well under that) but a
+    // real dryer fault can genuinely produce it — confirm-to-save, same as
+    // the statistical outliers above, rather than blocking the save outright.
+    ;[[form.moisture, 'Moisture'], [form.dryer2_moisture, 'Dryer 2 Moisture']].forEach(([v, label]) => {
+      const n = parseFloat(v as any)
+      if (!isNaN(n) && n > 10 && n <= 100) warns.push(`${label} ${n}% exceeds the normal 10% ceiling — confirm this is a genuine reading`)
+    })
     return warns
   })()
 
@@ -581,10 +588,14 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
     ]
     negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
     if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
-    // Hard ceiling — moisture above 10% is implausible for granules and is
-    // almost always a typo. Cannot be bypassed.
+    // Above 100% is physically impossible for a moisture percentage — always
+    // a typo, so this stays a hard block. 10-100% is unusual but a real
+    // dryer fault can genuinely produce it, so that range is a confirm-to-
+    // save warning (below, alongside the other outlier checks) instead of an
+    // unbypassable error — a real failing reading still needs to be saved so
+    // it can go through the re-check flow.
     ;[[form.moisture, 'Moisture'], [form.dryer2_moisture, 'Dryer 2 Moisture']].forEach(([v, label]) => {
-      const n = parseFloat(v as any); if (!isNaN(n) && n > 10) errs.push(`${label} ${n}% exceeds the 10% ceiling — check for a typo`)
+      const n = parseFloat(v as any); if (!isNaN(n) && n > 100) errs.push(`${label} ${n}% is above 100% — check for a typo`)
     })
     setErrors(errs); setWarnings(warns)
     return errs.length === 0
@@ -850,6 +861,10 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
     checkField('moisture', 'Moisture', form.moisture, 0.3, '%')
     checkField('bulk_density', 'Bulk Density', form.bulk_density, 5, '')
     checkField('dryer_temp', 'Dryer Temp', form.dryer_temp, 1.0, '°C')
+    // Moisture above 10% is unusual but a real dryer fault can genuinely
+    // produce it — confirm-to-save rather than an unbypassable block.
+    const moistN = parseFloat(form.moisture as any)
+    if (!isNaN(moistN) && moistN > 10 && moistN <= 100) warns.push(`Moisture ${moistN}% exceeds the normal 10% ceiling — confirm this is a genuine reading`)
     return warns
   })()
 
@@ -886,10 +901,11 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
     const negFields: [any, string][] = [[form.moisture, 'Moisture'], [form.bulk_density, 'Bulk Density'], [form.dryer_temp, 'Dryer Temperature']]
     negFields.forEach(([v, label]) => { if (isNegative(v)) errs.push(`${label} cannot be negative`) })
     if (Object.values(grams).some(v => isNegative(v))) errs.push('Sieve grams cannot be negative')
-    // Hard ceiling — moisture above 10% is implausible for granules and is
-    // almost always a typo. Cannot be bypassed.
+    // Above 100% is physically impossible — always a typo, still a hard
+    // block. 10-100% is a confirm-to-save outlier warning instead (above),
+    // so a real failing reading can still be saved and go through re-check.
     const moist = parseFloat(form.moisture as any)
-    if (!isNaN(moist) && moist > 10) errs.push(`Moisture ${moist}% exceeds the 10% ceiling — check for a typo`)
+    if (!isNaN(moist) && moist > 100) errs.push(`Moisture ${moist}% is above 100% — check for a typo`)
     setErrors(errs)
     return errs.length === 0
   }
@@ -2300,9 +2316,28 @@ export default function GranulePage() {
   }
 
   async function handleRecheckSample(sampleId: number, recheckData: any) {
-    const { data, error } = await db.schema('qms').from('granule_samples').update(recheckData).eq('id', sampleId).select().single()
+    const run = runs.find(r => (r.samples || []).some((s: any) => s.id === sampleId))
+    const sample = run?.samples.find((s: any) => s.id === sampleId)
+    // A passing re-check resolves the original moisture violation on this
+    // sample (the reading that failed is kept for the record — only the
+    // derived pass/fail state changes); any other violation (e.g. sieve
+    // fractions) is untouched. A failing/undone re-check leaves it in force.
+    const violations = recheckData.recheck_pass
+      ? (sample?.violations || []).filter((v: string) => !v.startsWith('Moisture '))
+      : (sample?.violations || [])
+    const { data, error } = await db.schema('qms').from('granule_samples').update({ ...recheckData, violations }).eq('id', sampleId).select().single()
     if (error) { alert(error.message); return }
-    setRuns(prev => prev.map(r => ({ ...r, samples: (r.samples || []).map((s: any) => s.id === sampleId ? { ...s, ...data } : s) })))
+    if (run) {
+      const anyVio = run.samples.some((s: any) => (s.id === sampleId ? violations : (s.violations || [])).length > 0)
+      await db.schema('qms').from('granule_runs').update({ overall_status: anyVio ? 'Fail' : 'Pass' }).eq('id', run.id)
+      setRuns(prev => prev.map(r => r.id !== run.id ? r : {
+        ...r,
+        samples: (r.samples || []).map((s: any) => s.id === sampleId ? { ...s, ...data } : s),
+        overall_status: anyVio ? 'Fail' : 'Pass',
+      }))
+    } else {
+      setRuns(prev => prev.map(r => ({ ...r, samples: (r.samples || []).map((s: any) => s.id === sampleId ? { ...s, ...data } : s) })))
+    }
   }
 
   async function handleReopenRun(id: number) {
