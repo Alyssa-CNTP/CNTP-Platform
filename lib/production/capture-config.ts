@@ -31,6 +31,12 @@ export const NEEDS_VARIANT = new Set(['sieving', 'refining1', 'refining2', 'gran
 
 export const SECTION_ORDER = ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'smallblender', 'pasteuriser'] as const
 
+// SECTION_ORDER is production capture's own section list (assignment, KPIs,
+// shift reports, capture routing all assume every entry is a real bagging
+// section) -- quality_lab isn't one, so it's kept out of that list and only
+// added here, for the Printers/Print Health admin pages to iterate instead.
+export const PRINTER_SECTIONS = [...SECTION_ORDER, 'quality_lab'] as const
+
 // Sieving Tower physical mesh screen stack, per variant family. This is a
 // standing machine setup (changed only when screens are physically swapped),
 // not a per-session captured value. Updated 2026-08-05: Organic was
@@ -204,6 +210,7 @@ export const KNOWN_PRINTERS: KnownPrinter[] = [
   { id: 'argox-pasteuriser', label: 'Argox CP-2140EX — Pasteuriser', ip: '192.168.0.55', lang: 'pplb' },
   { id: '26E55087', label: 'Argox CP-2140EX — 26E55087 (Prod 2 — Refining 1 / Blender)', ip: '192.168.0.124', lang: 'pplb' },
   { id: '26E55088', label: 'Argox CP-2140EX — 26E55088 (Prod 3 — Granule)', ip: '192.168.0.126', lang: 'pplb' },
+  { id: 'intermec-quality-lab', label: 'Intermec PD Series — 175C1950042 (Quality Lab / Sieving Final QC)', ip: '192.168.0.26', lang: 'zpl' },
 ]
 
 // Section → printer. Each section points at a printer + language. These are the
