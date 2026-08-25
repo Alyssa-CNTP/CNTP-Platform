@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Re-bag: fix misleading "Add & print label" button — nothing prints until the bag's actually registered)
+
+**Files changed:** `components/production/capture/OutputPicker.tsx`, `components/production/capture/RebagModal.tsx`
+
+Reported: Re-bag's item-picker step showed `OutputPicker`'s own button, which always reads "Add & print label" (or "Complete bag") — accurate for normal bagging, where tapping it really does create the bag and print. In Re-bag it doesn't: the pick is only staged, and the real create/print happens on a later screen (after grade/variant/weight, or after Confirm) — so the button was claiming to print a bag that had no grade, variant, or weight recorded yet.
+
+- `OutputPicker` gains an optional `confirmLabel` prop that overrides the button's text/icon; every existing caller (`SievingCapture`) leaves it unset and is unaffected.
+- Both of Re-bag's `OutputPicker` uses now pass `confirmLabel={<>Next <ArrowRight /></>}` — accurately describing that picking an item just advances to the next step, not a final print.
+
 ## 2026-08-25 — Alyssa (Re-bag: restore the "batch must have actually been debagged" rule for new re-bagged output)
 
 **Files changed:** `components/production/capture/RebagModal.tsx`

@@ -388,7 +388,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                 <>
                   <p className="text-[11px] text-text-muted">This material isn't tracked yet — pick what it is. You'll confirm its grade, variant, and current weight next, before anything is drawn from it.</p>
                   <OutputPicker sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
-                    defaultBatch="" onAdd={p => {
+                    defaultBatch="" confirmLabel={<>Next <ArrowRight size={16} /></>} onAdd={p => {
                       setPendingOnboard(p)
                       setOnboardWeight(p.weight)
                       setOnboardBatchRef(p.batch || '')
@@ -508,7 +508,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                 </>
               ) : (
                 <OutputPicker sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
-                  defaultBatch="" batchHints={sessionDebagLots}
+                  defaultBatch="" batchHints={sessionDebagLots} confirmLabel={<>Next <ArrowRight size={16} /></>}
                   onAdd={p => { setPickedOutput(p); setStep('confirm') }} onClose={() => setTargetMode('existing')} />
               )}
             </>
