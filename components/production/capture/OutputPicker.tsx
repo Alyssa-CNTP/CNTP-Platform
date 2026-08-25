@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
 import { LABEL_PRINTING_ENABLED, expectedBagWeightFor, isImplausibleWeight } from '@/lib/production/capture-config'
@@ -28,12 +28,18 @@ function standardWeight(label: string): string {
  * Easy output picker: the few items that fit the section + variant up top
  * (AI-suggested), full 630-item master search only when the operator looks.
  */
-export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaultBatch, batchHints = [], onAdd, onClose }: {
+export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaultBatch, batchHints = [], confirmLabel, onAdd, onClose }: {
   sectionId: string
   variantWord: string
   gradeLetter?: string
   defaultBatch: string
   batchHints?: string[]
+  // Overrides the confirm button's own text/icon — every normal capture
+  // caller leaves this unset (tapping it really does create the bag and,
+  // per LABEL_PRINTING_ENABLED, print), but a caller that stages this pick
+  // for its OWN later step (nothing is created or printed yet when this
+  // button is tapped) must say so, or the button lies about what happens.
+  confirmLabel?: ReactNode
   onAdd: (p: PickedOutput) => void
   onClose: () => void
 }) {
@@ -144,7 +150,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             </label>
             <button onClick={confirm} disabled={!weight || isImplausibleWeight(n(weight)) || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
-              {LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>}
+              {confirmLabel ?? (LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>)}
             </button>
           </div>
         )}
