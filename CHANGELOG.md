@@ -2,6 +2,69 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Requested: the "Balance" figure (both the whole-run one and each shift's own) read as `input − output`, an ambiguous positive number either way material moved — and there was no indication of whether a given balance was actually a problem or normal process variation.
+
+- Flipped to `output − input`, so a shortfall (the normal case — moisture, dust, spillage) reads as a plain **negative** number instead of an ambiguous positive one either way.
+- Added a tolerance verdict next to the figure: within ±1% of total input shows green ("within ±1%"); outside it and negative shows red ("material lost, outside ±1% tolerance"); outside it and positive (more output than input recorded — a measurement/weighing issue to check) shows amber. Applied to both the whole-run balance and each shift's own.
+- The whole-run balance is computed from the same "reliable ledger" total this page already used (`bagsOutputKg + bucket carry-over`, not the DB's own snapshot) — only the formula/tolerance treatment changed, not what counts as output. The per-shift balance still starts from `prod_mass_balance`'s own stored input/output columns, just displayed output-minus-input instead of the DB's generated `balance_kg` column (input-minus-output) — the underlying generated column itself was left alone, since it also feeds yield views elsewhere.
+
+## 2026-08-25 — Alyssa (Capture Overview: stop silently under-counting a shift's total when a mid-shift grade/variant changeover opened a separate batch record)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: the Sieving Tower Overview screen showed fewer bags/kg for a shift than the Production Order detail page for the exact same run (e.g. Overview said "6 bags, 1412.0 kg" of Indent Sticks and no Rolsiev Sticks at all, while Production Orders — which reads live from `bag_tags` — showed 7 bags/1460.0 kg and a Rolsiev Sticks bag Overview never mentioned), with a false "446.0 kg still to bag out" mass-balance warning telling the operator to keep bagging material that was already done.
+
+Root cause: Overview's totals and mass balance are built from `[...productions, ...siblingProductions]` — this session's own in-progress data plus every *other* `prod_sessions` row for the same section/date/shift, but `siblingProductions` is deliberately filtered down to only sessions running the exact same variant+grade (`productionMatchKey`, `app/(app)/production/capture/[section]/page.tsx:100`) — by design, so two genuinely different runs sharing a shift by coincidence never get their mass balances summed together. A mid-shift "Changeover — switch grade/variant" (`startNewProduction()`) opens a brand-new `prod_sessions` row for the new grade/variant; its bags are real, correctly saved to `bag_tags`, and correctly shown on Production Orders (which has no such filter) — but they were **silently** excluded from Overview/mass-balance with no indication anything was left out, since they don't match the currently-open session's variant/grade key.
+
+Fix: kept the balance-combining rule exactly as-is (still never sums different variant/grade balances), but Overview now surfaces a note whenever `shiftOtherProductions` (the unfiltered "everything this shift" set already used for the "Bags this shift" reference log) contains a batch record that `siblingProductions` excluded — showing its own in/out kg and variant/grade under the mass balance, so an excluded batch is visible instead of silently making the shown total look incomplete/wrong.
+
+## 2026-08-25 — Alyssa (Re-bag: ask "add or remove" upfront, so top-ups don't get mis-cast as an over-draw)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Reported: topping up a bag would get blocked with "can't move more than the source has" even though the operator wasn't trying to remove anything. Root cause: the modal always asked "where's the material coming from" first — for a genuine top-up, the operator's instinct is to name the bag they want to top up *first* (since that's the one they're actually focused on), which the modal then cast as the **source** — a correct over-draw block, just against the wrong bag.
+
+- The modal now opens by asking what you're doing: **"Add material to a bag"** (picks the bag being topped up first, then where the extra material comes from) or **"Remove material from a bag"** (today's existing order, unchanged — picks the bag it's coming out of first).
+- `source`/`target` still always mean the same physical thing (source = drawn from, target = received into) — only the pick *order* changes with intent, so `transferBagWeight`/`createBagFromTransfer` and all validation are untouched.
+- The amount + "resulting product type" fields now render once both bags are known, on whichever step happens to complete that pair — previously hardcoded into the target step, which broke as soon as target could be picked first.
+
+## 2026-08-25 — Alyssa (Stock Control: add the Quality Lab (Sieving Final QC) Intermec printer to the Printers/Print Health admin pages)
+
+**Files changed:** `lib/production/live-types.ts`, `lib/production/capture-config.ts`, `components/stock-control/PrintersModule.tsx`, `components/stock-control/PrintHealthModule.tsx`
+
+Requested: visibility into the Intermec PD (192.168.0.26) used for Sieving Final QC labels, to help diagnose it apparently needing a warm-up print from Bartender before it'll accept a print from the app again. That printer (`quality_lab` in `SECTION_PRINTER`) already existed in config but wasn't shown on either Stock Control admin page — `SECTION_ORDER`, which both pages iterate, is production capture's own section list (assignment, KPIs, shift reports, capture routing all assume every entry is a real bagging section), so `quality_lab` was deliberately never added there.
+
+- New `PRINTER_SECTIONS` constant (`SECTION_ORDER` + `quality_lab`), used only by the two printer admin pages — `SECTION_ORDER` itself is untouched, so nothing about production capture, assignment, or KPIs changes.
+- Added a `quality_lab` entry to `SECTION_CONFIG` (name/code/colour) so it renders properly, and to `KNOWN_PRINTERS` so it's pickable from the printer dropdown.
+- The Printers tab now shows its IP/port/language and has a working "Test print" button; Print Health shows its last successful print, same as every other section.
+- Possibly related: the print-socket truncation fix above (graceful `socket.end()` instead of an abrupt `destroy()`/RST) may also explain the printer needing a Bartender print to "unstick" it — a bad TCP close could plausibly leave the printer's receive buffer in a stuck state until something else resets it. Worth re-testing now that fix is live.
+
+## 2026-08-25 — Alyssa (Fix networked labels printing with random content missing/cut off — Sieving QC label and every direct-print bag label)
+
+**Files changed:** `lib/production/print-socket.ts`
+
+Reported (with a photo): the Sieving Final QC label printed at the lab's Intermec came out almost blank — just the "OUT OF SPEC" warning band, missing the header, barcode, and metrics grid that should also be on it. Described as happening "randomly," not on a specific field every time — pointing at a transmission problem, not a data bug (the label's actual template/data build looked correct on inspection).
+
+Root cause: `sendToPrinter()` (the shared TCP-socket helper used by every direct-print path — QC labels, production bag labels, and the test-print route) called `socket.destroy()` immediately after `socket.write()`'s callback fired. That callback only confirms the OS accepted the bytes into its own send buffer, not that the printer actually received and processed them — `destroy()` is an abrupt close that can send a TCP RST, cutting the stream off mid-transmission under any network jitter. That explains the "random" part: it depends on timing, so it doesn't reproduce the same way twice.
+
+- Now calls `socket.end()` (a graceful half-close/FIN, sent only once everything queued has actually gone out) instead of `destroy()`, and resolves the promise on the socket's `'close'` event rather than immediately after the write callback — so the connection isn't torn down until the transfer has genuinely finished.
+- The 5s timeout and error handling are unchanged; this only changes when a *successful* send is considered done.
+- This is a shared low-level fix — it should also apply to any other direct-print section (Refining/Granule/Blender/Pasteuriser bag labels) that has seen occasional print corruption, not just Sieving.
+
+## 2026-08-25 — Alyssa (Quality Granule: allow more than one re-test attempt on a failing sample, keep the full history)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260825_001_granule_recheck_attempts.sql`
+
+Follow-up to the moisture-ceiling fix above. Reported: after a re-check also failed, the panel dead-ended at "✗ FAIL — add new sample" — there was no way to log a second or third re-test against the same failing sample, even though that's QC's actual workflow (keep re-testing the dryer's output until moisture is back in spec, could take 2/3/4 tries).
+
+- Added `qms.granule_samples.recheck_attempts` (jsonb array — `{n, time, moisture, dryer_temp, pass}` per attempt), migration `20260825_001_granule_recheck_attempts.sql`. **Needs to be applied to the Supabase project (staging, then production) — this session has no direct DB access to run it.**
+- The re-check panel now shows every past attempt and, as long as the latest one hasn't passed, offers "Re-test #N" to log the next one — it no longer stops after a single attempt.
+- The existing single-slot columns (`recheck_done`/`recheck_moisture`/`recheck_dryer_temp`/`recheck_time`/`recheck_pass`) are kept in sync as a mirror of the latest attempt, so the run's Pass/Fail status still resolves correctly once any attempt passes (via the previous fix), and any other code reading those columns directly keeps working unchanged.
+
 ## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
 
 **Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`

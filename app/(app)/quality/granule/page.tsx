@@ -1209,16 +1209,30 @@ function GranuleInlineTastingRow({ tasting, colCount, rowBg, onSave, onDelete }:
 // ─── GranuleRecheckPanel ──────────────────────────────────────────────────────
 
 function GranuleRecheckPanel({ sample, specMoistureMax, onSave }: { sample: any; specMoistureMax: any; onSave: (id: number, f: any) => void }) {
-  const already = sample.recheck_done
+  // Full history of re-test attempts — a failing re-test used to dead-end at
+  // "add a new sample"; QC's actual workflow is to keep re-testing the SAME
+  // failing sample until it passes, so every attempt (not just the latest)
+  // is kept for the record and the panel always offers "log the next one"
+  // instead of stopping after the first attempt.
+  const attempts: any[] = sample.recheck_attempts || []
+  const resolved = attempts.length > 0 && attempts[attempts.length - 1].pass === true
   const [open, setOpen]         = useState(false)
-  const [moisture, setMoisture] = useState(sample.recheck_moisture ?? '')
-  const [temp, setTemp]         = useState(sample.recheck_dryer_temp ?? '')
-  const [time, setTime]         = useState(sample.recheck_time ?? (() => { const now = new Date(); return `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}` })())
+  const [editingIdx, setEditingIdx] = useState<number | null>(null) // null = logging a new attempt
+  const [moisture, setMoisture] = useState('')
+  const [temp, setTemp]         = useState('')
+  const [time, setTime]         = useState(() => { const now = new Date(); return `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}` })
   const [saving, setSaving]     = useState(false)
 
-  useEffect(() => {
-    if (open && already) { setMoisture(sample.recheck_moisture ?? ''); setTemp(sample.recheck_dryer_temp ?? ''); setTime(sample.recheck_time ?? '') }
-  }, [open])
+  const startNew = () => {
+    setEditingIdx(null); setMoisture(''); setTemp('')
+    const now = new Date(); setTime(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`)
+    setOpen(true)
+  }
+  const startEdit = (idx: number) => {
+    const a = attempts[idx]
+    setEditingIdx(idx); setMoisture(String(a.moisture ?? '')); setTemp(String(a.dryer_temp ?? '')); setTime(a.time || '')
+    setOpen(true)
+  }
 
   const recheckPass = moisture !== '' && specMoistureMax != null ? parseFloat(moisture) <= parseFloat(specMoistureMax) : null
   const canSave     = moisture !== '' && temp !== '' && time !== ''
@@ -1226,30 +1240,40 @@ function GranuleRecheckPanel({ sample, specMoistureMax, onSave }: { sample: any;
   const handleSave = async () => {
     if (!canSave) return
     setSaving(true)
-    await onSave(sample.id, { recheck_done: true, recheck_moisture: parseFloat(moisture), recheck_dryer_temp: parseFloat(temp), recheck_time: time, recheck_pass: recheckPass })
+    const entry = { n: (editingIdx != null ? editingIdx : attempts.length) + 1, sample_date: sample.sample_date, time, moisture: parseFloat(moisture), dryer_temp: parseFloat(temp), pass: recheckPass }
+    const nextAttempts = editingIdx != null ? attempts.map((a, i) => i === editingIdx ? entry : a) : [...attempts, entry]
+    const last = nextAttempts[nextAttempts.length - 1]
+    await onSave(sample.id, {
+      recheck_attempts: nextAttempts,
+      recheck_done: true, recheck_moisture: last.moisture, recheck_dryer_temp: last.dryer_temp, recheck_time: last.time, recheck_pass: last.pass,
+    })
     setSaving(false); setOpen(false)
   }
 
   return (
     <div className="px-4 py-2 border-l-[3px]" style={{ borderColor: '#f59e0b' }}>
       {!open ? (
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-[10px] font-bold text-warn">⚠ Moisture out of spec</span>
-          {already ? (
-            <>
-              <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${sample.recheck_pass ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>
-                🔁 Re-check: {sample.recheck_moisture}% @ {sample.recheck_time} · {sample.recheck_pass ? '✓ PASS' : '✗ FAIL — add new sample'}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] font-bold text-warn">⚠ Moisture out of spec</span>
+            {attempts.map((a, i) => (
+              <span key={i} className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${a.pass ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>
+                🔁 Re-test #{a.n}: {a.moisture}% @ {a.time} · {a.pass ? '✓ PASS' : '✗ FAIL'}
               </span>
-              {!sample.recheck_pass && <span className="text-[9px] text-text-muted italic">Re-check failed — please add a new sample</span>}
-              <button onClick={() => setOpen(true)} className="text-[10px] px-2 py-0.5 rounded border border-surface-rule bg-surface-card cursor-pointer">✏️ Edit</button>
-            </>
-          ) : (
-            <button onClick={() => setOpen(true)} className="text-[10px] px-2.5 py-0.5 rounded border font-bold cursor-pointer" style={{ borderColor: '#f59e0b', background: '#fef3c7', color: '#92400e' }}>+ Add Re-check</button>
-          )}
+            ))}
+            {resolved ? (
+              <button onClick={() => startEdit(attempts.length - 1)} className="text-[10px] px-2 py-0.5 rounded border border-surface-rule bg-surface-card cursor-pointer">✏️ Edit</button>
+            ) : (
+              <button onClick={startNew} className="text-[10px] px-2.5 py-0.5 rounded border font-bold cursor-pointer" style={{ borderColor: '#f59e0b', background: '#fef3c7', color: '#92400e' }}>
+                + {attempts.length === 0 ? 'Add Re-check' : `Re-test #${attempts.length + 1}`}
+              </button>
+            )}
+          </div>
+          {!resolved && attempts.length > 0 && <span className="text-[9px] text-text-muted italic">Still out of spec — log another re-test once it's checked again</span>}
         </div>
       ) : (
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-[10px] font-bold text-warn whitespace-nowrap">🔁 Re-check</span>
+          <span className="text-[10px] font-bold text-warn whitespace-nowrap">🔁 {editingIdx != null ? `Re-test #${attempts[editingIdx].n}` : `Re-test #${attempts.length + 1}`}</span>
           {[['Time', time, setTime, 'text', '09:30', 64],['Moisture %', moisture, setMoisture, 'number', specMoistureMax ? `max ${specMoistureMax}%` : '%', 90],['Dryer Temp °C', temp, setTemp, 'number', '°C', 90]].map(([label, val, setter, type, ph, w]) => (
             <div key={label as string} className="flex flex-col gap-1">
               <label className="text-[9px] text-text-muted font-semibold">{label as string}</label>
@@ -1261,12 +1285,11 @@ function GranuleRecheckPanel({ sample, specMoistureMax, onSave }: { sample: any;
           {moisture !== '' && recheckPass !== null && (
             <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${recheckPass ? 'bg-ok/15 text-ok' : 'bg-err/15 text-err'}`}>{recheckPass ? '✓ PASS' : '✗ FAIL'}</span>
           )}
-          <button onClick={() => { setOpen(false); if (already) { setMoisture(sample.recheck_moisture ?? ''); setTemp(sample.recheck_dryer_temp ?? ''); setTime(sample.recheck_time ?? '') } }}
-            className="text-[10px] px-2 py-1 rounded border border-surface-rule bg-surface-card cursor-pointer">Cancel</button>
+          <button onClick={() => setOpen(false)} className="text-[10px] px-2 py-1 rounded border border-surface-rule bg-surface-card cursor-pointer">Cancel</button>
           <button onClick={handleSave} disabled={saving || !canSave}
             className="text-[10px] px-3 py-1 rounded text-white font-bold"
             style={{ background: canSave ? '#166534' : '#d1d5db', cursor: canSave ? 'pointer' : 'not-allowed' }}>
-            {saving ? 'Saving…' : already ? '✓ Update Re-check' : '✓ Save Re-check'}
+            {saving ? 'Saving…' : editingIdx != null ? '✓ Update' : '✓ Save Re-test'}
           </button>
         </div>
       )}

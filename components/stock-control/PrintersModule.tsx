@@ -10,7 +10,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { SECTION_ORDER, sectionMeta, SECTION_PRINTER, KNOWN_PRINTERS, type PrinterLang } from '@/lib/production/capture-config'
+import { PRINTER_SECTIONS, sectionMeta, SECTION_PRINTER, KNOWN_PRINTERS, type PrinterLang } from '@/lib/production/capture-config'
 import { Printer, Check, Loader2, Wifi, Info } from 'lucide-react'
 
 interface Row {
@@ -49,7 +49,7 @@ export default function PrintersModule() {
   useEffect(() => {
     (async () => {
       const seeded: Record<string, Row> = {}
-      SECTION_ORDER.forEach(id => { seeded[id] = seedRow(id) })
+      PRINTER_SECTIONS.forEach(id => { seeded[id] = seedRow(id) })
       try {
         const { data } = await getDb().schema('production').from('printers').select('*')
         for (const r of (data ?? []) as any[]) {
@@ -175,7 +175,7 @@ export default function PrintersModule() {
       </div>
 
       <div className="mt-5 space-y-3">
-        {SECTION_ORDER.map(id => {
+        {PRINTER_SECTIONS.map(id => {
           const r = rows[id]
           if (!r) return null
           const meta = sectionMeta(id)
