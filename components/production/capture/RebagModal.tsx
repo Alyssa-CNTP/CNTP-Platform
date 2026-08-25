@@ -37,9 +37,9 @@ import { X, Search, Loader2, AlertTriangle, ArrowRight, Printer, PenLine, Histor
 import { getDb } from '@/lib/supabase/db'
 import { sanitizeSerial, transferBagWeight, createBagFromTransfer, originalBagEvent } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, sectionMeta, VARIANT_OPTIONS, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
+import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, sectionMeta, VARIANT_OPTIONS, DESTINATION_OPTIONS, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
-import { LEAF } from '@/lib/production/inventory'
+import { LEAF, debaggedBatches } from '@/lib/production/inventory'
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
@@ -107,21 +107,21 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const sectionName = sectionMeta(sectionId).name
   const [step, setStep] = useState<'source' | 'created' | 'target' | 'confirm' | 'newBagPrint'>('source')
 
-  // Batch numbers actually debagged THIS session — same restriction normal
-  // bagging already enforces (a Leaf output's batch must trace back to a
-  // real lot fed in, or a typo/fabricated batch corrupts traceability).
-  // Applies only to a brand-new TARGET bag (genuine output from today's
-  // session); deliberately NOT applied to registering an untracked source
-  // bag below — that material predates this session by definition, so it
-  // can never match something debagged today.
+  // Batch numbers actually debagged under this variant+grade — same
+  // restriction normal bagging enforces (a Leaf output's batch must trace
+  // back to a real lot fed in, or a typo/fabricated batch corrupts
+  // traceability). debaggedBatches() covers this session's own debag rows
+  // PLUS any other session's lots under the exact same variant+grade
+  // (e.g. fed in on an earlier shift) — never an unrestricted list. Applies
+  // only to a brand-new TARGET bag (genuine output from today's session);
+  // deliberately NOT applied to registering an untracked source bag below —
+  // that material predates this session by definition.
   const [sessionDebagLots, setSessionDebagLots] = useState<string[]>([])
   useEffect(() => {
-    if (!sessionId) { setSessionDebagLots([]); return }
-    getDb().schema('production').from('prod_debagging').select('lot_number').eq('session_id', sessionId)
-      .then((res: { data: any[] | null }) => setSessionDebagLots(
-        Array.from(new Set((res.data ?? []).map(r => (r.lot_number || '').trim()).filter(Boolean))),
-      ))
-  }, [sessionId])
+    if (!variantWord) { setSessionDebagLots([]); return }
+    debaggedBatches(sectionId, variantWord, GRADE_TO_LOCAL_EXPORT[gradeLetter ?? 'A'] ?? 'Export')
+      .then(setSessionDebagLots)
+  }, [sectionId, variantWord, gradeLetter])
 
   // Source can come from an EXISTING tracked bag (scan/type lookup), or —
   // since not all floor material is on the system yet during the

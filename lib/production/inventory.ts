@@ -130,6 +130,30 @@ export async function recentBatches(sectionId: string): Promise<string[]> {
 }
 
 /**
+ * Lot numbers actually debagged (production.prod_debagging) for this section,
+ * matching a specific variant + grade (local_or_export) — real batches that
+ * are legitimately consumable under that variant/grade even if they weren't
+ * debagged in the CURRENT session (e.g. fed in on an earlier shift). Never
+ * falls back to an unrestricted list — a batch that was never debagged here,
+ * under a different variant/grade, is not a valid suggestion.
+ */
+export async function debaggedBatches(sectionId: string, variant: string, localOrExport: string): Promise<string[]> {
+  if (!variant) return []
+  const { data } = await getDb().schema('production').from('prod_debagging')
+    .select('lot_number, prod_sessions!inner(section_id)')
+    .eq('variant', variant).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .eq('prod_sessions.section_id', sectionId)
+    .not('lot_number', 'is', null)
+    .order('created_at', { ascending: false }).limit(300)
+  const seen = new Set<string>(); const out: string[] = []
+  ;(data ?? []).forEach((r: any) => {
+    const l = (r.lot_number ?? '').trim()
+    if (l && !seen.has(l)) { seen.add(l); out.push(l) }
+  })
+  return out.slice(0, 60)
+}
+
+/**
  * Next-step nudge — a gentle prompt about what's likely missing. Rule-based.
  */
 export function nextStepNudge(sectionId: string, hasByType: Record<string, number>): string | null {

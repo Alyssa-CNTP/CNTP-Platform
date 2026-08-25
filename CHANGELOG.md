@@ -9,6 +9,21 @@ All changes deployed to staging are logged here automatically.
 - **Grade no longer mandatory for everything**: Indent Sticks, Blocks, Dust etc. don't necessarily have a grade the way Fine/Coarse Leaf do. Registering an untracked bag now only requires Grade when the picked product is Fine or Coarse Leaf (reuses the same `LEAF` set `OutputPicker` already uses for batch tracking, now exported) — otherwise just Variant + current weight.
 - **New step after registering a bag**: instead of jumping straight into "pick a target," it now shows the bag's identity (serial, variant, grade, weight, batch) and asks what's next — "Remove material" (continues into the existing flow, this bag as source) or "Add material to this bag" (pre-fills it as the target and returns to source selection, so topping it up from something else doesn't require leaving the modal and starting over).
 - **"From existing stock" can now be browsed, not just typed**: it was a blank serial box with no way to see what's actually in stock. Added a variant filter (+ optional product-type text filter) that shows a live preview list of matching in-stock bags — serial, product, weight, date added — tap one to fill the serial field, or still type/scan directly if the serial's already known.
+- **Also closes the gap flagged in the Sieving Tower fix below**: Re-bag's own `batchHints` restriction (yesterday, PR #794) only ever checked this session's own debag rows. Swapped it for the same `debaggedBatches()` helper Sieving now uses, so a new re-bagged output's batch is restricted to this session's debagged lots plus any other session's lots under the exact same variant+grade — no longer a same-session-only carve-out.
+
+## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
+
+Three reported issues on the Sieving Tower capture pages:
+
+- **Debagging: variant/grade weren't actually locked per bulk bag.** The batch's Variant/Grade `<select>`s stayed live-editable at any point before the whole session was locked, even after a bulk bag had been "Done — locked". Since `buildDebag` reads the *current* `prod.variant`/`.grade` for every debag row at save time (not a per-row snapshot), changing the top-level selects after locking a bag would silently relabel it on save. Fixed by disabling both selects once any bulk bag in the active batch is secured (`sievingHasSecuredDebag`), with the existing "Changeover — switch grade/variant" button as the sanctioned way to change variant/grade mid-shift (it opens a new batch record instead of mutating the locked one).
+- **Bagging: output batch suggestions weren't restricted to what was actually debagged.** The batch-number picker fell back to an unfiltered "recent lots at this section" list (from `bag_tags`, no variant/grade filter) whenever the current session's debag rows were empty — which could suggest a lot that was never fed into this run at all. Added `debaggedBatches()` (`lib/production/inventory.ts`), which queries `prod_debagging` (joined to `prod_sessions` for section scoping) for lots debagged under the *same variant + grade* currently being consumed, even from an earlier session/shift. The Bagging picker's suggestions are now always this session's debagged lots **plus** that cross-session same-variant/grade set — never an unrestricted recent-lots list.
+- **Bag Tracking profile didn't show grade.** `bag_tags.destination` (the field that carries Sieving's A/B/C grade) was never actually written when an output bag was created (`SievingCapture`'s `addOutput()` upsert omitted it), so it always showed as "—" on the `/tags` detail view regardless. Added `destination: grade` to that upsert, and relabelled the Details grid row from "Destination" to "Grade" with a friendly label (Export / Export Blend / Domestic-Local) via the existing `DESTINATION_OPTIONS` map, so a suggested batch's variant+grade can be confirmed on-screen without a database lookup.
+
+Moved the grade-letter → `local_or_export` string mapping (previously a private const duplicated where needed) into a single exported `GRADE_TO_LOCAL_EXPORT` in `capture-config.ts`. Note: Re-bag's own separate `batchHints` restriction (added just below, same day) doesn't yet have the same-variant/grade carve-out either — a follow-up if that gap matters in practice.
+
+## 2026-08-25 — Alyssa (Re-bag: fix misleading "Add & print label" button — nothing prints until the bag's actually registered)
 
 **Files changed:** `components/production/capture/OutputPicker.tsx`, `components/production/capture/RebagModal.tsx`
 
@@ -26,7 +41,7 @@ Reported gap: normal bagging (`SievingCapture`) restricts a Fine/Coarse Leaf out
 - Fixed for the "new target" path only: loads this session's actual `prod_debagging.lot_number` rows and passes them as `batchHints`, so a genuinely new re-bagged output is held to the same rule as any other bag created today.
 - Deliberately **not** applied to registering an untracked source bag ("Not on the system yet") — that material predates this session by definition, so it can never match something debagged today; restricting it there would make onboarding legacy Leaf stock impossible.
 
-## 2026-08-25 — Alyssa (Quality Granule: a genuinely failing moisture reading can now be saved and re-checked, instead of being blocked outright)
+## 2026-08-25 — Alyssa (Quality Granule: a genuinely failing moisture reading can now be saved and re-checked, instead of being blocked outright) [promoted to production]
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`
 
