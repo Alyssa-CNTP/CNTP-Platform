@@ -52,11 +52,13 @@ export async function GET() {
   // ── 3. Live Gemini ping ───────────────────────────────────────────────────
   if (apiKey) {
     try {
+      // gemini-2.0-flash, gemini-2.0-flash-lite, gemini-1.5-flash-8b and
+      // (later) gemini-2.5-flash-lite were all retired by Google — see
+      // lib/intelligence/gemini.ts for the same fix.
       const models = [
         'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-        'gemini-1.5-flash-8b',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash-lite',
       ]
 
       let geminiResult = ''

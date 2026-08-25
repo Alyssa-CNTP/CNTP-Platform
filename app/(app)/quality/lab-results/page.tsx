@@ -145,6 +145,23 @@ function expandRecord(r: LabResult): any[] {
   return [{ batch_no:batchKey, id:r.id, created_at:r.created_at, ...d }]
 }
 
+// Blank record for manual entry — same shape saveRecord()/ReviewPanel expect
+// from a real extraction, just empty. Lets a QC enter Final Lab Results
+// straight into the review form when PDF upload/Gemini is unavailable
+// (billing, quota, or outage on Google's side — none of which is something a
+// retry or a code fix here can work around), instead of being blocked from
+// recording results at all.
+function blankRecord(testType: TestType): any {
+  if (testType === 'micro') {
+    const cols = (COLS.micro ?? []).map(([k]) => k).filter(k => k !== 'overall_status')
+    return { batch_no: '', overall_status: 'Pass', results: Object.fromEntries(cols.map(k => [k, ''])), _manual: true }
+  }
+  if (testType === 'residue') {
+    return { batch_no: '', overall_status: 'Pass', compounds_detected: [], _manual: true }
+  }
+  return { batch_no: '', overall_status: 'Pass', analytes: [], _manual: true }
+}
+
 // ─── PDF Drop Zone ────────────────────────────────────────────────────────────
 
 interface QueueItem { id:string; file:File; status:'pending'|'processing'|'done'|'error'; message:string }
@@ -334,8 +351,37 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
       {/* compounds_detected (residue COA) */}
       {pending.compounds_detected !== undefined && !pending.analytes && !pending.results && (
         <div style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, padding:12, marginBottom:10 }}>
-          <div style={{ fontWeight:700, fontSize:11, color:'#166534', marginBottom:8 }}>🔍 Extracted Results</div>
-          {pending.compounds_detected.length === 0
+          <div style={{ fontWeight:700, fontSize:11, color:'#166534', marginBottom:8 }}>{pending._manual ? '✍️ Results' : '🔍 Extracted Results'}</div>
+          {pending._manual ? (
+            <>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                <thead><tr style={{ background:'#166534', color:'#fff' }}>
+                  {['Compound','Result (mg/kg)','Export MRL',''].map(h=><th key={h} style={{ padding:'4px 8px', textAlign:'left' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {pending.compounds_detected.map((c:any,i:number)=>(
+                    <tr key={i} style={{ background:i%2===0?'#fff':'#f9fafb', borderBottom:'1px solid #e5e7eb' }}>
+                      {(['compound_name','result_mg_kg','default_export_mrl'] as const).map(f => (
+                        <td key={f} style={{ padding:'3px 8px' }}>
+                          <input value={c[f]??''} onChange={e=>setPending((p:any)=>({...p,compounds_detected:p.compounds_detected.map((x:any,idx:number)=>idx===i?{...x,[f]:e.target.value}:x)}))}
+                            placeholder={f==='compound_name'?'e.g. Chlorpyrifos':f==='result_mg_kg'?'e.g. <0.01':'e.g. 0.05'}
+                            style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, fontFamily:f==='result_mg_kg'?'monospace':undefined, fontWeight:f==='result_mg_kg'?700:undefined, boxSizing:'border-box' }}/>
+                        </td>
+                      ))}
+                      <td style={{ padding:'3px 8px' }}>
+                        <button onClick={()=>setPending((p:any)=>({...p,compounds_detected:p.compounds_detected.filter((_:any,idx:number)=>idx!==i)}))}
+                          style={{ background:'none', border:'none', color:'#dc2626', cursor:'pointer', fontSize:13 }} title="Remove row">✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button onClick={()=>setPending((p:any)=>({...p,compounds_detected:[...p.compounds_detected,{compound_name:'',result_mg_kg:'',default_export_mrl:''}]}))}
+                style={{ marginTop:8, padding:'4px 10px', borderRadius:6, border:'1px dashed #9ca3af', background:'#fff', fontSize:11, fontWeight:600, cursor:'pointer' }}>
+                + Add compound
+              </button>
+            </>
+          ) : pending.compounds_detected.length === 0
             ? <div style={{ color:'#166534', fontWeight:600, fontSize:12 }}>✅ No residues detected → PASS</div>
             : <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
                 <thead><tr style={{ background:'#166534', color:'#fff' }}>
@@ -353,8 +399,18 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
                   ))}
                 </tbody>
               </table>}
-          <div style={{ marginTop:8, fontSize:10, color:'#6b7280' }}>
-            Overall: <strong style={{ color:statusColor(pending.overall_status) }}>{pending.overall_status||'PASS'}</strong>
+          <div style={{ marginTop:8, fontSize:10, color:'#6b7280', display:'flex', alignItems:'center', gap:8 }}>
+            {pending._manual ? (
+              <>
+                <span>Overall:</span>
+                <select value={pending.overall_status||'Pass'} onChange={e=>setPending((p:any)=>({...p,overall_status:e.target.value}))}
+                  style={{ padding:'3px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, background:'#fff' }}>
+                  <option>Pass</option><option>Fail</option>
+                </select>
+              </>
+            ) : (
+              <span>Overall: <strong style={{ color:statusColor(pending.overall_status) }}>{pending.overall_status||'PASS'}</strong></span>
+            )}
             {pending._model_used && <span style={{ marginLeft:12, color:'#9ca3af' }}>🤖 {pending._model_used}</span>}
           </div>
         </div>
@@ -363,8 +419,43 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
       {/* analytes array (glyphosate, heavy metals, eto, aflatoxins) */}
       {pending.analytes !== undefined && !pending.results && (
         <div style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, padding:12, marginBottom:10 }}>
-          <div style={{ fontWeight:700, fontSize:11, color:'#166534', marginBottom:8 }}>🔍 Extracted Results</div>
-          {pending.analytes.length === 0
+          <div style={{ fontWeight:700, fontSize:11, color:'#166534', marginBottom:8 }}>{pending._manual ? '✍️ Results' : '🔍 Extracted Results'}</div>
+          {pending._manual ? (
+            <>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+                <thead><tr style={{ background:'#1f4e79', color:'#fff' }}>
+                  {['Compound','Result (mg/kg)','EU MRL','Status',''].map(h=><th key={h} style={{ padding:'4px 8px', textAlign:'left' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {pending.analytes.map((a:any,i:number)=>(
+                    <tr key={i} style={{ background:i%2===0?'#fff':'#f9fafb', borderBottom:'1px solid #e5e7eb' }}>
+                      {(['analyte','result','eu_mrl'] as const).map(f => (
+                        <td key={f} style={{ padding:'3px 8px' }}>
+                          <input value={a[f]??''} onChange={e=>setPending((p:any)=>({...p,analytes:p.analytes.map((x:any,idx:number)=>idx===i?{...x,[f]:e.target.value}:x)}))}
+                            placeholder={f==='analyte'?'e.g. Glyphosate':f==='result'?'e.g. <0.01':'e.g. 0.05'}
+                            style={{ width:'100%', padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, fontFamily:f==='result'?'monospace':undefined, fontWeight:f==='result'?700:undefined, boxSizing:'border-box' }}/>
+                        </td>
+                      ))}
+                      <td style={{ padding:'3px 8px' }}>
+                        <select value={a.status||'Pass'} onChange={e=>setPending((p:any)=>({...p,analytes:p.analytes.map((x:any,idx:number)=>idx===i?{...x,status:e.target.value}:x)}))}
+                          style={{ padding:'4px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, background:'#fff' }}>
+                          <option>Pass</option><option>Fail</option>
+                        </select>
+                      </td>
+                      <td style={{ padding:'3px 8px' }}>
+                        <button onClick={()=>setPending((p:any)=>({...p,analytes:p.analytes.filter((_:any,idx:number)=>idx!==i)}))}
+                          style={{ background:'none', border:'none', color:'#dc2626', cursor:'pointer', fontSize:13 }} title="Remove row">✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button onClick={()=>setPending((p:any)=>({...p,analytes:[...p.analytes,{analyte:'',result:'',eu_mrl:'',status:'Pass'}]}))}
+                style={{ marginTop:8, padding:'4px 10px', borderRadius:6, border:'1px dashed #9ca3af', background:'#fff', fontSize:11, fontWeight:600, cursor:'pointer' }}>
+                + Add analyte
+              </button>
+            </>
+          ) : pending.analytes.length === 0
             ? <div style={{ color:'#166534', fontWeight:600, fontSize:12 }}>✅ None detected — all below reporting limits → PASS</div>
             : <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
                 <thead><tr style={{ background:'#1f4e79', color:'#fff' }}>
@@ -381,8 +472,18 @@ function ReviewPanel({ data, testType, onSave, onDiscard }: { data:any; testType
                   ))}
                 </tbody>
               </table>}
-          <div style={{ marginTop:8, fontSize:10, color:'#6b7280' }}>
-            Overall: <strong style={{ color:statusColor(pending.overall_status) }}>{pending.overall_status}</strong>
+          <div style={{ marginTop:8, fontSize:10, color:'#6b7280', display:'flex', alignItems:'center', gap:8 }}>
+            {pending._manual ? (
+              <>
+                <span>Overall:</span>
+                <select value={pending.overall_status||'Pass'} onChange={e=>setPending((p:any)=>({...p,overall_status:e.target.value}))}
+                  style={{ padding:'3px 6px', border:'1px solid #d1d5db', borderRadius:4, fontSize:11, background:'#fff' }}>
+                  <option>Pass</option><option>Fail</option>
+                </select>
+              </>
+            ) : (
+              <span>Overall: <strong style={{ color:statusColor(pending.overall_status) }}>{pending.overall_status}</strong></span>
+            )}
             {pending._model_used && <span style={{ marginLeft:12, color:'#9ca3af' }}>🤖 {pending._model_used}</span>}
           </div>
         </div>
@@ -1042,6 +1143,48 @@ export default function LabResultsPage() {
             style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:`1px solid ${showHistory?'#d97706':'#e5e7eb'}`, background:showHistory?'#fef3c7':'#fff', color:showHistory?'#92400e':'#374151', fontSize:11, cursor:'pointer' }}>
             📜 Historical
           </button>
+          {/* Admin-only: identify WHICH Google account the deployed key belongs
+              to, without ever showing the full secret. There's no API that maps
+              a bare key back to an account (deliberate on Google's side) — the
+              masked value here is only for visually matching against each
+              candidate account's own key list at aistudio.google.com/apikey. */}
+          {isAdmin && (
+            <button onClick={async () => {
+              try {
+                const res = await fetch('/api/quality/gemini-key-check')
+                const d = await res.json()
+                if (!res.ok) { alert(d.error || 'Could not check the key'); return }
+                if (!d.configured) { alert('GEMINI_API_KEY is not set on this server at all.'); return }
+                alert(`Deployed GEMINI_API_KEY: ${d.masked} (${d.length} chars)\n\nSign into aistudio.google.com/apikey with each Google account that might have created a Gemini key, and match this masked value against the key list shown there — that page is the only place the account/project behind a key is ever visible.`)
+              } catch (e: any) { alert('Check failed: ' + e.message) }
+            }}
+              style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', color:'#374151', fontSize:11, cursor:'pointer' }}>
+            🔧 Check Gemini key
+          </button>
+          )}
+          {/* Admin-only: an actual live call, made right now, with the real
+              deployed key — the masked-key check only proves which key is
+              deployed, not whether it can currently serve a request. Needed
+              because Google's own usage dashboard visibly lags (showed zero
+              requests for "today" right after a failed upload), and an old,
+              still-displayed queue row isn't proof of what's happening now. */}
+          {isAdmin && (
+            <button onClick={async () => {
+              try {
+                const res = await fetch('/api/quality/gemini-key-check', { method: 'POST' })
+                const d = await res.json()
+                if (res.status === 403) { alert(d.error || 'Permission denied'); return }
+                if (!d.configured) { alert('GEMINI_API_KEY is not set on this server at all.'); return }
+                const summary = d.ok
+                  ? `✅ LIVE call succeeded just now (${d.startedAt}) on ${d.model}.\n\nThe key can serve requests right now — if uploads are still failing, something else is wrong (a different model in the fallback chain, a transient blip at the exact moment of upload, or a per-day cap that's since reset).`
+                  : `❌ LIVE call FAILED just now (${d.startedAt}) on ${d.model} — HTTP ${d.status}.\n\nGoogle's exact response:\n${JSON.stringify(d.body ?? d.error, null, 2).slice(0, 1500)}`
+                alert(summary)
+              } catch (e: any) { alert('Test call failed: ' + e.message) }
+            }}
+              style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#fff', color:'#374151', fontSize:11, cursor:'pointer' }}>
+            🧪 Test Gemini now
+          </button>
+          )}
         </div>
       </div>
 
@@ -1080,6 +1223,19 @@ export default function LabResultsPage() {
         <PdfDropZone testType={activeTab}
           onExtracted={d=>{setPending(d);setDupWarn(null);setRecoveredDraft(null)}}
           onSectionsDetected={(sections,file,textLayerRead)=>{ setOtherSections(sections); setSourceFile(file); setSectionsScanned(textLayerRead) }}/>
+      )}
+
+      {/* Manual entry — same review form a PDF extraction would open, just
+          starting blank. For when PDF upload/Gemini isn't available (billing,
+          quota, an outage on Google's side) or the lab only sent a result by
+          phone/email, so results can still be captured without waiting on it. */}
+      {canWrite && !pending && (
+        <div style={{ textAlign:'center', marginBottom:14 }}>
+          <button onClick={()=>{ setPending(blankRecord(activeTab)); setDupWarn(null); setRecoveredDraft(null) }}
+            style={{ padding:'6px 14px', borderRadius:7, border:'1px dashed #9ca3af', background:'#fff', color:'#374151', fontSize:11, fontWeight:600, cursor:'pointer' }}>
+            ✍️ Enter results manually
+          </button>
+        </div>
       )}
 
       {/* Couldn't scan for the report's other analyses at all. Called out

@@ -2,6 +2,94 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-24 — Gustav (Lab Results: live "Test Gemini now" call, since the masked-key check can't prove the key actually works right now)
+
+**Files changed:** `app/api/quality/gemini-key-check/route.ts`, `app/(app)/quality/lab-results/page.tsx`
+
+The deployed `GEMINI_API_KEY` was confirmed to match the funded "CNTP Ops Platform" project (masked-key check against AI Studio's own key list) — a paid tier, $28.54 balance, usage nowhere near quota — yet uploads still 429'd with "prepayment credits are depleted." At the same time, Google's own usage dashboard showed **zero requests for the current day**, right after a failed upload. Two possible readings of that, and no way to tell them apart from the outside: either the dashboard is simply lagging (it's already known to lag up to 24h for cost data), or requests genuinely aren't reaching Google at all — in which case the "credits depleted" message on screen could be a stale, already-superseded queue row rather than a fresh result.
+
+- New `POST /api/quality/gemini-key-check` — same admin gate as the masked-key check, but instead of reading the key it **uses** it: one cheap, tiny live call (`maxOutputTokens: 5`) to `gemini-2.5-flash`, made at the moment of the click, returning the exact HTTP status and full response body Google sends back right now. Not a hint, not a summary — the actual current answer.
+- New **"🧪 Test Gemini now"** button next to the existing key check, admin-only. A success means the key can serve requests right now, so a still-failing upload points somewhere else (a different model in the fallback chain, a momentary blip, a since-reset per-day cap). A failure shows Google's real, current error verbatim, settling what's actually happening instead of reasoning from a UI banner or a delayed dashboard.
+
+## 2026-08-24 — Gustav (Lab Results: manual entry, for when PDF upload/Gemini isn't available)
+
+**Files changed:** `app/(app)/quality/lab-results/page.tsx`
+
+Requested while diagnosing the Gemini billing issue: a way to record Final Lab Results without depending on PDF upload/Gemini extraction at all — a Google-side billing or quota problem shouldn't be able to block recording a result that already exists on paper or came in by phone/email.
+
+- New **"✍️ Enter results manually"** button next to the PDF drop zone on every tab. Opens the exact same review form a PDF extraction would (`ReviewPanel`), just starting blank instead of pre-filled — same save path, same duplicate-batch check, same COA/history behaviour, nothing test-type-specific to special-case downstream.
+- **The analytes and compound tables — previously read-only, even for a normal PDF review** — now have editable inputs, a status picker and add/remove-row controls when a record is a manual entry (`pending._manual`), so a QC can type in analyte name, result and MRL/spec directly instead of only being able to correct values Gemini had already extracted. Micro's tab already had editable inputs for its flat result fields; those needed no changes.
+- Scoped tightly to manual entries only — every existing PDF-extraction review path renders exactly the same JSX as before (diffed to confirm every changed line is inside the new manual/non-manual branch, not a change to the original behaviour).
+
+## 2026-08-21 — Gustav (Fix: gemini-2.5-flash-lite retirement broke Lab Results upload — this time found the actual quality-upload culprit)
+
+**Files changed:** `app/api/upload/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/intelligence/gemini.ts`, `app/api/sales/health/route.ts`, `app/api/production/verify-clean/route.ts`, `app/api/production/read-value/route.ts`, `app/api/ocr-tag/route.ts`
+
+Reported: "gemini-2.5-flash-lite is no longer available to new users" AND Lab Results uploads themselves failing outright. The earlier same-day fix swapped the *previous* round of retired models (`gemini-2.0-flash` etc.) for `gemini-2.5-flash-lite` in five files that don't touch the Lab Results upload path — and concluded `app/api/upload/route.ts` (the actual quality-upload endpoint) was unaffected, since its fallback was `gemini-3.1-flash-lite-preview`, not `2.5-flash-lite`, by name.
+
+That conclusion was wrong: `gemini-3.1-flash-lite-preview` is a preview alias **built on** `gemini-2.5-flash-lite`, so once Google retired the underlying model, calls through the preview name started failing too — citing the underlying model in the error, not the alias actually requested. That preview alias is the *second and only remaining* model in the Lab Results upload's fallback list, so once the primary (`gemini-2.5-flash`) hit any transient 429/503 and fell through to it, the whole upload failed outright with no working fallback left — this is what "I also can't upload the quality records" actually was.
+
+- `app/api/upload/route.ts`: `gemini-3.1-flash-lite-preview` → `gemini-3.5-flash-lite` (Google's own suggested replacement for the retired `2.5-flash-lite`). `gemini-2.5-flash` stays primary, unaffected.
+- Same swap in `app/api/maintenance/transcribe/route.ts` (same suspect alias as its fallback) and in the five files fixed earlier today that had `gemini-2.5-flash-lite` explicitly, which is exactly what just got retired.
+- Swept the whole repo for every remaining reference to `gemini-2.0-flash`, `gemini-1.5-flash`(-8b), `gemini-2.5-flash-lite` and `gemini-3.1-flash-lite-preview` in live code — none left; only explanatory comments mention the retired names now.
+
+## 2026-08-21 — Gustav (Fix "model no longer available" errors — drop retired Gemini model fallbacks across the app)
+
+**Files changed:** `lib/intelligence/gemini.ts`, `app/api/sales/health/route.ts`, `app/api/production/verify-clean/route.ts`, `app/api/production/read-value/route.ts`, `app/api/ocr-tag/route.ts`
+
+Reported: "This model models/gemini-2.0-flash is no longer available." Traced it — it is **not** the Lab Results upload path (`app/api/upload/route.ts`); that file's model list (`gemini-2.5-flash`, `gemini-3.1-flash-lite-preview`) never referenced `gemini-2.0-flash` on either staging or production. The retired model was hardcoded as a fallback in five *other*, unrelated Gemini call sites across the app — the Alara intelligence engine, the sales health check, the cleaning-verification and gauge-reading photo checks (Production capture), and the bag-tag OCR reader — none of which had been touched by the earlier Lab Results fixes.
+
+- Replaced every occurrence of the retired `gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-1.5-flash` and `gemini-1.5-flash-8b` with `gemini-3.6-flash` (Google's own suggested replacement, quoted in the error) and `gemini-2.5-flash-lite` as a lighter fallback — already in active use elsewhere in the app, so a known-current model rather than a guess.
+- `gemini-2.5-flash` stays the primary everywhere it already was — it's the model actually reporting this error's *fallback* target, not itself flagged as retired.
+- Same lesson as the earlier Lab Results fix, applied everywhere it had been missed: a fallback chain is only as good as its last entry — if every model in the chain is dead, there's nothing left to fall back to, and the failure is total instead of just slower.
+
+## 2026-08-21 — Gustav (Lab Results: admin tool to identify which Google account a deployed Gemini key belongs to)
+
+**Files changed:** `app/api/quality/gemini-key-check/route.ts` (new), `app/(app)/quality/lab-results/page.tsx`
+
+Reported: uploads still 429 with "Your prepayment credits are depleted" after topping up Google billing. That wording is specific — it's Google AI Studio's own **prepay credit wallet**, a separate balance from a full Cloud Billing account (card/invoice). If billing was topped up on one Google account/project but `GEMINI_API_KEY` on the VPS was issued from a *different* one's prepay flow, the top-up never reaches this key's balance at all — a very easy mismatch across multiple Google accounts.
+
+There is no API that maps a bare key back to its owning account (deliberate, on Google's side) — the only place that mapping is ever visible is Google AI Studio's own key list (aistudio.google.com/apikey) under whichever account is signed in. So the fix isn't code — it's identifying the deployed key so it can be matched there by eye.
+
+- New admin-only **"🔧 Check Gemini key"** button on Lab Results, gated the same way as the page's existing admin actions (`can_delete_lab_results`). Calls a new `/api/quality/gemini-key-check` route that reads the live `process.env.GEMINI_API_KEY` server-side and returns only a masked form (`AIzaSy…567890` for a 37-char key) plus its length — enough to visually match against AI Studio's own truncated key display, nowhere near enough to reconstruct the real key.
+- No change to the upload/retry logic itself — this is purely a "which account is this" diagnostic for the person who can actually check billing.
+
+## 2026-08-21 — Gustav (Pasteuriser: date-range filter + per-batch trend graph in History, bulk density chart in Active Runs, moisture/temp colours swapped)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+Four requests off the Run Dashboard:
+
+1. **Date-range filter for History & Performance.** Added `from`/`to` date inputs next to the existing batch-number search. A batch matches if ANY of its sample dates falls inside the chosen range (`sampleDateRange()` + `inHistDateRange()`), not just its first day — so a batch that ran across several days isn't excluded just because it started before the "from" date. The batch count next to the search box now reflects the combined search+date filter instead of only the text search.
+2. **Moisture & Temperature graph per expanded history batch.** Expanding a batch row (the existing click-to-expand) now also renders the same trend chart style used in Active Runs, built from that batch's own samples (already chronological — sorted once at load). Scoped to "click a batch" specifically; a separate per-date drill-down wasn't added — the chart's x-axis carries date+time so a multi-day batch's days are still visually distinguishable without a second click target.
+3. **Bulk Density trend + spec limits in Active Runs**, directly under the Moisture & Temperature chart. Spec limits come from the same source every other spec check on this page already uses — customer override, else the matched customer spec, else `PAST_SPEC_DEFAULTS.untapped_bd` (280–340) — so the limit lines always have real numbers, not only when a customer spec happens to match.
+4. **Moisture/Temperature colours swapped** (Moisture was orange/Temp blue; now Moisture blue / Temp orange) in both the Active Runs trend chart and the new History one, for the correction requested and for consistency between the two.
+
+## 2026-08-21 — Gustav (Note Books: dropdown sections, drop the redundant Lot no. field, every field now required — STAGING ONLY)
+
+**Files changed:** `supabase/migrations/20260821_002_notebooks_drop_redundant_lot_no.sql` (new, applied to **staging only**), `lib/notebooks/types.ts`, `lib/notebooks/server.ts`, `components/notebooks/note-draft.ts`, `components/notebooks/NoteFields.tsx`, `components/notebooks/NotePaper.tsx`, `app/(app)/notebooks/new/page.tsx`, `app/(app)/notebooks/[id]/page.tsx`, `app/api/notebooks/documents/route.ts`, `app/api/notebooks/documents/[id]/route.ts`
+
+Follow-up feedback on the capture form: the five-tab strip took up space better spent on the fields themselves, Lot no. and Batch no. were two boxes for the one answer, and it was too easy to issue a note with gaps left in it.
+
+- **Section tabs replaced with a dropdown.** The same five sections (Weighbridge, Supplier & Goods, Traceability, Certification, Comments) are now picked from one `<select>` instead of a row of buttons — one control instead of five competing for attention, and it carries an "N to fix" count per section once a save has been attempted, so a problem hiding in a section you're not looking at doesn't go unnoticed.
+- **Lot no. is gone — Batch no. is the one field.** In this book's actual use the two never meant different things, so having both was just an extra box to fill in (or leave inconsistently blank). Removed from the header Traceability tab and from every goods line; `notebooks.documents.lot_no` and `notebooks.document_lines.lot_no` are dropped by the new migration (both `public.notebook_*` views recreated to match, per the lesson in `20260819_002`). Nothing has shipped to production yet and the module's own test rows were already gone, so there was no data to carry over. `Producer lot no.` is untouched — that's the farmer's own number, a different concept from our batch no.
+- **Every field the physical book captures is now required to save — literally "N/A" is an accepted answer** where a field genuinely doesn't apply (e.g. Control Union no. on a conventional load). A required-and-empty field shows a rounded amber outline the moment it's blank, before any save is even attempted, so what's left to fill in is visible at a glance rather than a surprise at submit time; trying to save with gaps still open turns those red, lists every one of them in a banner above Save, and blocks the request. The stamp tick-boxes stay optional (ticking nothing already means "conventional") and so does the free-text Comments box (open remarks, not a specific figure off the paper book).
+- The same requirement is enforced again server-side in `lib/notebooks/server.ts` (`createDocument`/`updateDocument`), against the already-converted payload rather than the in-form drafts — a request built by hand can't skip it either. Returns 400, not 500, when it's the reason a save was refused.
+- `npm run build` and `npx tsc --noEmit` both clean against current `staging` — zero errors in any notebooks file (the pre-existing unrelated errors elsewhere are untouched).
+- Full interactive click-through wasn't possible from this session (no path to sign in against staging), so this was verified by build + typecheck + a careful read of the rendered JSX, not by driving it in a browser — flagging that rather than claiming an interactive check that didn't happen.
+
+## 2026-08-21 — Alyssa (Production schema drift: the 404s/400 in the live console, audited and closed)
+
+**Files changed:** `supabase/migrations/20260821_001_count_drafts.sql` (new), `docs/ops/prod-drift-audit.sql` (new), `docs/ops/prod-drift-catchup.md` (new)
+
+The production site's console carries five PostgREST failures against objects the app queries — `count_drafts` (404), `employee_leave_active` (404), `roster_change_log` (404), `shift_reports` (404) and `job_cards_pasteuriser` (400). Every one is swallowed by a best-effort `catch`, so the features render empty instead of failing visibly.
+
+- **All five are database drift, not client bugs.** Checked each call site first: the three `production`-schema 404s come from `getDb().schema('production')` helpers (`supervisor/roster/page.tsx:102`/`:110`, `supervisor/signoff/page.tsx:130`), so the schema being sent is right and the object genuinely isn't reachable on production.
+- **`public.count_drafts` was never in the repo at all.** `lib/store/countStore.ts` has persisted the stock-count draft to it since it was written, so it only exists where somebody created it by hand — and not on production, where every draft load/save 404s and a counter's work therefore lives in browser memory only, lost on reload or device swap. Added as a real migration (`20260821_001`), shape derived from the three calls the store makes: PK `(user_id, date, role)` for its `onConflict`, `state_json` jsonb, and — unlike the app's usual `USING (true)` — an owner-scoped RLS policy, since a count draft is personal working state that nothing else reads. Applies to **both** databases.
+- **`docs/ops/prod-drift-audit.sql`** (read-only) reports existence *and* the `authenticated`/`service_role` SELECT privilege per object, because a PostgREST 404 is equally "table missing" and "table exists but no API role can see it, so it never enters the schema cache" — those have different fixes. Section 2 checks the nine `job_cards_pasteuriser` workflow columns behind the 400 (one missing column 400s the whole select, taking out the pasteuriser approval queue). Sections 3 and 4 dump every object and column in `public`/`production`/`qms`/`sales`/`hr` for a staging↔production diff, to catch drift nobody has hit in a browser yet.
+- **`docs/ops/prod-drift-catchup.md`** maps each symptom to what it costs while broken and the existing migration that closes it (`20260623_003`, `20260730_001`, `20260730_002`, `20260729_002` — all idempotent), in dependency order with the prerequisites each needs present first, plus the grant-only fix for the present-but-invisible case: `20260623_003` predates the grant convention and issues none, and its view needs its own grant since `20260611_005`'s `ALTER DEFAULT PRIVILEGES` only covers tables created by the role that ran it.
+- **Separate finding, not fixed:** `shift-report-generate.yml` pings `vars.SHIFT_REPORT_CRON_URL` and falls back to the *staging* URL. The repo has no Actions variables set, so the 16:00/01:00 SAST shift-report generation has only ever run against staging — creating `production.shift_reports` won't change that. Closing it is a decision (repoint the var, or add a production variant like `roster-rotate-production.yml`), so it's written up rather than done.
+
 ## 2026-08-21 — Alyssa (Capture: bagging rows stop saving after an output bag is removed — duplicate bag_no)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
@@ -14,6 +102,45 @@ Reported from Sieving: the red *"Your weights are saved, but the input/output ro
 - **The same serial twice in one session** (one physical bag captured twice) no longer takes the whole insert down on `prod_bagging_session_serial_uniq` — the first row keeps the serial, the duplicate keeps its weight without one, so the row list still adds up to the mass balance the operator signed.
 - **The banner now quotes Postgres' `details` and error code**, not just `message`. `message` names the constraint but `details` names the offending key (`Key (session_id, bag_no)=(…, 3) already exists`) — without it a duplicate-key report can't be traced to the row that caused it.
 - **Known, not fixed here:** a removed (voided) bag's `prod_bagging` row is excluded from the production order (`order-detail.ts` filters voided serials) but *not* from `shift-report-builder.ts` or the dashboard row/supply routes, so its kg still counts there.
+
+## 2026-08-21 — Gustav (Lab Results upload: explain billing / key / permission failures instead of dumping JSON)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Asked whether uploads still behave sensibly if the Gemini credits run out. They fail *safely* — a billing problem comes back as 400 `FAILED_PRECONDITION` or 403, neither of which is in the retryable set, so it fails on the first attempt rather than retrying six times against something retrying cannot fix, and it never touches the 429 backpressure. But the message was a raw truncated JSON dump (`Gemini API error (403) on gemini-2.5-flash: {"error":...`), which tells a QC nothing about what to do.
+
+- New `explainFatalGeminiError()` translates the non-retryable failures into plain language, most-specific first (a billing error also mentions "project"; a disabled-API error also mentions "permission"): **billing disabled / credit exhausted**, **invalid or revoked API key**, **Generative Language API not enabled on the project**, generic 403 permission/referrer restriction, and 404 retired-or-inaccessible model. Each quotes Google's own `message` and states plainly whether retrying can help.
+- Billing failures in particular now say outright that this is not a quota that resets and that the billing account for the `GEMINI_API_KEY` project needs attention — the opposite advice from a 429, which *does* reset.
+- Verified against realistic Google bodies for all six cases: each produces its intended message, takes exactly **one** attempt (confirming no retry), and leaves the pacing gap untouched. The 429 and 503 paths were re-run unchanged.
+
+## 2026-08-21 — Gustav (Lab Results upload: say WHICH Gemini quota was hit, and let a 429 slow the queue down)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Follow-up to yesterday's 503-vs-429 split. With that live, the Micro upload now fails with a *429* instead — i.e. a genuine rate-limit response, not Google capacity — even though the account is on a paid plan. The previous change could say "this is a quota", but not *which* quota, so it still couldn't distinguish "we are genuinely over a paid limit" from "the key deployed on the VPS isn't the paid one". Two gaps caused that, both fixed here:
+
+- **Google's own explanation was being thrown away.** The 429 body names the exceeded quota in a `QuotaFailure` block, and the metric contains `free_tier` when the key is billed on the free tier — the single fact that settles the question. It was captured into `GeminiTransient.detail` and then never used. It's now surfaced in the message and logged in full server-side. `quotaId` and `quotaMetric` are preferred over `message`, because the id spells out both the tier and the window (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`) whereas `message` is always the same "check your plan and billing".
+- **The detail was truncated to 200 chars**, which cut the diagnostic off entirely — Google's generic message alone is ~200 chars and the `QuotaFailure` block comes *after* it. Raised to 1500.
+- **A free-tier 429 now says so outright**, naming `GEMINI_API_KEY` on the VPS and the paid "CNTP Gemini" project as the thing to check, since no amount of retrying or pacing can fix a key on the wrong plan.
+- **Adaptive backpressure.** Yesterday's change dropped the pacing floor from 4500ms to 500ms on the assumption the key is paid — if that assumption is wrong, the floor was making 429s *more* likely, and it would have stayed wrong indefinitely. A 429 now doubles the effective gap for the whole shared queue (500→1000→2000→4000→4500, capped at the old free-tier-safe value) and each clean call halves it back toward the floor. The floor can no longer be wrong in a way that persists: the queue discovers the real limit from the first 429.
+- Verified against realistic Gemini 429 bodies by running the real source block: free-tier-per-day → the key-is-wrong message; paid-per-minute → the generic quota message plus the per-day-cap hint; 503 → unchanged; backpressure ramp/decay as above.
+
+## 2026-08-20 — Alyssa (Capture: "Bags this shift" — the whole shift's bags in and out, as a reference)
+
+**Files changed:** `components/production/capture/ShiftBagLog.tsx` (new), `app/(app)/production/capture/[section]/page.tsx`
+
+Requested by the afternoon shift: they want to see the entire shift's bags **inputted (debagging)** and **outputted (bagging)** while capturing, as a reference.
+
+Why it wasn't already possible: the Capture tab only ever renders the batch record open on screen, so anything captured under an earlier record on the same shift (a record submitted before "Start new batch record" opened the next one) was invisible there. Overview does list every bag, but it merges **both** shifts into one product/lot rollup and only counts sibling records whose variant/grade matches the active one — so neither screen answered "what has *this shift* put in and taken out so far", the question asked at every changeover, hand-over and stock check.
+
+- **New `ShiftBagLog`** — a collapsed one-line card between the batch card and the capture form on the Capture tab: `Bags this shift · in N bags / X kg · out N bags / Y kg`. Expanding it shows two lists, Debagged in and Bagged out, each row carrying its time (SAST), product, serial/bag number, lot and kg. Lists are capped and scroll inside the card so a reference can never push the capture form off a tablet screen; the card hides itself entirely until the shift has captured something.
+- **Scope is the whole shift on that line**, all batch records, whatever each was running — that's what "the entire shift's bags" means. Each record is listed under its own heading with its variant/grade and a `current` chip, so a record on another grade explains itself rather than looking like a stray total. The panel shows **no in-vs-out variance**: it is a bag list, not a second mass balance, and it deliberately can't be misread as one.
+- **Every section is read through an explicit `sectionId` switch** (sieving, refining1/2, granule, blender/smallblender, pasteuriser) rather than by duck-typing the shared `inputs`/`outputs`/`debag` field names — the lines are independent processes that happen to reuse those names. Pasteuriser pallet lines count as their many physical bags (`bags × kg/bag`, the same figure `prod_bagging` stores); granule dust rows likewise. Sieving's bucket-elevator and machine spillage are excluded: they're carry-over/loss figures, not bags, and already read on the mass balance.
+- **Data comes from the same place the screen already trusts** — the live in-memory records for the open session, plus the `draft_data` of the shift's other `prod_sessions` rows (already fetched by the existing load, now also kept **unfiltered** for this panel in `shiftOtherProductions`). No new query, and no reading of `prod_debagging`/`prod_bagging`, whose rows lag the screen by up to an autosave.
+- **`siblingProductions` is unchanged.** The variant/grade match filter on that set guards the mass balance from combining two different grades' or blends' balances; only the new unfiltered set feeds the bag log.
+- **`startNewProduction()` now hands the closing record to the bag log** before clearing local state. Without it, submitting a batch and starting the next one dropped "Bags this shift" to zero until a page reload, since sibling session rows are only re-read on load. It is deliberately *not* added to the mass-balance set, for the reason above.
+
+Verified: renders and totals correct against representative sieving data across two batch records on different grades (in 4 bags/1997.4 kg excluding the 120 kg elevator figure, out 4 bags/781.3 kg), SAST times correct from UTC instants, single-row header on tablet and a wrapped two-row header on a phone with no horizontal overflow, no console errors. Typecheck and lint clean on both files.
 
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
