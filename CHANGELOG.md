@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Re-bag: restore the "batch must have actually been debagged" rule for new re-bagged output)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Reported gap: normal bagging (`SievingCapture`) restricts a Fine/Coarse Leaf output's batch number to a lot actually debagged this session (`OutputPicker`'s `batchHints`/`restrictBatch`) — Re-bag's own `OutputPicker` calls never passed that, so a brand-new re-bagged target bag could be tagged with any typed batch number, bypassing the rule.
+
+- Fixed for the "new target" path only: loads this session's actual `prod_debagging.lot_number` rows and passes them as `batchHints`, so a genuinely new re-bagged output is held to the same rule as any other bag created today.
+- Deliberately **not** applied to registering an untracked source bag ("Not on the system yet") — that material predates this session by definition, so it can never match something debagged today; restricting it there would make onboarding legacy Leaf stock impossible.
+
 ## 2026-08-25 — Alyssa (Quality Granule: a genuinely failing moisture reading can now be saved and re-checked, instead of being blocked outright)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`

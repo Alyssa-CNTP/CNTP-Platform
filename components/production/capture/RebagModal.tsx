@@ -106,6 +106,22 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const sectionName = sectionMeta(sectionId).name
   const [step, setStep] = useState<'source' | 'target' | 'confirm' | 'newBagPrint'>('source')
 
+  // Batch numbers actually debagged THIS session — same restriction normal
+  // bagging already enforces (a Leaf output's batch must trace back to a
+  // real lot fed in, or a typo/fabricated batch corrupts traceability).
+  // Applies only to a brand-new TARGET bag (genuine output from today's
+  // session); deliberately NOT applied to registering an untracked source
+  // bag below — that material predates this session by definition, so it
+  // can never match something debagged today.
+  const [sessionDebagLots, setSessionDebagLots] = useState<string[]>([])
+  useEffect(() => {
+    if (!sessionId) { setSessionDebagLots([]); return }
+    getDb().schema('production').from('prod_debagging').select('lot_number').eq('session_id', sessionId)
+      .then((res: { data: any[] | null }) => setSessionDebagLots(
+        Array.from(new Set((res.data ?? []).map(r => (r.lot_number || '').trim()).filter(Boolean))),
+      ))
+  }, [sessionId])
+
   // Source can come from an EXISTING tracked bag (scan/type lookup), or —
   // since not all floor material is on the system yet during the
   // transition — get registered into the system for the first time right
@@ -492,7 +508,8 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                 </>
               ) : (
                 <OutputPicker sectionId={sectionId} variantWord={variantWord} gradeLetter={gradeLetter}
-                  defaultBatch="" onAdd={p => { setPickedOutput(p); setStep('confirm') }} onClose={() => setTargetMode('existing')} />
+                  defaultBatch="" batchHints={sessionDebagLots}
+                  onAdd={p => { setPickedOutput(p); setStep('confirm') }} onClose={() => setTargetMode('existing')} />
               )}
             </>
           )}
