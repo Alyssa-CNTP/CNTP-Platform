@@ -36,6 +36,7 @@ import {
 } from '@/components/production/capture/PasteuriserCapture'
 import { RebagModal } from '@/components/production/capture/RebagModal'
 import { upperCode } from '@/lib/production/normalize-code'
+import { makeBoxSerial } from '@/lib/production/pallet'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
@@ -1333,6 +1334,49 @@ function CaptureScreen() {
     // operator lowered the count) — anything already moved/dispatched downstream
     // is left untouched.
     if (isPasteuriser(sectionId)) {
+      // ── Pallets first ────────────────────────────────────────────────────
+      // Boxes carry a pallet_id FK, so the pallet rows have to exist (and have
+      // ids) before the bag_tags write below. Only pallets the operator has
+      // actually CONFIRMED on the Pallets & tags panel are written — an
+      // un-confirmed auto-split is a proposal, not a physical pallet, and
+      // writing it would put pallet serials on stock that was never stacked.
+      const palletRows: any[] = []
+      prods.forEach(p => {
+        const pd = p.data as PasteuriserData
+        ;(pd.outputs ?? []).forEach(line => {
+          const lot = upperCode(line.lot || pd.batchNo || '')
+          if (!lot) return
+          ;(line.pallets ?? []).forEach(pal => {
+            palletRows.push({
+              pallet_serial: upperCode(pal.serial), section_id: 'pasteuriser', session_id: sid,
+              lot_number: lot,
+              item: line.item || pd.item || 'Rooibos Final Product',
+              acumatica_id: line.itemCode || pd.itemCode || null,
+              variant: p.variant || null,
+              packaging: pd.packaging || null,
+              pallet_size: parseInt(line.boxesPerPallet ?? '', 10) || null,
+              box_count: pal.boxCount,
+              box_weight_kg: n(line.bagWeight) || n(pd.weightPerBag) || null,
+              total_kg: pal.totalKg,
+              start_bag_no: pal.startBagNo, end_bag_no: pal.endBagNo,
+              tag_method: pal.tagMethod, status: 'in_stock',
+              batch_id: bidFor(lot) ?? sessionBatchId,
+            })
+          })
+        })
+      })
+      // serial → id, so each box below can point at its pallet. Populated from
+      // the upsert's own returning rows, so it covers both newly-created and
+      // already-existing pallets in one round trip.
+      const palletIdBySerial = new Map<string, string>()
+      if (palletRows.length) {
+        const { data: savedPallets, error: palErr } = await db.schema('production').from('pallets')
+          .upsert(palletRows as any, { onConflict: 'pallet_serial' })
+          .select('id, pallet_serial')
+        if (palErr) console.error('pallet write failed', palErr)
+        ;((savedPallets as any[]) ?? []).forEach(r => palletIdBySerial.set(r.pallet_serial, r.id))
+      }
+
       const outBags: any[] = []
       const seen = new Set<string>()
       prods.forEach(p => {
@@ -1345,15 +1389,22 @@ function CaptureScreen() {
           const bagW    = n(line.bagWeight) || n(pd.weightPerBag) || null
           for (let i = 0; i < count; i++) {
             const physicalNo = Number.isFinite(startNo) ? startNo + i : i + 1
-            const serial = `${lot}-${String(physicalNo).padStart(3, '0')}`
+            const serial = makeBoxSerial(lot, physicalNo)
             if (seen.has(serial)) continue   // overlapping ranges within a batch — keep first
             seen.add(serial)
+            // Which confirmed pallet holds this box — by bag-number range, not
+            // by position, so a re-split or a corrected start number reassigns
+            // boxes correctly instead of shifting every box one pallet over.
+            const pal = (line.pallets ?? []).find(x => physicalNo >= x.startBagNo && physicalNo <= x.endBagNo)
             outBags.push({
               serial_number: serial, section_id: 'pasteuriser', session_id: sid,
               product_type: line.item || pd.item || 'Rooibos Final Product',
               variant: p.variant || null, weight_kg: bagW, lot_number: lot,
               acumatica_id: line.itemCode || pd.itemCode || null,
               status: 'in_stock', consumed: false,
+              bag_number: physicalNo,
+              pallet_id: pal ? (palletIdBySerial.get(upperCode(pal.serial)) ?? null) : null,
+              tag_method: pal?.boxTagMethod ?? null,
               batch_id: bidFor(lot) ?? sessionBatchId,
             })
           }
@@ -1366,6 +1417,20 @@ function CaptureScreen() {
         .select('serial_number').eq('session_id', sid).eq('section_id', 'pasteuriser').eq('status', 'in_stock')
       const stale = ((existingOut as any[]) ?? []).map(r => r.serial_number as string).filter(s => !seen.has(s))
       if (stale.length) await db.schema('production').from('bag_tags').delete().in('serial_number', stale)
+
+      // Prune pallets the operator re-split away. Mirrors the bag prune above
+      // and is scoped the same way — only still-in_stock pallets from THIS
+      // session, so a pallet already dispatched is never deleted out from under
+      // the logistics record. bag_tags.pallet_id is ON DELETE SET NULL, so the
+      // boxes survive a pallet being dropped; they just become unpalletised.
+      const keptPallets = new Set(palletRows.map(r => r.pallet_serial as string))
+      const { data: existingPallets } = await db.schema('production').from('pallets')
+        .select('pallet_serial').eq('session_id', sid).eq('status', 'in_stock')
+      const stalePallets = ((existingPallets as any[]) ?? [])
+        .map(r => r.pallet_serial as string).filter(s => !keptPallets.has(s))
+      if (stalePallets.length) {
+        await db.schema('production').from('pallets').delete().in('pallet_serial', stalePallets)
+      }
     }
 
     let mbA = 0, mbB = 0, mbC = 0, mbD = 0
