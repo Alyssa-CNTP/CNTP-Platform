@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`
+
+- **Grade no longer mandatory for everything**: Indent Sticks, Blocks, Dust etc. don't necessarily have a grade the way Fine/Coarse Leaf do. Registering an untracked bag now only requires Grade when the picked product is Fine or Coarse Leaf (reuses the same `LEAF` set `OutputPicker` already uses for batch tracking, now exported) — otherwise just Variant + current weight.
+- **New step after registering a bag**: instead of jumping straight into "pick a target," it now shows the bag's identity (serial, variant, grade, weight, batch) and asks what's next — "Remove material" (continues into the existing flow, this bag as source) or "Add material to this bag" (pre-fills it as the target and returns to source selection, so topping it up from something else doesn't require leaving the modal and starting over).
+- **"From existing stock" can now be browsed, not just typed**: it was a blank serial box with no way to see what's actually in stock. Added a variant filter (+ optional product-type text filter) that shows a live preview list of matching in-stock bags — serial, product, weight, date added — tap one to fill the serial field, or still type/scan directly if the serial's already known.
+- **Also closes the gap flagged in the Sieving Tower fix below**: Re-bag's own `batchHints` restriction (yesterday, PR #794) only ever checked this session's own debag rows. Swapped it for the same `debaggedBatches()` helper Sieving now uses, so a new re-bagged output's batch is restricted to this session's debagged lots plus any other session's lots under the exact same variant+grade — no longer a same-session-only carve-out.
+
 ## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
