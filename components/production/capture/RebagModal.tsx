@@ -38,6 +38,7 @@ import { getDb } from '@/lib/supabase/db'
 import { sanitizeSerial, transferBagWeight, createBagFromTransfer, originalBagEvent } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, sectionMeta, VARIANT_OPTIONS, DESTINATION_OPTIONS, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
+import { SECTION_CONFIG } from '@/lib/production/live-types'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { LEAF, debaggedBatches } from '@/lib/production/inventory'
 
@@ -246,6 +247,12 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
   const [amount, setAmount] = useState('')          // existing-target amount
   const [pickedOutput, setPickedOutput] = useState<PickedOutput | null>(null)  // new-target pick
   const [closeTargetBag, setCloseTargetBag] = useState(false)
+  // Only used when the source and (existing) target hold different products —
+  // what the combined bag should actually be recorded as afterward. Defaults
+  // to the source's product (what's physically being poured in) the moment a
+  // mismatch is found for a NEW target serial, but stays editable so the
+  // operator can name the real result instead.
+  const [targetProductType, setTargetProductType] = useState('')
   const [confirmHeavy, setConfirmHeavy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -263,6 +270,10 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
     originalBagEvent(target.serial_number).then(ev => setTargetOriginal(ev ? { weight_kg: ev.weight_kg } : null))
     loadHistory(target.serial_number).then(setTargetHistory)
   }, [target?.serial_number, targetMode])
+  // Prefill the reclassify field to the source's product every time a
+  // DIFFERENT target bag resolves — never overwrite what the operator has
+  // already typed for the current target.
+  useEffect(() => { setTargetProductType(source?.product_type ?? '') }, [target?.serial_number, source?.serial_number])
 
   const sourceKg = source?.weight_kg ?? 0
   const amountKg = targetMode === 'existing' ? (n(amount) || 0) : n(pickedOutput?.weight ?? '')
@@ -281,7 +292,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
     && source.product_type.toLowerCase() !== target.product_type.toLowerCase()
 
   const targetReady = targetMode === 'existing'
-    ? !!target && !targetVoided && !targetConsumed
+    ? !!target && !targetVoided && !targetConsumed && !(productMismatch && !targetProductType.trim())
     : !!pickedOutput
 
   const canSubmit = !!source && !sourceVoided && !sourceConsumed && amountKg > 0
@@ -292,14 +303,16 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
     setSaving(true); setError(null)
     try {
       if (targetMode === 'existing' && target) {
+        const resolvedProductType = productMismatch ? targetProductType.trim() : target.product_type
         await transferBagWeight(
           source.serial_number, sourceKg,
           target.serial_number, target.weight_kg ?? 0,
           amountKg, sectionId, sessionId, operatorId, closeTargetBag,
+          productMismatch ? resolvedProductType : undefined,
         )
         // Both labels are now stale — forced reprint, no choice, for both.
         await printLabelAuto({
-          id: target.serial_number, serial_number: target.serial_number, product_type: target.product_type,
+          id: target.serial_number, serial_number: target.serial_number, product_type: resolvedProductType,
           variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
           weight_kg: existingNewTotal, lot_number: target.lot_number || '', section_id: sectionId,
           section_name: sectionName, created_at: target.created_at, printed: true,
@@ -582,8 +595,24 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                       </div>
                       <div className="text-text-muted">{(target.weight_kg ?? 0).toFixed(1)}kg currently in stock</div>
                       {productMismatch && (
-                        <p className="text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Different product to the source — this will reclassify the material.</p>
+                        <p className="text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Different product to the source — pick what the combined bag actually is below.</p>
                       )}
+                    </div>
+                  )}
+                  {productMismatch && (
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Resulting product type <span className="text-err">*</span></label>
+                      <input list="rebag-product-types" value={targetProductType}
+                        onChange={e => setTargetProductType(e.target.value)}
+                        placeholder="Type or pick a product…"
+                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${targetProductType.trim() ? 'border-stone-200' : 'border-amber-300'}`} />
+                      <datalist id="rebag-product-types">
+                        {Array.from(new Set([
+                          source?.product_type, target?.product_type,
+                          ...(SECTION_CONFIG[sectionId]?.outputTypes ?? []),
+                        ].filter(Boolean) as string[])).map(t => <option key={t} value={t} />)}
+                      </datalist>
+                      {!targetProductType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
                     </div>
                   )}
                   {target && !targetVoided && !targetConsumed && (
@@ -620,6 +649,7 @@ export function RebagModal({ sectionId, sessionId, operatorId, variantWord, grad
                 <Row label="Amount moving" value={`${amountKg.toFixed(1)} kg`} />
                 <Row label="Source remaining" value={`${sourceRemaining.toFixed(1)} kg${sourceRemaining <= 0 ? ' (voided)' : ''}`} />
                 <Row label="Target new total" value={`${newTotal.toFixed(1)} kg`} />
+                {productMismatch && <Row label="Target reclassified to" value={targetProductType.trim() || '—'} />}
                 {targetMode === 'new' && pickedOutput?.batch && <Row label="Batch" value={pickedOutput.batch} />}
                 {targetMode === 'existing' && target?.lot_number && <Row label="Target batch (fixed at creation)" value={target.lot_number} />}
               </div>
