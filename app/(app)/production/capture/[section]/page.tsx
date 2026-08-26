@@ -1370,7 +1370,18 @@ function CaptureScreen() {
     const prevDebagIds = ((prevDebagRows as any[]) ?? []).map((r: any) => r.id as string)
 
     if (debag.length) {
-      const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      let insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      if (insDebag.error && /PGRST204|schema cache/i.test(`${insDebag.error.code} ${insDebag.error.message}`)) {
+        // PostgREST schema cache is stale after the local_or_export→grade rename
+        // and/or bagging_time addition. Strip those columns and retry so the
+        // rest of the row still lands; the data lives in draft_data until the
+        // cache catches up.
+        const fallback = (debag as any[]).map(r => {
+          const { grade, bagging_time, ...rest } = r
+          return rest
+        })
+        insDebag = await db.schema('production').from('prod_debagging').insert(fallback as any)
+      }
       if (insDebag.error) {
         rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
       } else if (prevDebagIds.length) {
