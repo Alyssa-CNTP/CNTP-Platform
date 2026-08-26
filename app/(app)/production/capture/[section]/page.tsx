@@ -52,7 +52,8 @@ import { LineChat } from '@/components/production/capture/LineChat'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
-import { productionShiftNow } from '@/lib/production/shifts'
+import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
+import { ShiftBagLog } from '@/components/production/capture/ShiftBagLog'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
 // Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
@@ -238,6 +239,13 @@ function CaptureScreen() {
   // earlier record captured — invisible unless the operator happened to link
   // both to the same production run (an optional, easy-to-skip banner).
   const [siblingProductions, setSiblingProductions] = useState<Production[]>([])
+  // The same sibling rows WITHOUT the variant/grade match filter — every other
+  // batch record this shift opened on this line, whatever it was running. Only
+  // the "Bags this shift" reference list uses these: it answers "what has this
+  // shift put in and taken out", which a record on a different grade is still
+  // part of, while a mass balance is only ever allowed to combine records
+  // running the same thing (hence the filtered set above).
+  const [shiftOtherProductions, setShiftOtherProductions] = useState<Production[]>([])
   const [blenderRatios, setBlenderRatios] = useState<BlenderRatioGroup[]>([])
   const bomGroupsCacheRef = useRef<Map<string, BlendIngredientGroup[]>>(new Map())
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
@@ -295,6 +303,17 @@ function CaptureScreen() {
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
 
+  // Sieving: once any bulk bag has been locked ("Done — lock this bag") under
+  // this batch's variant/grade, that choice is what's on record for it — the
+  // Variant/Grade selects must stop being live-editable, or a change here
+  // after the fact silently relabels an already-locked bag at save time
+  // (buildDebag reads prod.variant fresh, not a per-row snapshot). Changing
+  // variant/grade mid-shift is still possible, just only through Changeover,
+  // which opens a new batch record instead of mutating this one.
+  const sievingHasSecuredDebag = sectionId === 'sieving'
+    && Array.isArray((active?.data as any)?.debag)
+    && ((active.data as any).debag as Array<{ secured?: boolean }>).some(r => r.secured)
+
   // ── Load assignment + operators + existing session ───────────────────────
   useEffect(() => {
     async function load() {
@@ -346,11 +365,9 @@ function CaptureScreen() {
       const activeMatchKeys = new Set(
         (((sess as any)?.draft_data?.productions ?? []) as Production[]).map(p => productionMatchKey(p, sectionId))
       )
-      setSiblingProductions(
-        siblingRows
-          .flatMap(r => (r.draft_data?.productions ?? []) as Production[])
-          .filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId)))
-      )
+      const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
+      setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
+      setShiftOtherProductions(siblingProds)
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).
@@ -1722,6 +1739,22 @@ function CaptureScreen() {
     const yieldPct = A > 0 ? (G / A) * 100 : 0
     balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
   }
+  // A batch record this shift running a genuinely different variant/grade is
+  // deliberately kept out of the combined balance above (two different runs
+  // must never have their balances summed just because they share a shift) —
+  // but a SILENT exclusion reads to the operator as "this shift's whole
+  // story", making an already-bagged batch look like it's still owed. Surface
+  // it instead of hiding it, without changing what actually gets combined.
+  const siblingIds = new Set(siblingProductions.map(p => p.id))
+  const excludedThisShift = shiftOtherProductions.filter(p => !siblingIds.has(p.id) && hasCaptureData([p]))
+  if (excludedThisShift.length > 0) {
+    const ex = sessionTotals(excludedThisShift, shiftBal)
+    const exLabels = Array.from(new Set(excludedThisShift.map(p =>
+      (VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant) || 'unspecified'
+    ))).join(', ')
+    const exNote = `Also on this shift, under a different variant/grade (${exLabels}): ${ex.totalIn.toFixed(0)} kg in, ${ex.totalOut.toFixed(0)} kg out — its own separate balance, not part of the total above.`
+    balanceNote = balanceNote ? `${balanceNote} ${exNote}` : exNote
+  }
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
   // a section/machine tablet resolves the signer from the rostered operators by PIN.
@@ -1730,6 +1763,10 @@ function CaptureScreen() {
     : rosterOps
 
   function updateActiveMeta(key: 'variant' | 'lot' | 'grade', val: string) {
+    // Belt-and-braces: the Variant/Grade selects are already disabled once a
+    // bulk bag is locked (see sievingHasSecuredDebag), but block it here too
+    // in case anything else ever calls updateActiveMeta directly.
+    if ((key === 'variant' || key === 'grade') && sievingHasSecuredDebag) return
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, [key]: val } : p))
     if (key === 'variant') {
       const assigned = assignment?.variant ?? ''
@@ -1781,6 +1818,14 @@ function CaptureScreen() {
   // "No data" session behind (the duplicate-orders bug).
   function startNewProduction() {
     const aL = assignment?.lot_number ?? ''
+    // The record being closed is still part of this shift, so hand it to the
+    // whole-shift bag log before the local state is cleared — otherwise "Bags
+    // this shift" drops to zero the moment a new batch record opens, since the
+    // sibling prod_sessions rows are only re-read on a page load. Deliberately
+    // NOT added to siblingProductions: that set feeds the mass balance, which
+    // may only ever combine records running the same variant/grade.
+    const closing = productionsRef.current.filter(p => hasCaptureData([p]))
+    if (closing.length) setShiftOtherProductions(prev => [...prev, ...closing])
     sessionRef.current = null
     setSessionId(null)
     setStatus('new')
@@ -2130,8 +2175,8 @@ function CaptureScreen() {
                 <div className={`grid gap-2.5 ${gradeless ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Variant</label>
-                    <select value={active.variant} disabled={locked} onChange={e => updateActiveMeta('variant', e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.variant ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                    <select value={active.variant} disabled={locked || sievingHasSecuredDebag} onChange={e => updateActiveMeta('variant', e.target.value)}
+                      className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer disabled:cursor-not-allowed disabled:opacity-70 ${active.variant ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
                       <option value="" disabled>Select variant…</option>
                       {VARIANT_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                     </select>
@@ -2139,14 +2184,17 @@ function CaptureScreen() {
                   {!gradeless && (
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Grade</label>
-                      <select value={active.grade} disabled={locked} onChange={e => updateActiveMeta('grade', e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
+                      <select value={active.grade} disabled={locked || sievingHasSecuredDebag} onChange={e => updateActiveMeta('grade', e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-brand cursor-pointer disabled:cursor-not-allowed disabled:opacity-70 ${active.grade ? 'border-stone-200 text-text' : 'border-amber-300 text-stone-400'}`}>
                         <option value="" disabled>Select grade…</option>
                         {DESTINATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
                     </div>
                   )}
                 </div>
+                {sievingHasSecuredDebag && !locked && (
+                  <p className="text-[11px] text-stone-400">Bulk bags are locked in under this variant/grade — use <strong className="text-stone-500">Changeover</strong> below to switch.</p>
+                )}
 
                 {/* Per-batch breakdown — a changeover (addProduction) keeps the
                     run's mass balance combined, but that combined figure alone
@@ -2198,6 +2246,22 @@ function CaptureScreen() {
                   </div>
                 )}
               </div>
+
+              {/* Whole-shift bag reference — collapsed to a one-line in/out
+                  summary, expandable to every bag. Sits between the batch card
+                  and the capture form because it is context for what you are
+                  about to capture, not an action: the shift's own running list
+                  of what went in and what came out, across every batch record
+                  it opened (the capture form below only ever shows the record
+                  open on screen). Asked for by the afternoon shift. */}
+              <ShiftBagLog
+                sectionId={sectionId}
+                shiftLabel={SHIFT_LABEL[shiftBal]}
+                records={[
+                  ...productions.map((p, i) => ({ ...p, label: multi ? `P${i + 1}` : 'This record', current: true })),
+                  ...shiftOtherProductions.map((p, i) => ({ ...p, label: `Earlier record ${i + 1}`, current: false })),
+                ]}
+              />
 
               {variantMismatch && (
                 <div className="flex items-start gap-2.5 px-4 py-3 bg-warn/8 border border-warn/30 rounded-2xl text-[13px] text-amber-800">
