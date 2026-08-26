@@ -236,7 +236,6 @@ export function SievingCapture({
       if (cancelled || !data) return
       const known = new Set(value.outputs.map(o => o.serial))
       const missing = (data as any[]).filter(t => !known.has(t.serial_number))
-      if (!missing.length) return
       const restored: OutBag[] = missing.map(t => ({
         id: crypto.randomUUID(), serial: t.serial_number, productType: t.product_type,
         code: t.acumatica_id ?? null, weight: String(t.weight_kg ?? ''), batch: t.lot_number ?? '',
@@ -247,7 +246,14 @@ export function SievingCapture({
         tagMethod: t.printed_at ? 'printed' : null, secured: true,
         logged_at: t.printed_at ?? new Date().toISOString(),
       }))
-      patch({ outputs: byLoggedAt([...value.outputs, ...restored]) })
+      // Re-sort even when nothing is missing: a session already fully
+      // restored by an earlier run of this effect still had its rows in
+      // query order, not time order, until this check — the merge above
+      // alone doesn't fire again once outputs already has everything.
+      const merged = byLoggedAt([...value.outputs, ...restored])
+      const changed = merged.length !== value.outputs.length || merged.some((r, i) => r !== value.outputs[i])
+      if (!changed) return
+      patch({ outputs: merged })
     })()
     return () => { cancelled = true }
   }, [sessionId])
@@ -278,14 +284,18 @@ export function SievingCapture({
       const key = (bagNo: string, lot: string, nett: number) => `${bagNo.trim()}|${lot.trim()}|${nett}`
       const known = new Set(value.debag.map(r => key(r.bag_no, r.lot, n(r.nett))))
       const missing = (data as any[]).filter(d => !known.has(key(d.notes ?? '', d.lot_number ?? '', Number(d.kg_nett) || 0)))
-      if (!missing.length) return
       const restored: DebagRow[] = missing.map(d => ({
         id: crypto.randomUUID(), bag_no: d.notes ?? '', lot: d.lot_number ?? '',
         gross: d.kg_gross != null ? String(d.kg_gross) : '', nett: String(d.kg_nett ?? ''),
         delivery_date: d.delivery_date ?? '', local_export: d.local_or_export ?? '',
         secured: true, logged_at: d.created_at ?? new Date().toISOString(),
       }))
-      patch({ debag: byLoggedAt([...value.debag, ...restored]) })
+      // Re-sort even when nothing is missing — same reasoning as the
+      // outputs effect above.
+      const merged = byLoggedAt([...value.debag, ...restored])
+      const changed = merged.length !== value.debag.length || merged.some((r, i) => r !== value.debag[i])
+      if (!changed) return
+      patch({ debag: merged })
     })()
     return () => { cancelled = true }
   }, [sessionId])
