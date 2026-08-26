@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: fold into the correct product-type section everywhere, instead of a separate violet-only block)
+
+**Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `app/(app)/production/orders/[id]/page.tsx`
+
+Reported: a top-up (e.g. adding more to a Sticks bag) wasn't showing up under its own product type anywhere — it just showed as a generic "half bag top up" entry, disconnected from where that product's own rows live. Root cause, confirmed across all three screens: a top-up into a bag first bagged on an EARLIER day (the common case — "half a bag left over from yesterday") has no row of its own in today's own captured output, so there was nowhere for the existing same-day nesting to attach to — it either fell into a separate panel (Production Orders' "Topped up from today's production") or was invisible entirely (Overview).
+
+- New `fetchFreshTopUpsForSection()` in `scan-utils.ts` — resolves a cross-day top-up's target bag's own product/variant/grade/lot from `bag_tags`, so callers can fold it into the RIGHT existing (or newly created) product group instead of leaving it stranded.
+- `CaptureOverview`: cross-day top-ups now render as their own violet-marked row nested under the matching product → lot group (creating the group if today's own session never produced that product) — same-day top-ups are unaffected, still nested under the bag's own row as before.
+- Production Orders (`/production/orders/[id]`): removed the separate "Topped up from today's production" panel entirely — those rows now render inline inside "Bagging — outputs," under the same product-type group as every other bag of that type, marked violet.
+- `HalfBagTopUpActivity` (the live feed on the Capture tab): restructured from one flat chronological list into groups by product type, matching the shape every other bagging table on the page already uses.
+
+**Not promoted to production yet — staging only, pending testing.**
+
 ## 2026-08-26 — Alyssa (Sieving Tower: prod_debagging gets grade + bagging_time, product_type moves off '500kg Farm Bag')
 
 **Files changed:** `supabase/migrations/20260826_002_prod_debagging_grade_and_bagging_time.sql` (new — apply manually, see runbook), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/production/capture-config.ts`, `lib/supabase/database.types.ts`, `scripts/backfill-debag-rows.cjs`
