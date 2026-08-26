@@ -360,13 +360,13 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
     return (
       <div className="space-y-1">
         <div className="flex gap-2">
-          <button type="button" onClick={() => setAmountMode('amount')}
-            className={`flex-1 py-1.5 rounded-lg text-[11.5px] font-medium border ${amountMode === 'amount' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
-            I know the amount to add
-          </button>
           <button type="button" onClick={() => setAmountMode('target')}
             className={`flex-1 py-1.5 rounded-lg text-[11.5px] font-medium border ${amountMode === 'target' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
-            I know the final weight
+            Target weight
+          </button>
+          <button type="button" onClick={() => setAmountMode('amount')}
+            className={`flex-1 py-1.5 rounded-lg text-[11.5px] font-medium border ${amountMode === 'amount' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+            Custom amount
           </button>
         </div>
         {amountMode === 'amount' ? (
