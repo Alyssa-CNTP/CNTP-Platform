@@ -348,6 +348,23 @@ export async function originalBagEvent(
   return (data as any) ?? null
 }
 
+// ── setBagTargetWeight — the "pre-print" step of Half-bag Top-up: an
+// operator declares the final weight a bag should reach once fully topped
+// up, before any material has actually been added. Writes bag_tags.
+// target_weight_kg directly — a pure side-channel update, same as every
+// other top-up write here, never touches a session's draft_data. Passing
+// null clears a previously set target (e.g. once it's been reached and the
+// bag is closed out).
+export async function setBagTargetWeight(
+  serialNumber: string,
+  targetWeightKg: number | null,
+): Promise<void> {
+  if (!serialNumber) return
+  await getDb().schema('production').from('bag_tags')
+    .update({ target_weight_kg: targetWeightKg } as any)
+    .eq('serial_number', serialNumber)
+}
+
 // ── advanceToNextSerial — moves focus to next empty serial input after scan ──
 // Called after useSerialLookup fires. Finds the next input with
 // data-serial="true" that has no value and focuses it.

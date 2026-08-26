@@ -46,6 +46,19 @@ export function buildLabelHtml(bag: OutputBag, opts: { embed?: boolean } = {}): 
   const barWidth = getCode128Width(bag.serial_number, mw)
   const barcodeSvg = encodeCode128(bag.serial_number, { height: Math.round(barWidth * 0.24), moduleWidth: mw })
 
+  // Half-bag Top-up distinctive treatment — a solid black band + a history
+  // strip replacing the plain footer, so morning stock count can read a
+  // day's additions straight off the tag. Thermal printers are monochrome,
+  // so this is black/white throughout (same treatment as the TYPE/GRADE
+  // badge above it) — violet stays a screen-only convention (the button,
+  // Overview's sub-rows, the activity feed), never asked of the printer.
+  const hasTopUps = !!bag.topUps?.length
+  const hasTarget = bag.targetWeightKg != null
+  const remainingToTarget = hasTarget ? Math.max(0, (bag.targetWeightKg as number) - bag.weight_kg) : 0
+  const targetReached = hasTarget && remainingToTarget <= 0
+  const todayFormatted = new Date().toLocaleDateString('en-ZA', { day: '2-digit', month: '2-digit' })
+  const targetLine = targetReached ? '&#10003; reached' : `Need +${remainingToTarget.toFixed(0)} kg`
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -98,6 +111,27 @@ export function buildLabelHtml(bag: OutputBag, opts: { embed?: boolean } = {}): 
   .footer-cell:last-child { text-align: right; }
   .footer-label { font-size: 5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #666; font-weight: 700; }
   .footer-value { font-size: 8pt; font-weight: 800; line-height: 1.2; text-transform: uppercase; }
+
+  .topup-band {
+    background: #000; color: #fff;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9mm 2.5mm; margin: 0.8mm 0;
+    font-size: 6.5pt; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .topup-band .updated { font-family: 'Courier New', monospace; font-weight: 600; letter-spacing: 0; text-transform: none; opacity: 0.85; }
+
+  .history { border-top: 0.6pt solid #000; margin-top: 0.6mm; padding-top: 0.8mm; display: flex; flex-direction: column; gap: 0.5mm; }
+  .history-row1 { display: flex; justify-content: space-between; align-items: baseline; }
+  .history-orig { font-size: 5.6pt; color: #444; font-weight: 600; }
+  .history-orig b { color: #000; font-weight: 800; }
+  .history-now { text-align: right; }
+  .history-now-label { font-size: 4.8pt; text-transform: uppercase; letter-spacing: 0.07em; color: #666; font-weight: 700; }
+  .history-now-value { font-size: 9.5pt; font-weight: 900; }
+  .adds { display: flex; gap: 1.8mm; flex-wrap: nowrap; overflow: hidden; font-family: 'Courier New', monospace; font-size: 5.8pt; font-weight: 700; color: #000; }
+  .adds span { white-space: nowrap; }
+  .target-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 0.3mm; }
+  .target-value { font-size: 6.6pt; font-weight: 800; color: #000; }
+
   .print-btn {
     position: fixed; bottom: 12px; right: 12px;
     background: #1A3A0E; color: #fff; border: none; border-radius: 10px;
@@ -114,11 +148,51 @@ export function buildLabelHtml(bag: OutputBag, opts: { embed?: boolean } = {}): 
     <div class="type-grade-badge">${badgeText}</div>
   </div>
 
+  ${hasTopUps
+    ? `<div class="topup-band"><span>Topped up</span><span class="updated">reprinted ${todayFormatted}</span></div>`
+    : hasTarget
+      ? `<div class="topup-band"><span>Target set</span><span class="updated">${todayFormatted}</span></div>`
+      : ''}
+
   <div class="barcode-area">
     ${barcodeSvg}
     <div class="serial">${bag.serial_number}</div>
   </div>
 
+  ${hasTopUps ? `
+  <div class="history">
+    <div class="history-row1">
+      <div class="history-orig">Bagged ${dateFormatted}${bag.originalWeightKg != null ? ` at <b>${bag.originalWeightKg}&nbsp;kg</b>` : ''}${bag.lot_number ? ` &middot; ${bag.lot_number}` : ''}</div>
+      <div class="history-now">
+        <div class="history-now-label">Now</div>
+        <div class="history-now-value">${bag.weight_kg}&nbsp;kg</div>
+      </div>
+    </div>
+    <div class="adds">
+      ${bag.topUps!.slice(-3).map(t => `<span>+${t.kg} ${new Date(t.at).toLocaleDateString('en-ZA', { day: '2-digit', month: '2-digit' })}</span>`).join('')}
+    </div>
+    ${hasTarget ? `<div class="target-row"><div class="footer-label">Target ${bag.targetWeightKg}&nbsp;kg</div><div class="target-value">${targetLine}</div></div>` : ''}
+  </div>
+  ` : hasTarget ? `
+  <div class="footer-row">
+    <div class="footer-cell">
+      <div class="footer-label">Lot / Batch</div>
+      <div class="footer-value">${bag.lot_number || '—'}</div>
+    </div>
+    <div class="footer-cell">
+      <div class="footer-label">Current</div>
+      <div class="footer-value">${bag.weight_kg} kg</div>
+    </div>
+    <div class="footer-cell">
+      <div class="footer-label">Target</div>
+      <div class="footer-value">${bag.targetWeightKg} kg</div>
+    </div>
+  </div>
+  <div class="target-row">
+    <div class="footer-label">Still needed</div>
+    <div class="target-value">${targetLine}</div>
+  </div>
+  ` : `
   <div class="footer-row">
     <div class="footer-cell">
       <div class="footer-label">Lot / Batch</div>
@@ -133,6 +207,7 @@ export function buildLabelHtml(bag: OutputBag, opts: { embed?: boolean } = {}): 
       <div class="footer-value">${dateFormatted}</div>
     </div>
   </div>
+  `}
 
   ${embed ? '' : '<button class="print-btn no-print" onclick="window.print()">Print Label</button>'}
 </body>

@@ -58,6 +58,13 @@ export interface OutputBag {
   acumaticaId?:    string   // derived inventory code e.g. '10LGEF-C'
   acumaticaDesc?:  string   // human description e.g. 'Sieved Fine Leaf: Export - Conventional'
   phantomId?:      string   // phantom item for production order (sieving only)
+  // Half-bag Top-up label fields — all optional, only set when building a
+  // label for a bag that's been topped up and/or has a target weight set.
+  // When present, buildLabelHtml/buildLabelPplb/buildLabelZpl render the
+  // distinctive top-up band + history strip instead of the plain footer.
+  targetWeightKg?:   number             // final weight this bag should reach once fully topped up (bag_tags.target_weight_kg)
+  originalWeightKg?: number             // weight at first bagging, before any top-ups (from the bag's earliest scan_events row — weight_kg itself is overwritten in place on every top-up)
+  topUps?: { kg: number; at: string }[] // chronological additions since the original bagging, oldest first
 }
 
 export const SECTION_CONFIG: Record<string, {
