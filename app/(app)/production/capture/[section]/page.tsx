@@ -1344,11 +1344,24 @@ function CaptureScreen() {
     }
 
     const rowErrors: string[] = []
-    const delDebag = await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
-    if (delDebag.error) rowErrors.push(`inputs: ${rowErrText(delDebag.error)}`)
+
+    // Insert-then-delete for prod_debagging: write new rows first so a failed
+    // insert never wipes existing data.  prod_debagging has no unique constraint
+    // on (session_id, bag_no), so temporary duplicates are harmless — the old
+    // rows are removed once the insert succeeds.
+    const { data: prevDebagRows } = await db.schema('production').from('prod_debagging')
+      .select('id').eq('session_id', sid)
+    const prevDebagIds = ((prevDebagRows as any[]) ?? []).map((r: any) => r.id as string)
+
     if (debag.length) {
       const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
-      if (insDebag.error) rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
+      if (insDebag.error) {
+        rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
+      } else if (prevDebagIds.length) {
+        await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
+      }
+    } else if (prevDebagIds.length) {
+      await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
     }
 
     // Serialed bags are physical, already-tagged bags (bag_tags has the same
