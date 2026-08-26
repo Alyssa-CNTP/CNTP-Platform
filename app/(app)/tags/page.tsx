@@ -22,6 +22,7 @@ import {
 import { transferBagWeight } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG } from '@/lib/production/capture-config'
+import { SECTION_CONFIG } from '@/lib/production/live-types'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -269,6 +270,12 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
   const [confirmHeavy, setConfirmHeavy] = useState(false)
   const [saving,       setSaving]       = useState(false)
   const [addError,     setAddError]     = useState<string | null>(null)
+  // Only relevant when the source's product differs from this bag's — what
+  // the combined bag should actually be recorded as. Prefilled to the
+  // source's product (see the effect below) but left editable.
+  const [productType,  setProductType]  = useState('')
+  const [productTypeOverride, setProductTypeOverride] = useState<string | null>(null)
+  const displayProductType = productTypeOverride ?? tag.product_type
 
   const sourceFound   = sourceBag && sourceBag !== 'loading' && sourceBag !== 'not_found' ? sourceBag : null
   const sourceKg      = sourceFound?.weight_kg ?? 0
@@ -278,14 +285,18 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
   const exceedsSource = !!sourceFound && amountKg > sourceKg
   const newTotal  = currentWeight + amountKg
   const overCap   = newTotal > MAX_BAG_WEIGHT_KG
-  const unusual   = amountKg > 0 && !overCap && isUnusuallyHeavyBag(tag.product_type, newTotal)
-  const standard  = expectedBagWeightFor(tag.product_type)
-  const productMismatch = !!sourceFound && sourceFound.product_type && tag.product_type
-    && sourceFound.product_type.toLowerCase() !== tag.product_type.toLowerCase()
+  const unusual   = amountKg > 0 && !overCap && isUnusuallyHeavyBag(displayProductType, newTotal)
+  const standard  = expectedBagWeightFor(displayProductType)
+  const productMismatch = !!sourceFound && sourceFound.product_type && displayProductType
+    && sourceFound.product_type.toLowerCase() !== displayProductType.toLowerCase()
   const sourceRemaining = sourceFound ? sourceKg - amountKg : 0
 
   const canSubmit = !!sourceFound && !sourceVoided && !sourceConsumed && amountKg > 0
-    && !exceedsSource && !overCap && !(unusual && !confirmHeavy)
+    && !exceedsSource && !overCap && !(unusual && !confirmHeavy) && !(productMismatch && !productType.trim())
+
+  // Prefill the reclassify field to the source's product every time a
+  // DIFFERENT source bag resolves — never overwrite what's already typed.
+  useEffect(() => { setProductType(sourceFound?.product_type ?? '') }, [sourceFound?.serial_number])
 
   // Look up the source bag as the operator scans/types its serial — same
   // debounced pattern as the page's own quick-scan lookup, but always a
@@ -326,7 +337,7 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
   }
 
   function resetAddWeightForm() {
-    setSourceInput(''); setSourceBag(null); setAmount('')
+    setSourceInput(''); setSourceBag(null); setAmount(''); setProductType('')
     setCloseBag(false); setConfirmHeavy(false); setAddingWeight(false); setAddError(null)
   }
 
@@ -335,13 +346,15 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
     setSaving(true)
     setAddError(null)
     try {
+      const resolvedProductType = productMismatch ? productType.trim() : displayProductType
       await transferBagWeight(
         sourceFound.serial_number, sourceKg,
         tag.serial_number, currentWeight,
         amountKg, tag.section_id, tag.prod_session_id || null, operatorId, closeBag,
+        productMismatch ? resolvedProductType : undefined,
       )
       await printLabelAuto({
-        id: tag.id, serial_number: tag.serial_number, product_type: tag.product_type,
+        id: tag.id, serial_number: tag.serial_number, product_type: resolvedProductType,
         variant: tag.variant || 'Conventional', grade: (tag.destination as any) || 'A',
         weight_kg: newTotal, lot_number: tag.lot_number || '', section_id: tag.section_id,
         section_name: tag.section_name, created_at: tag.captured_at, printed: true,
@@ -360,6 +373,7 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       }
       setWeightOverride(newTotal)
       setOpenOverride(!closeBag)
+      if (productMismatch) setProductTypeOverride(resolvedProductType)
       resetAddWeightForm()
       reloadEvents()
       onChanged()
@@ -517,10 +531,27 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
               )}
               {productMismatch && (
                 <p className="text-[11px] text-amber-600 flex items-center gap-1.5">
-                  <AlertTriangle size={12} /> Source is "{sourceFound!.product_type}", this bag is "{tag.product_type}" — different products.
+                  <AlertTriangle size={12} /> Source is "{sourceFound!.product_type}", this bag is "{displayProductType}" — pick what the combined bag actually is below.
                 </p>
               )}
             </div>
+
+            {productMismatch && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-wide">Resulting product type *</label>
+                <input list="tags-add-weight-product-types" value={productType}
+                  onChange={e => setProductType(e.target.value)}
+                  placeholder="Type or pick a product…"
+                  className={`w-full px-3 py-2 rounded-lg border text-[13px] outline-none focus:border-sky-500 ${productType.trim() ? 'border-stone-200' : 'border-amber-300'}`} />
+                <datalist id="tags-add-weight-product-types">
+                  {Array.from(new Set([
+                    sourceFound?.product_type, tag.product_type,
+                    ...(SECTION_CONFIG[tag.section_id]?.outputTypes ?? []),
+                  ].filter(Boolean) as string[])).map(t => <option key={t} value={t} />)}
+                </datalist>
+                {!productType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
+              </div>
+            )}
 
             {sourceFound && !sourceVoided && !sourceConsumed && (
               <>
@@ -571,7 +602,7 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
                   <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                     <AlertTriangle size={13} className="text-amber-500 shrink-0" />
                     <span className="text-[11px] text-amber-700 flex-1">
-                      {newTotal.toFixed(1)}kg is unusually heavy for {tag.product_type || 'this product'} — sure that's right?
+                      {newTotal.toFixed(1)}kg is unusually heavy for {displayProductType || 'this product'} — sure that's right?
                     </span>
                     <button onClick={() => setConfirmHeavy(true)} disabled={confirmHeavy}
                       className="text-[11px] font-semibold text-amber-800 underline shrink-0 disabled:no-underline disabled:opacity-50">
@@ -612,7 +643,7 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
             <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2.5">Details</p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {([
-                ['Product type',    tag.product_type],
+                ['Product type',    displayProductType],
                 ['Lot / Batch',     tag.lot_number],
                 ['Weight',          currentWeight ? `${currentWeight} kg` : '—'],
                 ['Variant',         tag.variant || '—'],

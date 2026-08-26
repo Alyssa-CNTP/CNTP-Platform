@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle, Printer, PenLine, Shuffle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight } from '@/lib/production/capture-config'
+import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan } from '@/lib/production/validate-scan'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
@@ -537,7 +537,6 @@ export function BlenderCapture({
   // editing/removing an existing one.
   const [bagModal, setBagModal] = useState<{ editing: BlenderInputBag | null } | null>(null)
   const [outputWeight, setOutputWeight] = useState('')
-  const [outputLeaveOpen, setOutputLeaveOpen] = useState(false)
   const [bagError, setBagError] = useState<string | null>(null)
   const [groups, setGroups] = useState<BlendIngredientGroup[]>([])
   // Materials the operator added that aren't part of the blend's declared recipe —
@@ -661,7 +660,7 @@ export function BlenderCapture({
 
   // ── Output bag helpers ─────────────────────────────────────────────────────
 
-  async function addOutputBag(weight: string, leaveOpen = false): Promise<boolean> {
+  async function addOutputBag(weight: string): Promise<boolean> {
     if (n(weight) <= 0 || isImplausibleWeight(n(weight))) return false
     setBagError(null)
     const serial = await genBlendSerial()
@@ -677,7 +676,7 @@ export function BlenderCapture({
       product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantWord || null,
       weight_kg: n(weight), lot_number: lot,
       acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
-      is_open: leaveOpen,
+      is_open: isOpenBagWeight(n(weight)),
     } as any, { onConflict: 'serial_number' })
     if (tagErr) {
       setBagError(`Could not save bag ${serial} to the system — check the connection and try again.`)
@@ -898,9 +897,9 @@ export function BlenderCapture({
                     <div className="space-y-1.5 pt-1">
                       <div className="flex gap-2">
                         <input type="text" inputMode="decimal" pattern="[0-9.,]*" value={outputWeight} onChange={e => setOutputWeight(e.target.value)}
-                          onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } } }}
+                          onKeyDown={async e => { if (e.key === 'Enter') { e.preventDefault(); if (await addOutputBag(outputWeight)) setOutputWeight('') } }}
                           placeholder="Weight (kg)" className={INP + ' flex-1'} />
-                        <button onClick={async () => { if (await addOutputBag(outputWeight, outputLeaveOpen)) { setOutputWeight(''); setOutputLeaveOpen(false) } }} disabled={n(outputWeight) <= 0 || isImplausibleWeight(n(outputWeight))}
+                        <button onClick={async () => { if (await addOutputBag(outputWeight)) setOutputWeight('') }} disabled={n(outputWeight) <= 0 || isImplausibleWeight(n(outputWeight))}
                           className="flex items-center gap-1.5 px-4 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors shrink-0" style={{ background: BAG_COLOR }}>
                           <Plus size={15} /> Add bag
                         </button>
@@ -908,10 +907,14 @@ export function BlenderCapture({
                       {isImplausibleWeight(n(outputWeight)) && (
                         <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
                       )}
-                      <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
-                        <input type="checkbox" checked={outputLeaveOpen} onChange={e => setOutputLeaveOpen(e.target.checked)} className="rounded" />
-                        Leave bag open — not full yet, will top up later (from Tags)
-                      </label>
+                      {n(outputWeight) > 0 && !isImplausibleWeight(n(outputWeight)) && (
+                        <p className="text-[11px] text-stone-500 flex items-center gap-1.5">
+                          <Check size={12} className={isOpenBagWeight(n(outputWeight)) ? 'text-violet-500' : 'text-ok'} />
+                          {isOpenBagWeight(n(outputWeight))
+                            ? <>Under {OPEN_BAG_WEIGHT_THRESHOLD_KG}kg — left open automatically for a later top-up.</>
+                            : <>{OPEN_BAG_WEIGHT_THRESHOLD_KG}kg or more — marked complete.</>}
+                        </p>
+                      )}
                       {bagError && (
                         <p className="text-[11px] text-err flex items-center gap-1.5"><AlertTriangle size={12} /> {bagError}</p>
                       )}

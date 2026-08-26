@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, massBalanceToleranceFor, isImplausibleWeight } from '@/lib/production/capture-config'
+import { variantToShort, massBalanceToleranceFor, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
@@ -425,15 +425,13 @@ function OutputWeightGroup({
   onTag: (bagId: string, method: 'printed' | 'handwritten') => void
 }) {
   const [weight, setWeight] = useState('')
-  const [leaveOpen, setLeaveOpen] = useState(false)
   const groupKg = (group?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
   const col = groupColor(groupIndex)
 
   function handleAdd() {
     if (n(weight) <= 0 || isImplausibleWeight(n(weight))) return
-    onAdd(weight, leaveOpen)
+    onAdd(weight, isOpenBagWeight(n(weight)))
     setWeight('')
-    setLeaveOpen(false)
   }
 
   return (
@@ -509,10 +507,14 @@ function OutputWeightGroup({
             {isImplausibleWeight(n(weight)) && (
               <p className="text-[11px] text-err">That's over 999kg for one bag — check for a typo.</p>
             )}
-            <label className="flex items-center gap-1.5 text-[11px] text-stone-500 pl-0.5">
-              <input type="checkbox" checked={leaveOpen} onChange={e => setLeaveOpen(e.target.checked)} className="rounded" />
-              Leave bag open — not full yet, will top up later (from Tags)
-            </label>
+            {n(weight) > 0 && !isImplausibleWeight(n(weight)) && (
+              <p className="text-[11px] text-stone-500 flex items-center gap-1.5 pl-0.5">
+                <Check size={12} className={isOpenBagWeight(n(weight)) ? 'text-violet-500' : 'text-ok'} />
+                {isOpenBagWeight(n(weight))
+                  ? <>Under {OPEN_BAG_WEIGHT_THRESHOLD_KG}kg — left open automatically for a later top-up.</>
+                  : <>{OPEN_BAG_WEIGHT_THRESHOLD_KG}kg or more — marked complete.</>}
+              </p>
+            )}
           </div>
         )}
 

@@ -34,7 +34,7 @@ import {
   PasteuriserCapture, emptyPasteuriserData, pasteuriserTotals,
   type PasteuriserData,
 } from '@/components/production/capture/PasteuriserCapture'
-import { RebagModal } from '@/components/production/capture/RebagModal'
+import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -277,7 +277,7 @@ function CaptureScreen() {
   const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
   const [changeoverAsk, setChangeoverAsk] = useState(false) // early-submit "is there a changeover?" prompt
   const [gradeChangeover, setGradeChangeover] = useState(false) // Sieving: mid-shift grade/variant changeover confirm
-  const [rebagOpen, setRebagOpen] = useState(false) // Re-bag material: move weight from an existing bag into another (existing or new)
+  const [topUpOpen, setTopUpOpen] = useState(false) // Half-bag top-up: add weight to an existing bag from another existing bag
   const [error, setError]         = useState<string | null>(null)
 
   // Serial counter, seeded from existing tags for this section+date
@@ -1822,20 +1822,20 @@ function CaptureScreen() {
         />
       )}
 
-      {/* Re-bag material — move weight out of an existing bag into another
-          bag (existing or brand new), from this capture page directly
-          instead of the separate Tags page. Source scope stays bag-to-bag
-          only (no untracked bulk/farm lots — there's no local weight
-          record for those); Pasteuriser is excluded, same reason it was
-          excluded from the top-up feature (no per-bag records today). */}
-      {rebagOpen && !locked && (
-        <RebagModal
+      {/* Half-bag top-up — add material to an existing bag (typically a
+          half-filled bag left open from a previous shift) from an existing
+          source bag, from this capture page directly instead of the
+          separate Tags page. Deliberately narrow: both bags must already
+          be tracked — no brand-new bag creation, no registering untracked
+          stock. Those are warehouse-management functions, not built here.
+          Pasteuriser is excluded, same reason as always (no per-bag
+          records today). */}
+      {topUpOpen && !locked && (
+        <HalfBagTopUpModal
           sectionId={sectionId} sessionId={sessionId}
           operatorId={verifiedOp?.user_id ?? user?.id ?? null}
-          variantWord={active?.variant || ''} gradeLetter={active?.grade || 'A'}
-          genSerial={genSerial}
-          onDone={() => setRebagOpen(false)}
-          onClose={() => setRebagOpen(false)}
+          onDone={() => setTopUpOpen(false)}
+          onClose={() => setTopUpOpen(false)}
         />
       )}
 
@@ -2284,9 +2284,9 @@ function CaptureScreen() {
                       />
                   }
                   {!locked && !isPasteuriser(sectionId) && (
-                    <button onClick={() => setRebagOpen(true)}
+                    <button onClick={() => setTopUpOpen(true)}
                       className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 text-white font-medium text-[14px] hover:bg-violet-700 transition-colors">
-                      <Scale size={16} /> Re-bag material
+                      <Scale size={16} /> Half-bag top-up
                     </button>
                   )}
                   {!locked && (
