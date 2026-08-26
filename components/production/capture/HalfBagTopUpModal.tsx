@@ -157,21 +157,11 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   const [targetHistory, setTargetHistory] = useState<HistoryRow[]>([])
   const [targetTopUps, setTargetTopUps] = useState<TopUpEvent[]>([])
 
-  // The bag's declared target weight — separate from targetInput's own
-  // useBagLookup result so the "pre-print" panel below can update it
-  // instantly on save without waiting for a fresh debounced lookup.
+  // A previously declared target weight for this bag (bag_tags.
+  // target_weight_kg), shown as read-only context on the target step —
+  // informational only, distinct from the amount-entry mode below.
   const [targetWeightKg, setTargetWeightKgState] = useState<number | null>(null)
   useEffect(() => { setTargetWeightKgState(target?.target_weight_kg ?? null) }, [target?.serial_number, target?.target_weight_kg])
-
-  // "Pre-print" — a standalone action, separate from actually adding
-  // weight: declares the final weight this bag should reach and prints a
-  // tag showing it, so whoever fills the bag later knows how much more to
-  // add. Does not advance the step or touch the top-up amount below.
-  const [targetWeightDraft, setTargetWeightDraft] = useState('')
-  useEffect(() => { setTargetWeightDraft(target?.target_weight_kg != null ? String(target.target_weight_kg) : '') }, [target?.serial_number])
-  const [preprintSaving, setPreprintSaving] = useState(false)
-  const [preprintError, setPreprintError] = useState<string | null>(null)
-  const [preprintDone, setPreprintDone] = useState(false)
 
   const [targetBrowseVariant, setTargetBrowseVariant] = useState('')
   const [targetBrowseProductType, setTargetBrowseProductType] = useState('')
@@ -218,6 +208,18 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   const sourceBrowse = useBagBrowse(sourceBrowseVariant, sourceBrowseProductType, false)
 
   const [amount, setAmount] = useState('')
+  // The operator can name the amount directly, or name the FINAL weight
+  // they want the bag to reach — e.g. "it's at 67kg, I want it at 300kg" —
+  // and let the system do the subtraction. Either way this drives the same
+  // amountKg that actually gets added and logged below; there's no
+  // separate "declare now, fill later" step, the calculated amount is
+  // added immediately in this same submit.
+  const [amountMode, setAmountMode] = useState<'amount' | 'target'>('amount')
+  const [targetFinalInput, setTargetFinalInput] = useState('')
+  useEffect(() => {
+    setAmountMode('amount')
+    setTargetFinalInput(target?.target_weight_kg != null ? String(target.target_weight_kg) : '')
+  }, [target?.serial_number])
   const [closeTargetBag, setCloseTargetBag] = useState(false)
   // Only used when the source and target hold different products — what the
   // combined bag should actually be recorded as afterward. Defaults to the
@@ -247,7 +249,16 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   // in 'production' mode there's no source cap, no cross-product concept
   // (you're filling the target with more of what it already holds).
   const sourceKg = sourceMode === 'existing' ? (source?.weight_kg ?? 0) : 0
-  const amountKg = n(amount) || 0
+  const targetFinalKg = n(targetFinalInput) || 0
+  const amountKg = amountMode === 'target'
+    ? (target ? Math.max(0, targetFinalKg - (target.weight_kg ?? 0)) : 0)
+    : (n(amount) || 0)
+  // Once this submits, newTotal will equal targetFinalKg exactly — so the
+  // declared target (for the label's "reached" display) is whichever of
+  // the two is actually in play: the one just typed in target mode, or a
+  // pre-existing one carried over from an earlier top-up on this bag.
+  const effectiveTargetWeightKg = amountMode === 'target' && targetFinalKg > 0
+    ? targetFinalKg : (targetWeightKg ?? undefined)
   const exceedsSource = sourceMode === 'existing' && amountKg > sourceKg
   const sourceRemaining = sourceMode === 'existing' && source ? sourceKg - amountKg : 0
   const newTotal = target ? (target.weight_kg ?? 0) + amountKg : 0
@@ -257,53 +268,6 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
 
   const productMismatch = sourceMode === 'existing' && !!source && !!target
     && source.product_type.toLowerCase() !== target.product_type.toLowerCase()
-
-  // ── Pre-print target-weight panel — a standalone action available as
-  // soon as a target bag is picked, independent of amountKg/sourceMode
-  // below. Only ever raises the target above what's currently in the bag.
-  const targetWeightDraftKg = n(targetWeightDraft) || 0
-  const targetWeightValid = !!target && targetWeightDraftKg > (target.weight_kg ?? 0) && targetWeightDraftKg <= MAX_BAG_WEIGHT_KG
-  const targetStillNeeded = target ? Math.max(0, targetWeightDraftKg - (target.weight_kg ?? 0)) : 0
-
-  async function savePreprintTarget() {
-    if (!target || !targetWeightValid) return
-    setPreprintSaving(true); setPreprintError(null); setPreprintDone(false)
-    try {
-      await setBagTargetWeight(target.serial_number, targetWeightDraftKg)
-      setTargetWeightKgState(targetWeightDraftKg)
-      const preprintBag: any = {
-        id: target.serial_number, serial_number: target.serial_number, product_type: target.product_type,
-        variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
-        weight_kg: target.weight_kg ?? 0, lot_number: target.lot_number || '', section_id: sectionId,
-        section_name: sectionName, created_at: target.created_at, printed: true,
-        acumaticaId: target.acumatica_id ?? undefined,
-        targetWeightKg: targetWeightDraftKg,
-        originalWeightKg: targetOriginal?.weight_kg,
-        topUps: targetTopUps.map(t => ({ kg: t.kg, at: t.at })),
-      }
-      await printLabelAuto(preprintBag)
-      setPreprintDone(true)
-    } catch {
-      setPreprintError('Could not save the target weight — check the connection and try again.')
-    } finally {
-      setPreprintSaving(false)
-    }
-  }
-
-  async function clearPreprintTarget() {
-    if (!target) return
-    setPreprintSaving(true); setPreprintError(null)
-    try {
-      await setBagTargetWeight(target.serial_number, null)
-      setTargetWeightKgState(null)
-      setTargetWeightDraft('')
-      setPreprintDone(false)
-    } catch {
-      setPreprintError('Could not clear the target weight — check the connection and try again.')
-    } finally {
-      setPreprintSaving(false)
-    }
-  }
 
   const canSubmit = sourceMode === 'production'
     ? (!!target && !targetVoided && !targetConsumed && amountKg > 0 && !overCap && !(unusual && !confirmHeavy)
@@ -329,7 +293,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
     weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
     section_name: sectionName, created_at: target.created_at, printed: true,
     acumaticaId: target.acumatica_id ?? undefined,
-    targetWeightKg: targetWeightKg ?? undefined,
+    targetWeightKg: effectiveTargetWeightKg,
     originalWeightKg: targetOriginal?.weight_kg,
     topUps: targetTopUpsForLabel,
   } as any : null
@@ -354,6 +318,12 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
           amountKg, sectionId, sessionId, operatorId, closeTargetBag,
           targetNeedsBatch ? batchNote : undefined,
         )
+        // Record the declared target alongside the addition that reaches
+        // it — not a separate step, just what makes this top-up "reach
+        // 300kg" rather than a bare "+233kg" on the record and the label.
+        if (amountMode === 'target' && targetFinalKg > 0) {
+          await setBagTargetWeight(target.serial_number, targetFinalKg)
+        }
         // The label is now stale — forced reprint.
         await printLabelAuto(targetLabelBag)
       } else {
@@ -364,6 +334,9 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
           amountKg, sectionId, sessionId, operatorId, closeTargetBag,
           productMismatch ? resolvedProductType : undefined,
         )
+        if (amountMode === 'target' && targetFinalKg > 0) {
+          await setBagTargetWeight(target.serial_number, targetFinalKg)
+        }
         // Both labels are now stale — forced reprint, no choice, for both.
         await printLabelAuto(targetLabelBag)
         if (sourceLabelBag) await printLabelAuto(sourceLabelBag)
@@ -374,6 +347,49 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
     } finally {
       setSaving(false)
     }
+  }
+
+  // Shared by both source branches: the operator either names the amount
+  // to add directly, or names the FINAL weight they want the bag to reach
+  // and lets the system work out the amount — e.g. "it's at 67kg, I want
+  // it at 300kg" instead of doing the subtraction themselves. Either way
+  // amountKg (computed above) is what actually gets added and logged on
+  // submit — target mode isn't a separate declare-only step.
+  function renderAmountInput() {
+    if (!target) return null
+    return (
+      <div className="space-y-1">
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setAmountMode('amount')}
+            className={`flex-1 py-1.5 rounded-lg text-[11.5px] font-medium border ${amountMode === 'amount' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+            I know the amount to add
+          </button>
+          <button type="button" onClick={() => setAmountMode('target')}
+            className={`flex-1 py-1.5 rounded-lg text-[11.5px] font-medium border ${amountMode === 'target' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+            I know the final weight
+          </button>
+        </div>
+        {amountMode === 'amount' ? (
+          <>
+            <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to add (kg)</label>
+            <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
+          </>
+        ) : (
+          <>
+            <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Final weight this bag should reach (kg)</label>
+            <input autoFocus type="text" inputMode="decimal" value={targetFinalInput} onChange={e => setTargetFinalInput(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
+            {targetFinalKg > 0 && targetFinalKg <= (target.weight_kg ?? 0) && (
+              <p className="text-[11px] text-err">That's not more than what's already in the bag ({(target.weight_kg ?? 0).toFixed(1)}kg) — enter a higher final weight.</p>
+            )}
+            {targetFinalKg > (target.weight_kg ?? 0) && (
+              <p className="text-[11px] text-stone-500">Currently <span className="font-mono text-text">{(target.weight_kg ?? 0).toFixed(1)}kg</span> — need to add <span className="font-mono text-text">{amountKg.toFixed(1)}kg</span> to reach {targetFinalKg.toFixed(1)}kg.</p>
+            )}
+          </>
+        )}
+      </div>
+    )
   }
 
   function renderBrowseAndLookup(opts: {
@@ -465,35 +481,6 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                 </div>
               )}
 
-              {target && !targetVoided && !targetConsumed && (
-                <div className="rounded-xl border border-dashed border-stone-300 px-3 py-2.5 space-y-2">
-                  <p className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest flex items-center gap-1.5"><Target size={12} /> Pre-print a target-weight tag (optional)</p>
-                  <p className="text-[11px] text-text-muted">Not a top-up — this only prints a tag showing the final weight this bag should reach, so whoever fills it later knows how much more to add. Do this now, or skip straight to adding weight below.</p>
-                  <div className="flex items-center gap-2">
-                    <input type="text" inputMode="decimal" value={targetWeightDraft}
-                      onChange={e => { setTargetWeightDraft(e.target.value); setPreprintDone(false) }}
-                      placeholder="Target weight (kg)"
-                      className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
-                    {targetWeightKg != null && (
-                      <button onClick={clearPreprintTarget} disabled={preprintSaving} className="text-[11px] text-text-muted underline shrink-0 disabled:opacity-40">Clear</button>
-                    )}
-                  </div>
-                  {targetWeightDraft && !targetWeightValid && (
-                    <p className="text-[11px] text-err">Must be more than the current {(target.weight_kg ?? 0).toFixed(1)}kg{targetWeightDraftKg > MAX_BAG_WEIGHT_KG ? ` and under ${MAX_BAG_WEIGHT_KG}kg` : ''}.</p>
-                  )}
-                  {targetWeightValid && (
-                    <p className="text-[11px] text-stone-500">Needs <span className="font-mono text-text">+{targetStillNeeded.toFixed(1)}kg</span> more to reach {targetWeightDraftKg.toFixed(1)}kg.</p>
-                  )}
-                  {preprintError && <p className="text-[11px] text-err">{preprintError}</p>}
-                  {preprintDone && <p className="text-[11px] text-emerald-700">Target saved — tag printed.</p>}
-                  <button onClick={savePreprintTarget} disabled={!targetWeightValid || preprintSaving}
-                    className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-violet-600 text-violet-700 text-[13px] font-medium disabled:opacity-40">
-                    {preprintSaving ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-                    {preprintSaving ? 'Saving…' : 'Save target & print tag'}
-                  </button>
-                </div>
-              )}
-
               <button onClick={() => setStep('source')} disabled={!target || targetVoided || targetConsumed}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                 Next <ArrowRight size={15} />
@@ -551,11 +538,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                       )}
                     </div>
                   )}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to add (kg)</label>
-                    <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
-                  </div>
+                  {renderAmountInput()}
                   <p className="text-[11px] text-stone-400">Will show as today's output on the {date} · {shift} Production Order.</p>
                 </>
               ) : (
@@ -602,12 +585,8 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                           {!targetProductType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
                         </div>
                       )}
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to add (kg)</label>
-                        <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
-                          className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
-                        {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
-                      </div>
+                      {renderAmountInput()}
+                      {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
                     </>
                   )}
                 </>
@@ -642,10 +621,10 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                 {sourceMode === 'existing' && productMismatch && <Row label="Target reclassified to" value={targetProductType.trim() || '—'} />}
                 {target.lot_number && <Row label="Target batch (fixed at creation)" value={target.lot_number} />}
                 {sourceMode === 'production' && <Row label="Production day" value={`${date} · ${shift}`} />}
-                {targetWeightKg != null && (
-                  <Row label="Target weight" value={newTotal >= targetWeightKg
-                    ? `${targetWeightKg.toFixed(1)} kg (reached)`
-                    : `${targetWeightKg.toFixed(1)} kg · need +${(targetWeightKg - newTotal).toFixed(1)}kg more`} />
+                {effectiveTargetWeightKg != null && (
+                  <Row label="Target weight" value={newTotal >= effectiveTargetWeightKg
+                    ? `${effectiveTargetWeightKg.toFixed(1)} kg (reached)`
+                    : `${effectiveTargetWeightKg.toFixed(1)} kg · need +${(effectiveTargetWeightKg - newTotal).toFixed(1)}kg more`} />
                 )}
               </div>
 
