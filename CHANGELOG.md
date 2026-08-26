@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Production capture: serialize saves so overlapping writes stop racing each other)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported live: bags re-typed into a Sieving Tower session after being found missing stayed missing even after being re-added, and the capture screen showed `duplicate key value violates unique constraint "prod_bagging_session_serial_uniq"` plus repeated `TypeError: Failed to fetch` on the inputs write.
+
+Root cause: `flushSave()`/`persist()` (which deletes and reinserts every `prod_debagging`/`prod_bagging` row for the session on each save) is triggered from three independent, uncoordinated places — the 2.5s post-edit debounce, the immediate hide/backstop flush on tab-hide or pagehide, and a 20s backstop interval — with nothing to stop two of them firing close together and overlapping in flight. Two concurrent delete-then-insert sequences racing each other is exactly how a `(session_id, bag_serial_no)` duplicate-key violation happens (one call's insert lands on a row the other's insert only just wrote), and the resulting pile-up of concurrent requests plausibly explains the repeated `Failed to fetch` on the inputs write too.
+
+- Added `persistChainRef`, a promise chain all `flushSave()` calls now go through — a call always waits for whatever save is already in flight to finish before running its own, using the freshest `productionsRef.current` at that later moment (never a stale snapshot from when it was queued). Persist calls can no longer overlap.
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: "final weight" is now a way to enter the amount, not a separate declare-only step)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`

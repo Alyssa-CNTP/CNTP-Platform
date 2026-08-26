@@ -299,6 +299,16 @@ function CaptureScreen() {
   const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
+  // Serializes every persist() call (debounce, hide-flush, backstop can all fire
+  // within moments of each other). Without this, two overlapping calls each run
+  // their own delete-then-insert against prod_debagging/prod_bagging, and the
+  // second one's insert can land on a row the first one's insert only just wrote
+  // — a duplicate-key failure on prod_bagging_session_serial_uniq observed live,
+  // plus repeated "Failed to fetch" from the resulting pile-up of concurrent
+  // writes. Chaining onto this ref means a queued call always waits for the
+  // previous one to finish, then runs with productionsRef.current read fresh at
+  // that later moment — never a stale snapshot from when it was queued.
+  const persistChainRef = useRef<Promise<void>>(Promise.resolve())
 
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
@@ -590,7 +600,14 @@ function CaptureScreen() {
       if (!hasCaptureData(productionsRef.current)) return
       if (ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
     }
-    if (sid && persistRef.current) { try { await persistRef.current(productionsRef.current, sid) } catch {} }
+    if (sid && persistRef.current) {
+      const sidFinal = sid
+      const run = persistChainRef.current
+        .catch(() => {})
+        .then(() => persistRef.current!(productionsRef.current, sidFinal))
+      persistChainRef.current = run.catch(() => {})
+      try { await run } catch {}
+    }
   }
   const flushRef = useRef(flushSave); flushRef.current = flushSave
 
