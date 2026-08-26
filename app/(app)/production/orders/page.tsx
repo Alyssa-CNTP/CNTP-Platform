@@ -758,8 +758,8 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
 
   return (
     <div className={archived ? 'opacity-60' : ''}>
-      <div className="flex items-center gap-3 px-5 py-3">
-        <Link href={href} className="flex items-center gap-3 flex-1 min-w-0">
+      <div className="flex items-center gap-3 px-5 py-3 flex-wrap">
+        <Link href={href} className="flex items-center gap-3 w-full sm:w-auto sm:flex-1 min-w-0">
           <SectionChip code={meta.code} colorHex={meta.colorHex} size={30} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">

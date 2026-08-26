@@ -1896,16 +1896,21 @@ function CaptureScreen() {
       {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
           and stays available after checks are signed (page-level, not in the
           Checks tab). Only sections with an hourly VSD check surface it.
-          Suppressed on the Overview tab — that's a "just reading" view (often
-          reached from a supervisor's production-order review), and a modal
-          popping up over someone reading the AI summary rather than actually
-          operating the line reads as a bug, not a reminder. */}
-      {tab !== 'overview' && !cleanerActor && (
+          Suppressed (not unmounted) on the Overview tab — that's a "just
+          reading" view (often reached from a supervisor's production-order
+          review), and a modal popping up over someone reading the AI summary
+          rather than actually operating the line reads as a bug, not a
+          reminder. Kept mounted across tab switches via `visible` rather than
+          conditionally rendered — unmounting reset its "last reading"
+          fetch and hour timer on every switch, so it kept popping up
+          immediately regardless of when a reading was last logged. */}
+      {!cleanerActor && (
         <HourlyVsdPrompt
           sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId}
           running={totalIn > 0}
           active={status !== 'submitted' && status !== 'approved'}
           operator={verifiedOp ? { id: verifiedOp.id, name: verifiedOp.display_name || verifiedOp.name } : null}
+          visible={tab !== 'overview'}
         />
       )}
 
