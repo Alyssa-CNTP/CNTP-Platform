@@ -426,3 +426,66 @@ export function useGlobalScanner(onScan: (serial: string) => void, enabled = tru
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [enabled, onScan])
 }
+
+// ── Half-bag Top-up event lookup — shared by HalfBagTopUpActivity (this
+// session's own feed) and CaptureOverview (folded into each bag's own row).
+// A qualifying event is either a distinct 'topped_up' row (the "from another
+// bag" path — never ambiguous with anything else) or a 'bagging_out' row
+// whose notes carry the HALF_BAG_TOPUP marker (the "from today's
+// production" path — see addFreshWeightToBag). Anything else is an ordinary
+// bag's own first-ever row, not a top-up.
+export interface TopUpEvent {
+  serial: string
+  kg: number
+  mode: 'production' | 'existing'
+  sourceOrBatch: string | null   // source bag's serial (existing mode) or the batch noted (production mode)
+  at: string
+}
+
+function parseTopUpRow(r: any): TopUpEvent | null {
+  const qualifies = r.action === 'topped_up' || (r.action === 'bagging_out' && String(r.notes ?? '').startsWith('HALF_BAG_TOPUP'))
+  if (!qualifies) return null
+  const m = /^HALF_BAG_TOPUP:\s*(.+)$/.exec(String(r.notes ?? '').trim())
+  return {
+    serial: r.serial_number, kg: Number(r.weight_kg) || 0,
+    mode: r.action === 'topped_up' ? 'existing' : 'production',
+    sourceOrBatch: r.action === 'topped_up' ? r.related_serial_number : (m ? m[1] : null),
+    at: r.scanned_at,
+  }
+}
+
+function groupTopUpEvents(rows: any[]): Map<string, TopUpEvent[]> {
+  const map = new Map<string, TopUpEvent[]>()
+  for (const r of rows) {
+    const ev = parseTopUpRow(r)
+    if (!ev) continue
+    const list = map.get(ev.serial) ?? []
+    list.push(ev)
+    map.set(ev.serial, list)
+  }
+  return map
+}
+
+// Every top-up logged for this specific section+session — for a live "what
+// just happened in front of me" feed.
+export async function fetchTopUpEventsForSession(sectionId: string, sessionId: string): Promise<Map<string, TopUpEvent[]>> {
+  const { data } = await getDb().schema('production').from('scan_events')
+    .select('serial_number, action, related_serial_number, weight_kg, notes, scanned_at')
+    .eq('section_id', sectionId).eq('session_id', sessionId)
+    .in('action', ['topped_up', 'bagging_out']).order('scanned_at', { ascending: true })
+  return groupTopUpEvents((data as any[]) ?? [])
+}
+
+// Every top-up logged for a known set of bag serials, regardless of which
+// session logged it — for folding history into bags already being shown
+// elsewhere (e.g. Overview's own product/lot grouping), where the top-up
+// could have happened in a different session than the one that created
+// the bag.
+export async function fetchTopUpEventsForSerials(serials: string[]): Promise<Map<string, TopUpEvent[]>> {
+  if (!serials.length) return new Map()
+  const { data } = await getDb().schema('production').from('scan_events')
+    .select('serial_number, action, related_serial_number, weight_kg, notes, scanned_at')
+    .in('serial_number', serials).in('action', ['topped_up', 'bagging_out'])
+    .order('scanned_at', { ascending: true })
+  return groupTopUpEvents((data as any[]) ?? [])
+}

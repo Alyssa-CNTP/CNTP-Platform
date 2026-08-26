@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: fold top-up history into Overview's own bag rows, add the bag_tags.target_weight_kg column)
+
+**Files changed:** `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260826_001_bag_target_weight.sql`
+
+Requested: Overview should show a top-up as part of the bag it happened to, in that bag's own place in the existing product/lot grouping — not as a separate bolted-on panel.
+
+- Extracted the "is this scan_events row a top-up, and what does it mean" logic (previously only inside `HalfBagTopUpActivity`) into shared `fetchTopUpEventsForSession()`/`fetchTopUpEventsForSerials()` in `scan-utils.ts` — the session-scoped version for the capture page's own live feed, the serial-scoped version for folding into bags Overview already knows about regardless of which session logged the top-up.
+- `CaptureOverview` now fetches top-up events for every bag serial in its own product/lot grouping and renders each one as a violet sub-row directly under that bag — same visual language as the rest of Half-bag Top-up, folded into the existing hierarchy instead of a separate list.
+- Removed the standalone `HalfBagTopUpActivity` panel from the Overview tab (kept as-is on the live capture tab, under the section's own capture UI, where a separate "what just happened" feed still makes sense).
+- New `bag_tags.target_weight_kg` column (nullable, `CHECK > 0` when set) — groundwork for the upcoming "pre-print a target weight" step in Half-bag Top-up; not wired into any UI yet, so this migration is a safe, inert addition on its own.
+
+**Not promoted to production yet — staging only, pending testing.**
+
 ## 2026-08-26 — Alyssa (Sieving Tower capture: the resort has to run even when nothing is missing)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
