@@ -36,6 +36,12 @@ Reported confusion: after picking the bag to top up and tapping Next, the operat
 - **Production Orders fix**: a "from today's production" top-up updates a bag whose own `bag_tags.session_id` is whatever day it was *first* bagged, not today — invisible to the existing bag_tags-snapshot sum. `loadOrderDay()` now also sums today's own `bagging_out` scan_events rows for serials not already in today's bag snapshot, folding that kg into `bagsOutputKg` (both per-shift and whole-day), and lists them in a new "Topped up from today's production" panel (`OrderFreshTopUpRow`) so it's visible which older bag received it and from which batch — unlike the existing "Re-bagged in" panel, this kg *is* included in the totals, since it's genuinely new.
 - The confirm screen shows which Production Order (date · shift) this will be counted under, so the operator can see it's right before saving.
 
+## 2026-08-26 — Alyssa (COA generator: enlarge the signature blocks) [promoted to production]
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+Requested: the Lab Manager / Quality Manager signatures on the COA (preview, print, and exported PDF) were too small. Increased the base signature size by 40% — on-screen draggable signature `baseH` 40px → 56px (with the signature-block column `maxWidth` 260px → 280px, and the empty-slot placeholder height matched at 56px), and the PDF export's base height 30pt → 42pt (with its image-width cap 150pt → 170pt) to keep the on-screen preview and the exported PDF visually consistent, since the export code converts the on-screen px adjustment to PDF pt via a fixed ratio (`k = 0.75`, i.e. 56px ≈ 42pt). The existing drag-to-reposition / corner-handle resize behaviour is unchanged.
+
 ## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
