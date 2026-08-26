@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Production Orders: fix hourly VSD prompt retriggering + mobile overflow on order rows/panel headers) [promoted to production]
+
+**Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx`
+
+Reported: on a phone, the hourly VSD (infeed speed) reading prompt on Sieving's capture screen "just opens when the capture screen is open" and never waits the full hour before popping up again for a new reading. Root cause: the capture page only rendered `<HourlyVsdPrompt>` while on the Checks/Overview-adjacent tabs (`{tab !== 'overview' && <HourlyVsdPrompt .../>}`), so it unmounted and remounted every time the operator switched tabs — wiping its "last reading" state back to `null` each time. A freshly-mounted component with `lastVsd === null` is, by design, immediately "due" (no baseline reading yet), so the modal popped up again right away regardless of how recently a reading had actually been logged.
+
+- `HourlyVsdPrompt` now takes a `visible` prop instead of being conditionally mounted — it stays mounted across tab switches (state, and the hour timer, now survive), and is just hidden while `visible` is false (e.g. the Overview tab).
+- Added a `loaded` flag so "due" isn't judged until the last-reading DB read has actually resolved — previously the very first render (before that fetch returned) always evaluated `lastVsd === null` → due, causing a visible flash-open on slower mobile connections even when a recent reading already existed. Either way, the actual gate is always the true last-recorded timestamp read fresh from `production.check_events` on mount and on a 30s poll — not anything cached client-side — so a reading logged an hour or a minute ago is judged correctly however the page was reached.
+- Production Orders list: an order row's trailing status/balance pills and action icons (reopen, traceability, view order, manage menu) were plain `shrink-0` siblings with no wrap — on phone widths they didn't fit and got squeezed/clipped off-screen. The row now wraps them onto their own line under the record name instead.
+- `PanelHead` (shared by Production Orders, the Supervisor Hub and the Shift Report) now wraps and truncates instead of overflowing when a long title + meta + action badge don't fit on one line at phone widths.
+
+Verified on a phone against staging.
+
+
 ## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
