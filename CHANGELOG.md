@@ -2,6 +2,28 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Sieving Tower: prod_debagging gets grade + bagging_time, product_type moves off '500kg Farm Bag')
+
+**Files changed:** `supabase/migrations/20260826_002_prod_debagging_grade_and_bagging_time.sql` (new — apply manually, see runbook), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/production/capture-config.ts`, `lib/supabase/database.types.ts`, `scripts/backfill-debag-rows.cjs`
+
+Follow-up requested alongside the save-serialization fix above:
+
+- **`local_or_export` → `grade`** on `production.prod_debagging` (migration renames the column; its CHECK constraint — Export/Export Blend/Domestic/Local — carries over unchanged). Every read/write in the app (Sieving debag rows, Blender debag rows, `debaggedBatches()`/`debaggedBags()`, `OrderDebagRow`, the one-off backfill script) updated to match. The Sieving capture UI's "Local / export" field is now labelled **Grade**. Scoped to `prod_debagging` only — the unrelated `local_or_export` columns on the granule/pasteuriser job-card forms are untouched.
+- **`product_type` moves from `'500kg Farm Bag'` to `'Farm Bag'`**, going forward only — historical rows keep the old value, no backfill. Confirmed safe: Acumatica reads batch numbers + total weight for this, not this string. The self-heal restore query and display labels (`ShiftBagLog`) now recognise both values so old and new rows both surface correctly.
+- **New `bagging_time` column** (timestamptz), the debag-side twin of `prod_bagging.bagging_time` (20260813_001): `persist()` deletes and reinserts every `prod_debagging` row on every save, so `created_at` only ever reflects "last saved," not when the bag was actually captured. Every debag row already carries a real `logged_at` instant client-side (set the moment it locks) — `buildDebag()` now writes it into `bagging_time`, and the self-heal restore effect reads it back (falling back to `created_at` for historical rows that predate this column).
+
+⚠ **The migration is not applied automatically** (this repo's migration-push workflow is disabled, per `docs/db-reconciliation-runbook.md`) — run it manually on staging, then production, with the matching app-code deploy landing close after (a window where the column is renamed but old code still writes `local_or_export` would fail every debagging save).
+
+## 2026-08-26 — Alyssa (Production capture: serialize saves so overlapping writes stop racing each other)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported live: bags re-typed into a Sieving Tower session after being found missing stayed missing even after being re-added, and the capture screen showed `duplicate key value violates unique constraint "prod_bagging_session_serial_uniq"` plus repeated `TypeError: Failed to fetch` on the inputs write.
+
+Root cause: `flushSave()`/`persist()` (which deletes and reinserts every `prod_debagging`/`prod_bagging` row for the session on each save) is triggered from three independent, uncoordinated places — the 2.5s post-edit debounce, the immediate hide/backstop flush on tab-hide or pagehide, and a 20s backstop interval — with nothing to stop two of them firing close together and overlapping in flight. Two concurrent delete-then-insert sequences racing each other is exactly how a `(session_id, bag_serial_no)` duplicate-key violation happens (one call's insert lands on a row the other's insert only just wrote), and the resulting pile-up of concurrent requests plausibly explains the repeated `Failed to fetch` on the inputs write too.
+
+- Added `persistChainRef`, a promise chain all `flushSave()` calls now go through — a call always waits for whatever save is already in flight to finish before running its own, using the freshest `productionsRef.current` at that later moment (never a stale snapshot from when it was queued). Persist calls can no longer overlap.
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: "final weight" is now a way to enter the amount, not a separate declare-only step)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`
