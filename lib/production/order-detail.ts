@@ -85,6 +85,23 @@ export interface OrderRebagRow {
   shift: string
 }
 
+// Fresh production weight added straight into a bag that was first bagged
+// on an EARLIER day (a Half-bag Top-up filling an old open bag instead of
+// starting a new one) — the target bag's own bag_tags row belongs to that
+// earlier day's session, so it's invisible to the bag_tags-snapshot sum
+// above unless picked up here from its own scan_events row. Unlike
+// OrderRebagRow, this kg genuinely IS new output and IS folded into
+// bagsOutputKg (see loadOrderDay) — it was never counted before.
+export interface OrderFreshTopUpRow {
+  targetSerial: string
+  productType: string | null
+  batch: string | null   // parsed from the scan_events row's notes, if any
+  kg: number
+  at: string | null
+  sessionId: string
+  shift: string
+}
+
 export interface OrderDebagRow {
   id: string
   bag_no: number
@@ -164,8 +181,9 @@ export interface OrderDay {
   poItems: OrderPO[]                // production order codes + their Master Inventory descriptions
   shifts: OrderShiftBlock[]         // morning first
   bags: OrderBagRow[]               // merged across ALL shifts, continuous 1..N, shift-tagged
-  bagsOutputKg: number              // excludes bornViaRebag rows — see OrderBagRow
+  bagsOutputKg: number              // excludes bornViaRebag rows, includes freshTopUps — see OrderBagRow/OrderFreshTopUpRow
   rebagRows: OrderRebagRow[]        // bags born via re-bag on this day, shift-tagged
+  freshTopUps: OrderFreshTopUpRow[] // today's production added into an older bag, shift-tagged
   debags: OrderDebagRow[]           // all shifts, morning first
   massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
   reopenRequests: OrderReopenRequest[]   // union across shifts
@@ -395,6 +413,39 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     kg: b.kg, at: b.bagging_time, sessionId: b.session_id, shift: b.shift,
   }))
 
+  // "From today's production" Half-bag Top-ups into a bag first bagged on
+  // an EARLIER day — that bag's own bag_tags row belongs to that day's
+  // session, so it never appears in `bags` above at all. Any 'bagging_out'
+  // scan_events row tagged with TODAY's session_id whose serial isn't one
+  // of today's own bags is exactly that: fresh weight added today into an
+  // older bag (see addFreshWeightToBag). A same-day bag's own
+  // 'bagging_out' rows — its original creation, or a same-day top-up —
+  // are already fully reflected in its bag_tags.weight_kg snapshot above,
+  // so they're excluded here to avoid double-counting.
+  const todaysBagSerials = new Set(bags.map(b => b.bag_serial_no).filter(Boolean) as string[])
+  const { data: freshEvData } = await db.from('scan_events')
+    .select('serial_number, session_id, weight_kg, notes, scanned_at')
+    .in('session_id', ids).eq('action', 'bagging_out')
+  const freshRows = ((freshEvData as any[]) ?? [])
+    .filter(e => e.serial_number && !todaysBagSerials.has(e.serial_number))
+  const freshSerials = Array.from(new Set(freshRows.map(e => e.serial_number)))
+  let freshProductBySerial = new Map<string, string | null>()
+  if (freshSerials.length) {
+    const { data: freshTagsData } = await db.from('bag_tags')
+      .select('serial_number, product_type').in('serial_number', freshSerials)
+    freshProductBySerial = new Map(((freshTagsData as any[]) ?? []).map((t: any) => [t.serial_number, t.product_type ?? null]))
+  }
+  const freshTopUps: OrderFreshTopUpRow[] = freshRows.map(e => {
+    const m = /^batch:\s*(.+)$/.exec((e.notes ?? '').trim())
+    return {
+      targetSerial: e.serial_number, productType: freshProductBySerial.get(e.serial_number) ?? null,
+      batch: m ? m[1] : null, kg: Number(e.weight_kg) || 0, at: e.scanned_at,
+      sessionId: e.session_id, shift: shiftBySession.get(e.session_id) ?? '',
+    }
+  })
+  const freshKgBySession = new Map<string, number>()
+  for (const r of freshTopUps) freshKgBySession.set(r.sessionId, (freshKgBySession.get(r.sessionId) ?? 0) + r.kg)
+
   // Debag inputs across the day (already ordered per session by bag_no), tagged with shift.
   const debags: OrderDebagRow[] = ((debagsRes.data as any[]) ?? []).map(d => ({
     ...d, shift: shiftBySession.get(d.session_id) ?? '',
@@ -416,7 +467,8 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
         breaks: Array.isArray(t.breaks) ? t.breaks : [], confirmed: !!t.confirmed,
       })),
       bagCount: own.length,
-      bagsOutputKg: own.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0),
+      bagsOutputKg: own.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
+        + (freshKgBySession.get(s.id) ?? 0),
     }
   })
 
@@ -430,8 +482,10 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     poItems,
     shifts,
     bags,
-    bagsOutputKg: bags.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0),
+    bagsOutputKg: bags.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
+      + freshTopUps.reduce((t, r) => t + r.kg, 0),
     rebagRows,
+    freshTopUps,
     debags,
     massBalance: sumMassBalance(shifts, section_id),
     reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],

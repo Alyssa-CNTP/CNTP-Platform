@@ -8,8 +8,9 @@
  */
 import { getDb } from '@/lib/supabase/db'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
-import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily } from '@/lib/production/capture-config'
+import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
+import { variantFamily } from '@/lib/production/scan-utils'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface SuggestedItem {
@@ -136,12 +137,22 @@ export async function recentBatches(sectionId: string): Promise<string[]> {
  * debagged in the CURRENT session (e.g. fed in on an earlier shift). Never
  * falls back to an unrestricted list — a batch that was never debagged here,
  * under a different variant/grade, is not a valid suggestion.
+ *
+ * Matches on variant FAMILY (via variantFamily — Conventional/RA-Conventional
+ * together, Organic/RA-Organic/FT-ORG together), not an exact string — RA-CON
+ * and CON stock are the same conventional material for this purpose, and a
+ * bag tagged one way must still see batches debagged under the other name.
+ * Falls back to an exact match only for a variant outside both families.
  */
 export async function debaggedBatches(sectionId: string, variant: string, localOrExport: string): Promise<string[]> {
   if (!variant) return []
+  const family = variantFamily(variant)
+  const variantMatch = family
+    ? VARIANT_OPTIONS.map(v => v.value).filter(v => variantFamily(v) === family)
+    : [variant]
   const { data } = await getDb().schema('production').from('prod_debagging')
     .select('lot_number, prod_sessions!inner(section_id)')
-    .eq('variant', variant).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .in('variant', variantMatch).eq('local_or_export', localOrExport).eq('is_spillage', false)
     .eq('prod_sessions.section_id', sectionId)
     .not('lot_number', 'is', null)
     .order('created_at', { ascending: false }).limit(300)

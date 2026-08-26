@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: "from today's production" as the default path, not just bag-to-bag) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/scan-utils.ts`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported confusion: after picking the bag to top up and tapping Next, the operator lands on a second "search for a bag" screen with zero indication the first pick was kept — reads as being sent back to the start. Investigating that led to the real gap: the flow only ever modeled a top-up as material drawn from *another existing tracked bag*, but in most cases (especially Sieving Tower) the extra material is today's own freshly-debagged production that hasn't been bagged anywhere yet — there's no second bag at all. Blender genuinely does need the bag-to-bag path (e.g. consolidating two half-bags), so both stay, with "today's production" as the default.
+
+- The "which bag am I topping up" banner now stays visible on the next screen, with a "Change" link back — fixes the original confusion regardless of the deeper redesign.
+- New default path, **"From today's production"**: no source-bag lookup at all — just the amount, and (for Fine/Coarse Leaf) a required batch, restricted to lots actually debagged under the target bag's own variant+grade. Logged via new `addFreshWeightToBag()` (plain `bagging_out` scan_events row, batch recorded in `notes`) — this genuinely is new output, unlike a transfer, so it must count toward today's production.
+- Kept the existing **"From another bag"** path unchanged (Blender's case) — `transferBagWeight`'s linked `topped_up`/`drawn_down` pair, which must never count as new output.
+- `debaggedBatches()` now matches on variant **family** (via `variantFamily()`) rather than an exact string — RA-CON/CON count as the same conventional material, RA-ORG/ORG as the same organic material, matching how blending already treats these pairs elsewhere.
+- **Production Orders fix**: a "from today's production" top-up updates a bag whose own `bag_tags.session_id` is whatever day it was *first* bagged, not today — invisible to the existing bag_tags-snapshot sum. `loadOrderDay()` now also sums today's own `bagging_out` scan_events rows for serials not already in today's bag snapshot, folding that kg into `bagsOutputKg` (both per-shift and whole-day), and lists them in a new "Topped up from today's production" panel (`OrderFreshTopUpRow`) so it's visible which older bag received it and from which batch — unlike the existing "Re-bagged in" panel, this kg *is* included in the totals, since it's genuinely new.
+- The confirm screen shows which Production Order (date · shift) this will be counted under, so the operator can see it's right before saving.
+
 ## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`

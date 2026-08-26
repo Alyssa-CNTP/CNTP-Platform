@@ -1868,17 +1868,18 @@ function CaptureScreen() {
       )}
 
       {/* Half-bag top-up — add material to an existing bag (typically a
-          half-filled bag left open from a previous shift) from an existing
-          source bag, from this capture page directly instead of the
-          separate Tags page. Deliberately narrow: both bags must already
-          be tracked — no brand-new bag creation, no registering untracked
-          stock. Those are warehouse-management functions, not built here.
-          Pasteuriser is excluded, same reason as always (no per-bag
-          records today). */}
+          half-filled bag left open from a previous shift), either from
+          today's own production (the common case, mainly Sieving) or from
+          another existing tracked bag (mainly Blender). Deliberately
+          narrow beyond that: no brand-new bag creation, no registering
+          untracked stock — those are warehouse-management functions, not
+          built here. Pasteuriser is excluded, same reason as always (no
+          per-bag records today). */}
       {topUpOpen && !locked && (
         <HalfBagTopUpModal
           sectionId={sectionId} sessionId={sessionId}
           operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+          date={dateParam} shift={shift}
           onDone={() => setTopUpOpen(false)}
           onClose={() => setTopUpOpen(false)}
         />
