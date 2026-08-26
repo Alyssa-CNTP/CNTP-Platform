@@ -282,6 +282,47 @@ export async function createBagFromTransfer(
   ] as any)
 }
 
+// ── addFreshWeightToBag — the common Half-bag Top-up case: today's own
+// production (freshly debagged/produced material that hasn't been bagged
+// anywhere yet) goes into an EXISTING open bag instead of starting a new
+// one. Unlike transferBagWeight above, there is no source BAG — the
+// traceable origin is this session's own debagging/production, exactly
+// like an ordinary new output bag. Logged as a plain 'bagging_out' row
+// (not a topped_up/drawn_down pair) so it counts toward today's output
+// the same way a brand-new bag would — this genuinely IS new production,
+// not material moved between two already-counted containers.
+export async function addFreshWeightToBag(
+  targetSerial: string,
+  targetCurrentWeight: number,
+  amountKg: number,
+  sectionId: string,
+  sessionId: string | null,
+  operatorId?: string | null,
+  closeTargetBag = false,
+  // The debagged lot this addition actually came from (Fine/Coarse Leaf
+  // only — same batch-must-be-debagged rule ordinary bagging enforces).
+  // bag_tags.lot_number is deliberately left untouched (it stays "fixed at
+  // bagging", the bag's original batch) — this is recorded on the event
+  // itself, in the one free-text field scan_events has, so a bag topped up
+  // from more than one batch over time keeps every batch's identity in its
+  // history rather than only the latest one overwriting the last.
+  batch?: string,
+): Promise<void> {
+  if (!targetSerial || !(amountKg > 0)) return
+  const now = new Date().toISOString()
+
+  const targetUpdate: Record<string, unknown> = { weight_kg: targetCurrentWeight + amountKg }
+  if (closeTargetBag) targetUpdate.is_open = false
+  await getDb().schema('production').from('bag_tags').update(targetUpdate as any).eq('serial_number', targetSerial)
+
+  await getDb().schema('production').from('scan_events').insert({
+    serial_number: targetSerial, section_id: sectionId, session_id: sessionId || null,
+    action: 'bagging_out', weight_kg: amountKg,
+    operator_id: operatorId ?? null, scanned_at: now,
+    notes: batch ? `batch: ${batch}` : null,
+  } as any)
+}
+
 // ── originalBagEvent — a bag's starting weight isn't recoverable from ───────
 // bag_tags.weight_kg once it's been topped up/re-bagged (overwritten in
 // place each time). The earliest scan_events row for a serial always

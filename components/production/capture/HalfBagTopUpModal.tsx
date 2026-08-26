@@ -3,36 +3,55 @@
 // components/production/capture/HalfBagTopUpModal.tsx
 //
 // Half-bag top-up: an operator adds material to a bag they already have —
-// typically a half-filled bag left open from a previous shift/day — by
-// naming the existing bag the extra material is actually coming from. Both
-// bags must already be tracked; this deliberately does NOT create a brand
-// new bag, and does NOT register untracked/legacy stock into the system.
-// Those are warehouse-management functions, out of scope for the operator-
-// facing flow here — a separate feature, for later.
+// typically a half-filled bag left open from a previous shift/day. The
+// extra material has two possible origins, picked as a step-2 choice:
 //
-// Both bags involved show their current weight, their ORIGINAL bagging
-// date/weight (recovered from their earliest scan_events row —
-// bag_tags.weight_kg is overwritten in place on every top-up, so it can't
-// tell you what a bag started at), and their full scan_events history,
-// before the operator confirms and prints.
+//   - "From today's production" (the common case, and the default): fresh
+//     debagged/produced material that hasn't been bagged anywhere yet goes
+//     straight into the existing bag instead of starting a new one. There
+//     is no source BAG here — logged as a plain 'bagging_out' scan_events
+//     row (addFreshWeightToBag) so it counts toward today's output the
+//     same way a brand-new bag would.
+//   - "From another bag" (rare — e.g. consolidating two half-bags): names
+//     the existing bag the material is actually coming from. Logged as a
+//     linked topped_up/drawn_down pair (transferBagWeight) that must NEVER
+//     count as new output — that kg was already counted whenever the
+//     source bag was first bagged.
 //
-// Both labels are always force-reprinted on submit — a bag's printed label
-// is now stale the instant its weight changes, so there's no "write on tag"
-// choice here (skipped only if the source was fully drained and voided).
+// Neither path creates a brand-new bag or registers untracked/legacy stock
+// — those are warehouse-management functions, out of scope for the
+// operator-facing flow here, for later.
+//
+// The target bag (and the source, in "from another bag" mode) shows its
+// current weight, its ORIGINAL bagging date/weight (recovered from its
+// earliest scan_events row — bag_tags.weight_kg is overwritten in place on
+// every top-up, so it can't tell you what a bag started at), and its full
+// scan_events history, before the operator confirms and prints.
+//
+// The target's label is always force-reprinted on submit — its printed
+// label is now stale the instant its weight changes. In "from another bag"
+// mode the source is force-reprinted too (skipped only if it was fully
+// drained and voided).
 //
 // This modal NEVER touches a capture session's draft_data/value.outputs —
 // mass balance is computed from that local array on a completely separate
 // write path from bag_tags, so wiring a top-up into it would double-count
 // its weight there. Every write here is a pure, side-channel DB call,
-// exactly like the Tags page's original top-up flow this generalizes.
+// exactly like the Tags page's original top-up flow this generalizes. A
+// "from today's production" top-up's kg is picked up in Production Orders'
+// totals via its scan_events row directly (see order-detail.ts), since the
+// target bag's own bag_tags.session_id is whatever day it was first bagged,
+// not today.
 
 import { useEffect, useState } from 'react'
 import { X, Search, Loader2, AlertTriangle, ArrowRight, Printer, History } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { sanitizeSerial, transferBagWeight, originalBagEvent } from '@/lib/production/scan-utils'
+import { sanitizeSerial, transferBagWeight, addFreshWeightToBag, originalBagEvent } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, sectionMeta, VARIANT_OPTIONS } from '@/lib/production/capture-config'
+import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, GRADE_TO_LOCAL_EXPORT, sectionMeta, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
+import { LEAF, debaggedBatches } from '@/lib/production/inventory'
+import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
@@ -115,11 +134,15 @@ interface HalfBagTopUpModalProps {
   sectionId: string
   sessionId: string | null
   operatorId: string | null
+  date: string    // this session's production day — shown so the operator
+                   // can confirm which day's Production Order the "from
+                   // today's production" path will actually be counted in
+  shift: string
   onDone: () => void
   onClose: () => void
 }
 
-export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, onDone, onClose }: HalfBagTopUpModalProps) {
+export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shift, onDone, onClose }: HalfBagTopUpModalProps) {
   const sectionName = sectionMeta(sectionId).name
   const [step, setStep] = useState<'target' | 'source' | 'confirm'>('target')
 
@@ -138,8 +161,28 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, onDone, on
   const [onlyOpen, setOnlyOpen] = useState(true)
   const targetBrowse = useBagBrowse(targetBrowseVariant, targetBrowseProductType, onlyOpen)
 
-  // Where the extra material comes from — picked second, excluded from
-  // matching the target so a bag can't top itself up.
+  // Where the extra material comes from — picked second. "production" is
+  // the common case (today's own debagged/produced material, no source bag
+  // at all — mainly Sieving Tower); "existing" names another tracked bag to
+  // draw from (mainly Blender, e.g. consolidating two half-bags).
+  const [sourceMode, setSourceMode] = useState<'production' | 'existing'>('production')
+
+  // Batch of what's actually going in from today's production — required
+  // for Fine/Coarse Leaf only (same batch-must-be-debagged rule ordinary
+  // bagging enforces), restricted to lots genuinely debagged under the
+  // TARGET bag's own variant+grade (family-matched — RA-CON counts as CON,
+  // RA-ORG as ORG — see debaggedBatches). Irrelevant in "existing" mode:
+  // there the batch's identity already comes from the source bag itself.
+  const [productionBatch, setProductionBatch] = useState('')
+  const [productionBatchOptions, setProductionBatchOptions] = useState<string[]>([])
+  const targetNeedsBatch = sourceMode === 'production' && !!target && LEAF.has(target.product_type)
+  useEffect(() => {
+    if (!targetNeedsBatch || !target) { setProductionBatchOptions([]); return }
+    debaggedBatches(sectionId, target.variant ?? '', GRADE_TO_LOCAL_EXPORT[target.destination ?? 'A'] ?? 'Export')
+      .then(setProductionBatchOptions)
+  }, [targetNeedsBatch, target?.variant, target?.destination, sectionId])
+
+  // Excluded from matching the target so a bag can't top itself up.
   const [sourceInput, setSourceInput] = useState('')
   const sourceBag = useBagLookup(sourceInput, target?.serial_number)
   const source = found(sourceBag)
@@ -177,48 +220,72 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, onDone, on
   }, [source?.serial_number])
   useEffect(() => { setTargetProductType(source?.product_type ?? '') }, [target?.serial_number, source?.serial_number])
 
-  const sourceKg = source?.weight_kg ?? 0
+  // "Source" (an existing bag drawn from) only exists in 'existing' mode —
+  // in 'production' mode there's no source cap, no cross-product concept
+  // (you're filling the target with more of what it already holds).
+  const sourceKg = sourceMode === 'existing' ? (source?.weight_kg ?? 0) : 0
   const amountKg = n(amount) || 0
-  const exceedsSource = amountKg > sourceKg
-  const sourceRemaining = source ? sourceKg - amountKg : 0
+  const exceedsSource = sourceMode === 'existing' && amountKg > sourceKg
+  const sourceRemaining = sourceMode === 'existing' && source ? sourceKg - amountKg : 0
   const newTotal = target ? (target.weight_kg ?? 0) + amountKg : 0
   const overCap = newTotal > MAX_BAG_WEIGHT_KG
   const unusual = amountKg > 0 && !overCap && !!target && isUnusuallyHeavyBag(target.product_type, newTotal)
   const standard = target ? expectedBagWeightFor(target.product_type) : null
 
-  const productMismatch = !!source && !!target && source.product_type.toLowerCase() !== target.product_type.toLowerCase()
+  const productMismatch = sourceMode === 'existing' && !!source && !!target
+    && source.product_type.toLowerCase() !== target.product_type.toLowerCase()
 
-  const canSubmit = !!source && !!target && !sourceVoided && !sourceConsumed && !targetVoided && !targetConsumed
-    && amountKg > 0 && !exceedsSource && !overCap && !(unusual && !confirmHeavy)
-    && !(productMismatch && !targetProductType.trim())
+  const canSubmit = sourceMode === 'production'
+    ? (!!target && !targetVoided && !targetConsumed && amountKg > 0 && !overCap && !(unusual && !confirmHeavy)
+        && !(targetNeedsBatch && !productionBatch.trim()))
+    : (!!source && !!target && !sourceVoided && !sourceConsumed && !targetVoided && !targetConsumed
+        && amountKg > 0 && !exceedsSource && !overCap && !(unusual && !confirmHeavy)
+        && !(productMismatch && !targetProductType.trim()))
 
   async function submit() {
-    if (!canSubmit || !source || !target) return
+    if (!canSubmit || !target) return
     setSaving(true); setError(null)
     try {
-      const resolvedProductType = productMismatch ? targetProductType.trim() : target.product_type
-      await transferBagWeight(
-        source.serial_number, sourceKg,
-        target.serial_number, target.weight_kg ?? 0,
-        amountKg, sectionId, sessionId, operatorId, closeTargetBag,
-        productMismatch ? resolvedProductType : undefined,
-      )
-      // Both labels are now stale — forced reprint, no choice, for both.
-      await printLabelAuto({
-        id: target.serial_number, serial_number: target.serial_number, product_type: resolvedProductType,
-        variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
-        weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
-        section_name: sectionName, created_at: target.created_at, printed: true,
-        acumaticaId: target.acumatica_id ?? undefined,
-      } as any)
-      if (sourceRemaining > 0) {
+      if (sourceMode === 'production') {
+        await addFreshWeightToBag(
+          target.serial_number, target.weight_kg ?? 0,
+          amountKg, sectionId, sessionId, operatorId, closeTargetBag,
+          targetNeedsBatch ? productionBatch.trim() : undefined,
+        )
+        // The label is now stale — forced reprint.
         await printLabelAuto({
-          id: source.serial_number, serial_number: source.serial_number, product_type: source.product_type,
-          variant: source.variant || 'Conventional', grade: (source.destination as any) || 'A',
-          weight_kg: sourceRemaining, lot_number: source.lot_number || '', section_id: sectionId,
-          section_name: sectionName, created_at: source.created_at, printed: true,
-          acumaticaId: source.acumatica_id ?? undefined,
+          id: target.serial_number, serial_number: target.serial_number, product_type: target.product_type,
+          variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
+          weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
+          section_name: sectionName, created_at: target.created_at, printed: true,
+          acumaticaId: target.acumatica_id ?? undefined,
         } as any)
+      } else {
+        if (!source) return
+        const resolvedProductType = productMismatch ? targetProductType.trim() : target.product_type
+        await transferBagWeight(
+          source.serial_number, sourceKg,
+          target.serial_number, target.weight_kg ?? 0,
+          amountKg, sectionId, sessionId, operatorId, closeTargetBag,
+          productMismatch ? resolvedProductType : undefined,
+        )
+        // Both labels are now stale — forced reprint, no choice, for both.
+        await printLabelAuto({
+          id: target.serial_number, serial_number: target.serial_number, product_type: resolvedProductType,
+          variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
+          weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
+          section_name: sectionName, created_at: target.created_at, printed: true,
+          acumaticaId: target.acumatica_id ?? undefined,
+        } as any)
+        if (sourceRemaining > 0) {
+          await printLabelAuto({
+            id: source.serial_number, serial_number: source.serial_number, product_type: source.product_type,
+            variant: source.variant || 'Conventional', grade: (source.destination as any) || 'A',
+            weight_kg: sourceRemaining, lot_number: source.lot_number || '', section_id: sectionId,
+            section_name: sectionName, created_at: source.created_at, printed: true,
+            acumaticaId: source.acumatica_id ?? undefined,
+          } as any)
+        }
       }
       onDone(); onClose()
     } catch {
@@ -308,7 +375,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, onDone, on
                 <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-text">{target.serial_number}</span>
-                    <span className="text-text-muted">{target.product_type}</span>
+                    <span className="text-text-muted">{target.product_type}{target.variant ? ` · ${target.variant}` : ''}</span>
                   </div>
                   <div className="text-text-muted">{(target.weight_kg ?? 0).toFixed(1)}kg currently in stock{target.is_open ? ' · open' : ''}</div>
                 </div>
@@ -322,77 +389,127 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, onDone, on
 
           {step === 'source' && target && (
             <>
-              <p className="text-[12px] text-text-muted">Where's the extra material coming from?</p>
-              {renderBrowseAndLookup({
-                browseVariant: sourceBrowseVariant, setBrowseVariant: setSourceBrowseVariant,
-                browseProductType: sourceBrowseProductType, setBrowseProductType: setSourceBrowseProductType,
-                browsing: sourceBrowse.browsing, results: sourceBrowse.results,
-                input: sourceInput, setInput: setSourceInput,
-                placeholder: 'Source bag serial…',
-              })}
-              {sourceBag === 'loading' && <p className="text-[12px] text-text-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Looking up…</p>}
-              {sourceBag === 'not_found' && <p className="text-[12px] text-err">{sourceInput && sanitizeSerial(sourceInput) === sanitizeSerial(target.serial_number) ? "A bag can't top itself up." : 'Serial not found.'}</p>}
-              {source && sourceVoided && <p className="text-[12px] text-err">That bag has already been voided.</p>}
-              {source && sourceConsumed && <p className="text-[12px] text-err">That bag was already consumed downstream.</p>}
-              {source && !sourceVoided && !sourceConsumed && (
-                <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-text">{source.serial_number}</span>
-                    <span className="text-text-muted">{source.product_type}</span>
-                  </div>
-                  <div className="text-text-muted">{sourceKg.toFixed(1)}kg currently in stock</div>
-                  {productMismatch && (
-                    <p className="text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Different product to the bag being topped up — pick what the combined bag actually is below.</p>
-                  )}
+              <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-[12.5px] flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-semibold text-violet-500 uppercase tracking-widest">Topping up</div>
+                  <div className="text-text"><span className="font-mono">{target.serial_number}</span> <span className="text-text-muted">· {target.product_type}{target.variant ? ` · ${target.variant}` : ''} · {(target.weight_kg ?? 0).toFixed(1)}kg</span></div>
                 </div>
-              )}
-              {source && !sourceVoided && !sourceConsumed && (
+                <button onClick={() => setStep('target')} className="text-[11px] font-medium text-violet-700 underline shrink-0">Change</button>
+              </div>
+
+              <div className="flex gap-2">
+                <button onClick={() => setSourceMode('production')}
+                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${sourceMode === 'production' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+                  From today's production
+                </button>
+                <button onClick={() => setSourceMode('existing')}
+                  className={`flex-1 py-2 rounded-lg text-[12.5px] font-medium border ${sourceMode === 'existing' ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-stone-200 text-text-muted'}`}>
+                  From another bag
+                </button>
+              </div>
+
+              {sourceMode === 'production' ? (
                 <>
-                  {productMismatch && (
+                  <p className="text-[11px] text-text-muted">Fresh material from today's debagging/production, going straight into this bag — same variant as the bag ({target.variant || 'unset'}), no separate source bag needed.</p>
+                  {targetNeedsBatch && (
                     <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Resulting product type <span className="text-err">*</span></label>
-                      <input list="topup-product-types" value={targetProductType}
-                        onChange={e => setTargetProductType(e.target.value)}
-                        placeholder="Type or pick a product…"
-                        className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${targetProductType.trim() ? 'border-stone-200' : 'border-amber-300'}`} />
-                      <datalist id="topup-product-types">
-                        {Array.from(new Set([
-                          source.product_type, target.product_type,
-                          ...(SECTION_CONFIG[sectionId]?.outputTypes ?? []),
-                        ].filter(Boolean) as string[])).map(t => <option key={t} value={t} />)}
-                      </datalist>
-                      {!targetProductType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch <span className="text-err">*</span></label>
+                      <BatchKeypadField value={productionBatch} onChange={setProductionBatch} options={productionBatchOptions}
+                        placeholder="Tap to enter" label="Batch" restrictToOptions className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
+                      <p className="text-[11px] text-text-muted">Must match a lot actually debagged under {target.variant || 'this variant'} — RA-CON/CON and RA-ORG/ORG count as the same family.</p>
                     </div>
                   )}
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to add (kg)</label>
                     <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
                       className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
-                    {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
                   </div>
+                  <p className="text-[11px] text-stone-400">Will show as today's output on the {date} · {shift} Production Order.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[12px] text-text-muted">Which existing bag is it coming out of?</p>
+                  {renderBrowseAndLookup({
+                    browseVariant: sourceBrowseVariant, setBrowseVariant: setSourceBrowseVariant,
+                    browseProductType: sourceBrowseProductType, setBrowseProductType: setSourceBrowseProductType,
+                    browsing: sourceBrowse.browsing, results: sourceBrowse.results,
+                    input: sourceInput, setInput: setSourceInput,
+                    placeholder: 'Source bag serial…',
+                  })}
+                  {sourceBag === 'loading' && <p className="text-[12px] text-text-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Looking up…</p>}
+                  {sourceBag === 'not_found' && <p className="text-[12px] text-err">{sourceInput && sanitizeSerial(sourceInput) === sanitizeSerial(target.serial_number) ? "A bag can't top itself up." : 'Serial not found.'}</p>}
+                  {source && sourceVoided && <p className="text-[12px] text-err">That bag has already been voided.</p>}
+                  {source && sourceConsumed && <p className="text-[12px] text-err">That bag was already consumed downstream.</p>}
+                  {source && !sourceVoided && !sourceConsumed && (
+                    <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-text">{source.serial_number}</span>
+                        <span className="text-text-muted">{source.product_type}</span>
+                      </div>
+                      <div className="text-text-muted">{sourceKg.toFixed(1)}kg currently in stock</div>
+                      {productMismatch && (
+                        <p className="text-amber-700 flex items-center gap-1.5"><AlertTriangle size={12} /> Different product to the bag being topped up — pick what the combined bag actually is below.</p>
+                      )}
+                    </div>
+                  )}
+                  {source && !sourceVoided && !sourceConsumed && (
+                    <>
+                      {productMismatch && (
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Resulting product type <span className="text-err">*</span></label>
+                          <input list="topup-product-types" value={targetProductType}
+                            onChange={e => setTargetProductType(e.target.value)}
+                            placeholder="Type or pick a product…"
+                            className={`w-full px-3 py-2.5 rounded-xl border bg-white text-[13px] outline-none focus:border-violet-600 ${targetProductType.trim() ? 'border-stone-200' : 'border-amber-300'}`} />
+                          <datalist id="topup-product-types">
+                            {Array.from(new Set([
+                              source.product_type, target.product_type,
+                              ...(SECTION_CONFIG[sectionId]?.outputTypes ?? []),
+                            ].filter(Boolean) as string[])).map(t => <option key={t} value={t} />)}
+                          </datalist>
+                          {!targetProductType.trim() && <p className="text-[11px] text-err">Required — what's actually in the bag once this is done.</p>}
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Amount to add (kg)</label>
+                        <input autoFocus type="text" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)}
+                          className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
+                        {exceedsSource && <p className="text-[11px] text-err">Can't move more than the {sourceKg.toFixed(1)}kg the source has.</p>}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
+
               <button onClick={() => setStep('confirm')}
-                disabled={!source || sourceVoided || sourceConsumed || amountKg <= 0 || exceedsSource || (productMismatch && !targetProductType.trim())}
+                disabled={sourceMode === 'production'
+                  ? (!target || amountKg <= 0 || (targetNeedsBatch && !productionBatch.trim()))
+                  : (!source || sourceVoided || sourceConsumed || amountKg <= 0 || exceedsSource || (productMismatch && !targetProductType.trim()))}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                 Next <ArrowRight size={15} />
               </button>
             </>
           )}
 
-          {step === 'confirm' && source && target && (
+          {step === 'confirm' && target && (sourceMode === 'production' || source) && (
             <>
               <div className="space-y-2">
                 <BagHistoryCard title="Topping up" bag={target} original={targetOriginal} history={targetHistory} />
-                <BagHistoryCard title="Coming from" bag={source} original={sourceOriginal} history={sourceHistory} />
+                {sourceMode === 'existing' && source && (
+                  <BagHistoryCard title="Coming from" bag={source} original={sourceOriginal} history={sourceHistory} />
+                )}
               </div>
 
               <div className="rounded-xl border border-stone-200 px-3 py-2.5 text-[12.5px] space-y-1.5">
                 <Row label="Amount added" value={`${amountKg.toFixed(1)} kg`} />
-                <Row label="Source remaining" value={`${sourceRemaining.toFixed(1)} kg${sourceRemaining <= 0 ? ' (voided)' : ''}`} />
+                {sourceMode === 'production'
+                  ? <Row label="Source" value="Today's production" />
+                  : <Row label="Source remaining" value={`${sourceRemaining.toFixed(1)} kg${sourceRemaining <= 0 ? ' (voided)' : ''}`} />}
                 <Row label="Target new total" value={`${newTotal.toFixed(1)} kg`} />
-                {productMismatch && <Row label="Target reclassified to" value={targetProductType.trim() || '—'} />}
+                {sourceMode === 'production' && targetNeedsBatch && <Row label="Batch added" value={productionBatch.trim() || '—'} />}
+                {sourceMode === 'existing' && productMismatch && <Row label="Target reclassified to" value={targetProductType.trim() || '—'} />}
                 {target.lot_number && <Row label="Target batch (fixed at creation)" value={target.lot_number} />}
+                {sourceMode === 'production' && <Row label="Production day" value={`${date} · ${shift}`} />}
               </div>
 
               {overCap && <p className="text-[12px] text-err">That's over the {MAX_BAG_WEIGHT_KG}kg safety ceiling for one bag.</p>}
@@ -416,7 +533,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, onDone, on
               <button onClick={submit} disabled={!canSubmit || saving}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                 {saving ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />}
-                {saving ? 'Saving…' : 'Save & print label(s)'}
+                {saving ? 'Saving…' : sourceMode === 'production' ? 'Save & print label' : 'Save & print label(s)'}
               </button>
             </>
           )}
