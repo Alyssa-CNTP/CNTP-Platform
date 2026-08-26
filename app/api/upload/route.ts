@@ -233,7 +233,18 @@ async function geminiOnce(
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
     body:    JSON.stringify({
       contents:         [{ parts }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens, ...extraConfig },
+      // gemini-2.5-flash (and newer) think by default, and those thinking
+      // tokens are drawn from the SAME maxOutputTokens budget as the answer —
+      // not a separate allowance. Every workflow's token budget here was sized
+      // assuming all of it goes to the JSON reply, so once thinking is silently
+      // on, it can eat most or all of that budget and cut the answer off a few
+      // hundred characters in, which is exactly what an "Unterminated string" /
+      // "Expected double-quoted property name" parse failure at a tiny position
+      // looks like — a truncated reply, not a malformed one. This is a
+      // structured-extraction task with no need for extended reasoning, so
+      // thinking is switched off outright rather than padding every budget to
+      // cover an unbounded thinking phase.
+      generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 }, ...extraConfig },
     }),
   })
   if (GEMINI_RETRYABLE.has(res.status)) {
