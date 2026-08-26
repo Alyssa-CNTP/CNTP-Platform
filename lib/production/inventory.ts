@@ -21,7 +21,7 @@ export interface SuggestedItem {
   match: number            // 0–100 relevance, for display
 }
 
-const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
+export const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
 
 /**
  * The short, relevant output list for a section + variant — the default the
