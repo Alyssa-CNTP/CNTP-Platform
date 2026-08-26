@@ -14,7 +14,7 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
-import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
+import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft, Scale } from 'lucide-react'
 import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
@@ -216,15 +216,27 @@ export default function ProductionOrderDetailPage() {
         </PanelBody>
       </Panel>
 
-      {/* Bagging (outputs) — grouped by product type with per-type totals */}
+      {/* Bagging (outputs) — grouped by product type with per-type totals.
+          Half-bag Top-ups "from today's production" (freshTopUps — adding
+          freshly produced weight into a bag first bagged on an EARLIER day)
+          are folded in here under the SAME product-type group they belong
+          to, marked distinctly (violet), rather than in a separate panel
+          disconnected from the product they actually belong to. Their kg
+          is genuinely new output and already counted in bagsOutputKg. */}
       <Panel>
         <PanelHead title="Bagging — outputs"
           meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
         <PanelBody>
-          {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
+          {bags.length === 0 && freshTopUps.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">
-              {groupBy(bags, b => b.product_type || 'Other').map(g => (
-                <OutputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
+              {Array.from(new Set([
+                ...bags.map(b => b.product_type || 'Other'),
+                ...freshTopUps.map(r => r.productType || 'Other'),
+              ])).map(type => (
+                <OutputTypeGroup key={type} type={type}
+                  rows={bags.filter(b => (b.product_type || 'Other') === type)}
+                  topUps={freshTopUps.filter(r => (r.productType || 'Other') === type)}
+                  multiShift={shifts.length > 1} />
               ))}
               {bucketCarryOverKg > 0 && (
                 <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
@@ -259,27 +271,6 @@ export default function ProductionOrderDetailPage() {
                 <RebagTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
               <p className="text-[11px] text-text-faint">Already counted as output on an earlier day — not included in Bagged output or Total output above.</p>
-            </div>
-          </PanelBody>
-        </Panel>
-      )}
-
-      {/* Topped up from today's production — a Half-bag Top-up adding
-          freshly produced weight into a bag first bagged on an EARLIER day,
-          instead of starting a new bag. This genuinely IS new output, so —
-          unlike Re-bagged in above — its kg IS already folded into Bagged
-          output/Total output; shown here just for visibility into which
-          older bag received it and from what batch. */}
-      {freshTopUps.length > 0 && (
-        <Panel>
-          <PanelHead title="Topped up from today's production"
-            meta={`${freshTopUps.length} bag${freshTopUps.length === 1 ? '' : 's'} · ${freshTopUps.reduce((s, r) => s + r.kg, 0).toFixed(1)} kg`} />
-          <PanelBody>
-            <div className="space-y-4">
-              {groupBy(freshTopUps, r => r.productType || 'Other').map(g => (
-                <FreshTopUpTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
-              ))}
-              <p className="text-[11px] text-text-faint">Already included in Bagged output and Total output above — this is new production, not a transfer.</p>
             </div>
           </PanelBody>
         </Panel>
@@ -415,15 +406,21 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
   )
 }
 
-// One output product type's bags — compact per-bag lines with a per-type total.
-function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderBagRow[]; multiShift: boolean }) {
-  const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+// One output product type's bags — compact per-bag lines with a per-type
+// total. Half-bag Top-ups "from today's production" into an older bag of
+// this same product type render as their own violet-accented lines in the
+// SAME list (see loadOrderDay's freshTopUps) — real activity against this
+// product, not a separate disconnected panel.
+function OutputTypeGroup({ type, rows, topUps, multiShift }: { type: string; rows: OrderBagRow[]; topUps?: OrderFreshTopUpRow[]; multiShift: boolean }) {
+  const bagKg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+  const topUpKg = (topUps ?? []).reduce((s, r) => s + (r.kg || 0), 0)
+  const totalCount = rows.length + (topUps?.length ?? 0)
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">{type}</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
-          {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
+          {totalCount} bag{totalCount === 1 ? '' : 's'} · {(bagKg + topUpKg).toFixed(1)} kg
         </span>
       </div>
       <ul className="divide-y divide-surface-rule/60">
@@ -435,6 +432,18 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
             <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(b.bagging_time)}</span>
+          </li>
+        ))}
+        {(topUps ?? []).map((r, i) => (
+          <li key={`topup-${r.targetSerial}-${i}`} className="flex items-center gap-2 px-3 py-1.5 text-[12px] bg-violet-50/50 border-l-2 border-violet-300">
+            <Scale size={11} className="text-violet-500 shrink-0" />
+            <span className="font-mono text-violet-700 flex-1 min-w-0 truncate">
+              {r.targetSerial} <span className="text-violet-500 font-normal">· half-bag top-up, into an earlier bag</span>
+            </span>
+            {multiShift && <span className="text-[10px] text-violet-400 shrink-0 capitalize">{r.shift}</span>}
+            {r.batch && <span className="font-mono text-[10px] text-violet-400 shrink-0">{r.batch}</span>}
+            <span className="font-mono text-violet-700 shrink-0 tabular-nums w-16 text-right">+{r.kg.toFixed(1)} kg</span>
+            <span className="font-mono text-violet-400 shrink-0 w-10 text-right">{fmtBagTime(r.at)}</span>
           </li>
         ))}
       </ul>
@@ -466,35 +475,6 @@ function RebagTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderR
             </span>
             {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{r.shift}</span>}
             {r.acumaticaId && <span className="font-mono text-[10px] text-text-faint shrink-0">{r.acumaticaId}</span>}
-            <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{r.kg.toFixed(1)} kg</span>
-            <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(r.at)}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-// One product type's "topped up from today's production" rows — same
-// compact shape as RebagTypeGroup, showing the batch added instead of a
-// source serial (there is no source bag for this path).
-function FreshTopUpTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderFreshTopUpRow[]; multiShift: boolean }) {
-  const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
-  return (
-    <div className="rounded-xl border border-surface-rule overflow-hidden">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
-        <span className="text-[12.5px] font-semibold text-text">{type}</span>
-        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
-          {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
-        </span>
-      </div>
-      <ul className="divide-y divide-surface-rule/60">
-        {rows.map((r, i) => (
-          <li key={`${r.targetSerial}-${i}`} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
-            <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
-            <span className="font-mono text-text flex-1 min-w-0 truncate">{r.targetSerial}</span>
-            {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{r.shift}</span>}
-            {r.batch && <span className="font-mono text-[10px] text-text-faint shrink-0">{r.batch}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{r.kg.toFixed(1)} kg</span>
             <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(r.at)}</span>
           </li>

@@ -506,3 +506,66 @@ export async function fetchTopUpEventsForSerials(serials: string[]): Promise<Map
     .order('scanned_at', { ascending: true })
   return groupTopUpEvents((data as any[]) ?? [])
 }
+
+// ── fetchFreshTopUpsForSection — "from today's production" top-ups (no
+// source bag — addFreshWeightToBag) logged anywhere in this section on this
+// date, resolved with the TARGET bag's own product/variant/grade/lot. This
+// is specifically for the case fetchTopUpEventsForSerials can't cover: a
+// top-up into a bag first bagged on an EARLIER day, which was never part of
+// today's own captured output — so there's no existing row anywhere in
+// today's product/lot grouping to attach a sub-row to. Callers fold these
+// in as their OWN rows, under the matching product type, instead of leaving
+// them invisible (Overview) or stuck in a separate, disconnected panel
+// (Production Orders).
+//
+// Scoped by section+date via prod_sessions, the same join order-detail.ts
+// already uses for its own freshTopUps — robust to however many sessions/
+// shifts/operators the day actually had, without needing every caller to
+// thread a full session-id list through.
+export interface FreshTopUpRow {
+  serial: string
+  productType: string | null
+  variant: string | null
+  grade: string | null
+  lot: string | null
+  kg: number
+  at: string
+  batch: string | null   // parsed from notes — the debagged lot credited, Leaf-only
+}
+
+export async function fetchFreshTopUpsForSection(
+  sectionId: string,
+  date: string,
+  excludeSerials: Set<string> = new Set(),
+): Promise<FreshTopUpRow[]> {
+  const { data: sessions } = await getDb().schema('production').from('prod_sessions')
+    .select('id').eq('section_id', sectionId).eq('date', date)
+  const ids = ((sessions as any[]) ?? []).map(s => s.id)
+  if (!ids.length) return []
+
+  const { data } = await getDb().schema('production').from('scan_events')
+    .select('serial_number, weight_kg, notes, scanned_at')
+    .in('session_id', ids).eq('action', 'bagging_out').ilike('notes', 'HALF_BAG_TOPUP%')
+  const rows = ((data as any[]) ?? []).filter(e => e.serial_number && !excludeSerials.has(e.serial_number))
+  if (!rows.length) return []
+
+  const serials = Array.from(new Set(rows.map(r => r.serial_number)))
+  const { data: tags } = await getDb().schema('production').from('bag_tags')
+    .select('serial_number, product_type, variant, destination, lot_number').in('serial_number', serials)
+  const tagBySerial = new Map(((tags as any[]) ?? []).map((t: any) => [t.serial_number, t]))
+
+  return rows.map(r => {
+    const tag = tagBySerial.get(r.serial_number)
+    const m = /^HALF_BAG_TOPUP:\s*(.+)$/.exec(String(r.notes ?? '').trim())
+    return {
+      serial: r.serial_number,
+      productType: tag?.product_type ?? null,
+      variant: tag?.variant ?? null,
+      grade: tag?.destination ?? null,
+      lot: tag?.lot_number ?? null,
+      kg: Number(r.weight_kg) || 0,
+      at: r.scanned_at,
+      batch: m ? m[1] : null,
+    }
+  })
+}

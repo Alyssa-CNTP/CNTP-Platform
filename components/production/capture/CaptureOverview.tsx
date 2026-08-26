@@ -10,7 +10,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
-import { fetchTopUpEventsForSerials, type TopUpEvent } from '@/lib/production/scan-utils'
+import { fetchTopUpEventsForSerials, fetchFreshTopUpsForSection, type TopUpEvent, type FreshTopUpRow } from '@/lib/production/scan-utils'
 import { type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
@@ -40,6 +40,11 @@ interface DebagLotGroup { lot: string; rows: DebagRow[]; totalKg: number }
 interface FlatBag {
   product: string; lot: string; kg: number; variant: string; grade: string
   serial: string; loggedAt?: string; description?: string
+  // Set only for a synthetic row injected from a cross-day Half-bag
+  // Top-up — a "from today's production" addition into a bag first bagged
+  // on an EARLIER day, which isn't part of this page's own captured output
+  // at all (see mergeFreshTopUps below). Never set on a real captured bag.
+  isTopUp?: boolean; topUpBatch?: string | null
 }
 interface BagLotGroup { lot: string; variant: string; grade: string; bags: FlatBag[]; count: number; kg: number }
 interface ProductGroup { product: string; acumaticaCode?: string | null; acumaticaDesc?: string; lots: BagLotGroup[]; totalCount: number; totalKg: number }
@@ -223,6 +228,33 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
   return Array.from(prodMap.values())
 }
 
+// Folds cross-day Half-bag Top-ups ("from today's production" into a bag
+// first bagged on an EARLIER day — see fetchFreshTopUpsForSection) into the
+// matching product/lot group, creating the group/lot if this page's own
+// productions never produced that product today. Without this, such a
+// top-up has no existing bag row anywhere on this page to attach to, so it
+// was previously just invisible here — never shown "in its product type
+// section" the way an ordinary bag is. Same-day top-ups are unaffected —
+// see topUpsBySerial below, which nests those under the bag's OWN row.
+function mergeFreshTopUps(groups: ProductGroup[], freshTopUps: FreshTopUpRow[]): ProductGroup[] {
+  if (!freshTopUps.length) return groups
+  const merged = groups.map(pg => ({ ...pg, lots: pg.lots.map(lg => ({ ...lg, bags: [...lg.bags] })) }))
+  for (const r of freshTopUps) {
+    const product = r.productType || 'Other'
+    let pg = merged.find(g => g.product === product)
+    if (!pg) { pg = { product, lots: [], totalCount: 0, totalKg: 0 }; merged.push(pg) }
+    const grade = r.grade || '—'
+    const variant = r.variant || ''
+    const lot = r.lot || '—'
+    let lg = pg.lots.find(l => l.lot === lot && l.variant === variant && l.grade === grade)
+    if (!lg) { lg = { lot, variant, grade, bags: [], count: 0, kg: 0 }; pg.lots.push(lg) }
+    lg.bags.push({ product, lot, kg: r.kg, variant, grade, serial: r.serial, loggedAt: r.at, isTopUp: true, topUpBatch: r.batch })
+    lg.count++; lg.kg += r.kg
+    pg.totalCount++; pg.totalKg += r.kg
+  }
+  return merged
+}
+
 function formatPO(po: any): string {
   if (!po) return ''
   if (typeof po === 'string') return po.trim()
@@ -253,7 +285,7 @@ export function CaptureOverview({
   const [showFilters,   setShowFilters]   = useState(false)
 
   const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
-  const productGroups = useMemo(() => buildProductGroups(productions), [productions])
+  const rawProductGroups = useMemo(() => buildProductGroups(productions), [productions])
 
   // Half-bag Top-up folded into each bag's own row here, rather than a
   // separate panel — a top-up is a side-channel write that never touches
@@ -261,15 +293,31 @@ export function CaptureOverview({
   // page's own product/lot grouping even though it's real activity against
   // one of these exact bags. Keyed by serial, not by this page's own
   // session(s) — the top-up could have been logged in a different session
-  // than the one that first bagged it.
+  // than the one that first bagged it. Only for bags THIS page already has
+  // its own row for (same-day) — see freshTopUps below for the cross-day case.
   const [topUpsBySerial, setTopUpsBySerial] = useState<Map<string, TopUpEvent[]>>(new Map())
   useEffect(() => {
-    const serials = Array.from(new Set(productGroups.flatMap(pg => pg.lots.flatMap(lg => lg.bags.map(b => b.serial))).filter(Boolean))) as string[]
+    const serials = Array.from(new Set(rawProductGroups.flatMap(pg => pg.lots.flatMap(lg => lg.bags.map(b => b.serial))).filter(Boolean))) as string[]
     if (!serials.length) { setTopUpsBySerial(new Map()); return }
     let cancelled = false
     fetchTopUpEventsForSerials(serials).then(m => { if (!cancelled) setTopUpsBySerial(m) })
     return () => { cancelled = true }
-  }, [productGroups])
+  }, [rawProductGroups])
+
+  // Cross-day top-ups: "from today's production" added into a bag first
+  // bagged on an EARLIER day, so it has no row anywhere in rawProductGroups
+  // to nest under — folded in as their own synthetic rows under the
+  // matching product type instead (see mergeFreshTopUps).
+  const [freshTopUps, setFreshTopUps] = useState<FreshTopUpRow[]>([])
+  useEffect(() => {
+    if (!sectionId) { setFreshTopUps([]); return }
+    const covered = new Set(rawProductGroups.flatMap(pg => pg.lots.flatMap(lg => lg.bags.map(b => b.serial))).filter(Boolean) as string[])
+    let cancelled = false
+    fetchFreshTopUpsForSection(sectionId, date, covered).then(rows => { if (!cancelled) setFreshTopUps(rows) })
+    return () => { cancelled = true }
+  }, [sectionId, date, rawProductGroups])
+
+  const productGroups = useMemo(() => mergeFreshTopUps(rawProductGroups, freshTopUps), [rawProductGroups, freshTopUps])
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
   const totalIncl     = debagOnlyKg + bucketInKg + machineKg
@@ -570,6 +618,23 @@ export function CaptureOverview({
                                   {isLotOpen && (
                                     <div className="pl-12 pr-3 pb-2 space-y-1" style={{ background: BAG_ORANGE + '03' }}>
                                       {lg.bags.map((b, bi) => {
+                                        // isTopUp rows are synthetic (see mergeFreshTopUps) — the
+                                        // row itself IS the top-up event, so it never also looks
+                                        // up topUpsBySerial (that would just re-show the same event
+                                        // nested under itself).
+                                        if (b.isTopUp) {
+                                          return (
+                                            <div key={bi} className="flex items-center gap-2 py-1 text-[12px] pl-1 border-l-2 border-violet-300" style={{ background: '#7c3aed08' }}>
+                                              <Scale size={11} className="text-violet-500 shrink-0" />
+                                              <span className="font-mono text-[11px] font-medium text-violet-700 bg-violet-100 border border-violet-200 rounded-md px-1.5 py-0.5 shrink-0">{b.serial}</span>
+                                              <span className="text-violet-600 truncate flex-1">
+                                                half-bag top-up, into an earlier bag{b.topUpBatch ? ` · ${b.topUpBatch}` : ''}
+                                              </span>
+                                              {b.loggedAt && <span className="font-mono text-[10px] text-violet-400 shrink-0">{fmtTime(b.loggedAt)}</span>}
+                                              <span className="font-mono text-violet-700 shrink-0 w-16 text-right">+{b.kg.toFixed(1)} kg</span>
+                                            </div>
+                                          )
+                                        }
                                         const topUps = b.serial ? topUpsBySerial.get(b.serial) : undefined
                                         return (
                                         <div key={bi}>
