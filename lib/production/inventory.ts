@@ -164,6 +164,40 @@ export async function debaggedBatches(sectionId: string, variant: string, localO
   return out.slice(0, 60)
 }
 
+export interface DebaggedBagOption {
+  id: string
+  bagNo: number
+  lotNumber: string | null
+  kgNett: number
+  deliveryDate: string | null
+  sessionId: string
+}
+
+/**
+ * The actual debagged BAGS (production.prod_debagging rows, not just their
+ * distinct lot numbers) matching this section + variant family + grade —
+ * for confirming exactly which physical intake bag a Half-bag Top-up's
+ * "from today's production" material is credited to, when more than one
+ * bag under the same or a different batch could be in play. Same
+ * family-matching and section/grade scoping as debaggedBatches above.
+ */
+export async function debaggedBags(sectionId: string, variant: string, localOrExport: string): Promise<DebaggedBagOption[]> {
+  if (!variant) return []
+  const family = variantFamily(variant)
+  const variantMatch = family
+    ? VARIANT_OPTIONS.map(v => v.value).filter(v => variantFamily(v) === family)
+    : [variant]
+  const { data } = await getDb().schema('production').from('prod_debagging')
+    .select('id, bag_no, lot_number, kg_nett, delivery_date, session_id, prod_sessions!inner(section_id)')
+    .in('variant', variantMatch).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .eq('prod_sessions.section_id', sectionId)
+    .order('created_at', { ascending: false }).limit(60)
+  return ((data ?? []) as any[]).map(r => ({
+    id: r.id, bagNo: r.bag_no, lotNumber: r.lot_number ?? null,
+    kgNett: Number(r.kg_nett) || 0, deliveryDate: r.delivery_date ?? null, sessionId: r.session_id,
+  }))
+}
+
 /**
  * Next-step nudge — a gentle prompt about what's likely missing. Rule-based.
  */

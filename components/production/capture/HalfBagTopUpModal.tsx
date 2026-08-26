@@ -50,8 +50,7 @@ import { sanitizeSerial, transferBagWeight, addFreshWeightToBag, originalBagEven
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, GRADE_TO_LOCAL_EXPORT, sectionMeta, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
-import { LEAF, debaggedBatches } from '@/lib/production/inventory'
-import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
+import { LEAF, debaggedBags, type DebaggedBagOption } from '@/lib/production/inventory'
 
 const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
@@ -169,17 +168,22 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
 
   // Batch of what's actually going in from today's production — required
   // for Fine/Coarse Leaf only (same batch-must-be-debagged rule ordinary
-  // bagging enforces), restricted to lots genuinely debagged under the
-  // TARGET bag's own variant+grade (family-matched — RA-CON counts as CON,
-  // RA-ORG as ORG — see debaggedBatches). Irrelevant in "existing" mode:
-  // there the batch's identity already comes from the source bag itself.
-  const [productionBatch, setProductionBatch] = useState('')
-  const [productionBatchOptions, setProductionBatchOptions] = useState<string[]>([])
+  // bagging enforces) — not just a batch NUMBER but the actual debagged BAG
+  // (production.prod_debagging row): more than one physical intake bag can
+  // share a batch, or different batches can be running close together, so
+  // the operator confirms exactly which debagging bag this addition is
+  // credited to. Restricted to the TARGET bag's own variant+grade
+  // (family-matched — RA-CON counts as CON, RA-ORG as ORG — see
+  // debaggedBags). Irrelevant in "existing" mode: there the batch's
+  // identity already comes from the source bag itself.
+  const [selectedDebag, setSelectedDebag] = useState<DebaggedBagOption | null>(null)
+  const [debagOptions, setDebagOptions] = useState<DebaggedBagOption[]>([])
   const targetNeedsBatch = sourceMode === 'production' && !!target && LEAF.has(target.product_type)
   useEffect(() => {
-    if (!targetNeedsBatch || !target) { setProductionBatchOptions([]); return }
-    debaggedBatches(sectionId, target.variant ?? '', GRADE_TO_LOCAL_EXPORT[target.destination ?? 'A'] ?? 'Export')
-      .then(setProductionBatchOptions)
+    setSelectedDebag(null)
+    if (!targetNeedsBatch || !target) { setDebagOptions([]); return }
+    debaggedBags(sectionId, target.variant ?? '', GRADE_TO_LOCAL_EXPORT[target.destination ?? 'A'] ?? 'Export')
+      .then(setDebagOptions)
   }, [targetNeedsBatch, target?.variant, target?.destination, sectionId])
 
   // Excluded from matching the target so a bag can't top itself up.
@@ -237,7 +241,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
 
   const canSubmit = sourceMode === 'production'
     ? (!!target && !targetVoided && !targetConsumed && amountKg > 0 && !overCap && !(unusual && !confirmHeavy)
-        && !(targetNeedsBatch && !productionBatch.trim()))
+        && !(targetNeedsBatch && !selectedDebag))
     : (!!source && !!target && !sourceVoided && !sourceConsumed && !targetVoided && !targetConsumed
         && amountKg > 0 && !exceedsSource && !overCap && !(unusual && !confirmHeavy)
         && !(productMismatch && !targetProductType.trim()))
@@ -247,10 +251,13 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
     setSaving(true); setError(null)
     try {
       if (sourceMode === 'production') {
+        const batchNote = selectedDebag
+          ? `${selectedDebag.lotNumber ?? '—'} (debag #${selectedDebag.bagNo})`
+          : undefined
         await addFreshWeightToBag(
           target.serial_number, target.weight_kg ?? 0,
           amountKg, sectionId, sessionId, operatorId, closeTargetBag,
-          targetNeedsBatch ? productionBatch.trim() : undefined,
+          targetNeedsBatch ? batchNote : undefined,
         )
         // The label is now stale — forced reprint.
         await printLabelAuto({
@@ -413,10 +420,28 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                   <p className="text-[11px] text-text-muted">Fresh material from today's debagging/production, going straight into this bag — same variant as the bag ({target.variant || 'unset'}), no separate source bag needed.</p>
                   {targetNeedsBatch && (
                     <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch <span className="text-err">*</span></label>
-                      <BatchKeypadField value={productionBatch} onChange={setProductionBatch} options={productionBatchOptions}
-                        placeholder="Tap to enter" label="Batch" restrictToOptions className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] outline-none focus:border-violet-600" />
-                      <p className="text-[11px] text-text-muted">Must match a lot actually debagged under {target.variant || 'this variant'} — RA-CON/CON and RA-ORG/ORG count as the same family.</p>
+                      <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Which debagged bag is this from? <span className="text-err">*</span></label>
+                      <p className="text-[11px] text-text-muted">Confirm the specific intake bag — more than one can share a batch, or different batches can be running close together.</p>
+                      {debagOptions.length === 0 ? (
+                        <p className="text-[12px] text-text-muted italic py-2">No bags debagged yet under {target.variant || 'this variant'} — debag one first.</p>
+                      ) : (
+                        <ul className="divide-y divide-stone-100 rounded-xl border border-stone-200 max-h-[180px] overflow-y-auto">
+                          {debagOptions.map(d => (
+                            <li key={d.id}>
+                              <button onClick={() => setSelectedDebag(d)}
+                                className={`w-full flex items-center gap-2 px-3 py-2 text-left ${selectedDebag?.id === d.id ? 'bg-violet-50' : 'hover:bg-stone-50'}`}>
+                                <span className={`font-mono text-[11px] shrink-0 ${selectedDebag?.id === d.id ? 'text-violet-700 font-semibold' : 'text-text-faint'}`}>#{d.bagNo}</span>
+                                <span className="font-mono text-[12px] text-text flex-1 min-w-0 truncate">{d.lotNumber || '—'}</span>
+                                <span className="font-mono text-[11px] text-text-muted shrink-0">{d.kgNett.toFixed(1)}kg</span>
+                                <span className="text-[10px] text-text-faint shrink-0">{d.deliveryDate ? new Date(d.deliveryDate).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' }) : '—'}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {selectedDebag && (
+                        <p className="text-[11px] text-violet-700">Confirmed — filling up from debag #{selectedDebag.bagNo} · {selectedDebag.lotNumber || '—'}.</p>
+                      )}
                     </div>
                   )}
                   <div className="space-y-1">
@@ -483,7 +508,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
 
               <button onClick={() => setStep('confirm')}
                 disabled={sourceMode === 'production'
-                  ? (!target || amountKg <= 0 || (targetNeedsBatch && !productionBatch.trim()))
+                  ? (!target || amountKg <= 0 || (targetNeedsBatch && !selectedDebag))
                   : (!source || sourceVoided || sourceConsumed || amountKg <= 0 || exceedsSource || (productMismatch && !targetProductType.trim()))}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                 Next <ArrowRight size={15} />
@@ -506,7 +531,7 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                   ? <Row label="Source" value="Today's production" />
                   : <Row label="Source remaining" value={`${sourceRemaining.toFixed(1)} kg${sourceRemaining <= 0 ? ' (voided)' : ''}`} />}
                 <Row label="Target new total" value={`${newTotal.toFixed(1)} kg`} />
-                {sourceMode === 'production' && targetNeedsBatch && <Row label="Batch added" value={productionBatch.trim() || '—'} />}
+                {sourceMode === 'production' && targetNeedsBatch && <Row label="Debagged bag" value={selectedDebag ? `#${selectedDebag.bagNo} · ${selectedDebag.lotNumber || '—'}` : '—'} />}
                 {sourceMode === 'existing' && productMismatch && <Row label="Target reclassified to" value={targetProductType.trim() || '—'} />}
                 {target.lot_number && <Row label="Target batch (fixed at creation)" value={target.lot_number} />}
                 {sourceMode === 'production' && <Row label="Production day" value={`${date} · ${shift}`} />}
