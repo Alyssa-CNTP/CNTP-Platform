@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing)
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/label-print.ts`
+
+Requested: see what the reprinted label will actually look like before committing the top-up, not just the numbers.
+
+- `buildLabelHtml()` exported with an optional `embed` flag (mirrors the existing pattern in `lib/quality/qc-label-print.ts`) — drops the print button, since there's nothing to click inside a preview.
+- Confirm screen now shows a live label preview (an `iframe` with the same HTML `printLabelAuto` will actually send) for the target bag, and for the source bag too when "from another bag" mode reprints it. Built from the exact same bag object submit() uses — never a separate hand-built summary that could drift out of sync with the real print.
+
 ## 2026-08-26 — Alyssa (Production Orders: fix hourly VSD prompt retriggering + mobile overflow on order rows/panel headers)
 
 **Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx`

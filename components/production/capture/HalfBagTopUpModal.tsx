@@ -47,7 +47,7 @@ import { useEffect, useState } from 'react'
 import { X, Search, Loader2, AlertTriangle, ArrowRight, Printer, History } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { sanitizeSerial, transferBagWeight, addFreshWeightToBag, originalBagEvent } from '@/lib/production/scan-utils'
-import { printLabelAuto } from '@/lib/production/label-print'
+import { printLabelAuto, buildLabelHtml } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, GRADE_TO_LOCAL_EXPORT, sectionMeta, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import { LEAF, debaggedBags, type DebaggedBagOption } from '@/lib/production/inventory'
@@ -246,8 +246,28 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
         && amountKg > 0 && !exceedsSource && !overCap && !(unusual && !confirmHeavy)
         && !(productMismatch && !targetProductType.trim()))
 
+  // The exact bag records that will be (re)printed — built once here and
+  // reused for both the actual print call and the preview below, so the
+  // preview can never drift from what submit() actually sends.
+  const resolvedProductType = sourceMode === 'existing' && productMismatch
+    ? targetProductType.trim() : (target?.product_type ?? '')
+  const targetLabelBag = target ? {
+    id: target.serial_number, serial_number: target.serial_number, product_type: resolvedProductType,
+    variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
+    weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
+    section_name: sectionName, created_at: target.created_at, printed: true,
+    acumaticaId: target.acumatica_id ?? undefined,
+  } as any : null
+  const sourceLabelBag = (sourceMode === 'existing' && source && sourceRemaining > 0) ? {
+    id: source.serial_number, serial_number: source.serial_number, product_type: source.product_type,
+    variant: source.variant || 'Conventional', grade: (source.destination as any) || 'A',
+    weight_kg: sourceRemaining, lot_number: source.lot_number || '', section_id: sectionId,
+    section_name: sectionName, created_at: source.created_at, printed: true,
+    acumaticaId: source.acumatica_id ?? undefined,
+  } as any : null
+
   async function submit() {
-    if (!canSubmit || !target) return
+    if (!canSubmit || !target || !targetLabelBag) return
     setSaving(true); setError(null)
     try {
       if (sourceMode === 'production') {
@@ -260,16 +280,9 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
           targetNeedsBatch ? batchNote : undefined,
         )
         // The label is now stale — forced reprint.
-        await printLabelAuto({
-          id: target.serial_number, serial_number: target.serial_number, product_type: target.product_type,
-          variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
-          weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
-          section_name: sectionName, created_at: target.created_at, printed: true,
-          acumaticaId: target.acumatica_id ?? undefined,
-        } as any)
+        await printLabelAuto(targetLabelBag)
       } else {
         if (!source) return
-        const resolvedProductType = productMismatch ? targetProductType.trim() : target.product_type
         await transferBagWeight(
           source.serial_number, sourceKg,
           target.serial_number, target.weight_kg ?? 0,
@@ -277,22 +290,8 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
           productMismatch ? resolvedProductType : undefined,
         )
         // Both labels are now stale — forced reprint, no choice, for both.
-        await printLabelAuto({
-          id: target.serial_number, serial_number: target.serial_number, product_type: resolvedProductType,
-          variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
-          weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
-          section_name: sectionName, created_at: target.created_at, printed: true,
-          acumaticaId: target.acumatica_id ?? undefined,
-        } as any)
-        if (sourceRemaining > 0) {
-          await printLabelAuto({
-            id: source.serial_number, serial_number: source.serial_number, product_type: source.product_type,
-            variant: source.variant || 'Conventional', grade: (source.destination as any) || 'A',
-            weight_kg: sourceRemaining, lot_number: source.lot_number || '', section_id: sectionId,
-            section_name: sectionName, created_at: source.created_at, printed: true,
-            acumaticaId: source.acumatica_id ?? undefined,
-          } as any)
-        }
+        await printLabelAuto(targetLabelBag)
+        if (sourceLabelBag) await printLabelAuto(sourceLabelBag)
       }
       onDone(); onClose()
     } catch {
@@ -553,6 +552,13 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                   This completes the bag — mark it no longer open
                 </label>
               )}
+
+              <div className="space-y-2">
+                <p className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Label preview</p>
+                {targetLabelBag && <LabelPreview bag={targetLabelBag} caption={sourceMode === 'existing' ? 'Target — reprinted' : undefined} />}
+                {sourceLabelBag && <LabelPreview bag={sourceLabelBag} caption="Source — reprinted" />}
+              </div>
+
               {error && <p className="text-[12px] text-err">{error}</p>}
 
               <button onClick={submit} disabled={!canSubmit || saving}
@@ -563,6 +569,22 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
             </>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Renders the exact HTML printLabelAuto would send (embed:true just drops
+// the print button — there's nothing to click inside a preview), scaled
+// down into a fixed-aspect box matching the label's real 100mm × 49.2mm.
+function LabelPreview({ bag, caption }: { bag: any; caption?: string }) {
+  const html = buildLabelHtml(bag, { embed: true })
+  return (
+    <div className="space-y-1">
+      {caption && <p className="text-[11px] text-text-muted">{caption}</p>}
+      <div className="rounded-xl border border-stone-200 overflow-hidden bg-stone-50" style={{ aspectRatio: '100 / 49.2' }}>
+        <iframe srcDoc={html} title={`Label preview — ${bag.serial_number}`}
+          className="w-full h-full border-0" sandbox="" />
       </div>
     </div>
   )
