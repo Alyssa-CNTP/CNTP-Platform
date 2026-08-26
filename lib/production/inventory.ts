@@ -8,8 +8,9 @@
  */
 import { getDb } from '@/lib/supabase/db'
 import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
-import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily } from '@/lib/production/capture-config'
+import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
+import { variantFamily } from '@/lib/production/scan-utils'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface SuggestedItem {
@@ -20,7 +21,7 @@ export interface SuggestedItem {
   match: number            // 0–100 relevance, for display
 }
 
-const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
+export const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
 
 /**
  * The short, relevant output list for a section + variant — the default the
@@ -136,12 +137,22 @@ export async function recentBatches(sectionId: string): Promise<string[]> {
  * debagged in the CURRENT session (e.g. fed in on an earlier shift). Never
  * falls back to an unrestricted list — a batch that was never debagged here,
  * under a different variant/grade, is not a valid suggestion.
+ *
+ * Matches on variant FAMILY (via variantFamily — Conventional/RA-Conventional
+ * together, Organic/RA-Organic/FT-ORG together), not an exact string — RA-CON
+ * and CON stock are the same conventional material for this purpose, and a
+ * bag tagged one way must still see batches debagged under the other name.
+ * Falls back to an exact match only for a variant outside both families.
  */
 export async function debaggedBatches(sectionId: string, variant: string, localOrExport: string): Promise<string[]> {
   if (!variant) return []
+  const family = variantFamily(variant)
+  const variantMatch = family
+    ? VARIANT_OPTIONS.map(v => v.value).filter(v => variantFamily(v) === family)
+    : [variant]
   const { data } = await getDb().schema('production').from('prod_debagging')
     .select('lot_number, prod_sessions!inner(section_id)')
-    .eq('variant', variant).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .in('variant', variantMatch).eq('local_or_export', localOrExport).eq('is_spillage', false)
     .eq('prod_sessions.section_id', sectionId)
     .not('lot_number', 'is', null)
     .order('created_at', { ascending: false }).limit(300)
@@ -151,6 +162,40 @@ export async function debaggedBatches(sectionId: string, variant: string, localO
     if (l && !seen.has(l)) { seen.add(l); out.push(l) }
   })
   return out.slice(0, 60)
+}
+
+export interface DebaggedBagOption {
+  id: string
+  bagNo: number
+  lotNumber: string | null
+  kgNett: number
+  deliveryDate: string | null
+  sessionId: string
+}
+
+/**
+ * The actual debagged BAGS (production.prod_debagging rows, not just their
+ * distinct lot numbers) matching this section + variant family + grade —
+ * for confirming exactly which physical intake bag a Half-bag Top-up's
+ * "from today's production" material is credited to, when more than one
+ * bag under the same or a different batch could be in play. Same
+ * family-matching and section/grade scoping as debaggedBatches above.
+ */
+export async function debaggedBags(sectionId: string, variant: string, localOrExport: string): Promise<DebaggedBagOption[]> {
+  if (!variant) return []
+  const family = variantFamily(variant)
+  const variantMatch = family
+    ? VARIANT_OPTIONS.map(v => v.value).filter(v => variantFamily(v) === family)
+    : [variant]
+  const { data } = await getDb().schema('production').from('prod_debagging')
+    .select('id, bag_no, lot_number, kg_nett, delivery_date, session_id, prod_sessions!inner(section_id)')
+    .in('variant', variantMatch).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .eq('prod_sessions.section_id', sectionId)
+    .order('created_at', { ascending: false }).limit(60)
+  return ((data ?? []) as any[]).map(r => ({
+    id: r.id, bagNo: r.bag_no, lotNumber: r.lot_number ?? null,
+    kgNett: Number(r.kg_nett) || 0, deliveryDate: r.delivery_date ?? null, sessionId: r.session_id,
+  }))
 }
 
 /**

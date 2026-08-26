@@ -2,6 +2,40 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/label-print.ts`
+
+Requested: see what the reprinted label will actually look like before committing the top-up, not just the numbers.
+
+- `buildLabelHtml()` exported with an optional `embed` flag (mirrors the existing pattern in `lib/quality/qc-label-print.ts`) — drops the print button, since there's nothing to click inside a preview.
+- Confirm screen now shows a live label preview (an `iframe` with the same HTML `printLabelAuto` will actually send) for the target bag, and for the source bag too when "from another bag" mode reprints it. Built from the exact same bag object submit() uses — never a separate hand-built summary that could drift out of sync with the real print.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: visible on the capture page + Overview, confirm the actual debagged bag, not just a batch string) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx` (new), `lib/production/inventory.ts`, `lib/production/scan-utils.ts`, `lib/production/order-detail.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+Feedback after testing the "from today's production" path live:
+
+- **Invisible on the capture page.** A top-up is a deliberate side-channel write (never touches draft_data — that's what keeps mass balance from double-counting), which also meant it left no trace anywhere an operator or supervisor would actually be looking: not the section's own capture screen, not Overview. New `HalfBagTopUpActivity` — a small read-only, violet-styled list, scoped to the current session — mounted under the active section's own capture UI (right below the "Half-bag top-up" button) and on the Overview tab, showing serial, product/variant, kg added, and where it came from (today's production + batch, or another bag's serial).
+- **Batch confirmation was just a typed/tapped string.** For Sieving Tower especially, more than one physical intake bag can share a lot number, or different batches can be running close together — a batch *string* doesn't disambiguate that. Replaced the batch keypad with a list of the actual `production.prod_debagging` rows (bag number, lot, weight, delivery date) matching the target bag's own variant+grade, so the operator confirms the *specific debagged bag* this addition is credited to, not just a number. New `debaggedBags()` in `inventory.ts` (row-level sibling of the existing `debaggedBatches()`), same variant-family matching.
+- `addFreshWeightToBag()`'s scan_events row now always carries a `HALF_BAG_TOPUP` marker in `notes` (previously only when a batch applied) — the one reliable way to tell "this bagging_out row is a top-up" apart from an ordinary bag's own first-ever row, used by both the new activity list and Production Orders' cross-day detection (regex updated to match).
+
+**Known gap, not fixed here — needs a database view change, not just app code:** Quality's pending-QC queue (`qms.v_pending_bag_qc`) marks a bag "already sampled" by matching `sd_runs.serial_number` against the bag's serial alone, with no regard for whether more material was added *after* that sample was taken. A Fine/Coarse Leaf bag that was QC-sampled when first bagged, then topped up later (either mode), will **not** re-enter the pending queue under the current view logic — the added material never gets its own sampling opportunity through the normal workflow. Fixing this needs `qms.v_bag_qc_status`'s `qc_done` join to also consider whether the sample's `created_at` is after the bag's *latest* weight-changing event, not just whether a sample exists for that serial at all. Deliberately not attempted from here: this repo's migration-push workflow (`db-migrate.yml`) is explicitly disabled ("repo migrations are stale relative to the live databases... an automatic `supabase db push` could harm a database" — see `docs/db-reconciliation-runbook.md`), so a view change needs to go through whatever manual, reconciled process the last several `qms.v_bag_qc_status` migrations went through, not a blind new migration file.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: "from today's production" as the default path, not just bag-to-bag) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/scan-utils.ts`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported confusion: after picking the bag to top up and tapping Next, the operator lands on a second "search for a bag" screen with zero indication the first pick was kept — reads as being sent back to the start. Investigating that led to the real gap: the flow only ever modeled a top-up as material drawn from *another existing tracked bag*, but in most cases (especially Sieving Tower) the extra material is today's own freshly-debagged production that hasn't been bagged anywhere yet — there's no second bag at all. Blender genuinely does need the bag-to-bag path (e.g. consolidating two half-bags), so both stay, with "today's production" as the default.
+
+- The "which bag am I topping up" banner now stays visible on the next screen, with a "Change" link back — fixes the original confusion regardless of the deeper redesign.
+- New default path, **"From today's production"**: no source-bag lookup at all — just the amount, and (for Fine/Coarse Leaf) a required batch, restricted to lots actually debagged under the target bag's own variant+grade. Logged via new `addFreshWeightToBag()` (plain `bagging_out` scan_events row, batch recorded in `notes`) — this genuinely is new output, unlike a transfer, so it must count toward today's production.
+- Kept the existing **"From another bag"** path unchanged (Blender's case) — `transferBagWeight`'s linked `topped_up`/`drawn_down` pair, which must never count as new output.
+- `debaggedBatches()` now matches on variant **family** (via `variantFamily()`) rather than an exact string — RA-CON/CON count as the same conventional material, RA-ORG/ORG as the same organic material, matching how blending already treats these pairs elsewhere.
+- **Production Orders fix**: a "from today's production" top-up updates a bag whose own `bag_tags.session_id` is whatever day it was *first* bagged, not today — invisible to the existing bag_tags-snapshot sum. `loadOrderDay()` now also sums today's own `bagging_out` scan_events rows for serials not already in today's bag snapshot, folding that kg into `bagsOutputKg` (both per-shift and whole-day), and lists them in a new "Topped up from today's production" panel (`OrderFreshTopUpRow`) so it's visible which older bag received it and from which batch — unlike the existing "Re-bagged in" panel, this kg *is* included in the totals, since it's genuinely new.
+- The confirm screen shows which Production Order (date · shift) this will be counted under, so the operator can see it's right before saving.
+
 ## 2026-08-26 — Alyssa (COA generator: enlarge the signature blocks) [promoted to production]
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
