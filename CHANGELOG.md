@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/label-print.ts`
+
+Requested: see what the reprinted label will actually look like before committing the top-up, not just the numbers.
+
+- `buildLabelHtml()` exported with an optional `embed` flag (mirrors the existing pattern in `lib/quality/qc-label-print.ts`) — drops the print button, since there's nothing to click inside a preview.
+- Confirm screen now shows a live label preview (an `iframe` with the same HTML `printLabelAuto` will actually send) for the target bag, and for the source bag too when "from another bag" mode reprints it. Built from the exact same bag object submit() uses — never a separate hand-built summary that could drift out of sync with the real print.
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: visible on the capture page + Overview, confirm the actual debagged bag, not just a batch string) [promoted to production]
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx` (new), `lib/production/inventory.ts`, `lib/production/scan-utils.ts`, `lib/production/order-detail.ts`, `app/(app)/production/capture/[section]/page.tsx`

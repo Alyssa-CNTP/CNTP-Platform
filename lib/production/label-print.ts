@@ -26,7 +26,11 @@ const VARIANT_SHORT: Record<string, string> = {
   'FT-CON':          'FT CON',
 }
 
-function buildLabelHtml(bag: OutputBag): string {
+// `embed: true` drops the print button — for showing the label inline (e.g.
+// an iframe preview before the operator commits) rather than in its own
+// print window, where there's no print button to click.
+export function buildLabelHtml(bag: OutputBag, opts: { embed?: boolean } = {}): string {
+  const embed = !!opts.embed
   const gradeShort   = GRADE_FULL[bag.grade] ?? GRADE_LABELS[bag.grade] ?? bag.grade
   const variantShort = VARIANT_SHORT[bag.variant] ?? bag.variant
   const badgeText     = `${variantShort} - ${gradeShort}`
@@ -130,7 +134,7 @@ function buildLabelHtml(bag: OutputBag): string {
     </div>
   </div>
 
-  <button class="print-btn no-print" onclick="window.print()">Print Label</button>
+  ${embed ? '' : '<button class="print-btn no-print" onclick="window.print()">Print Label</button>'}
 </body>
 </html>`
 }
