@@ -315,11 +315,16 @@ export async function addFreshWeightToBag(
   if (closeTargetBag) targetUpdate.is_open = false
   await getDb().schema('production').from('bag_tags').update(targetUpdate as any).eq('serial_number', targetSerial)
 
+  // notes always carries the HALF_BAG_TOPUP marker (not only when a batch
+  // applies) — this is the one reliable way to tell "this bagging_out row
+  // is a top-up into an existing bag" apart from an ordinary bag's own
+  // first-ever bagging_out row, for both the live activity display and
+  // Production Orders' cross-day fresh-topup detection.
   await getDb().schema('production').from('scan_events').insert({
     serial_number: targetSerial, section_id: sectionId, session_id: sessionId || null,
     action: 'bagging_out', weight_kg: amountKg,
     operator_id: operatorId ?? null, scanned_at: now,
-    notes: batch ? `batch: ${batch}` : null,
+    notes: `HALF_BAG_TOPUP${batch ? `: ${batch}` : ''}`,
   } as any)
 }
 
