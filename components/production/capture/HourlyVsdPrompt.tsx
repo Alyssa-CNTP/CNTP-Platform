@@ -19,7 +19,7 @@ const SNOOZE_MS = 10 * 60 * 1000   // "remind me shortly" pushes the prompt out 
  * line is running and the session hasn't been submitted. Readings append to the
  * same production.check_events trail the Checks engine uses.
  */
-export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, active, operator }: {
+export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, active, operator, visible = true }: {
   sectionId: string
   date: string
   shift: string
@@ -27,6 +27,9 @@ export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, ac
   running: boolean               // machine running cue (material captured)
   active: boolean                // capture live (not locked / submitted)
   operator: { id: string; name: string } | null
+  visible?: boolean              // false on tabs (e.g. Overview) where the modal shouldn't pop —
+                                  // stays a prop, not a parent-side unmount, so the "last reading"
+                                  // fetch and the hour timer survive switching tabs and back
 }) {
   // Only sections with an hourly numeric check (Sieving → infeed_vsd) prompt.
   const vsdCheck = useMemo(
@@ -36,6 +39,7 @@ export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, ac
 
   const [spec, setSpec]       = useState<CheckSpec | null>(null)
   const [lastVsd, setLastVsd] = useState<number | null>(null)  // epoch ms of last reading
+  const [loaded, setLoaded]   = useState(false)                 // has the DB read for lastVsd resolved yet
   const [now, setNow]         = useState<number>(() => Date.now())
   const [value, setValue]     = useState('')
   const [saving, setSaving]   = useState(false)
@@ -54,8 +58,12 @@ export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, ac
     const { events } = await loadCheckRecord(sectionId, date, shift)
     const vsd = events.filter((e: any) => e.check_key === vsdCheck.key && e.value_num != null)
     setLastVsd(vsd.length ? new Date(vsd[vsd.length - 1].recorded_at).getTime() : null)
+    setLoaded(true)
   }
-  useEffect(() => { refreshLast() }, [sectionId, date, shift, running, vsdCheck])
+  // Re-fetching resets `loaded` first — otherwise, while sectionId/date/shift
+  // change (e.g. a changeover) but before the new record has loaded, `due`
+  // would briefly judge readiness against the PREVIOUS shift's lastVsd.
+  useEffect(() => { setLoaded(false); refreshLast() }, [sectionId, date, shift, running, vsdCheck])
 
   // ChecksPanel has its own, separate "Live: hourly VSD reading" widget on the
   // Checks tab that writes to the same check_events trail — a reading logged
@@ -72,7 +80,7 @@ export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, ac
   if (!vsdCheck) return null
 
   const minsSince = lastVsd ? (now - lastVsd) / 60000 : Infinity
-  const due = active && running
+  const due = visible && loaded && active && running
     && now >= snoozeUntil
     && (lastVsd === null || minsSince >= HOURLY_NUDGE_MINUTES)
 

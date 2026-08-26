@@ -74,11 +74,11 @@ export function PanelHead({ icon: Icon, title, meta, action, children }: {
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex items-center gap-2.5 px-5 pt-4 pb-3">
+    <div className="flex items-center gap-2.5 px-5 pt-4 pb-3 flex-wrap">
       {Icon && <Icon size={15} className="text-text-faint shrink-0" />}
-      <h3 className="font-display font-semibold text-[14px] text-text tracking-[-0.01em]">{title}</h3>
-      {meta && <span className="font-mono text-[11px] text-text-faint">{meta}</span>}
-      {(action || children) && <div className="ml-auto flex items-center gap-2">{children}{action}</div>}
+      <h3 className="font-display font-semibold text-[14px] text-text tracking-[-0.01em] truncate min-w-0">{title}</h3>
+      {meta && <span className="font-mono text-[11px] text-text-faint truncate">{meta}</span>}
+      {(action || children) && <div className="ml-auto flex items-center gap-2 shrink-0">{children}{action}</div>}
     </div>
   )
 }

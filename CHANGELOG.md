@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Production Orders: fix hourly VSD prompt retriggering + mobile overflow on order rows/panel headers)
+
+**Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx`
+
+Reported: on a phone, the hourly VSD (infeed speed) reading prompt on Sieving's capture screen "just opens when the capture screen is open" and never waits the full hour before popping up again for a new reading. Root cause: the capture page only rendered `<HourlyVsdPrompt>` while on the Checks/Overview-adjacent tabs (`{tab !== 'overview' && <HourlyVsdPrompt .../>}`), so it unmounted and remounted every time the operator switched tabs — wiping its "last reading" state back to `null` each time. A freshly-mounted component with `lastVsd === null` is, by design, immediately "due" (no baseline reading yet), so the modal popped up again right away regardless of how recently a reading had actually been logged.
+
+- `HourlyVsdPrompt` now takes a `visible` prop instead of being conditionally mounted — it stays mounted across tab switches (state, and the hour timer, now survive), and is just hidden while `visible` is false (e.g. the Overview tab).
+- Added a `loaded` flag so "due" isn't judged until the last-reading DB read has actually resolved — previously the very first render (before that fetch returned) always evaluated `lastVsd === null` → due, causing a visible flash-open on slower mobile connections even when a recent reading already existed.
+- Production Orders list: an order row's trailing status/balance pills and action icons (reopen, traceability, view order, manage menu) were plain `shrink-0` siblings with no wrap — on phone widths they didn't fit and got squeezed/clipped off-screen. The row now wraps them onto their own line under the record name instead.
+- `PanelHead` (shared by Production Orders, the Supervisor Hub and the Shift Report) now wraps and truncates instead of overflowing when a long title + meta + action badge don't fit on one line at phone widths.
 ## 2026-08-26 — Alyssa (Half-bag top-up: visible on the capture page + Overview, confirm the actual debagged bag, not just a batch string)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx` (new), `lib/production/inventory.ts`, `lib/production/scan-utils.ts`, `lib/production/order-detail.ts`, `app/(app)/production/capture/[section]/page.tsx`
@@ -13,7 +23,6 @@ Feedback after testing the "from today's production" path live:
 - `addFreshWeightToBag()`'s scan_events row now always carries a `HALF_BAG_TOPUP` marker in `notes` (previously only when a batch applied) — the one reliable way to tell "this bagging_out row is a top-up" apart from an ordinary bag's own first-ever row, used by both the new activity list and Production Orders' cross-day detection (regex updated to match).
 
 **Known gap, not fixed here — needs a database view change, not just app code:** Quality's pending-QC queue (`qms.v_pending_bag_qc`) marks a bag "already sampled" by matching `sd_runs.serial_number` against the bag's serial alone, with no regard for whether more material was added *after* that sample was taken. A Fine/Coarse Leaf bag that was QC-sampled when first bagged, then topped up later (either mode), will **not** re-enter the pending queue under the current view logic — the added material never gets its own sampling opportunity through the normal workflow. Fixing this needs `qms.v_bag_qc_status`'s `qc_done` join to also consider whether the sample's `created_at` is after the bag's *latest* weight-changing event, not just whether a sample exists for that serial at all. Deliberately not attempted from here: this repo's migration-push workflow (`db-migrate.yml`) is explicitly disabled ("repo migrations are stale relative to the live databases... an automatic `supabase db push` could harm a database" — see `docs/db-reconciliation-runbook.md`), so a view change needs to go through whatever manual, reconciled process the last several `qms.v_bag_qc_status` migrations went through, not a blind new migration file.
-
 ## 2026-08-26 — Alyssa (Half-bag top-up: "from today's production" as the default path, not just bag-to-bag)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/scan-utils.ts`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
