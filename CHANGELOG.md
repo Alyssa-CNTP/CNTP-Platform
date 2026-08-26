@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-25 — Alyssa (Re-bag / Tags: let the operator actually reclassify a bag's product type on a cross-product top-up) [promoted to production]
+
+**Files changed:** `app/(app)/tags/page.tsx`, `lib/production/scan-utils.ts`
+
+The "different product to the source" warning shown when topping up a bag from a different product type was a dead end — `transferBagWeight()` never actually touched the target's `product_type`, so nothing was ever reclassified regardless of the warning.
+
+- Added a "Resulting product type" field (free text + a datalist of the source's, the bag's, and the section's own output types) that appears only when a mismatch is detected, and is required before the top-up can be saved.
+- `transferBagWeight()` gained an optional trailing `reclassifyProductType` parameter — set only on a genuine mismatch, so a same-product top-up is completely unaffected.
+
 ## 2026-08-26 — Alyssa (Bagging: automatically leave under-200kg bags open for top-up, instead of a manual tick every time) [promoted to production]
 
 **Files changed:** `lib/production/capture-config.ts`, `components/production/capture/OutputPicker.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
