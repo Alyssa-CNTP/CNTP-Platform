@@ -12,6 +12,20 @@ Cause: `gemini-2.5-flash` (the primary model in the fallback list since the 2026
 
 - `geminiOnce()` now sends `thinkingConfig: { thinkingBudget: 0 }` in `generationConfig`. This is a structured-extraction task with no need for extended reasoning, so thinking is disabled outright rather than padding every per-workflow token budget to cover an unbounded thinking phase.
 
+## 2026-08-26 — Alyssa (Half-bag top-up: pre-print a target-weight tag, and give topped-up bags their own black-band label)
+
+**Files changed:** `lib/production/live-types.ts`, `lib/production/scan-utils.ts`, `lib/production/label-print.ts`, `lib/production/label-pplb.ts`, `lib/production/label-zpl.ts`, `components/production/capture/HalfBagTopUpModal.tsx`
+
+Requested: (1) a way to declare a bag's target weight and print a tag showing it *before* any material is actually added, so whoever fills the bag knows the goal; (2) a distinctive label for bags that have been topped up, showing the date/weight of every addition for morning stock count — as its own design, not a reskin of the plain label. Design approved from a true-scale mockup, with one correction: thermal printers are monochrome, so the "distinctive" band is solid black (matching the existing TYPE/GRADE badge treatment), not the app's usual violet — violet stays a screen-only convention (button, Overview's sub-rows, the activity feed).
+
+- `OutputBag` gained three optional fields — `targetWeightKg`, `originalWeightKg`, `topUps` (chronological `{kg, at}` list) — read by all three label builders to switch into the top-up layout; absent, every label renders exactly as before.
+- New `setBagTargetWeight()` in `scan-utils.ts` — a pure side-channel write to `bag_tags.target_weight_kg`, same pattern as every other top-up write here.
+- `HalfBagTopUpModal`'s target step now has a standalone "Pre-print a target-weight tag" panel: enter a target weight, see "+X kg still needed," save it and print immediately — independent of actually adding weight below it. The existing top-up flow now also carries the bag's target (if any) through to its own reprinted label, showing "reached" or "need +X kg more" alongside the addition history.
+- `buildLabelHtml` (browser/preview), `buildLabelPplb` (Argox, the confirmed-working hardware) and `buildLabelZpl` (Zebra) all render a solid black band ("Topped up" / "Target set") plus a history strip (original bagging → every addition → running total → target status) in place of the plain footer, whenever a bag has top-ups and/or a target set. PPLB/ZPL geometry is adapted from the approved browser design but **not yet verified against a physical print** — no printer reachable from this environment; check the first real print of each variant carefully.
+- **Still needed before this is fully live**: the `20260826_001_bag_target_weight.sql` migration (already committed, PR #822) needs to actually be applied to the staging Supabase project if it hasn't been already — `setBagTargetWeight()`'s update will fail until the column exists.
+
+**Not promoted to production yet — staging only, pending testing.**
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: fold top-up history into Overview's own bag rows, add the bag_tags.target_weight_kg column)
 
 **Files changed:** `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260826_001_bag_target_weight.sql`

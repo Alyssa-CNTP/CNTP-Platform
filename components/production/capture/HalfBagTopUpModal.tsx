@@ -44,9 +44,9 @@
 // not today.
 
 import { useEffect, useState } from 'react'
-import { X, Search, Loader2, AlertTriangle, ArrowRight, Printer, History } from 'lucide-react'
+import { X, Search, Loader2, AlertTriangle, ArrowRight, Printer, History, Target } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { sanitizeSerial, transferBagWeight, addFreshWeightToBag, originalBagEvent } from '@/lib/production/scan-utils'
+import { sanitizeSerial, transferBagWeight, addFreshWeightToBag, originalBagEvent, setBagTargetWeight, fetchTopUpEventsForSerials, type TopUpEvent } from '@/lib/production/scan-utils'
 import { printLabelAuto, buildLabelHtml } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, GRADE_TO_LOCAL_EXPORT, sectionMeta, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
@@ -66,6 +66,7 @@ interface RebagBag {
   consumed_at_section: string | null
   created_at: string
   is_open: boolean
+  target_weight_kg: number | null
 }
 
 type BagLookup = RebagBag | null | 'loading' | 'not_found'
@@ -154,6 +155,23 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   const targetConsumed = Boolean(target?.consumed_at_section)
   const [targetOriginal, setTargetOriginal] = useState<{ weight_kg: number } | null>(null)
   const [targetHistory, setTargetHistory] = useState<HistoryRow[]>([])
+  const [targetTopUps, setTargetTopUps] = useState<TopUpEvent[]>([])
+
+  // The bag's declared target weight — separate from targetInput's own
+  // useBagLookup result so the "pre-print" panel below can update it
+  // instantly on save without waiting for a fresh debounced lookup.
+  const [targetWeightKg, setTargetWeightKgState] = useState<number | null>(null)
+  useEffect(() => { setTargetWeightKgState(target?.target_weight_kg ?? null) }, [target?.serial_number, target?.target_weight_kg])
+
+  // "Pre-print" — a standalone action, separate from actually adding
+  // weight: declares the final weight this bag should reach and prints a
+  // tag showing it, so whoever fills the bag later knows how much more to
+  // add. Does not advance the step or touch the top-up amount below.
+  const [targetWeightDraft, setTargetWeightDraft] = useState('')
+  useEffect(() => { setTargetWeightDraft(target?.target_weight_kg != null ? String(target.target_weight_kg) : '') }, [target?.serial_number])
+  const [preprintSaving, setPreprintSaving] = useState(false)
+  const [preprintError, setPreprintError] = useState<string | null>(null)
+  const [preprintDone, setPreprintDone] = useState(false)
 
   const [targetBrowseVariant, setTargetBrowseVariant] = useState('')
   const [targetBrowseProductType, setTargetBrowseProductType] = useState('')
@@ -213,9 +231,10 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   // Original bagging date/weight + full history for each bag — fetched once
   // found, shown on the confirm screen.
   useEffect(() => {
-    if (!target) { setTargetOriginal(null); setTargetHistory([]); return }
+    if (!target) { setTargetOriginal(null); setTargetHistory([]); setTargetTopUps([]); return }
     originalBagEvent(target.serial_number).then(ev => setTargetOriginal(ev ? { weight_kg: ev.weight_kg } : null))
     loadHistory(target.serial_number).then(setTargetHistory)
+    fetchTopUpEventsForSerials([target.serial_number]).then(m => setTargetTopUps(m.get(target.serial_number) ?? []))
   }, [target?.serial_number])
   useEffect(() => {
     if (!source) { setSourceOriginal(null); setSourceHistory([]); return }
@@ -239,6 +258,53 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   const productMismatch = sourceMode === 'existing' && !!source && !!target
     && source.product_type.toLowerCase() !== target.product_type.toLowerCase()
 
+  // ── Pre-print target-weight panel — a standalone action available as
+  // soon as a target bag is picked, independent of amountKg/sourceMode
+  // below. Only ever raises the target above what's currently in the bag.
+  const targetWeightDraftKg = n(targetWeightDraft) || 0
+  const targetWeightValid = !!target && targetWeightDraftKg > (target.weight_kg ?? 0) && targetWeightDraftKg <= MAX_BAG_WEIGHT_KG
+  const targetStillNeeded = target ? Math.max(0, targetWeightDraftKg - (target.weight_kg ?? 0)) : 0
+
+  async function savePreprintTarget() {
+    if (!target || !targetWeightValid) return
+    setPreprintSaving(true); setPreprintError(null); setPreprintDone(false)
+    try {
+      await setBagTargetWeight(target.serial_number, targetWeightDraftKg)
+      setTargetWeightKgState(targetWeightDraftKg)
+      const preprintBag: any = {
+        id: target.serial_number, serial_number: target.serial_number, product_type: target.product_type,
+        variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
+        weight_kg: target.weight_kg ?? 0, lot_number: target.lot_number || '', section_id: sectionId,
+        section_name: sectionName, created_at: target.created_at, printed: true,
+        acumaticaId: target.acumatica_id ?? undefined,
+        targetWeightKg: targetWeightDraftKg,
+        originalWeightKg: targetOriginal?.weight_kg,
+        topUps: targetTopUps.map(t => ({ kg: t.kg, at: t.at })),
+      }
+      await printLabelAuto(preprintBag)
+      setPreprintDone(true)
+    } catch {
+      setPreprintError('Could not save the target weight — check the connection and try again.')
+    } finally {
+      setPreprintSaving(false)
+    }
+  }
+
+  async function clearPreprintTarget() {
+    if (!target) return
+    setPreprintSaving(true); setPreprintError(null)
+    try {
+      await setBagTargetWeight(target.serial_number, null)
+      setTargetWeightKgState(null)
+      setTargetWeightDraft('')
+      setPreprintDone(false)
+    } catch {
+      setPreprintError('Could not clear the target weight — check the connection and try again.')
+    } finally {
+      setPreprintSaving(false)
+    }
+  }
+
   const canSubmit = sourceMode === 'production'
     ? (!!target && !targetVoided && !targetConsumed && amountKg > 0 && !overCap && !(unusual && !confirmHeavy)
         && !(targetNeedsBatch && !selectedDebag))
@@ -251,12 +317,21 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
   // preview can never drift from what submit() actually sends.
   const resolvedProductType = sourceMode === 'existing' && productMismatch
     ? targetProductType.trim() : (target?.product_type ?? '')
+  // The addition in progress isn't in scan_events yet at preview/print
+  // time — appended here so the label (and its preview) reflects it
+  // immediately, same total either way once submit() actually writes it.
+  const targetTopUpsForLabel = amountKg > 0
+    ? [...targetTopUps.map(t => ({ kg: t.kg, at: t.at })), { kg: amountKg, at: new Date().toISOString() }]
+    : targetTopUps.map(t => ({ kg: t.kg, at: t.at }))
   const targetLabelBag = target ? {
     id: target.serial_number, serial_number: target.serial_number, product_type: resolvedProductType,
     variant: target.variant || 'Conventional', grade: (target.destination as any) || 'A',
     weight_kg: newTotal, lot_number: target.lot_number || '', section_id: sectionId,
     section_name: sectionName, created_at: target.created_at, printed: true,
     acumaticaId: target.acumatica_id ?? undefined,
+    targetWeightKg: targetWeightKg ?? undefined,
+    originalWeightKg: targetOriginal?.weight_kg,
+    topUps: targetTopUpsForLabel,
   } as any : null
   const sourceLabelBag = (sourceMode === 'existing' && source && sourceRemaining > 0) ? {
     id: source.serial_number, serial_number: source.serial_number, product_type: source.product_type,
@@ -384,8 +459,41 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                     <span className="text-text-muted">{target.product_type}{target.variant ? ` · ${target.variant}` : ''}</span>
                   </div>
                   <div className="text-text-muted">{(target.weight_kg ?? 0).toFixed(1)}kg currently in stock{target.is_open ? ' · open' : ''}</div>
+                  {targetWeightKg != null && (
+                    <div className="flex items-center gap-1.5 text-violet-700"><Target size={11} /> Target set: {targetWeightKg.toFixed(1)}kg</div>
+                  )}
                 </div>
               )}
+
+              {target && !targetVoided && !targetConsumed && (
+                <div className="rounded-xl border border-dashed border-stone-300 px-3 py-2.5 space-y-2">
+                  <p className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest flex items-center gap-1.5"><Target size={12} /> Pre-print a target-weight tag (optional)</p>
+                  <p className="text-[11px] text-text-muted">Not a top-up — this only prints a tag showing the final weight this bag should reach, so whoever fills it later knows how much more to add. Do this now, or skip straight to adding weight below.</p>
+                  <div className="flex items-center gap-2">
+                    <input type="text" inputMode="decimal" value={targetWeightDraft}
+                      onChange={e => { setTargetWeightDraft(e.target.value); setPreprintDone(false) }}
+                      placeholder="Target weight (kg)"
+                      className="flex-1 px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] outline-none focus:border-violet-600" />
+                    {targetWeightKg != null && (
+                      <button onClick={clearPreprintTarget} disabled={preprintSaving} className="text-[11px] text-text-muted underline shrink-0 disabled:opacity-40">Clear</button>
+                    )}
+                  </div>
+                  {targetWeightDraft && !targetWeightValid && (
+                    <p className="text-[11px] text-err">Must be more than the current {(target.weight_kg ?? 0).toFixed(1)}kg{targetWeightDraftKg > MAX_BAG_WEIGHT_KG ? ` and under ${MAX_BAG_WEIGHT_KG}kg` : ''}.</p>
+                  )}
+                  {targetWeightValid && (
+                    <p className="text-[11px] text-stone-500">Needs <span className="font-mono text-text">+{targetStillNeeded.toFixed(1)}kg</span> more to reach {targetWeightDraftKg.toFixed(1)}kg.</p>
+                  )}
+                  {preprintError && <p className="text-[11px] text-err">{preprintError}</p>}
+                  {preprintDone && <p className="text-[11px] text-emerald-700">Target saved — tag printed.</p>}
+                  <button onClick={savePreprintTarget} disabled={!targetWeightValid || preprintSaving}
+                    className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-violet-600 text-violet-700 text-[13px] font-medium disabled:opacity-40">
+                    {preprintSaving ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+                    {preprintSaving ? 'Saving…' : 'Save target & print tag'}
+                  </button>
+                </div>
+              )}
+
               <button onClick={() => setStep('source')} disabled={!target || targetVoided || targetConsumed}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[14px] font-medium disabled:opacity-40">
                 Next <ArrowRight size={15} />
@@ -534,6 +642,11 @@ export function HalfBagTopUpModal({ sectionId, sessionId, operatorId, date, shif
                 {sourceMode === 'existing' && productMismatch && <Row label="Target reclassified to" value={targetProductType.trim() || '—'} />}
                 {target.lot_number && <Row label="Target batch (fixed at creation)" value={target.lot_number} />}
                 {sourceMode === 'production' && <Row label="Production day" value={`${date} · ${shift}`} />}
+                {targetWeightKg != null && (
+                  <Row label="Target weight" value={newTotal >= targetWeightKg
+                    ? `${targetWeightKg.toFixed(1)} kg (reached)`
+                    : `${targetWeightKg.toFixed(1)} kg · need +${(targetWeightKg - newTotal).toFixed(1)}kg more`} />
+                )}
               </div>
 
               {overCap && <p className="text-[12px] text-err">That's over the {MAX_BAG_WEIGHT_KG}kg safety ceiling for one bag.</p>}
