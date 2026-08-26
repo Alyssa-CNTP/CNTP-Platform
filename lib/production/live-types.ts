@@ -80,7 +80,7 @@ export const SECTION_CONFIG: Record<string, {
     name: 'Sieving Tower', code: 'ST',
     colorHex: '#0d9488', colorClass: 'bg-teal-600',
     inputMode: 'register',
-    inputTypes: ['500kg Farm Bag'],
+    inputTypes: ['Farm Bag'],
     outputTypes: ['Fine Leaf','Coarse Leaf','RB Blocks','Rolsiev Sticks','Indent Sticks','Brown Dust','Powder Dust','Bucket Elevator Spillage'],
   },
   refining1: {

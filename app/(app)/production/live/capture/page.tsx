@@ -419,7 +419,7 @@ function CaptureInner() {
     const bag: ScannedBag = {
       id:             crypto.randomUUID(),
       serial_number:  serial,
-      product_type:   '500kg Farm Bag',
+      product_type:   'Farm Bag',
       variant:        regForm.variant,
       grade:          regForm.grade,
       weight_kg:      parseFloat(regForm.weight_kg) || 0,

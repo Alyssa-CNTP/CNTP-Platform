@@ -2,6 +2,13 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Bag tracking: print button uses the production label design; live capture product_type fix)
+
+**Files changed:** `app/(app)/tags/page.tsx`, `app/(app)/production/live/capture/page.tsx`, `lib/production/live-types.ts`
+
+- **Bag tracking print** — the Print button on the tag detail modal was using an old inline HTML template (loaded JsBarcode from cdnjs CDN, different layout) instead of the production label design. Replaced `printTagLabel()` with `printLabelAuto()` from `lib/production/label-print.ts`, which tries the networked label printer first (Zebra/Argox over TCP 9100) and falls back to the browser print popup with the correct 100×49.2mm barcode-hero layout. Same mapping pattern the half-bag top-up flow already uses.
+- **Live capture `product_type`** — the live capture page and `SECTION_CONFIG.sieving.inputTypes` still referenced `'500kg Farm Bag'`; updated to `'Farm Bag'` to match the regular capture page.
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: fold into the correct product-type section everywhere, instead of a separate violet-only block)
 
 **Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `app/(app)/production/orders/[id]/page.tsx`
