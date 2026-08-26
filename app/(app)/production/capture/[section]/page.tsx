@@ -2393,7 +2393,6 @@ function CaptureScreen() {
                 balanceNote={balanceNote}
                 blenderRatios={blenderRatios}
               />
-              <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />
             </>
           )}
 

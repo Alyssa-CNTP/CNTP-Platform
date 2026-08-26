@@ -7,9 +7,10 @@
 // Machine spillage is entered here (not in capture) and is session-level.
 // Combined totals merge both shifts when same variant+grade+lot are passed in.
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
+import { fetchTopUpEventsForSerials, type TopUpEvent } from '@/lib/production/scan-utils'
 import { type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
@@ -253,6 +254,22 @@ export function CaptureOverview({
 
   const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
   const productGroups = useMemo(() => buildProductGroups(productions), [productions])
+
+  // Half-bag Top-up folded into each bag's own row here, rather than a
+  // separate panel — a top-up is a side-channel write that never touches
+  // draft_data (see HalfBagTopUpModal), so it's otherwise invisible in this
+  // page's own product/lot grouping even though it's real activity against
+  // one of these exact bags. Keyed by serial, not by this page's own
+  // session(s) — the top-up could have been logged in a different session
+  // than the one that first bagged it.
+  const [topUpsBySerial, setTopUpsBySerial] = useState<Map<string, TopUpEvent[]>>(new Map())
+  useEffect(() => {
+    const serials = Array.from(new Set(productGroups.flatMap(pg => pg.lots.flatMap(lg => lg.bags.map(b => b.serial))).filter(Boolean))) as string[]
+    if (!serials.length) { setTopUpsBySerial(new Map()); return }
+    let cancelled = false
+    fetchTopUpEventsForSerials(serials).then(m => { if (!cancelled) setTopUpsBySerial(m) })
+    return () => { cancelled = true }
+  }, [productGroups])
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
   const totalIncl     = debagOnlyKg + bucketInKg + machineKg
@@ -552,16 +569,38 @@ export function CaptureOverview({
 
                                   {isLotOpen && (
                                     <div className="pl-12 pr-3 pb-2 space-y-1" style={{ background: BAG_ORANGE + '03' }}>
-                                      {lg.bags.map((b, bi) => (
-                                        <div key={bi} className="flex items-center gap-2 py-1 text-[12px]">
-                                          {b.serial
-                                            ? <span className="font-mono text-[11px] font-medium text-stone-600 bg-stone-100 border border-stone-200 rounded-md px-1.5 py-0.5 shrink-0">{b.serial}</span>
-                                            : <span className="text-[11px] text-stone-400 shrink-0">bag {bi + 1}</span>}
-                                          <span className="text-stone-400 truncate flex-1">{[b.variant, b.grade].filter(Boolean).join(' · ')}</span>
-                                          {b.loggedAt && <span className="font-mono text-[10px] text-stone-400 shrink-0">{fmtTime(b.loggedAt)}</span>}
-                                          <span className="font-mono text-stone-700 shrink-0 w-16 text-right">{b.kg.toFixed(1)} kg</span>
+                                      {lg.bags.map((b, bi) => {
+                                        const topUps = b.serial ? topUpsBySerial.get(b.serial) : undefined
+                                        return (
+                                        <div key={bi}>
+                                          <div className="flex items-center gap-2 py-1 text-[12px]">
+                                            {b.serial
+                                              ? <span className="font-mono text-[11px] font-medium text-stone-600 bg-stone-100 border border-stone-200 rounded-md px-1.5 py-0.5 shrink-0">{b.serial}</span>
+                                              : <span className="text-[11px] text-stone-400 shrink-0">bag {bi + 1}</span>}
+                                            <span className="text-stone-400 truncate flex-1">{[b.variant, b.grade].filter(Boolean).join(' · ')}</span>
+                                            {b.loggedAt && <span className="font-mono text-[10px] text-stone-400 shrink-0">{fmtTime(b.loggedAt)}</span>}
+                                            <span className="font-mono text-stone-700 shrink-0 w-16 text-right">{b.kg.toFixed(1)} kg</span>
+                                          </div>
+                                          {/* Half-bag Top-up history for this exact bag — folded in here
+                                              rather than a separate panel, since it's real activity
+                                              against this specific serial even though the write path
+                                              (see HalfBagTopUpModal) never touches this page's own
+                                              draft_data-derived grouping above. */}
+                                          {topUps?.map((t, ti) => (
+                                            <div key={ti} className="flex items-center gap-2 py-0.5 pl-4 text-[11px] border-l-2 border-violet-200">
+                                              <Scale size={10} className="text-violet-500 shrink-0" />
+                                              <span className="text-violet-700 truncate flex-1">
+                                                {t.mode === 'production'
+                                                  ? (t.sourceOrBatch ? `today's production · ${t.sourceOrBatch}` : "today's production")
+                                                  : `from ${t.sourceOrBatch}`}
+                                              </span>
+                                              <span className="font-mono text-[10px] text-violet-400 shrink-0">{fmtTime(t.at)}</span>
+                                              <span className="font-mono text-violet-700 shrink-0 w-16 text-right">+{t.kg.toFixed(1)} kg</span>
+                                            </div>
+                                          ))}
                                         </div>
-                                      ))}
+                                        )
+                                      })}
                                     </div>
                                   )}
                                 </div>
