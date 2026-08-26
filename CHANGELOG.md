@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (COA generator: enlarge the signature blocks)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+Requested: the Lab Manager / Quality Manager signatures on the COA (preview, print, and exported PDF) were too small. Increased the base signature size by 40% — on-screen draggable signature `baseH` 40px → 56px (with the signature-block column `maxWidth` 260px → 280px, and the empty-slot placeholder height matched at 56px), and the PDF export's base height 30pt → 42pt (with its image-width cap 150pt → 170pt) to keep the on-screen preview and the exported PDF visually consistent, since the export code converts the on-screen px adjustment to PDF pt via a fixed ratio (`k = 0.75`, i.e. 56px ≈ 42pt). The existing drag-to-reposition / corner-handle resize behaviour is unchanged.
+
 ## 2026-08-26 — Alyssa (Bagging: automatically leave under-200kg bags open for top-up, instead of a manual tick every time) [promoted to production]
 
 **Files changed:** `lib/production/capture-config.ts`, `components/production/capture/OutputPicker.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`

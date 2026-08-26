@@ -934,10 +934,10 @@ export default function CoaGeneratorPage() {
             {/* Signatures — Staff-Directory names, signed with each person's own signature */}
             <div className="flex justify-between gap-8 mt-10">
               {outputSigs.map((s) => (
-                <div key={s.slot} style={{ flex: 1, maxWidth: 260 }}>
+                <div key={s.slot} style={{ flex: 1, maxWidth: 280 }}>
                   {s.signature
                     ? <DraggableSignature src={s.signature} adjust={adjustOf(s.slot)} onChange={a => setSigAdjust(p => ({ ...p, [s.slot]: a }))} />
-                    : <div style={{ height: 40 }} />}
+                    : <div style={{ height: 56 }} />}
                   <div style={{ borderTop: '1px solid #111', paddingTop: 3 }} />
                   <div className="text-[11px] font-semibold">{s.title}</div>
                   <div className="text-[11px]">{s.name}</div>
@@ -1040,7 +1040,7 @@ function DraggableSignature({ src, adjust, onChange }: {
 }) {
   const drag = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null)
   const rez  = useRef<{ x: number; scale: number } | null>(null)
-  const baseH = 40
+  const baseH = 56
   // The image's real width:height ratio, measured once it loads. Sizing with
   // height + width:'auto' + a fixed maxWidth looked right only up to the
   // scale where the computed width hit that cap — past it, the browser kept
@@ -1268,13 +1268,13 @@ async function exportPdf(model: CoaModel, description: string, signatories?: { s
       // loadImage handles both and gives us dimensions to keep the aspect ratio.
       const img = await loadImage(s.signature)
       if (img) {
-        // Apply the on-screen move/resize. Preview base height is 40px ≈ 30pt,
+        // Apply the on-screen move/resize. Preview base height is 56px ≈ 42pt,
         // so convert px offsets to pt with k = 0.75. Bottom stays anchored above
         // the line (y - 2) and scaling grows the image upward.
         const adj = (sigAdjust && sigAdjust[s.slot]) || { dx: 0, dy: 0, scale: 1 }
         const k = 0.75
-        const h = 30 * adj.scale
-        const w = Math.min(150, img.w * (30 / img.h)) * adj.scale
+        const h = 42 * adj.scale
+        const w = Math.min(170, img.w * (42 / img.h)) * adj.scale
         const left = x + adj.dx * k
         const top = (y - 2) - h - adj.dy * k
         try { doc.addImage(img.dataUrl, 'PNG', left, top, w, h) } catch { /* ignore bad image */ }
