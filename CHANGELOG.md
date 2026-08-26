@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Half-bag top-up: "final weight" is now a way to enter the amount, not a separate declare-only step)
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`
+
+Correction to the previous "pre-print" panel (PR #825): that shipped as a standalone action that only saved a target weight and printed a tag, without touching the bag's actual weight — intended for a future operator to fill the gap later. That's not what was asked for. Clarified: the operator doing the top-up right now wants to name the bag's desired FINAL weight (e.g. "it's at 67kg, I want it at 300kg") and have the system work out the amount to add — and that calculated amount should be added and logged immediately, in the same submit, not declared for someone else to act on later.
+
+- Removed the standalone pre-print panel (`savePreprintTarget`/`clearPreprintTarget` and its own save/print flow) — it never touched real weight, which was the misunderstanding.
+- The source step's "Amount to add (kg)" field is now a toggle: "I know the amount to add" (unchanged) or "I know the final weight" — the second mode takes the bag's desired final weight and computes `amountKg = target − current` automatically, which then flows through the exact same `addFreshWeightToBag()`/`transferBagWeight()` write path as a normal top-up (so it's genuinely logged, not just recorded as an intention).
+- When "final weight" mode is used, the declared target is written to `bag_tags.target_weight_kg` alongside the real addition, so the printed label (already built in #825) shows "reached" — the calculated amount always brings the bag exactly to the stated target in one submit.
+- The read-only "Target set: Xkg" line on the target step stays, for a bag that already carries a declared target from an earlier top-up.
+
+**Not promoted to production yet — staging only, pending testing.**
+
 ## 2026-08-26 — Alyssa (Lab Results upload: gemini-2.5-flash's default "thinking" was silently eating the JSON answer budget)
 
 **Files changed:** `app/api/upload/route.ts`
