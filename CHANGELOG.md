@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (prod_debagging: insert-then-delete to prevent data loss on failed saves)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+- **Insert-then-delete for `prod_debagging`** — `persist()` previously did a blanket `DELETE … WHERE session_id = ?` followed by `INSERT`. If the insert failed (e.g. PGRST204 from a stale schema cache, network timeout, column mismatch), every debagging row for that session was already gone — exactly what happened on the morning of 2026-08-26 when the `local_or_export` → `grade` rename left PostgREST's cache stale. Now the function fetches the existing row IDs first, inserts the new rows (fresh UUIDs, no unique constraint to conflict), and only deletes the old rows by ID after a successful insert. If the insert fails, existing rows are untouched. Mirrors the safer targeted-delete pattern already used for `prod_bagging`.
+
 ## 2026-08-26 — Alyssa (Bag tracking: print button uses the production label design; live capture product_type fix)
 
 **Files changed:** `app/(app)/tags/page.tsx`, `app/(app)/production/live/capture/page.tsx`, `lib/production/live-types.ts`
