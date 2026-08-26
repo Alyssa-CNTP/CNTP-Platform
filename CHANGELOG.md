@@ -2,7 +2,7 @@
 
 All changes deployed to staging are logged here automatically.  
 
-## 2026-08-26 — Alyssa (Bagging: automatically leave under-200kg bags open for top-up, instead of a manual tick every time)
+## 2026-08-26 — Alyssa (Bagging: automatically leave under-200kg bags open for top-up, instead of a manual tick every time) [promoted to production]
 
 **Files changed:** `lib/production/capture-config.ts`, `components/production/capture/OutputPicker.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
 
@@ -12,7 +12,7 @@ Requested: the "Leave bag open — not full yet, will top up later" checkbox had
 - Removed the manual checkbox from all four places it existed (`OutputPicker` — used by Sieving; and the Refining, Granule, and Blender capture screens' own inline output-bagging forms) — `is_open` is now set automatically from the weight just typed. Replaced with a small non-interactive note ("Under 200kg — left open automatically" / "200kg or more — marked complete") so the operator can still see what's about to happen.
 - No change to reaching a closed bag when one genuinely needs a top-up anyway — Half-bag Top-up's bag pickers already let an operator search by variant/product type and toggle off "Only show open (half) bags" to see everything in stock, open or not.
 
-## 2026-08-25 — Alyssa (Half-bag top-up: narrowed the operator-facing "Re-bag material" feature down to exactly that)
+## 2026-08-25 — Alyssa (Half-bag top-up: narrowed the operator-facing "Re-bag material" feature down to exactly that) [promoted to production]
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx` (renamed from `RebagModal.tsx`), `app/(app)/production/capture/[section]/page.tsx`
 
@@ -22,6 +22,12 @@ Feedback after testing the full re-bagging feature: creating a brand-new bag, an
 - Removed the "add or remove" intent picker, "New bag" target creation (`OutputPicker` + serial generation), and "Not on the system yet" untracked-stock registration entirely from this flow — both bags involved must already be tracked bags. `createBagFromTransfer` (the new-bag-target primitive) stays defined in `lib/production/scan-utils.ts`, unused for now — reusable when the warehouse-management version of this gets built.
 - The flow is now a fixed two-step pick: which bag you're topping up, then where the extra material is coming from — followed by amount, a safety-net "resulting product type" field on a cross-SKU mismatch, and a confirm screen showing both bags' current weight, original bagging date/weight, and full history before printing.
 - Added the same browse-by-variant-and-product-type discovery to the "which bag are you topping up" step that the source step already had (previously that step was a bare serial box with no way in if you didn't know the exact serial), plus a smart default: an "Only show open (half) bags" filter, on by default, since that's exactly what a half-bag-from-yesterday is (`is_open`) — with an easy toggle to see everything in stock.
+
+## 2026-08-25 — Alyssa (Re-bag / Tags: let the operator actually reclassify a bag's product type on a cross-product top-up) [promoted to production]
+
+**Files changed:** `app/(app)/tags/page.tsx`, `lib/production/scan-utils.ts`, `components/production/capture/HalfBagTopUpModal.tsx`
+
+The "different product to the source" warning shown when topping up a bag from a different product type was a dead end — `transferBagWeight()` never actually touched the target's `product_type`, so nothing was ever reclassified regardless of the warning. Added a "Resulting product type" field (free text + a datalist) that appears only on a mismatch and is required before the top-up can save; `transferBagWeight()` gained an optional trailing `reclassifyProductType` parameter, set only on a genuine mismatch, so a same-product top-up is unaffected. This had no dedicated changelog entry when it originally shipped on the Tags page and Half-bag Top-up modal — recorded now since it's what's actually live.
 
 ## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input)
 
