@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Sieving Tower capture: fix scrambled bag numbering from the earlier self-heal, add the same reconciliation for debagging inputs)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Follow-up, reported live: after the earlier Bagging-list self-heal ran, "Bag 1"–"Bag N" no longer matched chronological order — each row's own serial/time was correct, but the numbers (array position) were scrambled, because the restored bags were appended in whatever order the query happened to return them, after the bags already on screen.
+
+- Both self-heal effects now sort the merged list by `logged_at` before writing it back, so "Bag N" always matches actual capture order regardless of which rows came from the ledger vs. were already on screen.
+- Added the same reconciliation for debagging inputs (`prod_debagging` vs. this session's `debag` array) — debag rows have no atomic per-row write of their own (`persist()` deletes and reinserts the whole set from the current array every save), so a `debag` array that reverts to a stale, shorter state after a disruption would otherwise get "confirmed" by the very next save, discarding rows `prod_debagging` genuinely still had. Matched on bag-number label + lot + net weight (debag rows have no serial to match on).
+- **Important limitation, confirmed live**: this can only restore what's actually still in the database somewhere. A debag row that was never written to `prod_debagging` at all (no atomic write path exists for it, unlike output bags) can't be recovered by this or any read-side fix — it needs to be re-entered if the operator's browser no longer has it locally.
+
 ## 2026-08-26 — Alyssa (Sieving Tower capture: self-heal the Bagging list from bag_tags when it falls behind)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
