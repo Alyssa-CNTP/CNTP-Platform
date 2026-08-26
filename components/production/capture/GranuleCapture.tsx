@@ -34,7 +34,7 @@ import {
 } from 'recharts'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, LABEL_PRINTING_ENABLED, isImplausibleWeight } from '@/lib/production/capture-config'
+import { variantToShort, LABEL_PRINTING_ENABLED, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
@@ -683,7 +683,6 @@ export function GranuleCapture({
   // ── Granule output bags ───────────────────────────────────────────────────────
   const [outTarget, setOutTarget] = useState(DEFAULT_TARGET_KG)
   const [outWeight, setOutWeight] = useState('')
-  const [outLeaveOpen, setOutLeaveOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   // Supervisor sets the lot at assignment, but the operator is the one who can
   // actually see the physical batch on the floor — a typo or a wrong batch
@@ -703,7 +702,7 @@ export function GranuleCapture({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: item,
         variant: variantWord || null, weight_kg: n(outWeight), lot_number: lot || null,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
-        is_open: outLeaveOpen,
+        is_open: isOpenBagWeight(n(outWeight)),
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({
         serial_number: serial, action: 'bagging_out', section_id: 'granule', weight_kg: n(outWeight), operator_id: operatorId ?? null,
@@ -714,7 +713,7 @@ export function GranuleCapture({
       weight: outWeight, code: acCode?.inventoryId ?? null, printed: LABEL_PRINTING_ENABLED, tagMethod: null, secured: true, logged_at: now,
     }
     onChange({ ...value, outputs: [...value.outputs, bag] })
-    setOutWeight(''); setOutLeaveOpen(false); setAdding(false)
+    setOutWeight(''); setAdding(false)
   }
   // Removing a bag from this record must also void its bag_tags row — leaving
   // it 'in_stock' would let it keep looking like real, available inventory
@@ -1056,10 +1055,14 @@ export function GranuleCapture({
                       )}
                     </div>
                   </div>
-                  <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
-                    <input type="checkbox" checked={outLeaveOpen} onChange={e => setOutLeaveOpen(e.target.checked)} className="rounded" />
-                    Leave bag open — not full yet, will top up later (from Tags)
-                  </label>
+                  {n(outWeight) > 0 && !isImplausibleWeight(n(outWeight)) && (
+                    <p className="text-[11px] text-stone-500 flex items-center gap-1.5">
+                      <Check size={12} className={isOpenBagWeight(n(outWeight)) ? 'text-violet-500' : 'text-ok'} />
+                      {isOpenBagWeight(n(outWeight))
+                        ? <>Under {OPEN_BAG_WEIGHT_THRESHOLD_KG}kg — left open automatically for a later top-up.</>
+                        : <>{OPEN_BAG_WEIGHT_THRESHOLD_KG}kg or more — marked complete.</>}
+                    </p>
+                  )}
                   <button onClick={addOutputBag} disabled={n(outWeight) <= 0 || isImplausibleWeight(n(outWeight)) || adding}
                     className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-white text-[13px] font-medium disabled:opacity-40 transition-colors" style={{ background: BAG_COLOR }}>
                     <Plus size={15} /> {adding ? 'Adding…' : 'Add bag'}

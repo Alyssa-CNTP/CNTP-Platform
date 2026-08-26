@@ -157,6 +157,18 @@ export function isUnusuallyHeavyBag(label: string, totalKg: number): boolean {
   return totalKg > threshold
 }
 
+// A bag under this weight is treated as not yet full and is automatically
+// left open for a later top-up — no operator tick required. Deliberately
+// flat rather than per-product: every product's own standard full weight
+// above (Indent Sticks 252kg, Leaf 300kg, the 350kg fallback) sits well
+// above this, so a genuinely full bag of any tracked product is never
+// mistakenly left open. A closed bag is still reachable at any time by
+// searching for it directly — this only controls the default.
+export const OPEN_BAG_WEIGHT_THRESHOLD_KG = 200
+export function isOpenBagWeight(weightKg: number): boolean {
+  return weightKg > 0 && weightKg < OPEN_BAG_WEIGHT_THRESHOLD_KG
+}
+
 // Hard ceiling for ANY single physical kg weight typed into a capture field —
 // one bag, one debagged row, one ingredient, one job-card per-bag figure.
 // Unlike isUnusuallyHeavyBag above (a soft, product-aware confirm-to-proceed

@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Bagging: automatically leave under-200kg bags open for top-up, instead of a manual tick every time)
+
+**Files changed:** `lib/production/capture-config.ts`, `components/production/capture/OutputPicker.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
+
+Requested: the "Leave bag open — not full yet, will top up later" checkbox had to be ticked by hand on every single bag that wasn't full, which is most of them at the end of a shift. Weight already tells you this — a bag well under any product's standard full weight (Indent Sticks ~252kg, Fine/Coarse Leaf ~300kg) is a half bag by definition.
+
+- New `isOpenBagWeight()` / `OPEN_BAG_WEIGHT_THRESHOLD_KG` (200kg) in `capture-config.ts` — a flat threshold rather than per-product, since every product's own standard sits comfortably above it.
+- Removed the manual checkbox from all four places it existed (`OutputPicker` — used by Sieving; and the Refining, Granule, and Blender capture screens' own inline output-bagging forms) — `is_open` is now set automatically from the weight just typed. Replaced with a small non-interactive note ("Under 200kg — left open automatically" / "200kg or more — marked complete") so the operator can still see what's about to happen.
+- No change to reaching a closed bag when one genuinely needs a top-up anyway — Half-bag Top-up's bag pickers already let an operator search by variant/product type and toggle off "Only show open (half) bags" to see everything in stock, open or not.
+
 ## 2026-08-25 — Alyssa (Half-bag top-up: narrowed the operator-facing "Re-bag material" feature down to exactly that)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx` (renamed from `RebagModal.tsx`), `app/(app)/production/capture/[section]/page.tsx`

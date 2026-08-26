@@ -3,7 +3,7 @@
 import { useState, useEffect, type ReactNode } from 'react'
 import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
 import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
-import { LABEL_PRINTING_ENABLED, expectedBagWeightFor, isImplausibleWeight } from '@/lib/production/capture-config'
+import { LABEL_PRINTING_ENABLED, expectedBagWeightFor, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
@@ -62,7 +62,6 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   const [picked, setPicked]   = useState<{ productType: string; code: string | null; description: string; batchTracked: boolean } | null>(null)
   const [weight, setWeight]   = useState('')
   const [batch, setBatch]     = useState(defaultBatch)
-  const [leaveOpen, setLeaveOpen] = useState(false)
 
   // Load the master list once; filtering is then instant on every keystroke.
   useEffect(() => { loadAllInventory().then(setAll) }, [])
@@ -80,7 +79,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
     if (picked.batchTracked && !batch.trim()) return
     if (picked.batchTracked && restrictBatch && !batchOptions.includes(batch.trim())) return
     // Internally-tracked items carry no operator batch — the barcode is the record.
-    onAdd({ productType: picked.productType, code: picked.code, description: picked.description, weight, batch: picked.batchTracked ? (batch || defaultBatch) : '', leaveOpen })
+    onAdd({ productType: picked.productType, code: picked.code, description: picked.description, weight, batch: picked.batchTracked ? (batch || defaultBatch) : '', leaveOpen: isOpenBagWeight(n(weight)) })
   }
 
   return (
@@ -144,10 +143,14 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
               <p className="text-[11px] text-text-muted flex items-center gap-1.5"><Check size={12} /> Tracked by its bag number{LABEL_PRINTING_ENABLED ? ' (barcode)' : ''} — no batch number needed.</p>
             )}
             {picked.code && <p className="text-[11px] text-text-muted font-mono">{picked.code} · {picked.description}</p>}
-            <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
-              <input type="checkbox" checked={leaveOpen} onChange={e => setLeaveOpen(e.target.checked)} className="rounded" />
-              Leave bag open — not full yet, will top up later (from Tags)
-            </label>
+            {n(weight) > 0 && !isImplausibleWeight(n(weight)) && (
+              <p className="text-[11px] text-stone-500 flex items-center gap-1.5">
+                <Check size={12} className={isOpenBagWeight(n(weight)) ? 'text-violet-500' : 'text-ok'} />
+                {isOpenBagWeight(n(weight))
+                  ? <>Under {OPEN_BAG_WEIGHT_THRESHOLD_KG}kg — left open automatically for a later top-up.</>
+                  : <>{OPEN_BAG_WEIGHT_THRESHOLD_KG}kg or more — marked complete.</>}
+              </p>
+            )}
             <button onClick={confirm} disabled={!weight || isImplausibleWeight(n(weight)) || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
               {confirmLabel ?? (LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>)}
