@@ -112,7 +112,7 @@ export interface OrderDebagRow {
   kg_gross: number | null
   kg_nett: number
   delivery_date: string | null
-  local_or_export: string | null
+  grade: string | null
   org_or_conv: string | null
   is_spillage: boolean
   notes: string | null

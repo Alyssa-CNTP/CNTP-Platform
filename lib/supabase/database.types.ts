@@ -151,7 +151,7 @@ export interface Database {
           kg_gross:         number | null
           kg_nett:          number
           delivery_date:    string | null
-          local_or_export:  LocalExport | null
+          grade:            LocalExport | null
           org_or_conv:      OrgConv | null
           is_spillage:      boolean
           notes:            string | null
