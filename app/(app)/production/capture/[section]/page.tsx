@@ -35,6 +35,7 @@ import {
   type PasteuriserData,
 } from '@/components/production/capture/PasteuriserCapture'
 import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
+import { HalfBagTopUpActivity } from '@/components/production/capture/HalfBagTopUpActivity'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -2354,6 +2355,7 @@ function CaptureScreen() {
                       <Scale size={16} /> Half-bag top-up
                     </button>
                   )}
+                  {!isPasteuriser(sectionId) && <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />}
                   {!locked && (
                     <button onClick={saveDraft} disabled={saving}
                       className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
@@ -2420,6 +2422,7 @@ function CaptureScreen() {
                 balanceNote={balanceNote}
                 blenderRatios={blenderRatios}
               />
+              <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />
             </>
           )}
 
