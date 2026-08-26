@@ -396,17 +396,17 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   // "From today's production" Half-bag Top-ups into a bag first bagged on
   // an EARLIER day — that bag's own bag_tags row belongs to that day's
-  // session, so it never appears in `bags` above at all. Any 'bagging_out'
-  // scan_events row tagged with TODAY's session_id whose serial isn't one
-  // of today's own bags is exactly that: fresh weight added today into an
-  // older bag (see addFreshWeightToBag). A same-day bag's own
-  // 'bagging_out' rows — its original creation, or a same-day top-up —
-  // are already fully reflected in its bag_tags.weight_kg snapshot above,
-  // so they're excluded here to avoid double-counting.
+  // session, so it never appears in `bags` above at all. addFreshWeightToBag
+  // always marks its scan_events row's notes with HALF_BAG_TOPUP, so this
+  // is never confused with an ordinary bag's own first-ever 'bagging_out'
+  // row. A same-day bag's own 'bagging_out' rows — its original creation, or
+  // a same-day top-up — are already fully reflected in its bag_tags.weight_kg
+  // snapshot above, so they're excluded here (via todaysBagSerials) too, to
+  // avoid double-counting.
   const todaysBagSerials = new Set(bags.map(b => b.bag_serial_no).filter(Boolean) as string[])
   const { data: freshEvData } = await db.from('scan_events')
     .select('serial_number, session_id, weight_kg, notes, scanned_at')
-    .in('session_id', ids).eq('action', 'bagging_out')
+    .in('session_id', ids).eq('action', 'bagging_out').ilike('notes', 'HALF_BAG_TOPUP%')
   const freshRows = ((freshEvData as any[]) ?? [])
     .filter(e => e.serial_number && !todaysBagSerials.has(e.serial_number))
   const freshSerials = Array.from(new Set(freshRows.map(e => e.serial_number)))
@@ -417,7 +417,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     freshProductBySerial = new Map(((freshTagsData as any[]) ?? []).map((t: any) => [t.serial_number, t.product_type ?? null]))
   }
   const freshTopUps: OrderFreshTopUpRow[] = freshRows.map(e => {
-    const m = /^batch:\s*(.+)$/.exec((e.notes ?? '').trim())
+    const m = /^HALF_BAG_TOPUP:\s*(.+)$/.exec((e.notes ?? '').trim())
     return {
       targetSerial: e.serial_number, productType: freshProductBySerial.get(e.serial_number) ?? null,
       batch: m ? m[1] : null, kg: Number(e.weight_kg) || 0, at: e.scanned_at,
