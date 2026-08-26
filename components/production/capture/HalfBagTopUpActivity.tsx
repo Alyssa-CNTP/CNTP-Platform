@@ -48,6 +48,18 @@ export function HalfBagTopUpActivity({ sectionId, sessionId }: { sectionId: stri
 
   if (!rows.length) return null
 
+  // Grouped by product type — the same shape as every other bagging table
+  // on this page — rather than one flat chronological list, so a Sticks
+  // top-up reads under a "Sticks" heading instead of being lumped in with
+  // everything else with only the violet colour to go on.
+  const groups = new Map<string, ActivityRow[]>()
+  for (const r of rows) {
+    const key = r.productType || 'Other'
+    const list = groups.get(key) ?? []
+    list.push(r)
+    groups.set(key, list)
+  }
+
   return (
     <div className="rounded-2xl border border-violet-200 bg-violet-50/40 overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-violet-100 bg-violet-50">
@@ -55,21 +67,31 @@ export function HalfBagTopUpActivity({ sectionId, sessionId }: { sectionId: stri
         <span className="font-semibold text-[13px] text-violet-700 flex-1">Half-bag top-ups this shift</span>
         <span className="font-mono text-[11px] text-violet-500">{rows.length}</span>
       </div>
-      <ul className="divide-y divide-violet-100/70">
-        {rows.map((r, i) => (
-          <li key={i} className="flex items-center gap-2 px-4 py-2 text-[12.5px] flex-wrap">
-            <span className="font-mono text-text shrink-0">{r.serial}</span>
-            <span className="text-text-muted truncate">{r.productType}{r.variant ? ` · ${r.variant}` : ''}</span>
-            <span className="font-mono text-text-muted shrink-0 ml-auto">+{r.kg.toFixed(1)}kg</span>
-            <span className="text-[11px] text-violet-600 shrink-0">
-              {r.mode === 'production'
-                ? (r.sourceOrBatch ? `today's production · ${r.sourceOrBatch}` : "today's production")
-                : `from ${r.sourceOrBatch}`}
-            </span>
-            <span className="text-[10px] text-text-faint shrink-0">{new Date(r.at).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}</span>
-          </li>
+      <div className="divide-y divide-violet-100/70">
+        {Array.from(groups.entries()).map(([type, group]) => (
+          <div key={type}>
+            <div className="flex items-center justify-between gap-2 px-4 py-1.5 bg-violet-50/60">
+              <span className="text-[11.5px] font-semibold text-violet-800">{type}</span>
+              <span className="font-mono text-[10px] text-violet-500">{group.reduce((s, r) => s + r.kg, 0).toFixed(1)} kg</span>
+            </div>
+            <ul className="divide-y divide-violet-100/50">
+              {group.map((r, i) => (
+                <li key={i} className="flex items-center gap-2 px-4 py-2 text-[12.5px] flex-wrap">
+                  <span className="font-mono text-text shrink-0">{r.serial}</span>
+                  {r.variant && <span className="text-text-muted truncate">{r.variant}</span>}
+                  <span className="font-mono text-text-muted shrink-0 ml-auto">+{r.kg.toFixed(1)}kg</span>
+                  <span className="text-[11px] text-violet-600 shrink-0">
+                    {r.mode === 'production'
+                      ? (r.sourceOrBatch ? `today's production · ${r.sourceOrBatch}` : "today's production")
+                      : `from ${r.sourceOrBatch}`}
+                  </span>
+                  <span className="text-[10px] text-text-faint shrink-0">{new Date(r.at).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   )
 }
