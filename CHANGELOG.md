@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Lab Results upload: gemini-2.5-flash's default "thinking" was silently eating the JSON answer budget)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported: Micro PDF uploads on the Quality page failing with errors like *"AI returned invalid JSON — Unterminated string in JSON at position 558"* / *"Expected double-quoted property name in JSON at position 431"* — different positions on every retry of the same file, all well under 600 characters in.
+
+Cause: `gemini-2.5-flash` (the primary model in the fallback list since the 2026-08-21 fix) has "thinking" turned on by default, and its thinking tokens are drawn from the same `maxOutputTokens` budget as the actual answer — not a separate allowance. Every workflow's token budget here (`micro: 1500`, etc.) was sized assuming all of it goes to the JSON reply, so once thinking silently claims part of it, the model gets cut off a few hundred characters into the answer. A response truncated mid-string is exactly what produces "Unterminated string" / "Expected double-quoted property name" at a tiny position — that's the signature of a cut-off reply, not a malformed one, and it's a different failure mode from the backslash-escape bug fixed on 2026-08-17 (which `repairInvalidEscapes` still handles fine).
+
+- `geminiOnce()` now sends `thinkingConfig: { thinkingBudget: 0 }` in `generationConfig`. This is a structured-extraction task with no need for extended reasoning, so thinking is disabled outright rather than padding every per-workflow token budget to cover an unbounded thinking phase.
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: fold top-up history into Overview's own bag rows, add the bag_tags.target_weight_kg column)
 
 **Files changed:** `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260826_001_bag_target_weight.sql`
