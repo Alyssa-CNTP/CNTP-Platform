@@ -2,6 +2,14 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Sieving Tower capture: the resort has to run even when nothing is missing)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Bug in the previous fix, caught before it reached the affected session: the sort-fix only ran inside the same `if (!missing.length) return` guard as the restore logic — so a session already fully restored by an earlier run (outputs already has everything, `missing` is empty) never got re-sorted at all, and would have kept showing the exact scrambled "Bag 1..N" order from the screenshot even after this fix deployed.
+
+- Both self-heal effects now always compute the sorted merge and compare it against the current array (by content length and per-index reference), patching whenever restoring OR re-sorting would actually change something — not only when there's something new to restore.
+
 ## 2026-08-26 — Alyssa (Sieving Tower capture: fix scrambled bag numbering from the earlier self-heal, add the same reconciliation for debagging inputs)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
