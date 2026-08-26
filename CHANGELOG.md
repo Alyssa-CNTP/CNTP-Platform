@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Bag tags: fix print button using old CDN-dependent label design)
+
+**Files changed:** `app/(app)/tags/page.tsx`
+
+- **Print button fix** — `printTagLabel()` was still using an old inline HTML template that loaded JsBarcode from cdnjs CDN (which fails when the CDN is blocked or slow). Replaced with `printLabelAuto()` from `lib/production/label-print.ts`, which uses the production label design (100×49.2mm barcode-hero layout) with inline Code128 encoding — no external dependencies. Same function the weight-transfer flow already uses.
+
 ## 2026-08-26 — Alyssa (prod_debagging: insert-then-delete to prevent data loss on failed saves)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
