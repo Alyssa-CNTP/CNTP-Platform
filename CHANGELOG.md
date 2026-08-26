@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Fix: staging deploy never installed new npm packages, causing chunk 404s for the camera barcode scanner)
+
+**Files changed:** `.github/workflows/deploy-staging.yml`, `CLAUDE.md`
+
+Reported: `Failed to load resource: 404` in the console on the Sieving capture page (the other lines in the same report — "message channel closed before a response was received" — are a browser-extension artifact, not app code; confirmed the app has no `chrome.runtime` messaging that could produce them). Root cause: `@zxing/browser`/`@zxing/library` were added to `package.json` for the camera barcode scanner (`components/shared/BarcodeScanner.tsx`, used from Sieving capture's scan button), but `deploy-staging.yml` only ran `git pull` → `npm run build` — no `npm install` — unlike `deploy-production.yml`, which already had `npm install --legacy-peer-deps`. So staging's `node_modules` never picked up the new packages, and the dynamic `import('@zxing/browser')` 404'd in the browser. Added the missing `npm install --legacy-peer-deps` step to both the GitHub Actions staging workflow and the equivalent manual SSH deploy snippet in `CLAUDE.md`.
+
 ## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
