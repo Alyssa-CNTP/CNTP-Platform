@@ -132,7 +132,7 @@ export async function recentBatches(sectionId: string): Promise<string[]> {
 
 /**
  * Lot numbers actually debagged (production.prod_debagging) for this section,
- * matching a specific variant + grade (local_or_export) — real batches that
+ * matching a specific variant + grade — real batches that
  * are legitimately consumable under that variant/grade even if they weren't
  * debagged in the CURRENT session (e.g. fed in on an earlier shift). Never
  * falls back to an unrestricted list — a batch that was never debagged here,
@@ -152,7 +152,7 @@ export async function debaggedBatches(sectionId: string, variant: string, localO
     : [variant]
   const { data } = await getDb().schema('production').from('prod_debagging')
     .select('lot_number, prod_sessions!inner(section_id)')
-    .in('variant', variantMatch).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .in('variant', variantMatch).eq('grade', localOrExport).eq('is_spillage', false)
     .eq('prod_sessions.section_id', sectionId)
     .not('lot_number', 'is', null)
     .order('created_at', { ascending: false }).limit(300)
@@ -189,7 +189,7 @@ export async function debaggedBags(sectionId: string, variant: string, localOrEx
     : [variant]
   const { data } = await getDb().schema('production').from('prod_debagging')
     .select('id, bag_no, lot_number, kg_nett, delivery_date, session_id, prod_sessions!inner(section_id)')
-    .in('variant', variantMatch).eq('local_or_export', localOrExport).eq('is_spillage', false)
+    .in('variant', variantMatch).eq('grade', localOrExport).eq('is_spillage', false)
     .eq('prod_sessions.section_id', sectionId)
     .order('created_at', { ascending: false }).limit(60)
   return ((data ?? []) as any[]).map(r => ({

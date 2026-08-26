@@ -150,8 +150,8 @@ function buildRecords(sectionId: string, records: ShiftLogRecord[]): BuiltRecord
       // read on the mass balance.
       const d = rec.data as SievingData
       ;(d.debag ?? []).forEach((r, i) => add(inputs, {
-        label: '500kg farm bag', ref: r.bag_no || `Bulk bag ${i + 1}`, lot: lot(r.lot), kg: num(r.nett),
-        time: timeOf(r.logged_at), note: r.local_export || undefined,
+        label: 'Farm bag', ref: r.bag_no || `Bulk bag ${i + 1}`, lot: lot(r.lot), kg: num(r.nett),
+        time: timeOf(r.logged_at), note: r.grade || undefined,
       }))
       ;(d.outputs ?? []).forEach(b => add(outputs, {
         label: b.productType || 'Output bag', ref: b.serial, lot: lot(b.batch), kg: num(b.weight),

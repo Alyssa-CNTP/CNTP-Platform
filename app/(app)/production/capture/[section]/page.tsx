@@ -1045,7 +1045,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            local_or_export: r.destination || null,
+            grade: r.destination || null,
             notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
@@ -1084,9 +1084,15 @@ function CaptureScreen() {
             // Preserve the operator's physical bag number in notes for traceability.
             bag_serial_no: null, notes: r.bag_no || null,
             lot_number: r.lot || prod.lot || null,
-            product_type: '500kg Farm Bag', variant: prod.variant,
+            // Was '500kg Farm Bag' — kept unchanged on historical rows (Acumatica
+            // actually reads batch numbers + total weight, not this string, so the
+            // rename is safe going forward without a backfill).
+            product_type: 'Farm Bag', variant: prod.variant,
             kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-            delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
+            delivery_date: r.delivery_date || null, grade: r.grade || null,
+            // Real capture instant, immune to persist()'s delete+reinsert restamping
+            // created_at on every save — same pattern as output bags' bagging_time.
+            bagging_time: r.logged_at || null,
             is_spillage: false,
           })
         })

@@ -124,7 +124,7 @@ function buildDebag(sectionId, prods, sid) {
         rows.push({
           session_id: sid, bag_no: bagNo++,
           bag_serial_no: r.inputMode !== 'manual' ? (r.serial || null) : null,
-          local_or_export: r.destination || null,
+          grade: r.destination || null,
           notes: r.inputMode === 'manual' ? (r.serial || null) : null,
           lot_number: r.lot || prod.lot || null,
           product_type: r.productType || null, variant: r.variant || prod.variant || null,
@@ -160,7 +160,7 @@ function buildDebag(sectionId, prods, sid) {
           lot_number: r.lot || prod.lot || null,
           product_type: '500kg Farm Bag', variant: prod.variant || null,
           kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-          delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
+          delivery_date: r.delivery_date || null, grade: r.local_export || null,
           is_spillage: false,
         });
       }

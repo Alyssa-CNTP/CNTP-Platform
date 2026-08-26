@@ -151,10 +151,11 @@ export interface Database {
           kg_gross:         number | null
           kg_nett:          number
           delivery_date:    string | null
-          local_or_export:  LocalExport | null
+          grade:            LocalExport | null
           org_or_conv:      OrgConv | null
           is_spillage:      boolean
           notes:            string | null
+          bagging_time:     string | null   // timestamptz — the bag's capture instant (logged_at)
           created_at:       string
         }
         Insert: Omit<Database['production']['Tables']['prod_debagging']['Row'], 'id' | 'created_at'>

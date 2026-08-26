@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Sieving Tower: prod_debagging gets grade + bagging_time, product_type moves off '500kg Farm Bag')
+
+**Files changed:** `supabase/migrations/20260826_002_prod_debagging_grade_and_bagging_time.sql` (new — apply manually, see runbook), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/production/capture-config.ts`, `lib/supabase/database.types.ts`, `scripts/backfill-debag-rows.cjs`
+
+Follow-up requested alongside the save-serialization fix above:
+
+- **`local_or_export` → `grade`** on `production.prod_debagging` (migration renames the column; its CHECK constraint — Export/Export Blend/Domestic/Local — carries over unchanged). Every read/write in the app (Sieving debag rows, Blender debag rows, `debaggedBatches()`/`debaggedBags()`, `OrderDebagRow`, the one-off backfill script) updated to match. The Sieving capture UI's "Local / export" field is now labelled **Grade**. Scoped to `prod_debagging` only — the unrelated `local_or_export` columns on the granule/pasteuriser job-card forms are untouched.
+- **`product_type` moves from `'500kg Farm Bag'` to `'Farm Bag'`**, going forward only — historical rows keep the old value, no backfill. Confirmed safe: Acumatica reads batch numbers + total weight for this, not this string. The self-heal restore query and display labels (`ShiftBagLog`) now recognise both values so old and new rows both surface correctly.
+- **New `bagging_time` column** (timestamptz), the debag-side twin of `prod_bagging.bagging_time` (20260813_001): `persist()` deletes and reinserts every `prod_debagging` row on every save, so `created_at` only ever reflects "last saved," not when the bag was actually captured. Every debag row already carries a real `logged_at` instant client-side (set the moment it locks) — `buildDebag()` now writes it into `bagging_time`, and the self-heal restore effect reads it back (falling back to `created_at` for historical rows that predate this column).
+
+⚠ **The migration is not applied automatically** (this repo's migration-push workflow is disabled, per `docs/db-reconciliation-runbook.md`) — run it manually on staging, then production, with the matching app-code deploy landing close after (a window where the column is renamed but old code still writes `local_or_export` would fail every debagging save).
+
 ## 2026-08-26 — Alyssa (Production capture: serialize saves so overlapping writes stop racing each other)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
