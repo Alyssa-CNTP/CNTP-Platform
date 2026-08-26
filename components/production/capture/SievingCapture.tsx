@@ -202,6 +202,44 @@ export function SievingCapture({
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
+  // Self-heal outputs from bag_tags. Every output bag's bag_tags row is
+  // written atomically the instant it's added (see addOutput below) — a
+  // completely separate write path from this session's own draft_data,
+  // which is only debounce-saved. If that save gets disrupted mid-shift (a
+  // deploy restart landing while the tab is open, a dropped connection, a
+  // stale second tab's autosave clobbering a newer one) bag_tags stays
+  // correct while `outputs` can silently fall behind, showing the operator
+  // fewer bags than actually exist even though nothing was lost. On load,
+  // pull back in any bag_tags row for this exact session that `outputs`
+  // doesn't have — the ledger is always the source of truth. Never removes
+  // anything outputs already has, and never writes to bag_tags/scan_events
+  // itself — purely a read-and-backfill of the local display.
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await getDb().schema('production').from('bag_tags')
+        .select('serial_number, product_type, acumatica_id, lot_number, weight_kg, destination, printed_at')
+        .eq('section_id', 'sieving').eq('session_id', sessionId).neq('status', 'voided')
+      if (cancelled || !data) return
+      const known = new Set(value.outputs.map(o => o.serial))
+      const missing = (data as any[]).filter(t => !known.has(t.serial_number))
+      if (!missing.length) return
+      const restored: OutBag[] = missing.map(t => ({
+        id: crypto.randomUUID(), serial: t.serial_number, productType: t.product_type,
+        code: t.acumatica_id ?? null, weight: String(t.weight_kg ?? ''), batch: t.lot_number ?? '',
+        // A bag_tags row from before the grade column was populated for this
+        // batch falls back to the batch's own current grade — the same
+        // fallback addOutput() itself uses when creating one fresh.
+        destination: t.destination ?? gradeLetter, printed: !!t.printed_at,
+        tagMethod: t.printed_at ? 'printed' : null, secured: true,
+        logged_at: t.printed_at ?? new Date().toISOString(),
+      }))
+      patch({ outputs: [...value.outputs, ...restored] })
+    })()
+    return () => { cancelled = true }
+  }, [sessionId])
+
   // Every field on a bulk bag is mandatory before it can be locked.
   const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && isValidLot(r.lot) && n(r.nett) > 0 && !isImplausibleWeight(n(r.nett))
 

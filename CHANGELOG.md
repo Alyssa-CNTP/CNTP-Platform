@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-26 — Alyssa (Sieving Tower capture: self-heal the Bagging list from bag_tags when it falls behind) [promoted to production]
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Reported live: production's Bagging list showed only 2 of a session's 8 output bags, even though every bag was correctly saved to `bag_tags` (and Production Orders, which reads that ledger directly, showed all of it correctly). Root cause: `addOutput()` writes to `bag_tags` immediately and atomically, on a completely separate path from this session's own `draft_data.outputs` (only debounce-saved) — a deploy restart landing mid-shift while the tab was open (this one happened at 08:49:32 UTC, right between two of the session's bags) disrupted that save cycle, so the local/persisted `outputs` array fell behind the ledger even though nothing was actually lost.
+
+- On session load, compares `outputs` against `bag_tags` for this exact `session_id` (excluding voided rows) and pulls in any bag the ledger has that `outputs` doesn't — the ledger is always the source of truth. A bag_tags row from before its grade column was populated falls back to the batch's own current grade, same as `addOutput()`'s own fallback.
+- Never removes anything `outputs` already has, and never writes to `bag_tags`/`scan_events` — a pure read-and-backfill of the local display. The existing periodic session autosave then persists the corrected `outputs` back to `draft_data` normally.
+- Self-terminating: once `outputs` and `bag_tags` agree (the normal case, every time), it's a no-op.
+
 ## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing) [promoted to production]
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/label-print.ts`
