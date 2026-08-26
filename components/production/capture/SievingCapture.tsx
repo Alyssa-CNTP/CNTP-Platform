@@ -202,6 +202,17 @@ export function SievingCapture({
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
+  // Shared by both self-heal effects below: order strictly by when each row
+  // was actually logged, never by array position — appending restored rows
+  // to the end (their natural query order) is what produced "Bag 1"..N
+  // labels that didn't match the times shown on each row. Anything without
+  // a timestamp (still being typed, not yet secured) sorts last, as "most
+  // recent."
+  function byLoggedAt<T extends { logged_at?: string }>(rows: T[]): T[] {
+    const t = (r: T) => (r.logged_at ? new Date(r.logged_at).getTime() : Infinity)
+    return [...rows].sort((a, b) => t(a) - t(b))
+  }
+
   // Self-heal outputs from bag_tags. Every output bag's bag_tags row is
   // written atomically the instant it's added (see addOutput below) — a
   // completely separate write path from this session's own draft_data,
@@ -224,7 +235,6 @@ export function SievingCapture({
       if (cancelled || !data) return
       const known = new Set(value.outputs.map(o => o.serial))
       const missing = (data as any[]).filter(t => !known.has(t.serial_number))
-      if (!missing.length) return
       const restored: OutBag[] = missing.map(t => ({
         id: crypto.randomUUID(), serial: t.serial_number, productType: t.product_type,
         code: t.acumatica_id ?? null, weight: String(t.weight_kg ?? ''), batch: t.lot_number ?? '',
@@ -235,7 +245,56 @@ export function SievingCapture({
         tagMethod: t.printed_at ? 'printed' : null, secured: true,
         logged_at: t.printed_at ?? new Date().toISOString(),
       }))
-      patch({ outputs: [...value.outputs, ...restored] })
+      // Re-sort even when nothing is missing: a session already fully
+      // restored by an earlier run of this effect still had its rows in
+      // query order, not time order, until this check — the merge above
+      // alone doesn't fire again once outputs already has everything.
+      const merged = byLoggedAt([...value.outputs, ...restored])
+      const changed = merged.length !== value.outputs.length || merged.some((r, i) => r !== value.outputs[i])
+      if (!changed) return
+      patch({ outputs: merged })
+    })()
+    return () => { cancelled = true }
+  }, [sessionId])
+
+  // Self-heal debagging inputs from prod_debagging. Unlike outputs above,
+  // debag rows have no per-row atomic write of their own — persist() in
+  // [section]/page.tsx deletes every prod_debagging row for this session
+  // and reinserts the CURRENT `debag` array, every save. That means if
+  // `debag` ever reverts to a stale, shorter array (the same disruption
+  // that hit outputs), the very next save would delete-and-reinsert only
+  // the stale rows — silently discarding the real ones prod_debagging
+  // already had. Restoring them into `debag` first, before that can
+  // happen, is what actually prevents the loss.
+  //
+  // debag rows have no serial (farm bags aren't in bag_tags) and no stable
+  // id round-trips to prod_debagging today, so matching what's "already
+  // known" uses the same fields buildDebag() itself writes: the operator's
+  // own bag-number label (kept in `notes`), lot number, and net weight —
+  // in practice always unique together for a real debag entry.
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await getDb().schema('production').from('prod_debagging')
+        .select('notes, lot_number, product_type, kg_gross, kg_nett, delivery_date, local_or_export, created_at')
+        .eq('session_id', sessionId).eq('product_type', '500kg Farm Bag').eq('is_spillage', false)
+      if (cancelled || !data) return
+      const key = (bagNo: string, lot: string, nett: number) => `${bagNo.trim()}|${lot.trim()}|${nett}`
+      const known = new Set(value.debag.map(r => key(r.bag_no, r.lot, n(r.nett))))
+      const missing = (data as any[]).filter(d => !known.has(key(d.notes ?? '', d.lot_number ?? '', Number(d.kg_nett) || 0)))
+      const restored: DebagRow[] = missing.map(d => ({
+        id: crypto.randomUUID(), bag_no: d.notes ?? '', lot: d.lot_number ?? '',
+        gross: d.kg_gross != null ? String(d.kg_gross) : '', nett: String(d.kg_nett ?? ''),
+        delivery_date: d.delivery_date ?? '', local_export: d.local_or_export ?? '',
+        secured: true, logged_at: d.created_at ?? new Date().toISOString(),
+      }))
+      // Re-sort even when nothing is missing — same reasoning as the
+      // outputs effect above.
+      const merged = byLoggedAt([...value.debag, ...restored])
+      const changed = merged.length !== value.debag.length || merged.some((r, i) => r !== value.debag[i])
+      if (!changed) return
+      patch({ debag: merged })
     })()
     return () => { cancelled = true }
   }, [sessionId])
