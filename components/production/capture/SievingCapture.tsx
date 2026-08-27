@@ -722,7 +722,10 @@ export function SievingCapture({
                         ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
                         : <>
                             <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
-                            <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
+                            <button onClick={() => {
+                              if (b.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', b.serial).then(() => {})
+                              patch({ outputs: value.outputs.filter(x => x.id !== b.id) })
+                            }} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
                           </>
                       )}
                     </div>

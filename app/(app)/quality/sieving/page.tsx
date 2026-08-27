@@ -1567,7 +1567,10 @@ export default function SievingPage() {
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
 
     // Link QC result back to the bag for audit trail (best-effort — don't block save).
-    if (form.serialNumber?.trim()) {
+    // Only Final QC runs carry a serial (In-Process nulls it in sd_runs at line
+    // 1530, but form.serialNumber in React state can retain a stale value from a
+    // prior run — gating on runType prevents attaching a QC event to the wrong bag).
+    if (form.runType === 'final' && form.serialNumber?.trim()) {
       const serial = form.serialNumber.trim().toUpperCase()
       const now = new Date().toISOString()
       const passLabel = newRun.pass_status === 'Pass' ? 'Pass' : 'Fail'

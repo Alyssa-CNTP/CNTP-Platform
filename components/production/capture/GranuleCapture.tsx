@@ -708,7 +708,11 @@ export function GranuleCapture({
     onChange({ ...value, outputs: [...value.outputs, bag] })
     setOutWeight(''); setAdding(false)
   }
-  function removeOutput(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
+  function removeOutput(id: string) {
+    const bag = value.outputs.find(b => b.id === id)
+    if (bag?.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', bag.serial).then(() => {})
+    patch({ outputs: value.outputs.filter(b => b.id !== id) })
+  }
 
   // Operator's Print label / Write on tag choice for a bag already added to
   // the output list — mirrors Blender/Pasteuriser's tagging pattern so every
