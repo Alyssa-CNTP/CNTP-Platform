@@ -1431,8 +1431,23 @@ function CaptureScreen() {
       const ins = await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
       if (ins.error) rowErrors.push(`bags: ${rowErrText(ins.error)}`)
     }
-    // Same failure class as the input rows above: prod_bagging has emptied out
-    // on production before with the capture screen showing no sign of it.
+    // Clean up orphaned prod_bagging rows — bags the operator deleted from the
+    // capture screen whose prod_bagging rows persisted as "held" rows, inflating
+    // the output total on the production order page. Now that the capture
+    // components void bag_tags on deletion, the held rows serve no purpose.
+    const allCurrentSerials = new Set(bagWithSerial.map((r: any) => r.bag_serial_no))
+    try {
+      const { data: remaining } = await db.schema('production').from('prod_bagging')
+        .select('id, bag_serial_no').eq('session_id', sid).not('bag_serial_no', 'is', null)
+      const orphanIds = ((remaining as any[]) ?? [])
+        .filter(r => r.bag_serial_no && !allCurrentSerials.has(r.bag_serial_no))
+        .map(r => r.id)
+      if (orphanIds.length) {
+        await db.schema('production').from('prod_bagging')
+          .delete().in('id', orphanIds)
+      }
+    } catch { /* best-effort — next save retries */ }
+
     setRowWriteError(rowErrors.length ? rowErrors.join(' · ') : null)
     if (rowErrors.length) console.error('structured row write failed', rowErrors)
 

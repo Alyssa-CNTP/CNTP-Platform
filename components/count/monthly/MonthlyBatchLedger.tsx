@@ -141,14 +141,14 @@ export default function MonthlyBatchLedger({ session }: { session: McSession }) 
     if (batchList.length > 0) {
       // Pasteuriser
       const { data: pastQ } = await db
-        .from('pasteuriser_runs')
+        .schema('quality').from('pasteuriser_runs')
         .select('batch_ref')
         .in('batch_ref', batchList)
       ;(pastQ ?? []).forEach((r: any) => qualityBatches.add(r.batch_ref))
 
       // Lab results
       const { data: labQ } = await db
-        .from('lab_results')
+        .schema('qms').from('lab_results')
         .select('batch_number')
         .in('batch_number', batchList)
       ;(labQ ?? []).forEach((r: any) => qualityBatches.add(r.batch_number))
