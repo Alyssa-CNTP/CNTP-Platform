@@ -366,12 +366,39 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   const descByCode = new Map<string, string>(((invRes.data as any[]) ?? []).map(r => [r.inventory_id, r.description]))
   const poItems: OrderPO[] = poCodes.map(code => ({ code, description: descByCode.get(code) ?? null }))
+
+  // Recover stranded bag_tags: addOutput() writes session_id: null; if persist()
+  // never stamps the session_id, the bag is invisible to the IN(ids) query.
+  // Match output serials from draft_data against what the query returned, then
+  // fetch any missing bag_tags by serial and attribute them to their session.
+  const allTags = [...((tagsRes.data as any[]) ?? [])]
+  const foundSerials = new Set(allTags.map((t: any) => t.serial_number))
+  const serialToSession = new Map<string, string>()
+  for (const s of sessions) {
+    for (const prod of ((s as any).draft_data?.productions ?? []) as any[]) {
+      for (const out of ((prod.data?.outputs ?? []) as any[])) {
+        if (out.serial && !foundSerials.has(out.serial)) {
+          serialToSession.set(out.serial, s.id)
+        }
+      }
+    }
+  }
+  if (serialToSession.size) {
+    const { data: strandedTags } = await db.from('bag_tags')
+      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status')
+      .in('serial_number', Array.from(serialToSession.keys()))
+    for (const t of ((strandedTags as any[]) ?? [])) {
+      if (!t.session_id) t.session_id = serialToSession.get(t.serial_number) ?? null
+      allTags.push(t)
+    }
+  }
+
   // Earliest scan_events row per active serial — tells a bag born via
   // re-bag ('topped_up' as its first-ever row) apart from an ordinary bag
   // topped up later (still 'bagging_out' first). One batched query, not one
   // per bag: fetch every event for this day's active serials, ordered, then
   // take each serial's first occurrence.
-  const activeSerials = ((tagsRes.data as any[]) ?? [])
+  const activeSerials = allTags
     .filter(t => t.status !== 'voided').map(t => t.serial_number)
   const firstEventBySerial = new Map<string, { action: string; related_serial_number: string | null }>()
   if (activeSerials.length) {
@@ -402,8 +429,37 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }))
 
   // Whole-day output bags, then attribute each to its shift.
-  const bags = mergeOutputBags((tagsRes.data as any[]) ?? [], (bagsRes.data as any[]) ?? [], firstEventBySerial)
+  const bags = mergeOutputBags(allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial)
   bags.forEach(b => { b.shift = shiftBySession.get(b.session_id) ?? '' })
+
+  // Fallback: output bags in draft_data that exist in neither bag_tags nor
+  // prod_bagging (persist() never ran or both writes failed).
+  const bagSerials = new Set(bags.map(b => b.bag_serial_no).filter(Boolean))
+  for (const s of sessions) {
+    for (const prod of ((s as any).draft_data?.productions ?? []) as any[]) {
+      for (const out of ((prod.data?.outputs ?? []) as any[])) {
+        if (out.serial && !bagSerials.has(out.serial)) {
+          bags.push({
+            id: out.id || `draft-${s.id}-out-${out.serial}`, bag_no: 0,
+            bag_serial_no: out.serial, output_group: null,
+            product_type: out.productType || null, variant: prod.variant || null,
+            acumatica_id: out.code || null, kg: Number(out.weight) || 0,
+            bagging_time: out.logged_at || null, session_id: s.id, shift: s.shift ?? '',
+            bornViaRebag: false, rebagSourceSerial: null,
+          })
+          bagSerials.add(out.serial)
+        }
+      }
+    }
+  }
+  if (bags.some(b => b.bag_no === 0)) {
+    bags.sort((a, b) => {
+      const ta = a.bagging_time ? Date.parse(a.bagging_time) : Infinity
+      const tb = b.bagging_time ? Date.parse(b.bagging_time) : Infinity
+      return ta - tb
+    })
+    bags.forEach((r, i) => { r.bag_no = i + 1 })
+  }
 
   // Re-bag transactions shown on their own panel — never folded into
   // bagsOutputKg (see OrderBagRow/mergeOutputBags): that kg was already
@@ -449,9 +505,70 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   for (const r of freshTopUps) freshKgBySession.set(r.sessionId, (freshKgBySession.get(r.sessionId) ?? 0) + r.kg)
 
   // Debag inputs across the day, tagged with shift and sorted by time.
-  const debags: OrderDebagRow[] = ((debagsRes.data as any[]) ?? []).map(d => ({
+  const debagRows = (debagsRes.data as any[]) ?? []
+  const debags: OrderDebagRow[] = debagRows.map(d => ({
     ...d, shift: shiftBySession.get(d.session_id) ?? '',
-  })).sort((a, b) => {
+  }))
+
+  // Fallback: when prod_debagging has no rows for a session (the insert can fail
+  // silently — PGRST204 schema cache, FK violations, mid-production code changes
+  // that write under a different session_id), synthesise from draft_data so the
+  // order page never shows "No inputs recorded" against a correct mass balance.
+  const debagSessionIds = new Set(debagRows.map((r: any) => r.session_id))
+  for (const s of sessions) {
+    if (debagSessionIds.has(s.id)) continue
+    const prods = ((s as any).draft_data?.productions ?? []) as any[]
+    let bagNo = 1
+    for (const prod of prods) {
+      const data = prod.data ?? {}
+      for (const [idx, sp] of (data.spillage ?? []).entries()) {
+        const kg = Number(sp?.kg) || 0
+        if (kg === 0) continue
+        debags.push({
+          id: `draft-${s.id}-sp-${idx}`, bag_no: bagNo++, bag_serial_no: null,
+          lot_number: null, product_type: idx === 0 ? 'Bucket Elevator' : 'Machine Spillage',
+          variant: prod.variant ?? null, kg_gross: null, kg_nett: kg,
+          delivery_date: null, grade: null, org_or_conv: null, is_spillage: true,
+          notes: null, bagging_time: null, created_at: (s as any).created_at ?? null,
+          session_id: s.id, shift: s.shift ?? '',
+        } as OrderDebagRow)
+      }
+      for (const d of (data.debag ?? data.inputs ?? [])) {
+        const kg = Number(d.nett ?? d.weight) || 0
+        if (kg === 0) continue
+        debags.push({
+          id: `draft-${s.id}-d-${bagNo}`, bag_no: bagNo++,
+          bag_serial_no: d.inputMode !== 'manual' ? (d.serial || null) : null,
+          lot_number: d.lot || prod.lot || null,
+          product_type: d.productType || 'Farm Bag', variant: d.variant || prod.variant || null,
+          kg_gross: Number(d.gross) || null, kg_nett: kg,
+          delivery_date: d.delivery_date || d.deliveryDate || null,
+          grade: d.grade || null, org_or_conv: null, is_spillage: false,
+          notes: d.bag_no || (d.inputMode === 'manual' ? d.serial : null) || null,
+          bagging_time: d.logged_at || null, created_at: (s as any).created_at ?? null,
+          session_id: s.id, shift: s.shift ?? '',
+        } as OrderDebagRow)
+      }
+      for (const bl of (data.blends ?? [])) {
+        for (const r of (bl.rows ?? [])) {
+          const kg = Number(r.weight) || 0
+          if (kg === 0) continue
+          debags.push({
+            id: `draft-${s.id}-g-${bagNo}`, bag_no: bagNo++,
+            bag_serial_no: r.inputMode !== 'manual' ? (r.serial || null) : null,
+            lot_number: r.lot || prod.lot || null, product_type: r.dustKey || null,
+            variant: r.variant || prod.variant || null, kg_gross: null, kg_nett: kg,
+            delivery_date: null, grade: null, org_or_conv: null, is_spillage: false,
+            notes: [`blend ${bl.blendNo}`, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            bagging_time: null, created_at: (s as any).created_at ?? null,
+            session_id: s.id, shift: s.shift ?? '',
+          } as OrderDebagRow)
+        }
+      }
+    }
+  }
+
+  debags.sort((a, b) => {
     const ta = a.bagging_time ? Date.parse(a.bagging_time) : a.created_at ? Date.parse(a.created_at) : Infinity
     const tb = b.bagging_time ? Date.parse(b.bagging_time) : b.created_at ? Date.parse(b.created_at) : Infinity
     return ta - tb

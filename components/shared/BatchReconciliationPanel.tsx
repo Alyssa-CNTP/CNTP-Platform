@@ -340,9 +340,9 @@ export default function BatchReconciliationPanel({
     // ── Quality ───────────────────────────────────────────────────────────────
     const quality: QualityRecord[] = []
     const [{ data: pastData }, { data: labData }, { data: rawData }] = await Promise.all([
-      db.from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', bn).limit(5),
-      db.from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', bn).limit(5),
-      db.from('raw_material_entries').select('id,received_date,lot_number,grade').ilike('lot_number', bn).limit(5),
+      db.schema('quality').from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', bn).limit(5),
+      db.schema('qms').from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', bn).limit(5),
+      db.schema('quality').from('raw_material_records').select('id,received_date,lot_number,grade').ilike('lot_number', bn).limit(5),
     ])
     ;(pastData ?? []).forEach((r: any) => quality.push({ source: 'Pasteuriser', ref: r.id?.slice(0,8) ?? '—', date: r.run_date ?? '', description: `Status: ${r.status ?? 'unknown'}`, url: '/quality/pasteuriser' }))
     ;(labData  ?? []).forEach((r: any) => quality.push({ source: 'Lab Result',  ref: r.id?.slice(0,8) ?? '—', date: r.sample_date ?? '', description: `Result: ${r.result_status ?? 'pending'}`, url: '/quality/lab-results' }))

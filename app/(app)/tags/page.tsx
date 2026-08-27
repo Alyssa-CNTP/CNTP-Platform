@@ -380,9 +380,9 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
     setLoadingQual(true)
     const db = getDb()
     Promise.all([
-      db.from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', lot).limit(10),
-      db.from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', lot).limit(10),
-      db.from('raw_material_entries').select('id,received_date,lot_number,grade').ilike('lot_number', lot).limit(10),
+      db.schema('quality').from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', lot).limit(10),
+      db.schema('qms').from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', lot).limit(10),
+      db.schema('quality').from('raw_material_records').select('id,received_date,lot_number,grade').ilike('lot_number', lot).limit(10),
     ]).then(([past, lab, raw]: any[]) => {
       const rows: QualityRow[] = []
       ;(past?.data ?? []).forEach((r: any) => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))

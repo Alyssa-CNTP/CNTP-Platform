@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-27 — Alyssa (Sieving order page: recover stranded bags/debagging, void-on-delete, mass balance from real rows)
+
+**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/management/page.tsx`, `app/(app)/quality/sieving/page.tsx`, `app/(app)/tags/page.tsx`, `components/count/monthly/MonthlyBatchLedger.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/shared/BatchReconciliationPanel.tsx`
+
+Investigated a 26 Aug sieving discrepancy: the order page showed fewer bags/inputs than actually captured, and a stale mass balance. Root cause traced to a mid-shift code change (rename of `local_or_export` → `grade`, PR #838) that made `prod_debagging` writes fail silently for a period, plus `bag_tags` rows that never got their `session_id` stamped by `persist()`.
+
+- **`loadOrderDay`: recover stranded output bags** — `bag_tags` rows written with `session_id: null` (when `persist()` never ran or failed) were invisible to the day's `WHERE session_id IN (ids)` query. Now cross-references draft_data output serials against what the query returned, fetches any missing `bag_tags` rows by serial, and attributes them to the correct session.
+- **`loadOrderDay`: draft_data fallback for missing debag rows** — when `prod_debagging` has zero rows for a session (insert failed silently), synthesises debag/spillage/blend-input rows from that session's own `draft_data` so the order page never shows "No inputs recorded" against a valid mass balance.
+- **`loadOrderDay`: draft_data fallback for missing output bags** — when an output bag exists in neither `bag_tags` nor `prod_bagging` (both writes failed), synthesises it from `draft_data.outputs` so the bag count/list stays correct.
+- **Mass balance computed from actual debag/bag rows** (`ec293c8`) — total input was read from the `prod_mass_balance` snapshot, which goes stale when `persist()` fails or the session is submitted. Now computed directly from the loaded debag rows, matching how output is already computed from actual bag data.
+- **Bag delete: void `bag_tags` + clean orphaned `prod_bagging` + fix QC serial leak** (`2eede95`) — deleting an output bag now sets its `bag_tags.status = 'voided'` so it stops counting in mass balance and isn't restored by the self-heal effect on reload. `persist()` also cleans up orphaned `prod_bagging` rows whose serials are no longer in the current draft_data (previously these "held" rows inflated the output total). QC sieving scan events are now gated on `runType==='final'` to stop an In-Process run's stale serial from attaching a QC scan to the wrong bag.
+
+Confirmed against the real 26 Aug sessions (`60bb8536` morning, `c06c7eef` afternoon, both `submitted`, same `run_id`) — draft_data shows 14 Fine Leaf bags in the morning and 10 in the afternoon, matching what was reported; the order page reads both sessions' debagging/bags together since they share one `date`.
+
 ## 2026-08-27 — Alyssa (Production fixes: grade rename promote, deploy cache, mass balance recalc)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/supabase/database.types.ts`, `lib/production/capture-config.ts`, `.github/workflows/deploy-production.yml`, `.github/workflows/deploy-staging.yml`, `app/(app)/production/orders/[id]/page.tsx`
