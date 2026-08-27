@@ -67,7 +67,7 @@ const TONE_TEXT_CLASS: Record<'ok' | 'warn' | 'err', string> = { ok: 'text-ok', 
 // is a "Bulk Bag"; Bucket Elevator / Machine Spillage carry their own type.
 function inputType(d: OrderDebagRow): string {
   const pt = (d.product_type || '').trim()
-  if (!pt || /500\s*kg\s*farm\s*bag/i.test(pt)) return 'Bulk Bag'
+  if (!pt || /farm\s*bag/i.test(pt)) return 'Bulk Bag'
   return pt
 }
 
