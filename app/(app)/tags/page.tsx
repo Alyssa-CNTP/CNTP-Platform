@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { transferBagWeight } from '@/lib/production/scan-utils'
-import { printLabel, printLabelAuto } from '@/lib/production/label-print'
+import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 
@@ -170,11 +170,13 @@ function SectionPill({ sectionId, label }: { sectionId: string; label?: string }
 }
 
 // ── Print single label ────────────────────────────────────────────────────────
-// Uses synchronous printLabel (not async printLabelAuto) so the popup opens in
-// the click-handler context — browsers block window.open() from promise
-// continuations, which is what printLabelAuto's fetch-then-fallback path does.
+// Routes through the same networked print-relay every other print button in
+// the app uses (printLabelAuto resolves the bag's section printer server-side,
+// falling back to the browser print window only if that printer is
+// unreachable) — matching the Add-weight reprint calls in this same file,
+// which already use printLabelAuto with no popup-blocker issue in practice.
 function printTagLabel(tag: BagTag) {
-  printLabel({
+  printLabelAuto({
     id: tag.id, serial_number: tag.serial_number, product_type: tag.product_type,
     variant: (tag.variant || 'Conventional') as any, grade: (tag.destination as any) || 'A',
     weight_kg: tag.weight_kg ?? 0, lot_number: tag.lot_number || '', section_id: tag.section_id,
