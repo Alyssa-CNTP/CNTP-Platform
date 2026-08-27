@@ -32,6 +32,7 @@ jobs:
             git checkout main
             git reset --hard origin/main
             npm install --legacy-peer-deps 2>&1 | tail -5
+            rm -rf .next
             npm run build 2>&1 | tail -20
             PORT=3001 /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-production --update-env
             echo "✅ Production deployed successfully"
