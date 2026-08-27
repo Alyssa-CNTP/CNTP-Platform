@@ -15,7 +15,7 @@ import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
-import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
+import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
@@ -123,7 +123,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, debags, massBalance: mb, timesheets, takeovers } = day
+  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, massBalance: mb, timesheets, takeovers } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -262,6 +262,27 @@ export default function ProductionOrderDetailPage() {
                 <RebagTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
               <p className="text-[11px] text-text-faint">Already counted as output on an earlier day — not included in Bagged output or Total output above.</p>
+            </div>
+          </PanelBody>
+        </Panel>
+      )}
+
+      {/* Topped up from today's production — a Half-bag Top-up adding
+          freshly produced weight into a bag first bagged on an EARLIER day,
+          instead of starting a new bag. This genuinely IS new output, so —
+          unlike Re-bagged in above — its kg IS already folded into Bagged
+          output/Total output; shown here just for visibility into which
+          older bag received it and from what batch. */}
+      {freshTopUps.length > 0 && (
+        <Panel>
+          <PanelHead title="Topped up from today's production"
+            meta={`${freshTopUps.length} bag${freshTopUps.length === 1 ? '' : 's'} · ${freshTopUps.reduce((s, r) => s + r.kg, 0).toFixed(1)} kg`} />
+          <PanelBody>
+            <div className="space-y-4">
+              {groupBy(freshTopUps, r => r.productType || 'Other').map(g => (
+                <FreshTopUpTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
+              ))}
+              <p className="text-[11px] text-text-faint">Already included in Bagged output and Total output above — this is new production, not a transfer.</p>
             </div>
           </PanelBody>
         </Panel>
@@ -448,6 +469,35 @@ function RebagTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderR
             </span>
             {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{r.shift}</span>}
             {r.acumaticaId && <span className="font-mono text-[10px] text-text-faint shrink-0">{r.acumaticaId}</span>}
+            <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{r.kg.toFixed(1)} kg</span>
+            <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(r.at)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// One product type's "topped up from today's production" rows — same
+// compact shape as RebagTypeGroup, showing the batch added instead of a
+// source serial (there is no source bag for this path).
+function FreshTopUpTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderFreshTopUpRow[]; multiShift: boolean }) {
+  const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+  return (
+    <div className="rounded-xl border border-surface-rule overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
+        <span className="text-[12.5px] font-semibold text-text">{type}</span>
+        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
+        </span>
+      </div>
+      <ul className="divide-y divide-surface-rule/60">
+        {rows.map((r, i) => (
+          <li key={`${r.targetSerial}-${i}`} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
+            <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
+            <span className="font-mono text-text flex-1 min-w-0 truncate">{r.targetSerial}</span>
+            {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{r.shift}</span>}
+            {r.batch && <span className="font-mono text-[10px] text-text-faint shrink-0">{r.batch}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{r.kg.toFixed(1)} kg</span>
             <span className="font-mono text-text-faint shrink-0 w-10 text-right">{fmtBagTime(r.at)}</span>
           </li>

@@ -35,6 +35,7 @@ import {
   type PasteuriserData,
 } from '@/components/production/capture/PasteuriserCapture'
 import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
+import { HalfBagTopUpActivity } from '@/components/production/capture/HalfBagTopUpActivity'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -298,6 +299,7 @@ function CaptureScreen() {
   const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
+  const persistChainRef = useRef<Promise<void>>(Promise.resolve())
 
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
@@ -589,7 +591,14 @@ function CaptureScreen() {
       if (!hasCaptureData(productionsRef.current)) return
       if (ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
     }
-    if (sid && persistRef.current) { try { await persistRef.current(productionsRef.current, sid) } catch {} }
+    if (sid && persistRef.current) {
+      const sidFinal = sid
+      const run = persistChainRef.current
+        .catch(() => {})
+        .then(() => persistRef.current!(productionsRef.current, sidFinal))
+      persistChainRef.current = run.catch(() => {})
+      try { await run } catch {}
+    }
   }
   const flushRef = useRef(flushSave); flushRef.current = flushSave
 
@@ -1027,7 +1036,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            local_or_export: r.destination || null,
+            grade: r.destination || null,
             notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
@@ -1066,9 +1075,10 @@ function CaptureScreen() {
             // Preserve the operator's physical bag number in notes for traceability.
             bag_serial_no: null, notes: r.bag_no || null,
             lot_number: r.lot || prod.lot || null,
-            product_type: '500kg Farm Bag', variant: prod.variant,
+            product_type: 'Farm Bag', variant: prod.variant,
             kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-            delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
+            delivery_date: r.delivery_date || null, grade: r.grade || (r as any).local_export || null,
+            bagging_time: r.logged_at || null,
             is_spillage: false,
           })
         })
@@ -1343,11 +1353,31 @@ function CaptureScreen() {
     }
 
     const rowErrors: string[] = []
-    const delDebag = await db.schema('production').from('prod_debagging').delete().eq('session_id', sid)
-    if (delDebag.error) rowErrors.push(`inputs: ${rowErrText(delDebag.error)}`)
+
+    // Insert-then-delete for prod_debagging: write new rows first so a failed
+    // insert never wipes existing data.  prod_debagging has no unique constraint
+    // on (session_id, bag_no), so temporary duplicates are harmless — the old
+    // rows are removed once the insert succeeds.
+    const { data: prevDebagRows } = await db.schema('production').from('prod_debagging')
+      .select('id').eq('session_id', sid)
+    const prevDebagIds = ((prevDebagRows as any[]) ?? []).map((r: any) => r.id as string)
+
     if (debag.length) {
-      const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
-      if (insDebag.error) rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
+      let insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      if (insDebag.error && /PGRST204|schema cache/i.test(`${insDebag.error.code} ${insDebag.error.message}`)) {
+        const fallback = (debag as any[]).map(r => {
+          const { grade, bagging_time, ...rest } = r
+          return rest
+        })
+        insDebag = await db.schema('production').from('prod_debagging').insert(fallback as any)
+      }
+      if (insDebag.error) {
+        rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
+      } else if (prevDebagIds.length) {
+        await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
+      }
+    } else if (prevDebagIds.length) {
+      await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
     }
 
     // Serialed bags are physical, already-tagged bags (bag_tags has the same
@@ -1868,17 +1898,18 @@ function CaptureScreen() {
       )}
 
       {/* Half-bag top-up — add material to an existing bag (typically a
-          half-filled bag left open from a previous shift) from an existing
-          source bag, from this capture page directly instead of the
-          separate Tags page. Deliberately narrow: both bags must already
-          be tracked — no brand-new bag creation, no registering untracked
-          stock. Those are warehouse-management functions, not built here.
-          Pasteuriser is excluded, same reason as always (no per-bag
-          records today). */}
+          half-filled bag left open from a previous shift), either from
+          today's own production (the common case, mainly Sieving) or from
+          another existing tracked bag (mainly Blender). Deliberately
+          narrow beyond that: no brand-new bag creation, no registering
+          untracked stock — those are warehouse-management functions, not
+          built here. Pasteuriser is excluded, same reason as always (no
+          per-bag records today). */}
       {topUpOpen && !locked && (
         <HalfBagTopUpModal
           sectionId={sectionId} sessionId={sessionId}
           operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+          date={dateParam} shift={shift}
           onDone={() => setTopUpOpen(false)}
           onClose={() => setTopUpOpen(false)}
         />
@@ -2358,6 +2389,7 @@ function CaptureScreen() {
                       <Scale size={16} /> Half-bag top-up
                     </button>
                   )}
+                  {!isPasteuriser(sectionId) && <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />}
                   {!locked && (
                     <button onClick={saveDraft} disabled={saving}
                       className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-stone-200 bg-white font-medium text-[14px] text-text disabled:opacity-40 hover:bg-stone-50 transition-colors">
@@ -2424,6 +2456,7 @@ function CaptureScreen() {
                 balanceNote={balanceNote}
                 blenderRatios={blenderRatios}
               />
+              <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />
             </>
           )}
 

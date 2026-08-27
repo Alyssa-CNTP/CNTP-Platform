@@ -58,7 +58,7 @@ async function nextSievingSerial(productType: string, localSerials: string[], da
 export interface SpillageRow { id: string; kg: string }
 export interface DebagRow {
   id: string; bag_no: string; lot: string; gross: string; nett: string
-  delivery_date: string; local_export: string; secured?: boolean; logged_at?: string
+  delivery_date: string; grade: string; secured?: boolean; logged_at?: string
 }
 export interface OutBag {
   id: string; serial: string; productType: string; code: string | null; description?: string
@@ -202,6 +202,116 @@ export function SievingCapture({
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
+  // One-time migration: draft_data saved before the local_export→grade rename
+  // has debag rows keyed as {local_export: "Export"} instead of {grade: "Export"}.
+  // Convert on first render so every downstream read sees the new key.
+  useEffect(() => {
+    const needs = value.debag.some(r => !r.grade && (r as any).local_export)
+    if (!needs) return
+    patch({ debag: value.debag.map(r => {
+      if (r.grade || !(r as any).local_export) return r
+      const { local_export, ...rest } = r as any
+      return { ...rest, grade: local_export } as DebagRow
+    }) })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Shared by both self-heal effects below: order strictly by when each row
+  // was actually logged, never by array position — appending restored rows
+  // to the end (their natural query order) is what produced "Bag 1"..N
+  // labels that didn't match the times shown on each row. Anything without
+  // a timestamp (still being typed, not yet secured) sorts last, as "most
+  // recent."
+  function byLoggedAt<T extends { logged_at?: string }>(rows: T[]): T[] {
+    const t = (r: T) => (r.logged_at ? new Date(r.logged_at).getTime() : Infinity)
+    return [...rows].sort((a, b) => t(a) - t(b))
+  }
+
+  // Self-heal outputs from bag_tags. Every output bag's bag_tags row is
+  // written atomically the instant it's added (see addOutput below) — a
+  // completely separate write path from this session's own draft_data,
+  // which is only debounce-saved. If that save gets disrupted mid-shift (a
+  // deploy restart landing while the tab is open, a dropped connection, a
+  // stale second tab's autosave clobbering a newer one) bag_tags stays
+  // correct while `outputs` can silently fall behind, showing the operator
+  // fewer bags than actually exist even though nothing was lost. On load,
+  // pull back in any bag_tags row for this exact session that `outputs`
+  // doesn't have — the ledger is always the source of truth. Never removes
+  // anything outputs already has, and never writes to bag_tags/scan_events
+  // itself — purely a read-and-backfill of the local display.
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await getDb().schema('production').from('bag_tags')
+        .select('serial_number, product_type, acumatica_id, lot_number, weight_kg, destination, printed_at')
+        .eq('section_id', 'sieving').eq('session_id', sessionId).neq('status', 'voided')
+      if (cancelled || !data) return
+      const known = new Set(value.outputs.map(o => o.serial))
+      const missing = (data as any[]).filter(t => !known.has(t.serial_number))
+      const restored: OutBag[] = missing.map(t => ({
+        id: crypto.randomUUID(), serial: t.serial_number, productType: t.product_type,
+        code: t.acumatica_id ?? null, weight: String(t.weight_kg ?? ''), batch: t.lot_number ?? '',
+        // A bag_tags row from before the grade column was populated for this
+        // batch falls back to the batch's own current grade — the same
+        // fallback addOutput() itself uses when creating one fresh.
+        destination: t.destination ?? gradeLetter, printed: !!t.printed_at,
+        tagMethod: t.printed_at ? 'printed' : null, secured: true,
+        logged_at: t.printed_at ?? new Date().toISOString(),
+      }))
+      // Re-sort even when nothing is missing: a session already fully
+      // restored by an earlier run of this effect still had its rows in
+      // query order, not time order, until this check — the merge above
+      // alone doesn't fire again once outputs already has everything.
+      const merged = byLoggedAt([...value.outputs, ...restored])
+      const changed = merged.length !== value.outputs.length || merged.some((r, i) => r !== value.outputs[i])
+      if (!changed) return
+      patch({ outputs: merged })
+    })()
+    return () => { cancelled = true }
+  }, [sessionId])
+
+  // Self-heal debagging inputs from prod_debagging. Unlike outputs above,
+  // debag rows have no per-row atomic write of their own — persist() in
+  // [section]/page.tsx deletes every prod_debagging row for this session
+  // and reinserts the CURRENT `debag` array, every save. That means if
+  // `debag` ever reverts to a stale, shorter array (the same disruption
+  // that hit outputs), the very next save would delete-and-reinsert only
+  // the stale rows — silently discarding the real ones prod_debagging
+  // already had. Restoring them into `debag` first, before that can
+  // happen, is what actually prevents the loss.
+  //
+  // debag rows have no serial (farm bags aren't in bag_tags) and no stable
+  // id round-trips to prod_debagging today, so matching what's "already
+  // known" uses the same fields buildDebag() itself writes: the operator's
+  // own bag-number label (kept in `notes`), lot number, and net weight —
+  // in practice always unique together for a real debag entry.
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await getDb().schema('production').from('prod_debagging')
+        .select('notes, lot_number, product_type, kg_gross, kg_nett, delivery_date, grade, bagging_time, created_at')
+        .eq('session_id', sessionId).in('product_type', ['Farm Bag', '500kg Farm Bag']).eq('is_spillage', false)
+      if (cancelled || !data) return
+      const key = (bagNo: string, lot: string, nett: number) => `${bagNo.trim()}|${lot.trim()}|${nett}`
+      const known = new Set(value.debag.map(r => key(r.bag_no, r.lot, n(r.nett))))
+      const missing = (data as any[]).filter(d => !known.has(key(d.notes ?? '', d.lot_number ?? '', Number(d.kg_nett) || 0)))
+      const restored: DebagRow[] = missing.map(d => ({
+        id: crypto.randomUUID(), bag_no: d.notes ?? '', lot: d.lot_number ?? '',
+        gross: d.kg_gross != null ? String(d.kg_gross) : '', nett: String(d.kg_nett ?? ''),
+        delivery_date: d.delivery_date ?? '', grade: d.grade ?? '',
+        secured: true, logged_at: d.bagging_time ?? d.created_at ?? new Date().toISOString(),
+      }))
+      // Re-sort even when nothing is missing — same reasoning as the
+      // outputs effect above.
+      const merged = byLoggedAt([...value.debag, ...restored])
+      const changed = merged.length !== value.debag.length || merged.some((r, i) => r !== value.debag[i])
+      if (!changed) return
+      patch({ debag: merged })
+    })()
+    return () => { cancelled = true }
+  }, [sessionId])
+
   // Every field on a bulk bag is mandatory before it can be locked.
   const debagComplete = (r: DebagRow) => !!r.bag_no.trim() && isValidLot(r.lot) && n(r.nett) > 0 && !isImplausibleWeight(n(r.nett))
 
@@ -217,7 +327,7 @@ export function SievingCapture({
   // Adding the next bulk bag finalises the previous completed one.
   const addDebag = () => patch({ debag: [...lockCompleted(value.debag), {
     id: crypto.randomUUID(), bag_no: '', lot: assignment.lot_number ?? '',
-    gross: '', nett: '', delivery_date: '', local_export: GRADE_TO_LOCAL_EXPORT[gradeLetter] ?? 'Export',
+    gross: '', nett: '', delivery_date: '', grade: GRADE_TO_LOCAL_EXPORT[gradeLetter] ?? 'Export',
   }] })
   const updateDebag = (id: string, k: keyof DebagRow, v: string) =>
     patch({ debag: value.debag.map(r => r.id === id ? { ...r, [k]: v } : r) })
@@ -489,7 +599,7 @@ export function SievingCapture({
                     <Lock size={15} className="shrink-0" style={{ color: DEBAG_BLUE }} />
                     <div className="flex-1 min-w-0">
                       <div className="text-[13px] font-medium text-text">Bulk bag {i + 1} · {n(r.nett).toFixed(1)} kg</div>
-                      <div className="font-mono text-[11px] text-text-muted truncate">{[r.bag_no, r.lot, r.local_export].filter(Boolean).join(' · ')}{r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}</div>
+                      <div className="font-mono text-[11px] text-text-muted truncate">{[r.bag_no, r.lot, r.grade].filter(Boolean).join(' · ')}{r.logged_at ? ` · logged ${fmtTime(r.logged_at)}` : ''}</div>
                     </div>
                     {!locked && (
                       <button onClick={() => setDebagSecured(r.id, false)}
@@ -519,8 +629,8 @@ export function SievingCapture({
                       {isImplausibleWeight(n(r.nett)) && (
                         <p className="text-[11px] text-err">That's over 999kg for one bulk bag — check for a typo.</p>
                       )}</div>
-                    <div className="space-y-1"><label className={LBL}>Local / export</label>
-                      <select value={r.local_export} disabled={locked} onChange={e => updateDebag(r.id, 'local_export', e.target.value)} className={INP + ' cursor-pointer'}>
+                    <div className="space-y-1"><label className={LBL}>Grade</label>
+                      <select value={r.grade} disabled={locked} onChange={e => updateDebag(r.id, 'grade', e.target.value)} className={INP + ' cursor-pointer'}>
                         <option>Export</option><option>Export Blend</option><option>Domestic/Local</option>
                       </select></div>
                   </div>

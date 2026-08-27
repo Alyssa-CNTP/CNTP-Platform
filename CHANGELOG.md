@@ -15,6 +15,144 @@ Reported: on a phone, the hourly VSD (infeed speed) reading prompt on Sieving's 
 
 Verified on a phone against staging.
 
+## 2026-08-26 — Alyssa (prod_debagging: insert-then-delete to prevent data loss on failed saves)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+- **Insert-then-delete for `prod_debagging`** — `persist()` previously did a blanket `DELETE … WHERE session_id = ?` followed by `INSERT`. If the insert failed (e.g. PGRST204 from a stale schema cache, network timeout, column mismatch), every debagging row for that session was already gone — exactly what happened on the morning of 2026-08-26 when the `local_or_export` → `grade` rename left PostgREST's cache stale. Now the function fetches the existing row IDs first, inserts the new rows (fresh UUIDs, no unique constraint to conflict), and only deletes the old rows by ID after a successful insert. If the insert fails, existing rows are untouched. Mirrors the safer targeted-delete pattern already used for `prod_bagging`.
+
+## 2026-08-26 — Alyssa (Bag tracking: print button uses the production label design; live capture product_type fix)
+
+**Files changed:** `app/(app)/tags/page.tsx`, `app/(app)/production/live/capture/page.tsx`, `lib/production/live-types.ts`
+
+- **Bag tracking print** — the Print button on the tag detail modal was using an old inline HTML template (loaded JsBarcode from cdnjs CDN, different layout) instead of the production label design. Replaced `printTagLabel()` with `printLabelAuto()` from `lib/production/label-print.ts`, which tries the networked label printer first (Zebra/Argox over TCP 9100) and falls back to the browser print popup with the correct 100×49.2mm barcode-hero layout. Same mapping pattern the half-bag top-up flow already uses.
+- **Live capture `product_type`** — the live capture page and `SECTION_CONFIG.sieving.inputTypes` still referenced `'500kg Farm Bag'`; updated to `'Farm Bag'` to match the regular capture page.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: fold into the correct product-type section everywhere, instead of a separate violet-only block)
+
+**Files changed:** `lib/production/scan-utils.ts`, `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `app/(app)/production/orders/[id]/page.tsx`
+
+Reported: a top-up (e.g. adding more to a Sticks bag) wasn't showing up under its own product type anywhere — it just showed as a generic "half bag top up" entry, disconnected from where that product's own rows live. Root cause, confirmed across all three screens: a top-up into a bag first bagged on an EARLIER day (the common case — "half a bag left over from yesterday") has no row of its own in today's own captured output, so there was nowhere for the existing same-day nesting to attach to — it either fell into a separate panel (Production Orders' "Topped up from today's production") or was invisible entirely (Overview).
+
+- New `fetchFreshTopUpsForSection()` in `scan-utils.ts` — resolves a cross-day top-up's target bag's own product/variant/grade/lot from `bag_tags`, so callers can fold it into the RIGHT existing (or newly created) product group instead of leaving it stranded.
+- `CaptureOverview`: cross-day top-ups now render as their own violet-marked row nested under the matching product → lot group (creating the group if today's own session never produced that product) — same-day top-ups are unaffected, still nested under the bag's own row as before.
+- Production Orders (`/production/orders/[id]`): removed the separate "Topped up from today's production" panel entirely — those rows now render inline inside "Bagging — outputs," under the same product-type group as every other bag of that type, marked violet.
+- `HalfBagTopUpActivity` (the live feed on the Capture tab): restructured from one flat chronological list into groups by product type, matching the shape every other bagging table on the page already uses.
+
+**Not promoted to production yet — staging only, pending testing.**
+
+## 2026-08-26 — Alyssa (Sieving Tower: prod_debagging gets grade + bagging_time, product_type moves off '500kg Farm Bag')
+
+**Files changed:** `supabase/migrations/20260826_002_prod_debagging_grade_and_bagging_time.sql` (new — apply manually, see runbook), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/production/capture-config.ts`, `lib/supabase/database.types.ts`, `scripts/backfill-debag-rows.cjs`
+
+Follow-up requested alongside the save-serialization fix above:
+
+- **`local_or_export` → `grade`** on `production.prod_debagging` (migration renames the column; its CHECK constraint — Export/Export Blend/Domestic/Local — carries over unchanged). Every read/write in the app (Sieving debag rows, Blender debag rows, `debaggedBatches()`/`debaggedBags()`, `OrderDebagRow`, the one-off backfill script) updated to match. The Sieving capture UI's "Local / export" field is now labelled **Grade**. Scoped to `prod_debagging` only — the unrelated `local_or_export` columns on the granule/pasteuriser job-card forms are untouched.
+- **`product_type` moves from `'500kg Farm Bag'` to `'Farm Bag'`**, going forward only — historical rows keep the old value, no backfill. Confirmed safe: Acumatica reads batch numbers + total weight for this, not this string. The self-heal restore query and display labels (`ShiftBagLog`) now recognise both values so old and new rows both surface correctly.
+- **New `bagging_time` column** (timestamptz), the debag-side twin of `prod_bagging.bagging_time` (20260813_001): `persist()` deletes and reinserts every `prod_debagging` row on every save, so `created_at` only ever reflects "last saved," not when the bag was actually captured. Every debag row already carries a real `logged_at` instant client-side (set the moment it locks) — `buildDebag()` now writes it into `bagging_time`, and the self-heal restore effect reads it back (falling back to `created_at` for historical rows that predate this column).
+
+⚠ **The migration is not applied automatically** (this repo's migration-push workflow is disabled, per `docs/db-reconciliation-runbook.md`) — run it manually on staging, then production, with the matching app-code deploy landing close after (a window where the column is renamed but old code still writes `local_or_export` would fail every debagging save).
+
+## 2026-08-26 — Alyssa (Production capture: serialize saves so overlapping writes stop racing each other)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported live: bags re-typed into a Sieving Tower session after being found missing stayed missing even after being re-added, and the capture screen showed `duplicate key value violates unique constraint "prod_bagging_session_serial_uniq"` plus repeated `TypeError: Failed to fetch` on the inputs write.
+
+Root cause: `flushSave()`/`persist()` (which deletes and reinserts every `prod_debagging`/`prod_bagging` row for the session on each save) is triggered from three independent, uncoordinated places — the 2.5s post-edit debounce, the immediate hide/backstop flush on tab-hide or pagehide, and a 20s backstop interval — with nothing to stop two of them firing close together and overlapping in flight. Two concurrent delete-then-insert sequences racing each other is exactly how a `(session_id, bag_serial_no)` duplicate-key violation happens (one call's insert lands on a row the other's insert only just wrote), and the resulting pile-up of concurrent requests plausibly explains the repeated `Failed to fetch` on the inputs write too.
+
+- Added `persistChainRef`, a promise chain all `flushSave()` calls now go through — a call always waits for whatever save is already in flight to finish before running its own, using the freshest `productionsRef.current` at that later moment (never a stale snapshot from when it was queued). Persist calls can no longer overlap.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: "final weight" is now a way to enter the amount, not a separate declare-only step)
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`
+
+Correction to the previous "pre-print" panel (PR #825): that shipped as a standalone action that only saved a target weight and printed a tag, without touching the bag's actual weight — intended for a future operator to fill the gap later. That's not what was asked for. Clarified: the operator doing the top-up right now wants to name the bag's desired FINAL weight (e.g. "it's at 67kg, I want it at 300kg") and have the system work out the amount to add — and that calculated amount should be added and logged immediately, in the same submit, not declared for someone else to act on later.
+
+- Removed the standalone pre-print panel (`savePreprintTarget`/`clearPreprintTarget` and its own save/print flow) — it never touched real weight, which was the misunderstanding.
+- The source step's "Amount to add (kg)" field is now a toggle: "I know the amount to add" (unchanged) or "I know the final weight" — the second mode takes the bag's desired final weight and computes `amountKg = target − current` automatically, which then flows through the exact same `addFreshWeightToBag()`/`transferBagWeight()` write path as a normal top-up (so it's genuinely logged, not just recorded as an intention).
+- When "final weight" mode is used, the declared target is written to `bag_tags.target_weight_kg` alongside the real addition, so the printed label (already built in #825) shows "reached" — the calculated amount always brings the bag exactly to the stated target in one submit.
+- The read-only "Target set: Xkg" line on the target step stays, for a bag that already carries a declared target from an earlier top-up.
+
+**Not promoted to production yet — staging only, pending testing.**
+
+## 2026-08-26 — Alyssa (Lab Results upload: gemini-2.5-flash's default "thinking" was silently eating the JSON answer budget)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported: Micro PDF uploads on the Quality page failing with errors like *"AI returned invalid JSON — Unterminated string in JSON at position 558"* / *"Expected double-quoted property name in JSON at position 431"* — different positions on every retry of the same file, all well under 600 characters in.
+
+Cause: `gemini-2.5-flash` (the primary model in the fallback list since the 2026-08-21 fix) has "thinking" turned on by default, and its thinking tokens are drawn from the same `maxOutputTokens` budget as the actual answer — not a separate allowance. Every workflow's token budget here (`micro: 1500`, etc.) was sized assuming all of it goes to the JSON reply, so once thinking silently claims part of it, the model gets cut off a few hundred characters into the answer. A response truncated mid-string is exactly what produces "Unterminated string" / "Expected double-quoted property name" at a tiny position — that's the signature of a cut-off reply, not a malformed one, and it's a different failure mode from the backslash-escape bug fixed on 2026-08-17 (which `repairInvalidEscapes` still handles fine).
+
+- `geminiOnce()` now sends `thinkingConfig: { thinkingBudget: 0 }` in `generationConfig`. This is a structured-extraction task with no need for extended reasoning, so thinking is disabled outright rather than padding every per-workflow token budget to cover an unbounded thinking phase.
+
+## 2026-08-26 — Alyssa (Sieving Tower capture: the resort has to run even when nothing is missing) [promoted to production]
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Bug in the previous fix, caught before it reached the affected session: the sort-fix only ran inside the same `if (!missing.length) return` guard as the restore logic — so a session already fully restored by an earlier run (outputs already has everything, `missing` is empty) never got re-sorted at all, and would have kept showing the exact scrambled "Bag 1..N" order from the screenshot even after this fix deployed.
+
+- Both self-heal effects now always compute the sorted merge and compare it against the current array (by content length and per-index reference), patching whenever restoring OR re-sorting would actually change something — not only when there's something new to restore.
+
+## 2026-08-26 — Alyssa (Sieving Tower capture: fix scrambled bag numbering from the earlier self-heal, add the same reconciliation for debagging inputs) [promoted to production]
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Follow-up, reported live: after the earlier Bagging-list self-heal ran, "Bag 1"–"Bag N" no longer matched chronological order — each row's own serial/time was correct, but the numbers (array position) were scrambled, because the restored bags were appended in whatever order the query happened to return them, after the bags already on screen.
+
+- Both self-heal effects now sort the merged list by `logged_at` before writing it back, so "Bag N" always matches actual capture order regardless of which rows came from the ledger vs. were already on screen.
+- Added the same reconciliation for debagging inputs (`prod_debagging` vs. this session's `debag` array) — debag rows have no atomic per-row write of their own (`persist()` deletes and reinserts the whole set from the current array every save), so a `debag` array that reverts to a stale, shorter state after a disruption would otherwise get "confirmed" by the very next save, discarding rows `prod_debagging` genuinely still had. Matched on bag-number label + lot + net weight (debag rows have no serial to match on).
+- **Important limitation, confirmed live**: this can only restore what's actually still in the database somewhere. A debag row that was never written to `prod_debagging` at all (no atomic write path exists for it, unlike output bags) can't be recovered by this or any read-side fix — it needs to be re-entered if the operator's browser no longer has it locally.
+
+## 2026-08-26 — Alyssa (Sieving Tower capture: self-heal the Bagging list from bag_tags when it falls behind) [promoted to production]
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`
+
+Reported live: production's Bagging list showed only 2 of a session's 8 output bags, even though every bag was correctly saved to `bag_tags` (and Production Orders, which reads that ledger directly, showed all of it correctly). Root cause: `addOutput()` writes to `bag_tags` immediately and atomically, on a completely separate path from this session's own `draft_data.outputs` (only debounce-saved) — a deploy restart landing mid-shift while the tab was open (this one happened at 08:49:32 UTC, right between two of the session's bags) disrupted that save cycle, so the local/persisted `outputs` array fell behind the ledger even though nothing was actually lost.
+
+- On session load, compares `outputs` against `bag_tags` for this exact `session_id` (excluding voided rows) and pulls in any bag the ledger has that `outputs` doesn't — the ledger is always the source of truth. A bag_tags row from before its grade column was populated falls back to the batch's own current grade, same as `addOutput()`'s own fallback.
+- Never removes anything `outputs` already has, and never writes to `bag_tags`/`scan_events` — a pure read-and-backfill of the local display. The existing periodic session autosave then persists the corrected `outputs` back to `draft_data` normally.
+- Self-terminating: once `outputs` and `bag_tags` agree (the normal case, every time), it's a no-op.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/label-print.ts`
+
+Requested: see what the reprinted label will actually look like before committing the top-up, not just the numbers.
+
+- `buildLabelHtml()` exported with an optional `embed` flag (mirrors the existing pattern in `lib/quality/qc-label-print.ts`) — drops the print button, since there's nothing to click inside a preview.
+- Confirm screen now shows a live label preview (an `iframe` with the same HTML `printLabelAuto` will actually send) for the target bag, and for the source bag too when "from another bag" mode reprints it. Built from the exact same bag object submit() uses — never a separate hand-built summary that could drift out of sync with the real print.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: visible on the capture page + Overview, confirm the actual debagged bag, not just a batch string) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx` (new), `lib/production/inventory.ts`, `lib/production/scan-utils.ts`, `lib/production/order-detail.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+Feedback after testing the "from today's production" path live:
+
+- **Invisible on the capture page.** A top-up is a deliberate side-channel write (never touches draft_data — that's what keeps mass balance from double-counting), which also meant it left no trace anywhere an operator or supervisor would actually be looking: not the section's own capture screen, not Overview. New `HalfBagTopUpActivity` — a small read-only, violet-styled list, scoped to the current session — mounted under the active section's own capture UI (right below the "Half-bag top-up" button) and on the Overview tab, showing serial, product/variant, kg added, and where it came from (today's production + batch, or another bag's serial).
+- **Batch confirmation was just a typed/tapped string.** For Sieving Tower especially, more than one physical intake bag can share a lot number, or different batches can be running close together — a batch *string* doesn't disambiguate that. Replaced the batch keypad with a list of the actual `production.prod_debagging` rows (bag number, lot, weight, delivery date) matching the target bag's own variant+grade, so the operator confirms the *specific debagged bag* this addition is credited to, not just a number. New `debaggedBags()` in `inventory.ts` (row-level sibling of the existing `debaggedBatches()`), same variant-family matching.
+- `addFreshWeightToBag()`'s scan_events row now always carries a `HALF_BAG_TOPUP` marker in `notes` (previously only when a batch applied) — the one reliable way to tell "this bagging_out row is a top-up" apart from an ordinary bag's own first-ever row, used by both the new activity list and Production Orders' cross-day detection (regex updated to match).
+
+**Known gap, not fixed here — needs a database view change, not just app code:** Quality's pending-QC queue (`qms.v_pending_bag_qc`) marks a bag "already sampled" by matching `sd_runs.serial_number` against the bag's serial alone, with no regard for whether more material was added *after* that sample was taken. A Fine/Coarse Leaf bag that was QC-sampled when first bagged, then topped up later (either mode), will **not** re-enter the pending queue under the current view logic — the added material never gets its own sampling opportunity through the normal workflow. Fixing this needs `qms.v_bag_qc_status`'s `qc_done` join to also consider whether the sample's `created_at` is after the bag's *latest* weight-changing event, not just whether a sample exists for that serial at all. Deliberately not attempted from here: this repo's migration-push workflow (`db-migrate.yml`) is explicitly disabled ("repo migrations are stale relative to the live databases... an automatic `supabase db push` could harm a database" — see `docs/db-reconciliation-runbook.md`), so a view change needs to go through whatever manual, reconciled process the last several `qms.v_bag_qc_status` migrations went through, not a blind new migration file.
+
+## 2026-08-26 — Alyssa (Half-bag top-up: "from today's production" as the default path, not just bag-to-bag) [promoted to production]
+
+**Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/scan-utils.ts`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported confusion: after picking the bag to top up and tapping Next, the operator lands on a second "search for a bag" screen with zero indication the first pick was kept — reads as being sent back to the start. Investigating that led to the real gap: the flow only ever modeled a top-up as material drawn from *another existing tracked bag*, but in most cases (especially Sieving Tower) the extra material is today's own freshly-debagged production that hasn't been bagged anywhere yet — there's no second bag at all. Blender genuinely does need the bag-to-bag path (e.g. consolidating two half-bags), so both stay, with "today's production" as the default.
+
+- The "which bag am I topping up" banner now stays visible on the next screen, with a "Change" link back — fixes the original confusion regardless of the deeper redesign.
+- New default path, **"From today's production"**: no source-bag lookup at all — just the amount, and (for Fine/Coarse Leaf) a required batch, restricted to lots actually debagged under the target bag's own variant+grade. Logged via new `addFreshWeightToBag()` (plain `bagging_out` scan_events row, batch recorded in `notes`) — this genuinely is new output, unlike a transfer, so it must count toward today's production.
+- Kept the existing **"From another bag"** path unchanged (Blender's case) — `transferBagWeight`'s linked `topped_up`/`drawn_down` pair, which must never count as new output.
+- `debaggedBatches()` now matches on variant **family** (via `variantFamily()`) rather than an exact string — RA-CON/CON count as the same conventional material, RA-ORG/ORG as the same organic material, matching how blending already treats these pairs elsewhere.
+- **Production Orders fix**: a "from today's production" top-up updates a bag whose own `bag_tags.session_id` is whatever day it was *first* bagged, not today — invisible to the existing bag_tags-snapshot sum. `loadOrderDay()` now also sums today's own `bagging_out` scan_events rows for serials not already in today's bag snapshot, folding that kg into `bagsOutputKg` (both per-shift and whole-day), and lists them in a new "Topped up from today's production" panel (`OrderFreshTopUpRow`) so it's visible which older bag received it and from which batch — unlike the existing "Re-bagged in" panel, this kg *is* included in the totals, since it's genuinely new.
+- The confirm screen shows which Production Order (date · shift) this will be counted under, so the operator can see it's right before saving.
+
+## 2026-08-26 — Alyssa (COA generator: enlarge the signature blocks) [promoted to production]
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+Requested: the Lab Manager / Quality Manager signatures on the COA (preview, print, and exported PDF) were too small. Increased the base signature size by 40% — on-screen draggable signature `baseH` 40px → 56px (with the signature-block column `maxWidth` 260px → 280px, and the empty-slot placeholder height matched at 56px), and the PDF export's base height 30pt → 42pt (with its image-width cap 150pt → 170pt) to keep the on-screen preview and the exported PDF visually consistent, since the export code converts the on-screen px adjustment to PDF pt via a fixed ratio (`k = 0.75`, i.e. 56px ≈ 42pt). The existing drag-to-reposition / corner-handle resize behaviour is unchanged.
 
 ## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
 
