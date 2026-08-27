@@ -36,6 +36,7 @@ import {
 } from '@/components/production/capture/PasteuriserCapture'
 import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
 import { HalfBagTopUpActivity } from '@/components/production/capture/HalfBagTopUpActivity'
+import { fetchTopUpEventsForSession } from '@/lib/production/scan-utils'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -1509,6 +1510,17 @@ function CaptureScreen() {
       prods.forEach(p => { mbB += pasteuriserTotals(p.data as PasteuriserData).produced })
     } else {
       prods.forEach(p => { mbB += sievingTotals(p.data as SievingData, shiftBal).totalOut })
+      // Half-bag Top-up weight added into an existing bag THIS session —
+      // never in p.data.outputs (side-channel write, see HalfBagTopUpModal),
+      // so it has to be pulled in here too or the debagged material it came
+      // from is counted as input with nothing on the output side to balance
+      // it. Session-scoped, added once (not per-production — prods can hold
+      // more than one run within this one session). Restricted to
+      // mode==='production' — a mode==='existing' (bag-to-bag) transfer
+      // moves weight OUT of a source bag already counted as output when IT
+      // was first bagged, so adding it again here would double-count.
+      const topUpMap = await fetchTopUpEventsForSession(sectionId, sid)
+      mbB += Array.from(topUpMap.values()).flat().filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
     }
     await db.schema('production').from('prod_mass_balance').upsert({
       session_id: sid, total_input_kg: totalIn,

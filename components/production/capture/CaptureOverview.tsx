@@ -228,14 +228,47 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
   return Array.from(prodMap.values())
 }
 
+// Bumps each bag's OWN kg by its same-day top-ups (topUpsBySerial), cascading
+// up through its lot and product totals. Without this, a topped-up bag's row
+// kept showing its ORIGINAL weight — the addition was only visible as the
+// nested violet sub-row, never counted in baggedOnlyKg/totalOut below — so
+// the debagged material a top-up came from was counted as input with
+// nothing added to the output side to balance it. Real activity, not a
+// display quirk: this is the same root cause mergeFreshTopUps fixes for the
+// cross-day case below.
+//
+// Restricted to mode==='production' ("from today's production", no source
+// bag) — mode==='existing' ("from another bag") moves weight OUT of a
+// source bag already counted as output when IT was first bagged, so adding
+// it again here would double-count.
+function bumpSameDayTopUps(groups: ProductGroup[], topUpsBySerial: Map<string, TopUpEvent[]>): ProductGroup[] {
+  if (!topUpsBySerial.size) return groups
+  return groups.map(pg => {
+    let pgDelta = 0
+    const lots = pg.lots.map(lg => {
+      let lgDelta = 0
+      const bags = lg.bags.map(b => {
+        const added = b.serial
+          ? (topUpsBySerial.get(b.serial) ?? []).filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
+          : 0
+        if (!added) return b
+        lgDelta += added; pgDelta += added
+        return { ...b, kg: b.kg + added }
+      })
+      return lgDelta ? { ...lg, bags, kg: lg.kg + lgDelta } : lg
+    })
+    return pgDelta ? { ...pg, lots, totalKg: pg.totalKg + pgDelta } : pg
+  })
+}
+
 // Folds cross-day Half-bag Top-ups ("from today's production" into a bag
 // first bagged on an EARLIER day — see fetchFreshTopUpsForSection) into the
 // matching product/lot group, creating the group/lot if this page's own
 // productions never produced that product today. Without this, such a
 // top-up has no existing bag row anywhere on this page to attach to, so it
 // was previously just invisible here — never shown "in its product type
-// section" the way an ordinary bag is. Same-day top-ups are unaffected —
-// see topUpsBySerial below, which nests those under the bag's OWN row.
+// section" the way an ordinary bag is. Same-day top-ups are handled by
+// bumpSameDayTopUps above, which nests those under the bag's OWN row.
 function mergeFreshTopUps(groups: ProductGroup[], freshTopUps: FreshTopUpRow[]): ProductGroup[] {
   if (!freshTopUps.length) return groups
   const merged = groups.map(pg => ({ ...pg, lots: pg.lots.map(lg => ({ ...lg, bags: [...lg.bags] })) }))
@@ -317,7 +350,10 @@ export function CaptureOverview({
     return () => { cancelled = true }
   }, [sectionId, date, rawProductGroups])
 
-  const productGroups = useMemo(() => mergeFreshTopUps(rawProductGroups, freshTopUps), [rawProductGroups, freshTopUps])
+  const productGroups = useMemo(
+    () => mergeFreshTopUps(bumpSameDayTopUps(rawProductGroups, topUpsBySerial), freshTopUps),
+    [rawProductGroups, topUpsBySerial, freshTopUps],
+  )
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
   const totalIncl     = debagOnlyKg + bucketInKg + machineKg

@@ -2,6 +2,21 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-27 — Alyssa (Half-bag top-up: fold added weight into Sieving Tower's own output total and bag cards, and into Overview's mass balance — not just a separate feed)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported (with screenshot): a top-up's weight never showed up in "Total bagged out" or on the topped-up bag's own card on the live Capture tab — it only appeared as a separate line in the "Half-bag top-ups this shift" feed below. Root cause: `HalfBagTopUpModal` deliberately never touches a session's own `draft_data`/`value.outputs` (mass-balance-sensitive, side-channel write by design), so nothing ever pulled the addition back INTO the numbers the operator is actually looking at — the debagged material a top-up came from was counted as input, with nothing added on the output side to balance it. A real, growing mass-balance shortfall, not just a display quirk.
+
+- `sievingTotals()` gained a `topUpKg` parameter, added straight into `outputs` — the single source both the live "Total bagged out" tile and the actual `prod_mass_balance` row saved on submit/sign-off now read from.
+- `SievingCapture`'s own bag cards now show each bag's CURRENT weight (original + top-up), with a violet `(+Xkg top-up)` marker — no more stale weight sitting on screen after a top-up.
+- `persist()` in `page.tsx` now adds the session's own top-up kg into `mbB` before writing `prod_mass_balance` — the number used for the actual mass-balance check and sign-off, not just what's shown live.
+- `CaptureOverview`: same-day top-ups now bump the topped-up bag's own row (and its lot/product totals) instead of only showing as a disconnected sub-row that never counted toward `baggedOnlyKg`/`totalOut`.
+- All three restricted to `mode==='production'` ("from today's production," no source bag) — a `mode==='existing'` (bag-to-bag) transfer moves weight OUT of a source bag already counted as output when THAT bag was first bagged, so adding it again here would double-count it.
+- **Scope**: this fix is Sieving Tower + Overview only, matching the reported screenshot — Refining/Blender/Granule have the identical underlying gap in their own `xTotals()` functions and "Total output" tiles, but each attributes output across multiple named slots (A/B/C/D) rather than one flat total, so replicating this safely needs its own pass per section rather than a blind copy-paste.
+
+**Not promoted to production yet — staging only, pending testing.**
+
 ## 2026-08-26 — Alyssa (Bag tags: fix print button using old CDN-dependent label design)
 
 **Files changed:** `app/(app)/tags/page.tsx`
