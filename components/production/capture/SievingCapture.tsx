@@ -8,6 +8,7 @@ import { variantToShort, isImplausibleWeight, GRADE_TO_LOCAL_EXPORT } from '@/li
 import { nextStepNudge, recentBatches, debaggedBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
+import ConfirmSheet from '@/components/ui/ConfirmSheet'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
@@ -176,6 +177,7 @@ export function SievingCapture({
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
   const [addingOutput, setAddingOutput] = useState(false)
+  const [confirmDeleteOutput, setConfirmDeleteOutput] = useState<OutBag | null>(null)
   // Synchronous guard against a double-tap firing addOutput() twice before the
   // first call's await chain resolves — state alone isn't enough since a second
   // tap can land in the same tick, before React has re-rendered with the
@@ -467,6 +469,11 @@ export function SievingCapture({
     }
   }
 
+  function deleteOutput(b: OutBag) {
+    if (b.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', b.serial).then(() => {})
+    patch({ outputs: value.outputs.filter(x => x.id !== b.id) })
+  }
+
   function reprint(b: OutBag) {
     printLabelAuto({
       id: b.id, serial_number: b.serial, product_type: b.productType, variant: variantShort,
@@ -748,10 +755,7 @@ export function SievingCapture({
                         ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
                         : <>
                             <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
-                            <button onClick={() => {
-                              if (b.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', b.serial).then(() => {})
-                              patch({ outputs: value.outputs.filter(x => x.id !== b.id) })
-                            }} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
+                            <button onClick={() => setConfirmDeleteOutput(b)} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
                           </>
                       )}
                     </div>
@@ -794,6 +798,16 @@ export function SievingCapture({
           </div>
         </>
       )}
+
+      <ConfirmSheet
+        open={!!confirmDeleteOutput}
+        title={`Delete bag ${confirmDeleteOutput?.serial ?? ''}?`}
+        message="This removes it from today's bagging list and voids its tag — it stops counting toward mass balance and stock. This can't be undone from here."
+        confirmLabel="Yes, delete"
+        danger
+        onConfirm={() => { if (confirmDeleteOutput) deleteOutput(confirmDeleteOutput); setConfirmDeleteOutput(null) }}
+        onCancel={() => setConfirmDeleteOutput(null)}
+      />
     </div>
   )
 }
