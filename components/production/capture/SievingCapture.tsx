@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { voidBagTag } from '@/lib/production/scan-utils'
+import { voidBagTag, fetchTopUpEventsForSession, type TopUpEvent } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, isImplausibleWeight, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { nextStepNudge, recentBatches, debaggedBatches } from '@/lib/production/inventory'
@@ -143,11 +143,20 @@ export type Shift = 'morning' | 'afternoon'
 // elevator for the next day — so it's an OUTPUT. The two are different material
 // and never cancel; keeping the distinction is what makes the run balance honest.
 // Machine spillage (spillage[1..]) is always counted on the input side.
-export function sievingTotals(d: SievingData, shift?: Shift) {
+//
+// topUpKg — Half-bag Top-up weight added into an EXISTING bag this session
+// (see HalfBagTopUpModal/addFreshWeightToBag). It's a side-channel write
+// that never touches d.outputs, so without this parameter it was invisible
+// here: the debagged material it came from is still counted in debagIn
+// above, but the bagged weight it became was never added back to outputs —
+// a real, growing mass-balance shortfall, not just a display quirk. Callers
+// pass the session's own topped-up total (fetchTopUpEventsForSession),
+// defaulting to 0 for any caller that hasn't wired it up yet.
+export function sievingTotals(d: SievingData, shift?: Shift, topUpKg = 0) {
   const debagIn   = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
   const bucketKg  = n(d.spillage?.[0]?.kg)                                   // bucket elevator carryover
   const machineKg = (d.spillage ?? []).slice(1).reduce((s, r) => s + n(r.kg), 0)  // machine spillage
-  const outputs   = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)
+  const outputs   = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0) + topUpKg
   const bucketIsOutput = shift === 'afternoon'
   const totalIn  = debagIn + machineKg + (bucketIsOutput ? 0 : bucketKg)
   const totalOut = outputs + (bucketIsOutput ? bucketKg : 0)
@@ -457,7 +466,34 @@ export function SievingCapture({
     if (method === 'printed') reprint(b)
   }
 
-  const { totalIn, totalOut } = sievingTotals(value, shift)
+  // Half-bag Top-up: never touches value.outputs (side-channel write — see
+  // HalfBagTopUpModal), so its weight has to be pulled in from scan_events
+  // separately to actually count toward this session's own output total and
+  // each topped-up bag's own displayed weight — otherwise the debagged
+  // material it came from is counted as input with nothing to balance it
+  // on the output side. Keyed by serial so each bag's own card can show
+  // exactly what was added to it.
+  //
+  // Restricted to mode==='production' ("from today's production", no
+  // source bag — addFreshWeightToBag) — mode==='existing' ("from another
+  // bag" — transferBagWeight) moves weight OUT of a source bag that was
+  // already counted as output when IT was first bagged, so adding it again
+  // here would double-count; that mode is deliberately left off this total.
+  const [topUpsBySerial, setTopUpsBySerial] = useState<Map<string, TopUpEvent[]>>(new Map())
+  useEffect(() => {
+    if (!sessionId) { setTopUpsBySerial(new Map()); return }
+    let cancelled = false
+    fetchTopUpEventsForSession(sectionId, sessionId).then(m => { if (!cancelled) setTopUpsBySerial(m) })
+    return () => { cancelled = true }
+  }, [sectionId, sessionId])
+  const productionTopUpsBySerial = new Map(
+    Array.from(topUpsBySerial.entries())
+      .map(([serial, list]) => [serial, list.filter(t => t.mode === 'production')] as const)
+      .filter(([, list]) => list.length > 0),
+  )
+  const topUpKg = Array.from(productionTopUpsBySerial.values()).flat().reduce((s, t) => s + t.kg, 0)
+
+  const { totalIn, totalOut } = sievingTotals(value, shift, topUpKg)
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
@@ -667,7 +703,10 @@ export function SievingCapture({
             const groups = sortOutputGroups(Array.from(new Set(value.outputs.map(b => b.productType))))
             return groups.map((productType, gi) => {
               const bags = value.outputs.filter(b => b.productType === productType)
-              const groupKg = bags.reduce((s, b) => s + n(b.weight), 0)
+              const groupKg = bags.reduce((s, b) => {
+                const bagTopUpKg = (b.serial ? productionTopUpsBySerial.get(b.serial) : undefined)?.reduce((ts, t) => ts + t.kg, 0) ?? 0
+                return s + n(b.weight) + bagTopUpKg
+              }, 0)
               const col = groupColor(gi)
               return (
                 <div key={productType} className="space-y-2">
@@ -678,12 +717,19 @@ export function SievingCapture({
                     </span>
                     <span className="text-[11px] font-mono text-stone-500">{groupKg.toFixed(1)} kg · {bags.length} bag{bags.length === 1 ? '' : 's'}</span>
                   </div>
-                  {bags.map((b, i) => (
+                  {bags.map((b, i) => {
+                    const bagTopUps = b.serial ? productionTopUpsBySerial.get(b.serial) : undefined
+                    const bagTopUpKg = (bagTopUps ?? []).reduce((s, t) => s + t.kg, 0)
+                    return (
                     <div key={b.id} className="flex items-center gap-3 rounded-2xl px-4 py-3 border"
                       style={{ background: col + '0d', borderColor: col + '40' }}>
                       {b.secured && <Lock size={14} className="shrink-0" style={{ color: col }} />}
                       <div className="flex-1 min-w-0">
-                        <div className="text-[13px] font-medium text-text">Bag {i + 1} · {b.weight} kg{b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}</div>
+                        <div className="text-[13px] font-medium text-text">
+                          Bag {i + 1} · {(n(b.weight) + bagTopUpKg).toFixed(1)} kg
+                          {bagTopUpKg > 0 && <span className="ml-1 font-semibold text-violet-600">(+{bagTopUpKg.toFixed(1)} top-up)</span>}
+                          {b.logged_at ? <span className="font-normal text-text-muted"> · {fmtTime(b.logged_at)}</span> : null}
+                        </div>
                         <div className="mt-1 flex items-center gap-2 flex-wrap">
                           <span className="inline-flex items-center gap-2 font-mono text-[13px] font-bold text-text bg-stone-100 border border-stone-200 rounded-lg px-2.5 py-1">
                             {b.serial}{b.code ? <span className="text-[10px] font-sans font-normal text-stone-400"> · {b.code}</span> : null}
@@ -724,7 +770,8 @@ export function SievingCapture({
                           </>
                       )}
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )
             })
