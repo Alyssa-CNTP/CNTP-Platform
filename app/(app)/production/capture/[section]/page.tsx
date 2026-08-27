@@ -299,6 +299,7 @@ function CaptureScreen() {
   const lastActivityRef = useRef(0)  // throttle the timesheet heartbeat (ms epoch)
   const persistRef = useRef<((p: Production[], sid: string) => Promise<void>) | null>(null)
   const ensureRef  = useRef<(() => Promise<string>) | null>(null)
+  const persistChainRef = useRef<Promise<void>>(Promise.resolve())
 
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
@@ -590,7 +591,14 @@ function CaptureScreen() {
       if (!hasCaptureData(productionsRef.current)) return
       if (ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
     }
-    if (sid && persistRef.current) { try { await persistRef.current(productionsRef.current, sid) } catch {} }
+    if (sid && persistRef.current) {
+      const sidFinal = sid
+      const run = persistChainRef.current
+        .catch(() => {})
+        .then(() => persistRef.current!(productionsRef.current, sidFinal))
+      persistChainRef.current = run.catch(() => {})
+      try { await run } catch {}
+    }
   }
   const flushRef = useRef(flushSave); flushRef.current = flushSave
 
@@ -1028,7 +1036,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++,
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            local_or_export: r.destination || null,
+            grade: r.destination || null,
             notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
             product_type: r.productType || null, variant: r.variant || prod.variant || null,
@@ -1067,9 +1075,10 @@ function CaptureScreen() {
             // Preserve the operator's physical bag number in notes for traceability.
             bag_serial_no: null, notes: r.bag_no || null,
             lot_number: r.lot || prod.lot || null,
-            product_type: '500kg Farm Bag', variant: prod.variant,
+            product_type: 'Farm Bag', variant: prod.variant,
             kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-            delivery_date: r.delivery_date || null, local_or_export: r.local_export || null,
+            delivery_date: r.delivery_date || null, grade: r.grade || (r as any).local_export || null,
+            bagging_time: r.logged_at || null,
             is_spillage: false,
           })
         })
@@ -1354,7 +1363,14 @@ function CaptureScreen() {
     const prevDebagIds = ((prevDebagRows as any[]) ?? []).map((r: any) => r.id as string)
 
     if (debag.length) {
-      const insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      let insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
+      if (insDebag.error && /PGRST204|schema cache/i.test(`${insDebag.error.code} ${insDebag.error.message}`)) {
+        const fallback = (debag as any[]).map(r => {
+          const { grade, bagging_time, ...rest } = r
+          return rest
+        })
+        insDebag = await db.schema('production').from('prod_debagging').insert(fallback as any)
+      }
       if (insDebag.error) {
         rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
       } else if (prevDebagIds.length) {
