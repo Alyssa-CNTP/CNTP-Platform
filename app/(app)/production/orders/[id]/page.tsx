@@ -144,12 +144,16 @@ export default function ProductionOrderDetailPage() {
     /bucket elevator/i.test(d.product_type || '') && (d.shift === 'afternoon' || d.shift === 'night')
   const inputRows = debags.filter(d => !isBucketCarryOut(d))
   const bucketCarryOverKg = debags.filter(isBucketCarryOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
+  // Total input = computed from actual debag rows (non-spillage bags + machine
+  // spillage + morning bucket elevator), NOT from the prod_mass_balance snapshot
+  // which goes stale when persist() fails or the session is submitted.
+  const totalInput = inputRows.reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
   // Total output = physical bagged product (the reliable ledger) + the bucket
   // elevator carried over. Derived from the ledger, so it always agrees with
   // the Bagging section below instead of the race-prone mass-balance snapshot.
   const totalOutput = bagsOutputKg + bucketCarryOverKg
-  const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / num(mb.total_input_kg)) * 1000) / 10 : null
-  const wholeRunBalance = massBalanceInfo(totalOutput, num(mb?.total_input_kg))
+  const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
+  const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -188,13 +192,13 @@ export default function ProductionOrderDetailPage() {
         </PanelBody>
       </Panel>
 
-      {/* Whole-run mass balance */}
-      {mb && (
+      {/* Whole-run mass balance — computed from actual debag/bag rows */}
+      {(totalInput > 0 || totalOutput > 0) && (
         <Panel>
           <PanelHead title="Mass balance — full run (07h00–01h00)" />
           <PanelBody>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <Field label="Total input"  value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
+              <Field label="Total input"  value={`${totalInput.toFixed(1)} kg`} />
               <Field label="Bagged output" value={`${bagsOutputKg.toFixed(1)} kg`} />
               {bucketCarryOverKg > 0 && <Field label="Bucket elevator (carried over)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
               <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />

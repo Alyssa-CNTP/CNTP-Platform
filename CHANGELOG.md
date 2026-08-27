@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-27 — Alyssa (Production fixes: grade rename promote, deploy cache, mass balance recalc)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/supabase/database.types.ts`, `lib/production/capture-config.ts`, `.github/workflows/deploy-production.yml`, `.github/workflows/deploy-staging.yml`, `app/(app)/production/orders/[id]/page.tsx`
+
+**PRs:** #838, #839, #840, #841, #844
+
+- **Promote `local_or_export` → `grade` to production** (PR #838) — migration `20260826_002` renamed the column on the production DB but the code on `main` was never updated. All seven files updated: `SievingCapture.tsx` (DebagRow interface, self-heal query, draft_data migration effect), `ShiftBagLog.tsx`, `page.tsx` (buildDebag for sieving + blender), `inventory.ts` (debaggedBatches/debaggedBags queries), `order-detail.ts` (OrderDebagRow interface), `database.types.ts`, `capture-config.ts` comment. Root cause of PGRST204 errors on every prod_debagging save on production.
+- **Deploy: clear `.next` cache before build** (PR #839) — production deploy served old compiled code despite `origin/main` having correct source. Root cause: Next.js incremental build cache (`.next/cache`) reused stale compiled chunks. Added `rm -rf .next` before `npm run build` in both staging and production deploy workflows.
+- **prod_debagging: delete-then-insert** (PR #840) — `prod_debagging_session_bag_uidx` enforces unique `(session_id, bag_no)` on production (constraint added outside repo migrations). The insert-then-delete pattern hit a 409 conflict on every save. Switched to delete-then-insert; draft_data is the source of truth and the self-heal effect reconstructs rows if the insert fails.
+- **Order detail: sort debags by time** (PRs #841, #844) — debag rows were interleaved by `bag_no` across shifts. Now sorted by `bagging_time` (falling back to `created_at`), matching how output bags are already sorted. Added `bagging_time` and `created_at` to `OrderDebagRow` interface.
+- **Order detail: match "Farm Bag" product type** (PR #841) — `inputType()` only matched `"500kg Farm Bag"` but `buildDebag()` now writes `"Farm Bag"`. Broadened regex to `/farm\s*bag/i` so both old and new rows display as "Bulk Bag".
+- **Submitted sessions can save** (PR #844) — `flushSave()` blocked all saves for submitted sessions, preventing mass balance recalculation after data corrections. Now only approved sessions are fully locked. Submitted sessions allow saves so debag/bag rows and mass balance update while sign-off status stays unchanged.
+
 ## 2026-08-26 — Alyssa (Production Orders: fix hourly VSD prompt retriggering + mobile overflow on order rows/panel headers) [promoted to production]
 
 **Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx`
