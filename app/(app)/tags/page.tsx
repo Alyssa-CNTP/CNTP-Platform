@@ -170,67 +170,19 @@ function SectionPill({ sectionId, label }: { sectionId: string; label?: string }
 }
 
 // ── Print single label ────────────────────────────────────────────────────────
+// Routes through the same networked print-relay every other print button in
+// the app uses (printLabelAuto resolves the bag's section printer server-side,
+// falling back to the browser print window only if that printer is
+// unreachable) — matching the Add-weight reprint calls in this same file,
+// which already use printLabelAuto with no popup-blocker issue in practice.
 function printTagLabel(tag: BagTag) {
-  const win = window.open('', '_blank')
-  if (!win) { alert('Allow pop-ups to print labels.'); return }
-  const dateStr = tag.tag_date
-    ? format(parseISO(tag.tag_date + 'T00:00:00'), 'dd-MM-yy')
-    : '—'
-
-  win.document.write(`<!DOCTYPE html><html><head>
-  <meta charset="UTF-8"><title>CNTP Label ${tag.serial_number}</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
-  <style>
-    @page { size: 100mm 60mm; margin: 3mm; }
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { font-family:'Helvetica Neue',Arial,sans-serif; font-size:10px; background:white; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    .label { border:1.5px solid #374151; border-radius:4px; padding:4px 6px; height:54mm; display:flex; flex-direction:column; }
-    .header { display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:0.5px solid #9ca3af; margin-bottom:3px; }
-    .title { font-weight:700; font-size:11px; }
-    .badge { font-size:8px; font-weight:700; border:1.5px solid #374151; padding:1px 5px; border-radius:2px; }
-    .barcode { width:100%; height:40px; display:block; }
-    .serial { font-family:'Courier New',monospace; font-size:13px; font-weight:700; text-align:center; letter-spacing:.1em; padding:2px 0 4px; border-bottom:0.5px solid #e5e7eb; }
-    .grid { display:grid; grid-template-columns:1fr 1fr; gap:0; }
-    .cell { padding:3px 4px; border-right:0.5px solid #e5e7eb; }
-    .cell:nth-child(even) { border-right:none; }
-    .cell:nth-child(n+3) { border-top:0.5px solid #e5e7eb; }
-    .lbl { font-size:7px; text-transform:uppercase; letter-spacing:.05em; color:#6b7280; }
-    .val { font-family:'Courier New',monospace; font-size:10px; font-weight:700; color:#111; }
-    .footer { display:flex; justify-content:space-between; margin-top:auto; padding-top:3px; border-top:0.5px solid #e5e7eb; font-size:8px; color:#6b7280; }
-    .boxes { display:flex; gap:4px; align-items:center; }
-    .box { display:inline-block; width:10px; height:10px; border:1.5px solid #374151; text-align:center; line-height:8px; font-size:8px; font-weight:700; }
-  </style>
-</head><body>
-  <div class="label">
-    <div class="header">
-      <span class="title">${tag.section_name}: ${tag.product_type}</span>
-      <span class="badge">${tag.variant || 'CON'}</span>
-    </div>
-    <svg id="bc" class="barcode"></svg>
-    <div class="serial">${tag.serial_number}</div>
-    <div class="grid">
-      <div class="cell"><div class="lbl">Lot / Batch</div><div class="val">${tag.lot_number}</div></div>
-      <div class="cell"><div class="lbl">Weight</div><div class="val">${tag.weight_kg ?? '—'} kg</div></div>
-      <div class="cell"><div class="lbl">Date</div><div class="val">${dateStr}</div></div>
-      <div class="cell"><div class="lbl">Acumatica</div><div class="val">${tag.acumatica_id || '—'}</div></div>
-    </div>
-    <div class="footer">
-      <span>${tag.section_name}</span>
-      <span class="boxes">
-        CON <span class="box">${tag.variant === 'Conventional' ? '✕' : ' '}</span>
-        ORG <span class="box">${tag.variant === 'Organic' ? '✕' : ' '}</span>
-        RA  <span class="box">${(tag.variant || '').startsWith('RA') ? '✕' : ' '}</span>
-      </span>
-    </div>
-  </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      JsBarcode('#bc', '${tag.serial_number}', { format:'CODE128', width:1.8, height:36, displayValue:false, margin:2, lineColor:'#111827', background:'transparent' });
-      setTimeout(function(){ window.print(); }, 350);
-    });
-  </script>
-</body></html>`)
-  win.document.close()
+  printLabelAuto({
+    id: tag.id, serial_number: tag.serial_number, product_type: tag.product_type,
+    variant: (tag.variant || 'Conventional') as any, grade: (tag.destination as any) || 'A',
+    weight_kg: tag.weight_kg ?? 0, lot_number: tag.lot_number || '', section_id: tag.section_id,
+    section_name: tag.section_name, created_at: tag.captured_at, printed: true,
+    acumaticaId: tag.acumatica_id ?? undefined,
+  } as any)
 }
 
 // ── Tag detail modal ───────────────────────────────────────────────────────────
