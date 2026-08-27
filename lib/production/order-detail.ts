@@ -446,10 +446,11 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   const freshKgBySession = new Map<string, number>()
   for (const r of freshTopUps) freshKgBySession.set(r.sessionId, (freshKgBySession.get(r.sessionId) ?? 0) + r.kg)
 
-  // Debag inputs across the day (already ordered per session by bag_no), tagged with shift.
+  // Debag inputs across the day, tagged with shift and sorted morning-first.
+  const SHIFT_ORDER: Record<string, number> = { morning: 0, afternoon: 1 }
   const debags: OrderDebagRow[] = ((debagsRes.data as any[]) ?? []).map(d => ({
     ...d, shift: shiftBySession.get(d.session_id) ?? '',
-  }))
+  })).sort((a, b) => (SHIFT_ORDER[a.shift] ?? 2) - (SHIFT_ORDER[b.shift] ?? 2) || a.bag_no - b.bag_no)
 
   const shifts: OrderShiftBlock[] = sessions.map(s => {
     const own = bags.filter(b => b.session_id === s.id)
