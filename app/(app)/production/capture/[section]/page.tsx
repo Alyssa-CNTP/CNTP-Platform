@@ -579,12 +579,14 @@ function CaptureScreen() {
   // Reliable save — ensures a session exists (in case the open-time create
   // failed) then persists. Used by the debounce, the hide-flush, and the backstop.
   async function flushSave() {
-    // A submitted/approved session is read-only — nothing to save, and creating a
-    // row for it (via ensureSession) is exactly how empty duplicates appeared when
-    // a second person opened an already-signed-off shift.
-    if (status === 'submitted' || status === 'approved') return
+    // An approved session is fully locked — no saves. Submitted sessions still
+    // allow saves so that corrections recalculate the mass balance and update
+    // structured rows while the sign-off status stays unchanged.
+    if (status === 'approved') return
     let sid = sessionRef.current
     if (!sid) {
+      // A submitted session that lost its ref shouldn't create a new row.
+      if (status === 'submitted') return
       // Never create a session with no captured data — this is the core guard that
       // stops empty "No data" sessions from opening a section or an abandoned "start
       // new batch record". A row is created only once real weights are entered.
