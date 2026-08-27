@@ -116,6 +116,8 @@ export interface OrderDebagRow {
   org_or_conv: string | null
   is_spillage: boolean
   notes: string | null
+  bagging_time: string | null
+  created_at: string | null
   session_id: string
   shift: string
 }
@@ -446,11 +448,14 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   const freshKgBySession = new Map<string, number>()
   for (const r of freshTopUps) freshKgBySession.set(r.sessionId, (freshKgBySession.get(r.sessionId) ?? 0) + r.kg)
 
-  // Debag inputs across the day, tagged with shift and sorted morning-first.
-  const SHIFT_ORDER: Record<string, number> = { morning: 0, afternoon: 1 }
+  // Debag inputs across the day, tagged with shift and sorted by time.
   const debags: OrderDebagRow[] = ((debagsRes.data as any[]) ?? []).map(d => ({
     ...d, shift: shiftBySession.get(d.session_id) ?? '',
-  })).sort((a, b) => (SHIFT_ORDER[a.shift] ?? 2) - (SHIFT_ORDER[b.shift] ?? 2) || a.bag_no - b.bag_no)
+  })).sort((a, b) => {
+    const ta = a.bagging_time ? Date.parse(a.bagging_time) : a.created_at ? Date.parse(a.created_at) : Infinity
+    const tb = b.bagging_time ? Date.parse(b.bagging_time) : b.created_at ? Date.parse(b.created_at) : Infinity
+    return ta - tb
+  })
 
   const shifts: OrderShiftBlock[] = sessions.map(s => {
     const own = bags.filter(b => b.session_id === s.id)
