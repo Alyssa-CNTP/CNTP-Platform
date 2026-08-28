@@ -29,7 +29,18 @@ export default function CaptureLandingPage() {
 
   // date and shift always agree on which production shift "now" belongs to —
   // see productionShiftNow()'s comment for why that's not simply today+currentShift().
-  const [{ date, shift }] = useState(productionShiftNow())
+  const [{ date, shift }, setDateShift] = useState(productionShiftNow())
+
+  // A tablet left open across a shift boundary (07h00/16h00) would otherwise be
+  // stuck showing the shift that was current when the tab was opened, forever —
+  // recheck periodically and roll forward when it actually changes.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = productionShiftNow()
+      setDateShift(prev => (prev.date === next.date && prev.shift === next.shift) ? prev : next)
+    }, 60_000)
+    return () => clearInterval(id)
+  }, [])
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([])
   const [opMap, setOpMap] = useState<Record<string, string>>({})
   const [statusMap, setStatusMap] = useState<Record<string, string>>({})
