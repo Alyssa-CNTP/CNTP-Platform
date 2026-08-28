@@ -14,10 +14,12 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
-import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, ArrowRightLeft } from 'lucide-react'
-import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet } from '@/lib/production/order-detail'
+import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, AlertTriangle } from 'lucide-react'
+import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
+import { formatSAST } from '@/lib/production/shifts'
 import { getDb } from '@/lib/supabase/db'
+import { useAuth } from '@/lib/auth/context'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
 
 const fmtBagTime = (ts: string | null) =>
@@ -74,6 +76,7 @@ function inputType(d: OrderDebagRow): string {
 export default function ProductionOrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
+  const { displayName } = useAuth()
   const [day, setDay] = useState<OrderDay | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -112,6 +115,7 @@ export default function ProductionOrderDetailPage() {
       .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_bagging' },       (p: any) => { if (inScopeSession(p)) reload() })
       .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_mass_balance' },  (p: any) => { if (inScopeSession(p)) reload() })
       .on('postgres_changes', { event: '*', schema: 'production', table: 'session_signatures' }, (p: any) => { if (inScopeSession(p)) reload() })
+      .on('postgres_changes', { event: '*', schema: 'production', table: 'po_notes' },           (p: any) => { if (inScopeSession(p)) reload() })
       .on('postgres_changes', { event: '*', schema: 'production', table: 'prod_sessions' },      (p: any) => { if (inScopeSession(p) || inScopeDay(p)) reload() })
       .subscribe((s: string) => { if (alive) setLive(s === 'SUBSCRIBED') })
     const poll = setInterval(reload, 20_000)
@@ -123,7 +127,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, massBalance: mb, timesheets, takeovers } = day
+  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -191,6 +195,13 @@ export default function ProductionOrderDetailPage() {
           </div>
         </PanelBody>
       </Panel>
+
+      {/* Notes — a timestamped log, separate from the per-shift handover
+          comments below. Anyone can add one; author + SAST time are stamped
+          server-side. */}
+      <div className="no-print">
+        <NotesPanel sessionId={representativeSessionId} notes={notes} requestedByName={displayName} />
+      </div>
 
       {/* Whole-run mass balance — computed from actual debag/bag rows */}
       {(totalInput > 0 || totalOutput > 0) && (
@@ -547,6 +558,74 @@ function ShiftBlock({ block }: { block: OrderShiftBlock }) {
             <SignoffBlock label="Supervisor" name={s.sup_name_signoff} signedAt={s.sup_signed_at} image={supSig?.signature_b64} />
           </div>
           {s.comments && <p className="text-[12.5px] text-text whitespace-pre-wrap border-t border-surface-rule/60 pt-3">{s.comments}</p>}
+        </div>
+      </PanelBody>
+    </Panel>
+  )
+}
+
+// ── Notes — a timestamped log on the order ─────────────────────────────────
+// Separate from a shift's single "Handover & operator notes" field (which the
+// next save overwrites): every note here stays, with its own author and SAST
+// timestamp, server-stamped rather than client-supplied. New notes are
+// attached to the day's representative session; the realtime channel above
+// (po_notes) picks up the insert and refreshes this list automatically.
+function NotesPanel({ sessionId, notes, requestedByName }: {
+  sessionId: string; notes: OrderNote[]; requestedByName: string
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    if (!note.trim()) return
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch(`/api/production/orders/${sessionId}/notes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || `Error ${res.status}`)
+      setNote('')
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setBusy(false)
+  }
+
+  return (
+    <Panel>
+      <PanelHead title="Notes" meta={notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : undefined} />
+      <PanelBody>
+        <div className="space-y-3">
+          <div className="flex items-start gap-2">
+            <textarea value={note} onChange={e => setNote(e.target.value)} rows={2}
+              placeholder="Add a note for anyone else looking at this order…"
+              className="flex-1 px-3.5 py-2.5 rounded-xl border border-surface-rule bg-surface-card text-[13px] text-text outline-none focus:border-brand resize-none placeholder:text-text-faint" />
+            <button onClick={submit} disabled={busy || !note.trim()}
+              className="flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-brand text-white text-[12.5px] font-medium disabled:opacity-40 hover:bg-brand-mid transition-colors shrink-0">
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <MessageSquarePlus size={14} />} Add
+            </button>
+          </div>
+          <p className="text-[10.5px] text-text-faint -mt-1.5">Adding as {requestedByName || 'you'}</p>
+          {error && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} className="shrink-0" /> {error}</p>}
+          {notes.length === 0 ? <Empty>No notes yet.</Empty> : (
+            <div className="space-y-2.5 pt-1">
+              {notes.map(n => (
+                <div key={n.id} className="flex items-start gap-2">
+                  <MessageSquare size={14} className="text-text-faint shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-[12.5px] text-text whitespace-pre-wrap leading-relaxed">{n.note}</p>
+                    <span className="text-[10.5px] text-text-faint">
+                      {n.created_by_name || 'Unknown'} · {formatSAST(n.created_at)} SAST
+                      {n.shift && <span className="capitalize"> · {n.shift}</span>}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </PanelBody>
     </Panel>

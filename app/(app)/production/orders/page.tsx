@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { format, parseISO, subDays } from 'date-fns'
@@ -11,7 +11,7 @@ import {
   Loader2, CheckCircle2, Clock, Pen, Play, ChevronRight,
   Filter, X, AlertTriangle, Package, ArrowRight, MoreHorizontal, Pencil, Trash2,
   RotateCcw, Save, Unlock, Archive, BarChart3, List, Gauge, TrendingUp, Undo2,
-  Layers, Scale, FileText,
+  Layers, Scale, FileText, MessageSquare, MessageSquarePlus,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -63,6 +63,7 @@ interface SessionRow {
   debag_count: number
   bag_count: number
   has_raw_data: boolean
+  note_count: number
 }
 
 interface Kpis {
@@ -183,10 +184,17 @@ function OrdersInner() {
     return () => { alive = false }
   }, [dateFrom, dateTo, filterSection, filterVariant, filterShift, refreshKey])
 
+  const loadedOnceRef = useRef(false)
+
   useEffect(() => {
     let alive = true
     async function load() {
-      setLoading(true)
+      // Only block the view with a spinner on the very first load. A
+      // background refresh (the 30s poll below, or an explicit reload after
+      // an action) must never unmount the row list in place — anything open
+      // in it, like the "Request reopen" modal's textarea, would be wiped
+      // out mid-type. See loadedOnceRef.current gate further down.
+      if (!loadedOnceRef.current) setLoading(true)
       const db = getDb()
 
       const { data: sess } = await db.schema('production').from('prod_sessions')
@@ -196,7 +204,7 @@ function OrdersInner() {
         .limit(200)
 
       if (!alive) return
-      if (!sess?.length) { setSessions([]); setLoading(false); return }
+      if (!sess?.length) { setSessions([]); loadedOnceRef.current = true; setLoading(false); return }
 
       const ids = (sess as any[]).map(s => s.id)
 
@@ -224,11 +232,14 @@ function OrdersInner() {
       // session with 18 real bags could show "1" here. prod_bagging is unioned
       // in only to cover any bag it has that bag_tags doesn't (no-serial
       // by-products, Pasteuriser range rows); voided bags are excluded.
-      const [{ data: tags }, { data: bags }, { data: debags }] = await Promise.all([
+      const [{ data: tags }, { data: bags }, { data: debags }, { data: noteRows }] = await Promise.all([
         db.schema('production').from('bag_tags').select('session_id,serial_number,weight_kg,status').in('session_id', ids),
         db.schema('production').from('prod_bagging').select('session_id,bag_serial_no,kg').in('session_id', ids),
         db.schema('production').from('prod_debagging').select('session_id').in('session_id', ids),
+        db.schema('production').from('po_notes').select('session_id').in('session_id', ids),
       ])
+      const noteCount = new Map<string, number>()
+      ;(noteRows ?? []).forEach((r: any) => noteCount.set(r.session_id, (noteCount.get(r.session_id) ?? 0) + 1))
       // Per session: build the reliable output set keyed by serial.
       const perSession = new Map<string, { serials: Set<string>; kg: number; noSerial: number; voided: Set<string> }>()
       const bucket = (sid: string) => {
@@ -273,8 +284,10 @@ function OrdersInner() {
           debag_count: debagCount.get(s.id) ?? 0,
           bag_count:   bagCount.get(s.id)   ?? 0,
           has_raw_data: rawData.get(s.id) ?? false,
+          note_count: noteCount.get(s.id) ?? 0,
         }
       }))
+      loadedOnceRef.current = true
       setLoading(false)
     }
     load()
@@ -717,6 +730,7 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
   const [editing,  setEditing]  = useState(false)
   const [busy,     setBusy]     = useState(false)
   const [reopening, setReopening] = useState(false)
+  const [noting,    setNoting]    = useState(false)
   const [form, setForm] = useState({
     operator_names:    (s.operator_names ?? []).join(', '),
     variant:           s.variant ?? '',
@@ -800,6 +814,16 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
             <Undo2 size={15} />
           </button>
         )}
+        <button onClick={() => setNoting(true)}
+          title={s.note_count ? `${s.note_count} note${s.note_count === 1 ? '' : 's'} — add another` : 'Add a note'}
+          className="relative p-1.5 rounded-lg text-text-faint hover:text-brand hover:bg-surface-raised shrink-0 transition-colors">
+          {s.note_count > 0 ? <MessageSquare size={15} className="text-brand" /> : <MessageSquarePlus size={15} />}
+          {s.note_count > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-[3px] rounded-full bg-brand text-white text-[9px] font-semibold leading-[14px] text-center">
+              {s.note_count}
+            </span>
+          )}
+        </button>
         {s.lot_number && (
           <Link href={`/traceability?batch=${encodeURIComponent(s.lot_number)}`} title="Full batch traceability"
             className="p-1.5 rounded-lg text-text-faint hover:text-brand hover:bg-surface-raised shrink-0 transition-colors">
@@ -893,6 +917,78 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
         <RequestReopenModal session={s} requestedByName={displayName ?? null}
           onClose={() => setReopening(false)} onDone={() => { setReopening(false); onChanged() }} />
       )}
+      {noting && (
+        <AddNoteModal session={s}
+          onClose={() => setNoting(false)} onDone={() => { setNoting(false); onChanged() }} />
+      )}
+    </div>
+  )
+}
+
+// ── "Add note" ────────────────────────────────────────────────────────────────
+// A lightweight, timestamped note log on the order — separate from the single
+// "Handover & operator notes" field a shift's own operator writes during
+// capture. Anyone can add one; author name and SAST timestamp are stamped
+// server-side, never client-supplied, and notes accumulate rather than
+// overwrite. Read together with the full log on the order detail page.
+function AddNoteModal({ session: s, onClose, onDone }: {
+  session: SessionRow; onClose: () => void; onDone: () => void
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [sent, setSent] = useState(false)
+  const m = sectionMeta(s.section_id)
+
+  async function submit() {
+    if (!note.trim()) return
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch(`/api/production/orders/${s.id}/notes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || `Error ${res.status}`)
+      setSent(true)
+      setTimeout(onDone, 900)
+    } catch (e: any) {
+      setError(e.message)
+    }
+    setBusy(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.45)' }}>
+      <div className="bg-surface-card rounded-2xl shadow-menu w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-brand-bg flex items-center justify-center shrink-0"><MessageSquarePlus size={17} className="text-brand" /></div>
+          <div className="min-w-0">
+            <div className="font-display font-semibold text-[15px] text-text leading-tight">Add a note</div>
+            <div className="text-[11.5px] text-text-muted mt-0.5">
+              {m.name} · {format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · <span className="capitalize">{s.shift}</span>
+            </div>
+          </div>
+        </div>
+        {sent ? (
+          <p className="flex items-center gap-2 text-[13px] text-ok"><CheckCircle2 size={15} /> Note added.</p>
+        ) : (<>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={4} autoFocus
+            placeholder="Add a note for anyone else looking at this order…"
+            className="w-full px-3.5 py-2.5 rounded-xl border border-surface-rule bg-surface-card text-[13px] text-text outline-none focus:border-brand resize-none placeholder:text-text-faint" />
+          {error && <p className="text-[12px] text-err flex items-center gap-1.5"><AlertTriangle size={13} className="shrink-0" /> {error}</p>}
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={onClose} disabled={busy}
+              className="py-2.5 rounded-xl border border-surface-rule text-text font-medium text-[12.5px] hover:bg-surface-raised disabled:opacity-40 transition-colors">
+              Cancel
+            </button>
+            <button onClick={submit} disabled={busy || !note.trim()}
+              className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand text-white font-medium text-[12.5px] disabled:opacity-40 hover:bg-brand-mid transition-colors">
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <MessageSquarePlus size={14} />} Add note
+            </button>
+          </div>
+        </>)}
+      </div>
     </div>
   )
 }

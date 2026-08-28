@@ -140,6 +140,14 @@ export interface OrderReopenRequest {
   created_at: string
 }
 
+export interface OrderNote {
+  id: string
+  note: string
+  created_by_name: string | null
+  created_at: string
+  shift: string
+}
+
 export interface OrderTimesheet {
   operator_name: string
   shift: string
@@ -165,6 +173,7 @@ export interface OrderShiftBlock {
   massBalance: OrderMassBalance | null
   signatures: OrderSignature[]
   reopenRequests: OrderReopenRequest[]
+  notes: OrderNote[]
   aiSummary: string | null       // Gemini machine-checks summary for this shift
   checksStatus: string | null    // in_progress | operator_signed | supervisor_verified
   timesheets: OrderTimesheet[]   // hours worked, per operator on this shift
@@ -189,6 +198,7 @@ export interface OrderDay {
   debags: OrderDebagRow[]           // all shifts, morning first
   massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
   reopenRequests: OrderReopenRequest[]   // union across shifts
+  notes: OrderNote[]                // union across shifts, newest first
   timesheets: OrderTimesheet[]      // all operators across the day, shift-tagged
   takeovers: OrderTakeover[]        // shift hand-over records (16h00 changeover)
 }
@@ -348,13 +358,14 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   // Inventory description so the report shows "CODE — Description".
   const poCodes = Array.from(new Set(sessions.flatMap(s => (s.production_orders ?? []) as string[]).filter(Boolean)))
 
-  const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, checksRes, tsRes, takeoverRes, invRes] = await Promise.all([
+  const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, notesRes, checksRes, tsRes, takeoverRes, invRes] = await Promise.all([
     db.from('prod_mass_balance').select('*').in('session_id', ids),
     db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status').in('session_id', ids),
     db.from('prod_bagging').select('*').in('session_id', ids),
     db.from('prod_debagging').select('*').in('session_id', ids).order('bag_no'),
     db.from('session_signatures').select('*').in('session_id', ids),
     db.from('po_reopen_requests').select('*').in('session_id', ids).order('created_at', { ascending: false }),
+    db.from('po_notes').select('*').in('session_id', ids).order('created_at', { ascending: false }),
     // AI check summary is keyed by (section_id, date, shift), not session_id.
     db.from('check_records').select('shift,ai_summary,status').eq('section_id', section_id).eq('date', date),
     db.from('prod_timesheets').select('*').in('session_id', ids),
@@ -416,6 +427,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   const mbBySession = new Map<string, OrderMassBalance>(((mbRes.data as any[]) ?? []).map(m => [m.session_id, m]))
   const sigBySession = group<any>((sigRes.data as any[]) ?? [], (s: any) => s.session_id) as Map<string, OrderSignature[]>
   const reopenBySession = group<any>((reopenRes.data as any[]) ?? [], (r: any) => r.session_id) as Map<string, OrderReopenRequest[]>
+  const notesBySession = group<any>((notesRes.data as any[]) ?? [], (n: any) => n.session_id) as Map<string, OrderNote[]>
   const checkByShift = new Map<string, any>(((checksRes.data as any[]) ?? []).map(c => [c.shift, c]))
   const tsBySession = group<any>((tsRes.data as any[]) ?? [], (t: any) => t.session_id)
   const timesheets: OrderTimesheet[] = ((tsRes.data as any[]) ?? []).map(t => ({
@@ -582,6 +594,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
       massBalance: mbBySession.get(s.id) ?? null,
       signatures: sigBySession.get(s.id) ?? [],
       reopenRequests: reopenBySession.get(s.id) ?? [],
+      notes: (notesBySession.get(s.id) ?? []).map((n: any) => ({ ...n, shift: s.shift })),
       aiSummary: chk?.ai_summary ?? null,
       checksStatus: chk?.status ?? null,
       timesheets: (tsBySession.get(s.id) ?? []).map((t: any) => ({
@@ -612,6 +625,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     debags,
     massBalance: sumMassBalance(shifts, section_id),
     reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],
+    notes: ((notesRes.data as any[]) ?? []).map((n: any) => ({ ...n, shift: shiftBySession.get(n.session_id) ?? '' })) as OrderNote[],
     timesheets,
     takeovers,
   }
