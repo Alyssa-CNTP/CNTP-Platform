@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-28 — Alyssa (Capture landing page: fix shift/date going stale on an open tab)
+
+**Files changed:** `app/(app)/production/capture/page.tsx`
+
+Reported: a Capture tab left open overnight still showed "Thursday 27 August · Afternoon / Night shift" at 07h00 the next morning, even though the header clock had already rolled to Friday.
+
+- **Root cause:** `date`/`shift` were computed once via `useState(productionShiftNow())` on mount and never recomputed, so the page's data queries (and header text) stayed pinned to whatever shift was current when the tab was opened — a device left running across the 07h00/16h00 changeover never picked up the new shift without a manual reload.
+- **Fix:** added a 60s interval that recomputes `productionShiftNow()` and rolls the state forward the moment the resolved (date, shift) actually changes, which re-triggers the existing data-fetch effect.
+
 ## 2026-08-28 — Alyssa (Mass balance formula fix, checks VSD sign-off block, live AI summary)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`
