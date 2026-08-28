@@ -40,8 +40,6 @@ const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 
   new:       { label: 'Not started',       tone: 'neutral', icon: Play },
 }
 
-const num = (v: number | null | undefined) => v ?? 0
-
 // Mass balance on this page reads OUTPUT − INPUT (not input − output): a
 // shortfall (the normal case — moisture, dust, spillage) is then a NEGATIVE
 // number that reads as "material lost" at a glance, instead of an ambiguous
@@ -140,22 +138,27 @@ export default function ProductionOrderDetailPage() {
     : '—'
 
   // The bucket elevator is WIP that carries across the day: the afternoon/night
-  // shift LEAVES it in the tower for tomorrow, so it's an OUTPUT (carry-over),
-  // not a bagged product and not an input. It's captured as a debag row, so
-  // pull it out of the inputs and state it on the output side — that 's exactly
-  // the gap between the bagged-bag total and the mass-balance output total.
+  // shift LEAVES it in the tower for tomorrow, unprocessed — it hasn't become
+  // bagged product yet, so it's excluded from BOTH sides of the balance (not
+  // an input today, and not an output today either). It's captured as a debag
+  // row, so pull it out of the input total and show it purely as an
+  // informational carry-over figure, not summed into anything.
   const isBucketCarryOut = (d: OrderDebagRow) =>
     /bucket elevator/i.test(d.product_type || '') && (d.shift === 'afternoon' || d.shift === 'night')
   const inputRows = debags.filter(d => !isBucketCarryOut(d))
   const bucketCarryOverKg = debags.filter(isBucketCarryOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
   // Total input = computed from actual debag rows (non-spillage bags + machine
-  // spillage + morning bucket elevator), NOT from the prod_mass_balance snapshot
-  // which goes stale when persist() fails or the session is submitted.
+  // spillage + morning bucket elevator — yesterday's carry-over being consumed
+  // today), NOT from the prod_mass_balance snapshot which goes stale when
+  // persist() fails or the session is submitted.
   const totalInput = inputRows.reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
-  // Total output = physical bagged product (the reliable ledger) + the bucket
-  // elevator carried over. Derived from the ledger, so it always agrees with
-  // the Bagging section below instead of the race-prone mass-balance snapshot.
-  const totalOutput = bagsOutputKg + bucketCarryOverKg
+  // Total output = physical bagged product only (bagsOutputKg already reflects
+  // each bag's current weight, so a half-filled bag counts at whatever it
+  // currently holds — no separate handling needed for half bags). The bucket
+  // elevator carry-over is WIP, not finished product, and is deliberately
+  // excluded here — folding it into output previously masked genuine
+  // over/under-yield by inflating the output side with unprocessed material.
+  const totalOutput = bagsOutputKg
   const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
   const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
 
@@ -210,9 +213,8 @@ export default function ProductionOrderDetailPage() {
           <PanelBody>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <Field label="Total input"  value={`${totalInput.toFixed(1)} kg`} />
-              <Field label="Bagged output" value={`${bagsOutputKg.toFixed(1)} kg`} />
-              {bucketCarryOverKg > 0 && <Field label="Bucket elevator (carried over)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
               <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />
+              {bucketCarryOverKg > 0 && <Field label="Bucket elevator (WIP, carried to tomorrow)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
               <Field label="Balance"      value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
@@ -246,14 +248,8 @@ export default function ProductionOrderDetailPage() {
               ))}
               {bucketCarryOverKg > 0 && (
                 <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
-                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged)</span></span>
+                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged — excluded from mass balance)</span></span>
                   <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
-                </div>
-              )}
-              {bucketCarryOverKg > 0 && (
-                <div className="flex items-center justify-between gap-2 px-3 pt-1 text-[13px] font-semibold border-t border-surface-rule/60">
-                  <span className="text-text pt-2">Total output</span>
-                  <span className="font-mono text-text tabular-nums pt-2">{bags.length} bags bagged + {bucketCarryOverKg.toFixed(0)} kg carry-over = {totalOutput.toFixed(1)} kg</span>
                 </div>
               )}
             </div>
@@ -303,10 +299,21 @@ export default function ProductionOrderDetailPage() {
         </Panel>
       )}
 
-      {/* Per-shift: AI check summary + sign-off */}
-      {shifts.map(block => (
-        <ShiftBlock key={block.session.id} block={block} />
-      ))}
+      {/* Per-shift: AI check summary + sign-off. Input/output computed from
+          the same ledger rows as the whole-run total above (bags/debags
+          filtered to this session), not the prod_mass_balance snapshot —
+          that snapshot goes stale under the exact same conditions the
+          whole-run total used to (persist() failing, or a submitted
+          session), so it needs the same fix. */}
+      {shifts.map(block => {
+        const sid = block.session.id
+        const shiftInput = inputRows.filter(d => d.session_id === sid)
+          .reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
+        const shiftOutput = bags.filter(b => b.session_id === sid && !b.bornViaRebag)
+          .reduce((s, b) => s + (b.kg || 0), 0)
+          + freshTopUps.filter(r => r.sessionId === sid).reduce((s, r) => s + r.kg, 0)
+        return <ShiftBlock key={sid} block={block} shiftInput={shiftInput} shiftOutput={shiftOutput} />
+      })}
 
       {/* ── Later pages: handover notes + timesheet ── */}
       {(shifts.some(s => s.session.comments) || takeovers.length > 0) && (
@@ -524,8 +531,8 @@ function FreshTopUpTypeGroup({ type, rows, multiShift }: { type: string; rows: O
 
 // One shift's block: its AI machine-checks summary, its own mass balance, and
 // its sign-off.
-function ShiftBlock({ block }: { block: OrderShiftBlock }) {
-  const { session: s, massBalance: mb, signatures, aiSummary } = block
+function ShiftBlock({ block, shiftInput, shiftOutput }: { block: OrderShiftBlock; shiftInput: number; shiftOutput: number }) {
+  const { session: s, signatures, aiSummary } = block
   const opSig  = signatures.find(x => x.signer_role === 'operator')
   const supSig = signatures.find(x => x.signer_role === 'supervisor')
   const label = SHIFT_LABEL[s.shift] ?? s.shift
@@ -541,12 +548,11 @@ function ShiftBlock({ block }: { block: OrderShiftBlock }) {
               <p className="text-[12.5px] text-text leading-relaxed">{aiSummary}</p>
             </div>
           )}
-          {mb && (() => {
-            const shiftOutput = num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg)
-            const shiftBalance = massBalanceInfo(shiftOutput, num(mb.total_input_kg))
+          {(shiftInput > 0 || shiftOutput > 0) && (() => {
+            const shiftBalance = massBalanceInfo(shiftOutput, shiftInput)
             return (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <Field label="Input"   value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
+                <Field label="Input"   value={`${shiftInput.toFixed(1)} kg`} />
                 <Field label="Output"  value={`${shiftOutput.toFixed(1)} kg`} />
                 <Field label="Balance" value={<span className={TONE_TEXT_CLASS[shiftBalance.tone]}>{shiftBalance.text}</span>} />
                 <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />

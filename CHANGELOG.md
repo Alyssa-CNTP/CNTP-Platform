@@ -2,6 +2,14 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-28 — Alyssa (Mass balance formula fix, checks VSD sign-off block, live AI summary)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`
+
+- **Mass balance: exclude bucket-elevator WIP from output** — total output was `bagsOutputKg + bucketCarryOverKg`, folding the afternoon/night bucket elevator's unprocessed carry-over (left in the tower for tomorrow) into today's output. That's WIP, not finished bagged product, and inflating output with it masked genuine over/under-yield (a run reading +4.2% when the real bagged-vs-input variance was different). Total output is now bagged product only; the carry-over still displays, purely informational. Applied the same real-ledger-rows fix to the per-shift Input/Output/Balance figures, which previously read from the `prod_mass_balance` snapshot — stale under the same conditions the whole-run total used to be before `ec293c8`.
+- **Checks: fix the first VSD reading of a shift silently failing and blocking sign-off** — `ensureCheckRecord()` did a non-atomic SELECT-then-INSERT against `check_records`, which has a real `UNIQUE(section_id,date,shift)` constraint. `HourlyVsdPrompt`'s auto-popup and `ChecksPanel`'s own VSD widget both call this; on the very first reading of a shift (no record exists yet) both can pass the SELECT before either INSERT lands, so the loser hits a `23505` conflict and throws — silently losing that reading. Since `sign()` hard-blocks on any check still "pending" and the VSD check's status is gated on having a saved reading, this is what blocked operator sign-off outright. Now treats `23505` as success: re-selects and returns the row the other caller just created instead of discarding the reading.
+- **Checks: AI summary now live through the shift, not just at sign-off** — was only ever generated once, right after `sign()`. Now also regenerated (best-effort, fire-and-forget) whenever the existing autosave debounce actually writes new check data, so it reflects the shift's actual state throughout instead of only appearing — possibly based on stale/incomplete data — at submission.
+
 ## 2026-08-27 — Alyssa (Sieving order page: recover stranded bags/debagging, void-on-delete, mass balance from real rows)
 
 **Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/management/page.tsx`, `app/(app)/quality/sieving/page.tsx`, `app/(app)/tags/page.tsx`, `components/count/monthly/MonthlyBatchLedger.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/shared/BatchReconciliationPanel.tsx`

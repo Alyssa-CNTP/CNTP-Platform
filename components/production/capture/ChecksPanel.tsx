@@ -193,6 +193,7 @@ export function ChecksPanel({
     if (!dirty.length) return
     let id: string
     try { id = await getRecord() } catch { return }   // next tick retries
+    let wroteAny = false
     for (const { def: c, value: val } of dirty) {
       try {
         if (c.kind === 'confirm') {
@@ -221,8 +222,13 @@ export function ChecksPanel({
             actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null })
         }
         lastSavedRef.current[c.key] = val
+        wroteAny = true
       } catch { /* leave undirtied — the next debounce/backstop tick retries it */ }
     }
+    // Keep the AI summary live through the shift instead of only generating
+    // it once at sign-off — best-effort and fire-and-forget, same as the
+    // sign() call below, so a slow/failed Gemini call never blocks autosave.
+    if (wroteAny) generateAiSummary(id)
   }
 
   const flushRef = useRef(flushDirtyChecks)

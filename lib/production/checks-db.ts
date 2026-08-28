@@ -43,7 +43,22 @@ export async function ensureCheckRecord(
   const { data, error } = await db.schema('production').from('check_records')
     .insert({ section_id: sectionId, date, shift, session_id: sessionId ?? null } as any)
     .select('id').single()
-  if (error) throw new Error(`Could not create the checks record: ${error.message}`)
+  if (error) {
+    // check_records has UNIQUE(section_id,date,shift) — two near-simultaneous
+    // first writes (the HourlyVsdPrompt popup and ChecksPanel's own VSD widget
+    // both call this) can both pass the SELECT-found-nothing check above before
+    // either INSERT lands, so the loser hits a 23505 conflict here. That's not
+    // a real failure — the record exists now, just created by the other
+    // caller — so fetch and return it instead of throwing away the operator's
+    // first reading of the shift.
+    if (error.code === '23505') {
+      const { data: retry, error: retryErr } = await db.schema('production').from('check_records')
+        .select('id').eq('section_id', sectionId).eq('date', date).eq('shift', shift).single()
+      if (retryErr) throw new Error(`Could not load the checks record: ${retryErr.message}`)
+      return (retry as any).id
+    }
+    throw new Error(`Could not create the checks record: ${error.message}`)
+  }
   return (data as any).id
 }
 
