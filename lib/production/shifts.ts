@@ -84,3 +84,14 @@ function ymd(d: Date): string {
 export function sastToday(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 }
+
+/**
+ * A UTC timestamp rendered in SAST (Africa/Johannesburg), e.g. "27 Aug, 14:32" —
+ * for anything stamped server-side (created_at, etc.) that must read correctly
+ * regardless of the viewing device's own timezone.
+ */
+export function formatSAST(iso: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Johannesburg', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(iso)).replace(',', '')
+}

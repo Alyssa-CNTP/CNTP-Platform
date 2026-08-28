@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-27 — Alyssa (Production Orders: stop background refresh from wiping in-progress modals; add timestamped notes)
+
+**Files changed:** `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `lib/production/order-detail.ts`, `lib/production/shifts.ts`, `app/api/production/orders/[id]/notes/route.ts` (new), `supabase/migrations/20260827_001_po_notes.sql` (new)
+
+Reported: while typing a "Request reopen" message on Production Orders, the page's background auto-refresh fired and the whole message was lost.
+
+- **Fixed the reload-wipes-modal bug** — the list's 30s background poll (`page.tsx`) drove a `load()` effect that called `setLoading(true)` on *every* refresh, not just the first. While `loading` was true the row list — including any open modal, like "Request reopen"'s textarea — was swapped for a spinner, unmounting it and losing whatever was typed. Added a `loadedOnceRef` guard (mirroring the pattern already used on the order detail page) so only the first load shows the spinner; background refreshes now update the list in place without touching anything open in it.
+- **Added a timestamped notes log on production orders** — new `production.po_notes` table (migration `20260827_001`), modeled on `po_reopen_requests` minus the approval workflow: append-only, author + SAST timestamp always server-derived (never client-supplied). New API route `app/api/production/orders/[id]/notes/route.ts` (GET/POST). Distinct from the existing single `prod_sessions.comments` "handover" field, which the next save overwrites — every note here stays, with its own author and time.
+  - **Orders list** (`page.tsx`): a note icon per row shows the note count and opens an "Add note" modal (`AddNoteModal`); note counts are batch-fetched alongside the other per-session data in the existing `load()` effect.
+  - **Order detail** (`[id]/page.tsx`): a new `NotesPanel` shows the full running log (newest first) plus an add-note box; notes are unioned across both shifts of the day (`order-detail.ts`, mirroring how `reopenRequests` is already unioned); the page's realtime channel now also listens on `po_notes` so a new note appears live.
+  - Added `formatSAST()` to `lib/production/shifts.ts` — a shared UTC→SAST date-time formatter for the note timestamps.
+- Migration `20260827_001_po_notes.sql` still needs to be run against the staging (then production) Supabase project before the notes feature will work — see the file's header comment.
+
 ## 2026-08-27 — Alyssa (Half-bag top-up: fold added weight into Sieving Tower's own output total and bag cards, and into Overview's mass balance — not just a separate feed)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
