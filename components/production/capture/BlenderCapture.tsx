@@ -695,7 +695,11 @@ export function BlenderCapture({
     return true
   }
 
-  function removeOutputBag(id: string) { patch({ outputs: value.outputs.filter(b => b.id !== id) }) }
+  function removeOutputBag(id: string) {
+    const bag = value.outputs.find(b => b.id === id)
+    if (bag?.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', bag.serial).then(() => {})
+    patch({ outputs: value.outputs.filter(b => b.id !== id) })
+  }
   function setOutputSecured(id: string, val: boolean) { patch({ outputs: value.outputs.map(b => b.id === id ? { ...b, secured: val } : b) }) }
 
   function setOutputTag(id: string, method: 'printed' | 'handwritten') {

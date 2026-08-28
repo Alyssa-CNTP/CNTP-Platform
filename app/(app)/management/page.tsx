@@ -467,8 +467,8 @@ export default function ManagementPage() {
       db.schema('production').from('bag_tags').select('weight_kg').gte('tag_date', prevFrom).lte('tag_date', prevTo),
       db.schema('production').from('bag_tags').select('weight_kg').eq('tag_date', today),
       db.schema('production').from('prod_sessions').select('section_id,section_name,shift,status,notes').eq('date', today),
-      db.from('pasteuriser_runs').select('status').gte('run_date', from).lte('run_date', to),
-      db.from('lab_results').select('result_status').gte('sample_date', from).lte('sample_date', to),
+      db.schema('quality').from('pasteuriser_runs').select('status').gte('run_date', from).lte('run_date', to),
+      db.schema('qms').from('lab_results').select('result_status').gte('sample_date', from).lte('sample_date', to),
     ])
 
     const tonsNow  = (bagsNow  ?? []).reduce((s: number, b: any) => s + (b.weight_kg ?? 0), 0)

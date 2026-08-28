@@ -28,7 +28,7 @@ function standardWeight(label: string): string {
  * Easy output picker: the few items that fit the section + variant up top
  * (AI-suggested), full 630-item master search only when the operator looks.
  */
-export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaultBatch, batchHints = [], onAdd, onClose }: {
+export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaultBatch, batchHints = [], onAdd, onClose, submitting = false }: {
   sectionId: string
   variantWord: string
   gradeLetter?: string
@@ -36,6 +36,11 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   batchHints?: string[]
   onAdd: (p: PickedOutput) => void
   onClose: () => void
+  // True while a previous tap's onAdd is still in flight — the caller owns
+  // this (it's the one awaiting the DB round-trip), not local state here,
+  // since a fast second tap needs to be blocked before onAdd is even called
+  // again, not just visually.
+  submitting?: boolean
 }) {
   const [dbBatches, setDbBatches] = useState<string[]>([])
   useEffect(() => { recentBatches(sectionId).then(setDbBatches) }, [sectionId])
@@ -68,6 +73,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   function onSearch(q: string) { setQuery(q) }
 
   function confirm() {
+    if (submitting) return
     if (!picked || !weight) return
     if (isImplausibleWeight(n(weight))) return
     if (picked.batchTracked && !batch.trim()) return
@@ -145,9 +151,9 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
                   : <>{OPEN_BAG_WEIGHT_THRESHOLD_KG}kg or more — marked complete.</>}
               </p>
             )}
-            <button onClick={confirm} disabled={!weight || isImplausibleWeight(n(weight)) || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
+            <button onClick={confirm} disabled={submitting || !weight || isImplausibleWeight(n(weight)) || (picked.batchTracked && (!batch.trim() || (restrictBatch && !batchOptions.includes(batch.trim()))))}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white text-[14px] font-medium disabled:opacity-40">
-              {LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>}
+              {submitting ? 'Adding…' : LABEL_PRINTING_ENABLED ? <><Printer size={16} /> Add &amp; print label</> : <><Check size={16} /> Complete bag</>}
             </button>
           </div>
         )}

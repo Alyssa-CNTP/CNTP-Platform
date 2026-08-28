@@ -738,6 +738,8 @@ export function RefiningCapture({
   function removeBagFromGroup(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', bagId: string) {
     const g = value[groupKey]
     if (!g) return
+    const bag = g.bags.find(b => b.id === bagId)
+    if (bag?.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', bag.serial).then(() => {})
     const remaining = g.bags.filter(b => b.id !== bagId)
     patch({ [groupKey]: remaining.length ? { ...g, bags: remaining } : null })
   }

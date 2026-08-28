@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
@@ -8,6 +8,7 @@ import { variantToShort, isImplausibleWeight, GRADE_TO_LOCAL_EXPORT } from '@/li
 import { nextStepNudge, recentBatches, debaggedBatches } from '@/lib/production/inventory'
 import { OutputPicker, type PickedOutput } from '@/components/production/capture/OutputPicker'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
+import ConfirmSheet from '@/components/ui/ConfirmSheet'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
@@ -175,6 +176,13 @@ export function SievingCapture({
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
+  const [addingOutput, setAddingOutput] = useState(false)
+  const [confirmDeleteOutput, setConfirmDeleteOutput] = useState<OutBag | null>(null)
+  // Synchronous guard against a double-tap firing addOutput() twice before the
+  // first call's await chain resolves — state alone isn't enough since a second
+  // tap can land in the same tick, before React has re-rendered with the
+  // disabled button. See addOutput() below.
+  const addingOutputRef = useRef(false)
   const [dbBatches, setDbBatches] = useState<string[]>([])
   useEffect(() => { recentBatches('sieving').then(setDbBatches) }, [])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
@@ -403,42 +411,67 @@ export function SievingCapture({
   }
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
+  // Guarded against overlapping calls: addOutput() awaits a DB round-trip
+  // (nextSievingSerial) before writing bag_tags/scan_events and only then
+  // calls patch() with whatever `value.outputs` this call started with. Two
+  // overlapping calls (e.g. a double-tap before the confirm button had a
+  // chance to disable) would each write their own bag_tags row correctly,
+  // but whichever patch() lands last replaces `outputs` wholesale from its
+  // own stale snapshot — silently dropping the other call's bag from the
+  // draft (and permanently orphaning its bag_tags row, since it never makes
+  // it into draft_data for persist() to later stamp a session_id onto).
+  // addingOutputRef is checked synchronously so a same-tick second call
+  // bails out before ever reaching the network — state alone isn't enough
+  // since React hasn't re-rendered the disabled button yet at that point.
   async function addOutput(p: PickedOutput) {
-    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial), date)
-    const grade  = gradeLetter || 'A'
-    const now    = new Date().toISOString()
-    const bag: OutputBag = {
-      id: crypto.randomUUID(), serial_number: serial, product_type: p.productType,
-      variant: variantShort, grade: grade as any, weight_kg: n(p.weight),
-      lot_number: p.batch || '', section_id: 'sieving',
-      section_name: 'Sieving Tower', created_at: now, printed: false,
-      acumaticaId: p.code ?? undefined, acumaticaDesc: p.description,
-    }
+    if (addingOutputRef.current) return
+    addingOutputRef.current = true
+    setAddingOutput(true)
     try {
-      await getDb().schema('production').from('bag_tags').upsert({
-        serial_number: serial, section_id: 'sieving', session_id: null,
-        product_type: p.productType, variant: variantWord || null, weight_kg: n(p.weight),
-        lot_number: bag.lot_number || null, acumatica_id: p.code || null,
-        status: 'in_stock', consumed: false, printed_at: now, is_open: !!p.leaveOpen,
-        destination: grade,
-      } as any, { onConflict: 'serial_number' })
-      // Event tracking — log the bagging-out once, when the bag is created.
-      await getDb().schema('production').from('scan_events').insert({
-        serial_number: serial, action: 'bagging_out', section_id: 'sieving',
-        weight_kg: n(p.weight), operator_id: operatorId ?? null,
-      } as any)
-    } catch { /* session save retries */ }
+      const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial), date)
+      const grade  = gradeLetter || 'A'
+      const now    = new Date().toISOString()
+      const bag: OutputBag = {
+        id: crypto.randomUUID(), serial_number: serial, product_type: p.productType,
+        variant: variantShort, grade: grade as any, weight_kg: n(p.weight),
+        lot_number: p.batch || '', section_id: 'sieving',
+        section_name: 'Sieving Tower', created_at: now, printed: false,
+        acumaticaId: p.code ?? undefined, acumaticaDesc: p.description,
+      }
+      try {
+        await getDb().schema('production').from('bag_tags').upsert({
+          serial_number: serial, section_id: 'sieving', session_id: null,
+          product_type: p.productType, variant: variantWord || null, weight_kg: n(p.weight),
+          lot_number: bag.lot_number || null, acumatica_id: p.code || null,
+          status: 'in_stock', consumed: false, printed_at: now, is_open: !!p.leaveOpen,
+          destination: grade,
+        } as any, { onConflict: 'serial_number' })
+        // Event tracking — log the bagging-out once, when the bag is created.
+        await getDb().schema('production').from('scan_events').insert({
+          serial_number: serial, action: 'bagging_out', section_id: 'sieving',
+          weight_kg: n(p.weight), operator_id: operatorId ?? null,
+        } as any)
+      } catch { /* session save retries */ }
 
-    // An output bag is complete the moment it's added (picked + weighed), so it
-    // logs and secures itself right away — no separate "secure" tap needed. The
-    // tag itself (print vs write-on-bag) is a per-bag choice made just below,
-    // same as Blender — not an automatic/global decision.
-    patch({ outputs: [...value.outputs, {
-      id: bag.id, serial, productType: p.productType, code: p.code, description: p.description,
-      weight: p.weight, batch: bag.lot_number, destination: grade, printed: false, tagMethod: null,
-      secured: true, logged_at: now,
-    }] })
-    setPicking(false)
+      // An output bag is complete the moment it's added (picked + weighed), so it
+      // logs and secures itself right away — no separate "secure" tap needed. The
+      // tag itself (print vs write-on-bag) is a per-bag choice made just below,
+      // same as Blender — not an automatic/global decision.
+      patch({ outputs: [...value.outputs, {
+        id: bag.id, serial, productType: p.productType, code: p.code, description: p.description,
+        weight: p.weight, batch: bag.lot_number, destination: grade, printed: false, tagMethod: null,
+        secured: true, logged_at: now,
+      }] })
+      setPicking(false)
+    } finally {
+      addingOutputRef.current = false
+      setAddingOutput(false)
+    }
+  }
+
+  function deleteOutput(b: OutBag) {
+    if (b.serial) getDb().schema('production').from('bag_tags').update({ status: 'voided' } as any).eq('serial_number', b.serial).then(() => {})
+    patch({ outputs: value.outputs.filter(x => x.id !== b.id) })
   }
 
   function reprint(b: OutBag) {
@@ -722,7 +755,7 @@ export function SievingCapture({
                         ? <button onClick={() => setOutputSecured(b.id, false)} className="flex items-center gap-1.5 text-[12px] text-stone-500 hover:text-brand px-2 py-1 rounded-lg"><Pencil size={13} /> Unlock</button>
                         : <>
                             <button onClick={() => setOutputSecured(b.id, true)} className="flex items-center gap-1.5 text-[12px] text-ok hover:bg-ok/10 px-2 py-1 rounded-lg"><Check size={13} /> Secure</button>
-                            <button onClick={() => patch({ outputs: value.outputs.filter(x => x.id !== b.id) })} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
+                            <button onClick={() => setConfirmDeleteOutput(b)} className="text-stone-300 hover:text-err p-1.5"><Trash2 size={15} /></button>
                           </>
                       )}
                     </div>
@@ -749,7 +782,7 @@ export function SievingCapture({
                   ...value.debag.map(r => r.lot.trim()).filter(Boolean),
                   ...matchingBatches,
                 ]))}
-                onAdd={addOutput} onClose={() => setPicking(false)} />
+                onAdd={addOutput} onClose={() => setPicking(false)} submitting={addingOutput} />
             : <button onClick={() => setPicking(true)} className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl border-2 border-dashed border-stone-300 text-stone-500 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
                 <Plus size={16} /> Add output bag
               </button>
@@ -765,6 +798,16 @@ export function SievingCapture({
           </div>
         </>
       )}
+
+      <ConfirmSheet
+        open={!!confirmDeleteOutput}
+        title={`Delete bag ${confirmDeleteOutput?.serial ?? ''}?`}
+        message="This removes it from today's bagging list and voids its tag — it stops counting toward mass balance and stock. This can't be undone from here."
+        confirmLabel="Yes, delete"
+        danger
+        onConfirm={() => { if (confirmDeleteOutput) deleteOutput(confirmDeleteOutput); setConfirmDeleteOutput(null) }}
+        onCancel={() => setConfirmDeleteOutput(null)}
+      />
     </div>
   )
 }
