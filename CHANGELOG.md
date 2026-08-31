@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-31 — Gustav (Maintenance: originator verification step retired; QC-done notifications; production DB brought in line)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/notify/qc-done/route.ts` (new), `supabase/migrations/20260831_010_retire_originator_verify_step.sql` (new, applied to staging AND production)
+
+- **Removed the originator "Satisfactory" step.** The chain is now **qc_check → mgr_verify → complete**, or straight to **mgr_verify** when QC is not required. QC and the maintenance manager remain as the two checkpoints (the double confirmation is kept) — nothing goes back to the person who raised the card.
+- **Freed two production job cards that were stuck.** `JC-26/280` (Pasteurizer) and `JC-26/281` (Diamond Blender) had passed QC on 27 Aug and were sitting at the retired originator step with no way forward; both moved to the manager's sign-off queue, with an audit log entry on each.
+- **Production's status CHECK constraint was missing `mgr_verify` entirely** — the earlier staging migration had never been applied there, so the manager sign-off stage would have been rejected outright on production. Constraint rebuilt on both databases (with `verify` retained so historical rows stay valid).
+- **QC-done notifications:** when QC finishes a check, the maintenance manager and the assigned technician(s) are both notified and told where the card now sits — passed → with the manager for sign-off; failed → back with the technician, including the QC's comment. A live toast also fires for the technician when their card clears QC.
+- Legacy cards still at `verify` are handled by the manager's sign-off panel, so nothing can be stranded mid-chain.
+
+---
+
 ## 2026-08-31 — Gustav (Maintenance: QC access fix, pause reasons, parts & pause notifications, technician job-card screen, two-person jobs, FG lubricant)
 
 **Files changed:** `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/my-jobs/page.tsx` (new), `app/api/maintenance/job-cards/[id]/assign/route.ts`, `app/api/maintenance/notify/pause/route.ts` (new), `app/api/maintenance/notify/parts-issued/route.ts` (new), `supabase/migrations/20260809_010_jobcard_second_tech_and_fg_lubricant.sql` (new, applied to staging)
