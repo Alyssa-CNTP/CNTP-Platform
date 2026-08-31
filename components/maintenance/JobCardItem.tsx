@@ -91,11 +91,11 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const canManage = roles.canManage
   const isTech = roles.isTech || canManage
   const isQc = roles.isQc || canManage
-  // The "raiser" steps (clarify / satisfactory verification) are for whoever
-  // actually raised THIS card — not a blanket permission. Technicians never see
-  // them even if they happen to be the raiser (that's the manager's / QC's /
-  // originator's checkpoint, not the repairer's); they get a completion
-  // notification instead. Manager can always act as a fallback.
+  // The clarify step belongs to whoever actually raised THIS card — not a blanket
+  // permission. Technicians never see it even if they raised the card; they get a
+  // completion notification instead. The manager can always act as a fallback.
+  // (The old originator "satisfactory" step was removed — QC then the maintenance
+  // manager are the two checkpoints.)
   const isCardRaiser = !!userId && !!j.raised_by_user_id && j.raised_by_user_id === userId
   const isRaiser = canManage || (isCardRaiser && !roles.isTech)
 
@@ -106,8 +106,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
     : j.status === 'assigned' && isTech ? { label: acceptedNotStarted ? 'Start job' : (isBd ? 'Attend & accept' : 'Accept'), primary: true }
     : j.status === 'in_progress' && isTech ? { label: 'Log work', primary: true }
     : j.status === 'qc_check' && isQc ? { label: 'QC check', primary: true }
-    : j.status === 'verify' && isRaiser ? { label: 'Verify', primary: true }
-    : j.status === 'mgr_verify' && canManage ? { label: 'Sign off', primary: true }
+    : (j.status === 'mgr_verify' || j.status === 'verify') && canManage ? { label: 'Sign off', primary: true }
     : { label: expanded ? 'Hide' : 'Open', primary: false }
 
   const ageDays = diffDays(j.raised_at, j.completed_at ?? j.verified_at ?? new Date().toISOString())
@@ -657,35 +656,21 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
-          {/* verify → originator signs off, then it goes to the manager */}
-          {j.status === 'verify' && isRaiser && (
-            <div className={PANEL}>
-              <div className="text-[12px] font-semibold text-text mb-2">Verification by originator ({j.raised_by})</div>
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Work:</span> {j.work_done || '—'}</div>
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Root Cause:</span> {j.root_cause || '—'}</div>
-              {j.tools_used && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Tools:</span> {j.tools_used}</div>}
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
-              {j.qc_required && <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
-              <div className="flex gap-2 flex-wrap mt-1">
-                <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>Satisfactory — send to manager</button>
-                <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>
-              </div>
-            </div>
-          )}
-          {/* verify stage — non-originator view */}
-          {j.status === 'verify' && !isRaiser && (
-            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting verification by the originator ({j.raised_by}).</div></div>
+          {/* Legacy 'verify' cards (the retired originator step) are handled by the
+              manager panel below — nothing sits with the originator any more. */}
+          {j.status === 'verify' && !canManage && (
+            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting the maintenance manager's final sign-off.</div></div>
           )}
 
           {/* mgr_verify → maintenance manager gives the final sign-off (every card) */}
-          {j.status === 'mgr_verify' && canManage && (
+          {(j.status === 'mgr_verify' || j.status === 'verify') && canManage && (
             <div className={PANEL}>
               <div className="text-[12px] font-semibold text-text mb-2">Final sign-off — maintenance manager</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Work:</span> {j.work_done || '—'}</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Root Cause:</span> {j.root_cause || '—'}</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
               {j.qc_required && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
-              <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">Originator verified:</span> {j.raised_by}</div>
+              <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">Raised by:</span> {j.raised_by}</div>
               <div className="flex gap-2 flex-wrap mt-1">
                 <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>✓ Sign off &amp; close</button>
                 <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>

@@ -446,14 +446,16 @@ export function useMaintenanceData() {
     const wd = (drafts['wd' + j.id] ?? j.work_done ?? '').trim()
     const rc = (drafts['rc' + j.id] ?? j.root_cause ?? '').trim()
     if (!wd || !rc) { setPopup('Before finishing, please record both the Work Done and the Root Cause.'); return }
-    const next: Status = j.qc_required ? 'qc_check' : 'verify'
+    // No originator step any more — QC (when required) then the maintenance
+    // manager's final sign-off are the two checkpoints.
+    const next: Status = j.qc_required ? 'qc_check' : 'mgr_verify'
     await upJC(j.id, {
       status: next, completed_at: new Date().toISOString(),
       work_done: drafts['wd' + j.id] ?? j.work_done, root_cause: drafts['rc' + j.id] ?? j.root_cause,
       tools_used: drafts['tl' + j.id] ?? j.tools_used,
     })
     await addLog(j.id, 'event', next, j.assigned_to ?? actor,
-      j.qc_required ? `Work complete — sent to QC (${qcFor(j.area) || 'QC on duty'})` : 'Work complete — QC not required, sent to originator for verification.')
+      j.qc_required ? `Work complete — sent to QC (${qcFor(j.area) || 'QC on duty'})` : 'Work complete — QC not required, sent to the maintenance manager for final sign-off.')
     // Notify the Quality dashboard to run the post-maintenance QC check. The
     // server resolves the station QC (area→QC map) or all Quality users.
     if (j.qc_required) {
@@ -481,6 +483,15 @@ export function useMaintenanceData() {
     return data.name
   }
 
+  // Tell the manager + technician(s) where the card went after a QC check.
+  // Best-effort: a notification failure must never block the QC result.
+  const notifyQcDone = (cardId: number, passed: boolean, qcName: string, note: string) => {
+    fetch('/api/maintenance/notify/qc-done', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cardId, passed, qcName, note }),
+    }).catch(() => {})
+  }
+
   // QC submits — any YES sends the card back to the technician
   const qcSubmit = async (j: JobCard) => {
     const answers: QcAnswer[] = QC_CHECKS.map((_, i) => normQc((j.qc_checks ?? [])[i] ?? 'na'))
@@ -492,10 +503,12 @@ export function useMaintenanceData() {
       await upJC(j.id, { status: 'in_progress', qc_checks: answers, qc_name: qcName, reopen_count: (j.reopen_count ?? 0) + 1, completed_at: null })
       await addLog(j.id, 'comment', 'qc_check', qcName, note)
       await addLog(j.id, 'event', 'in_progress', qcName, `QC FAILED (${answers.filter(a => a === 'yes').length} × YES) — card returned to technician ${j.assigned_to}. Maintenance manager informed. Reopen #${(j.reopen_count ?? 0) + 1}.`)
+      notifyQcDone(j.id, false, qcName, note)
       setDrafts(p => ({ ...p, ['qf' + j.id]: '' }))
     } else {
-      await upJC(j.id, { status: 'verify', qc_checks: answers, qc_name: qcName, qc_done_at: new Date().toISOString() })
-      await addLog(j.id, 'event', 'verify', qcName, 'QC passed — sent to originator for verification.')
+      await upJC(j.id, { status: 'mgr_verify', qc_checks: answers, qc_name: qcName, qc_done_at: new Date().toISOString() })
+      await addLog(j.id, 'event', 'mgr_verify', qcName, 'QC passed — sent to the maintenance manager for final sign-off.')
+      notifyQcDone(j.id, true, qcName, '')
     }
   }
 
