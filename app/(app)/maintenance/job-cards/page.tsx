@@ -221,7 +221,7 @@ export default function JobCardsPage() {
             Your job cards, <strong className="text-text">{actor}</strong>. Click a row to log work — the timer shows while a job is running. Breakdowns time from the moment they were raised.
           </div>
           <JobCardTable
-            cards={jcs.filter(j => j.assigned_to === actor && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
+            cards={jcs.filter(j => (j.assigned_to === actor || j.assigned_to_2 === actor) && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
             roles={cardRoles}
             empty={`No open job cards assigned to ${actor}.`} />
 

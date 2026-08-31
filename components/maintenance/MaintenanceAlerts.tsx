@@ -91,7 +91,7 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
             toast(`${c.card_no} is ready for your sign-off — ${c.area}`, 'info')
           }
           // Technician: the job they worked on has been signed off and closed.
-          if (prev.status !== 'complete' && c.status === 'complete' && c.assigned_user_id === userId) {
+          if (prev.status !== 'complete' && c.status === 'complete' && (c.assigned_user_id === userId || c.assigned_user_id_2 === userId)) {
             toast(`${c.card_no} — job completed and signed off. ${c.area}`, 'success')
           }
         }
@@ -150,7 +150,7 @@ export function MaintenanceAlerts({ actions, actor, reload }: {
   // A job card allocated to me (breakdown or planned) that I have not yet
   // accepted — the pop-up follows the allocation, never the raiser.
   const myCard = userId
-    ? cards.find(c => c.assigned_user_id === userId
+    ? cards.find(c => (c.assigned_user_id === userId || c.assigned_user_id_2 === userId)
         && c.status === 'assigned' && !c.accepted_at && !techDismissed.includes(c.id)) ?? null
     : null
   const myIsBd = myCard?.workflow === 'breakdown'
