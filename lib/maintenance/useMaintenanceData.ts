@@ -75,7 +75,7 @@ export function useMaintenanceData() {
   const [saving, setSaving] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [nj, setNj] = useState({ workflow: 'planned' as 'breakdown' | 'planned', area: '', machine: '', type: [] as string[], desc: '', longDesc: '', raisedBy: '', photo: null as string | null, aiSug: '' })
-  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; external?: boolean; company?: string; qc?: boolean; urgency?: import('./types').Urgency }>>({})
+  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; tech2?: string; tech2Id?: string | null; external?: boolean; company?: string; qc?: boolean; urgency?: import('./types').Urgency }>>({})
   const [spForm, setSpForm] = useState<Record<number, { partId?: string; desc?: string; qty?: string; from?: string; critical?: boolean }>>({})
   const [slotForm, setSlotForm] = useState({ cardId: '', tech: TECHS[0], techId: null as string | null, date: '', time: '08:00', hours: '2', note: '' })
   const [rosterForm, setRosterForm] = useState({ tech: TECHS[0], techId: null as string | null, start: '', end: '' })
@@ -243,6 +243,14 @@ export function useMaintenanceData() {
       const part = stock.find(s => s.id === req.part_id)
       if (part) await updatePart(req.part_id, { qty_new: part.qty_new + req.qty })
     }
+    // Parts are in — tell the technician who asked for them that they can collect
+    // and resume. Best-effort; never blocks the status change.
+    if (status === 'received') {
+      fetch('/api/maintenance/notify/parts-issued', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: id }),
+      }).catch(() => {})
+    }
   }
   const cancelRequest = (id: number) => setRequestStatus(id, 'cancelled')
 
@@ -334,6 +342,8 @@ export function useMaintenanceData() {
       body: JSON.stringify({
         assigned_to: a.external ? '' : a.tech!,
         assigned_user_id: a.external ? null : (a.techId ?? null),
+        assigned_to_2: a.external ? null : (a.tech2 || null),
+        assigned_user_id_2: a.external ? null : (a.tech2Id ?? null),
         external: !!a.external, external_company: a.external ? a.company! : '',
         qc_required: a.qc !== false, urgency: a.urgency ?? null,
         actor: actor || 'Maintenance Manager',
@@ -403,6 +413,11 @@ export function useMaintenanceData() {
     if (j.paused) return
     await upJC(j.id, { paused: true, paused_at: new Date().toISOString(), paused_reason: reason })
     await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, `Timer paused — ${reason}.`)
+    // Tell the maintenance manager the job has stopped (and flag a parts hold).
+    fetch('/api/maintenance/notify/pause', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cardId: j.id, cardNo: j.card_no, area: j.area, reason, tech: j.assigned_to ?? actor }),
+    }).catch(() => {})
   }
 
   // Resume a paused job (breakdown interrupt or spares/problem hold). Banks the

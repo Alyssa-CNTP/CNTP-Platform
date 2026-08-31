@@ -15,6 +15,16 @@ export const TECHS = ['Shane', 'Mohapi', 'John', 'Yamkela', 'Melikhaya']
 // Breakdown is its own workflow now — removed from the selectable planned types
 export const PLANNED_TYPES = ['Planned Maintenance', 'Safety Related', 'Engineering', 'Repair', 'Temporary Repair', 'Improvement', 'Audit/Inspection Finding']
 
+// Why a technician paused a job. Picked from this list so pauses are reportable
+// (e.g. how much time is lost waiting for parts) instead of free text. 'Other'
+// requires a comment — see the pause panel in JobCardItem.
+export const PAUSE_REASONS = [
+  'Waiting for parts or tools',
+  'Assistance required from another technician / assisting another technician',
+  'More urgent job card or breakdown attended to',
+  'Other',
+] as const
+
 export const QC_CHECKS = ['Any loose screws visible?', 'Any spares, equipment or foreign objects left behind?', 'Any oil or grease spillages present or visible on the machine/equipment?', 'Any water leakages, spillages or poor housekeeping present?', 'Any loose or missing machine cover plates/end-guards?', 'Any reason why the machine is not safe for work?']
 
 export const STATUS_LABEL: Record<Status, string> = {

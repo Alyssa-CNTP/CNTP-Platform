@@ -75,6 +75,13 @@ const ROUTE_GUARDS: Array<{
   // reach Job Cards (to report breakdowns + track their own cards). Longest-prefix
   // matcher means the job-cards rule wins for that sub-route.
   { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  // Job cards specifically are reachable by QUALITY (the QC does the
+  // post-maintenance check on a card) and PRODUCTION (they raise breakdowns and
+  // are the originator who verifies the work). Both are shown the link in the
+  // Sidebar, so without this more-specific rule the route bounced them straight
+  // back to /home — QC could not open a QC check and an originator could not
+  // verify, leaving the card stuck. The rest of /maintenance stays restricted.
+  { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production','Quality'], permission: 'can_access_maintenance', orPermission: true },
   { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 
   // Logistics (barcode-driven receiving, warehouse, dispatch) — module is
