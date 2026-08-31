@@ -19,6 +19,10 @@ export interface JobCard {
   workflow: 'breakdown' | 'planned'
   raised_by: string; raised_by_user_id?: string | null; raised_at: string
   status: Status; assigned_to: string | null; assigned_user_id: string | null; assigned_at: string | null
+  // Optional SECOND technician when a task needs two people.
+  assigned_to_2?: string | null; assigned_user_id_2?: string | null
+  // Food-grade lubricant declaration, recorded on completion.
+  fg_lubricant?: boolean | null; fg_lubricant_note?: string | null
   accepted_at: string | null; started_at: string | null; completed_at: string | null
   // Manager urgency label (null → derived priority); cancellation audit fields.
   urgency: Urgency | null; cancelled_at: string | null; cancelled_by: string | null

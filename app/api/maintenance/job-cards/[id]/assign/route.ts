@@ -56,6 +56,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       status: 'assigned', assigned_to: external ? b.external_company : b.assigned_to,
       assigned_user_id: external ? null : (b.assigned_user_id ?? null),
       assigned_at: new Date().toISOString(),
+      assigned_to_2: external ? null : (b.assigned_to_2 || null),
+      assigned_user_id_2: external ? null : (b.assigned_user_id_2 ?? null),
       external, external_company: external ? b.external_company : '',
       qc_required: b.qc_required !== false, urgency, updated_at: new Date().toISOString(),
     }
@@ -70,13 +72,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             (urgency ? ` • Urgency: ${urgency.toUpperCase()}` : ''),
     })
 
-    // Notify the assigned internal technician to open the app.
-    if (!external && update.assigned_user_id) {
-      const [tech] = await resolveRecipients([update.assigned_user_id])
-      if (tech) await notify({ recipients: [tech], kind: 'assignment', cardId, url: `/maintenance/job-cards/${cardId}`,
-        title: `New job card ${card.card_no} assigned to you`,
-        body: `${card.area}: ${card.description}. Please open the app to view and accept.`,
-        channels: ['inApp', 'email'] })
+    // Notify the assigned internal technician(s) to open the app. A two-person job
+    // notifies BOTH, and each is told who they are working with.
+    if (!external) {
+      const ids = [update.assigned_user_id, update.assigned_user_id_2].filter(Boolean) as string[]
+      const both = !!(b.assigned_to && b.assigned_to_2)
+      const techs = ids.length ? await resolveRecipients(ids) : []
+      for (const t of techs) {
+        const partner = t.userId === update.assigned_user_id ? b.assigned_to_2 : b.assigned_to
+        await notify({ recipients: [t], kind: 'assignment', cardId, url: `/maintenance/job-cards/${cardId}`,
+          title: `New job card ${card.card_no} assigned to you`,
+          body: `${card.area}: ${card.description}.` +
+            (both && partner ? ` This is a two-person job with ${partner}.` : '') +
+            ' Please open the app to view and accept.',
+          channels: ['inApp', 'email'] })
+      }
     }
 
     return NextResponse.json({ card })

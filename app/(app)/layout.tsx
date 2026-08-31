@@ -65,10 +65,13 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
-  // Maintenance — full module is Maintenance + Management. Production may only
-  // reach Job Cards (to report breakdowns + track their own cards). Longest-prefix
-  // matcher means the job-cards rule wins for that sub-route.
-  { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  // Maintenance — full module is Maintenance + Management. Job cards specifically
+  // are also reachable by PRODUCTION (they raise breakdowns and track their own
+  // cards) and QUALITY (the QC does the post-maintenance check on a card). Both
+  // are shown the link in the Sidebar, so without QUALITY here the route bounced
+  // the QC straight back to /home and a check could never be opened.
+  // Longest-prefix matcher means this job-cards rule wins for that sub-route.
+  { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production','Quality'], permission: 'can_access_maintenance', orPermission: true },
   { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 
   // Logistics (barcode-driven receiving, warehouse, dispatch) — module is

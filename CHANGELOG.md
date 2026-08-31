@@ -2,6 +2,21 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-31 — Gustav (Maintenance: QC access fix, pause reasons, parts & pause notifications, technician job-card screen, two-person jobs, FG lubricant)
+
+**Files changed:** `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/my-jobs/page.tsx` (new), `app/api/maintenance/job-cards/[id]/assign/route.ts`, `app/api/maintenance/notify/pause/route.ts` (new), `app/api/maintenance/notify/parts-issued/route.ts` (new), `supabase/migrations/20260809_010_jobcard_second_tech_and_fg_lubricant.sql` (new, applied to staging)
+
+- **FIXED: QC could not open a QC check, and originators could not verify.** The `/maintenance` route guard only admitted the Maintenance and Management departments. The Sidebar showed Quality a "QC Sign-off" link and Production a "Job Cards" link, but the moment either clicked through to `/maintenance/job-cards/<id>` the guard bounced them straight back to `/home`. That is why QC "couldn't open the check", and why a Production originator could never click **Satisfactory** — leaving cards stuck after QC with only "return to technician" available. Added a more specific `/maintenance/job-cards` rule admitting **Production and Quality** (longest-prefix wins, so the rest of `/maintenance` stays restricted to Maintenance/Management).
+- **Manager is notified when a job card is paused**, with the reason; a pause for parts/tools is flagged **PARTS NEEDED** in the notification title so a parts hold is obvious without opening the card.
+- **Technician is notified when the parts they requested are issued** (spare request marked *received*) — telling them they can collect and resume, deep-linked to the job card.
+- **Technicians can now pause a job with a reason** from a standard list — waiting for parts or tools; assisting / needing another technician; a more urgent job or breakdown; or Other (comment required). Previously a pause only happened indirectly via the spares request with free-text reasons, so pause time was not reportable.
+- **New "My Job Cards" screen** (`/maintenance/my-jobs`) with tabs for **Allocated / In progress / Completed** plus an **All history** tab, and shared filters for area, machine, issue/fault type, date range and free-text search across fault, root cause and what was done.
+- **Recurring-problem auto-link:** a job card now automatically shows any cards closed on the **same machine in the 14 days before it was raised**, with the previous root cause and what was done — so a technician can tell at a glance whether the last repair held. Derived live, nothing stored.
+- **Two-person jobs:** the manager can allocate an optional **second technician**. Both are notified (each told who they're working with), both see the card in their own lists, and both names show on the card.
+- **Food-grade (FG) lubricant declaration** in the completion section — Yes / No / N/A with an optional lubricant/batch note, shown on the closed-card summary as a food-safety record.
+
+---
+
 ## 2026-08-28 — Alyssa (Sieving capture: fix explicit Save/Submit racing autosave and dropping input/output rows)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
