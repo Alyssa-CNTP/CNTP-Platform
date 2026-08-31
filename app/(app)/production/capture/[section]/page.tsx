@@ -576,6 +576,24 @@ function CaptureScreen() {
       .catch(() => {})
   }, [tab, sectionId, dateParam, shift])
 
+  // Every persist() call — debounce, hide-flush, backstop, AND the explicit
+  // Save/Submit button — must run through this one chain. persist() does a
+  // delete-then-insert against prod_debagging/prod_bagging, and two of those
+  // overlapping (e.g. the 20s backstop firing right as the operator taps "Save
+  // draft") race: one call's insert can land between the other's delete and
+  // insert, tripping prod_debagging_session_bag_uidx /
+  // prod_bagging_session_serial_uniq with a 23505 duplicate-key 409 — surfaced
+  // to the operator as "your data is saved but it did not upload into the
+  // input/output rows". Previously only flushSave() was chained here;
+  // saveDraft() called persist() directly and could race it.
+  function queuePersist(prods: Production[], sid: string): Promise<void> {
+    const run = persistChainRef.current
+      .catch(() => {})
+      .then(() => persistRef.current!(prods, sid))
+    persistChainRef.current = run.catch(() => {})
+    return run
+  }
+
   // Reliable save — ensures a session exists (in case the open-time create
   // failed) then persists. Used by the debounce, the hide-flush, and the backstop.
   async function flushSave() {
@@ -594,12 +612,7 @@ function CaptureScreen() {
       if (ensureRef.current) { try { sid = await ensureRef.current() } catch { return } }
     }
     if (sid && persistRef.current) {
-      const sidFinal = sid
-      const run = persistChainRef.current
-        .catch(() => {})
-        .then(() => persistRef.current!(productionsRef.current, sidFinal))
-      persistChainRef.current = run.catch(() => {})
-      try { await run } catch {}
+      try { await queuePersist(productionsRef.current, sid) } catch {}
     }
   }
   const flushRef = useRef(flushSave); flushRef.current = flushSave
@@ -1616,7 +1629,7 @@ function CaptureScreen() {
         if (!hasCaptureData(productions)) { setSaving(false); return }
         sid = await ensureSession()
       }
-      await persist(productions, sid)
+      await queuePersist(productions, sid)
       setStatus(s => s === 'new' ? 'draft' : s)
       setSaved(true); setTimeout(() => setSaved(false), 2500)
     } catch (e: any) { setError(e.message) }

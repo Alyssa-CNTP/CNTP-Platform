@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-28 — Alyssa (Sieving capture: fix explicit Save/Submit racing autosave and dropping input/output rows)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported live on the floor: Sieving Tower operator saw "your data is saved but it did not upload into the input/output rows", console showing `409` conflicts on `prod_debagging`/`prod_bagging` with `23505 duplicate key value violates unique constraint` on `prod_debagging_session_bag_uidx` / `prod_bagging_session_bag_uidx` / `prod_bagging_session_serial_uniq`.
+
+- **Root cause:** `persist()` does delete-then-insert against `prod_debagging`/`prod_bagging` on every save. The debounce/hide-flush/backstop autosave paths were already serialized through `persistChainRef` (added in PR #830) so they couldn't race each other — but `saveDraft()` (the explicit "Save draft" button, and `submitSession()` which calls it) called `persist()` directly, bypassing that queue entirely. If the operator tapped Save/Submit while an autosave was mid-flight, the two delete-then-insert sequences interleaved: one call's insert landed, then the other's insert collided with it, tripping the unique constraints and dropping that save's rows (draft_data still had them; the structured tables didn't).
+- **Fix:** extracted the `persistChainRef` serialization into a shared `queuePersist()` helper and routed `saveDraft()` through it as well, so autosave and explicit Save/Submit can never run `persist()` concurrently for the same session. No schema change; self-healing for already-affected today's sessions since `persist()` rewrites both tables from the browser's current `draft_data` on every successful call.
+
 ## 2026-08-28 — Alyssa (Mass balance formula fix, checks VSD sign-off block, live AI summary)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`
