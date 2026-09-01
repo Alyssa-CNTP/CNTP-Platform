@@ -13,6 +13,8 @@ import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-t
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { n } from '@/lib/core/num'
+import { sievingTotals } from '@/lib/core/mass-balance/sieving'
+export { sievingTotals }
 
 // ── Sieving output serial ─────────────────────────────────────────────────────
 // Format: ST{TYPE}-DDMMYY-NNN  (e.g. Fine Leaf → STFL-120826-003).
@@ -150,16 +152,6 @@ export type Shift = 'morning' | 'afternoon'
 // a real, growing mass-balance shortfall, not just a display quirk. Callers
 // pass the session's own topped-up total (fetchTopUpEventsForSession),
 // defaulting to 0 for any caller that hasn't wired it up yet.
-export function sievingTotals(d: SievingData, shift?: Shift, topUpKg = 0) {
-  const debagIn   = (d.debag ?? []).reduce((s, r) => s + n(r.nett), 0)
-  const bucketKg  = n(d.spillage?.[0]?.kg)                                   // bucket elevator carryover
-  const machineKg = (d.spillage ?? []).slice(1).reduce((s, r) => s + n(r.kg), 0)  // machine spillage
-  const outputs   = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0) + topUpKg
-  const bucketIsOutput = shift === 'afternoon'
-  const totalIn  = debagIn + machineKg + (bucketIsOutput ? 0 : bucketKg)
-  const totalOut = outputs + (bucketIsOutput ? bucketKg : 0)
-  return { totalIn, totalOut, spillage: bucketKg + machineKg, bucketKg, machineKg, bucketIsOutput }
-}
 
 const INP = 'w-full px-3 py-2.5 min-h-[42px] rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
 const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
@@ -491,7 +483,7 @@ export function SievingCapture({
   )
   const topUpKg = Array.from(productionTopUpsBySerial.values()).flat().reduce((s, t) => s + t.kg, 0)
 
-  const { totalIn, totalOut } = sievingTotals(value, shift, topUpKg)
+  const { totalIn, totalOut } = sievingTotals(value, { shift, topUpKg })
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)

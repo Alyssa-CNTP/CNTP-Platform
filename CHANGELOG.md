@@ -2,6 +2,33 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Alyssa (Mass balance moved to core; Total Output redefined; capture page branching removed)
+
+**Files changed:** `lib/core/mass-balance/{types,sieving,refining,granule,blender,pasteuriser,index}.ts` (new), `lib/core/mass-balance/mass-balance.test.ts` (new), `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `ARCHITECTURE.md`, `.github/workflows/ci.yml`
+
+Mass balance is now a core feature with **one module per section**, kept deliberately separate because the five formulas mirror five different paper forms with different sign conventions. What is shared is the vocabulary and a single dispatch, `productionTotals(kind, data, ctx)`.
+
+**Everything now reads one balance.** The capture screen, the persisted `prod_mass_balance` row and the production-order summaries previously computed "what did this shift produce" three different ways. The screen ignored half-bag top-ups entirely while the persisted row counted them — and only for Sieving. Because the PO summaries read `total_output_b_kg` off the persisted row, correcting what `persist()` writes carries straight through to them.
+
+**Total Output now means finished product.**
+
+- **Includes half-bag top-ups** made from the shift's own loose production — the increment only, never the whole bag, since the bag it went into may have been created on an earlier day and so never appears in this session's outputs. Restricted to `mode === 'production'`; a `mode === 'existing'` bag-to-bag transfer moves mass already counted when the source bag was bagged, and counting it again would double-count.
+- **Excludes bucket-elevator material left for the next day.** That is work in progress, not product. It is reported as `carryOverOut` and now has its own "left in elevator" column in the mass-balance table, with the variance subtracting it — so the balance still reconciles to zero instead of showing a shortfall on every afternoon Sieving shift. The arithmetic of the variance is unchanged: `totalIn − totalOut − carryOverOut` is identical to the old `totalIn − (product + leftover)`.
+
+**Total Input includes carry-over consumed from a previous day**, matched on **variant family** — conventional and organic are separate physical pools that never mix. Read from `production.bucket_elevator_log` via the existing `outstandingBucketElevator()`; the figure typed on the capture screen is now only a fallback.
+
+Top-ups are session-scoped, so they are added **once** after summing, through a new `withTopUp()` that knows which way each section's balance sign runs — Blender and Pasteuriser follow their paper forms' `out − in`, so more output moves their balance *up*, the opposite of the other three. Getting that sign wrong would silently mis-state the variance, so it sits behind an exhaustive switch rather than being open-coded.
+
+**Latent bug fixed:** in the persisted-balance path, Blender fell through to `sievingTotals` and only produced the right number by accident, because both data shapes happen to have an `outputs` array keyed on `weight`. It now uses `blenderTotals`.
+
+**Capture page branching.** The empty-data factory and both `persist()` build chains (debag rows and bagging rows) now dispatch on the section kind and end in `assertNever`, replacing `sectionId.startsWith('refining')` / `isBlenderSection` / `isPasteuriser` chains that fell through to Sieving. Verified by temporarily adding a sixth section kind: the build then fails in **7 places across 3 files** — the capture page, `CaptureOverview`, and the core balance dispatch — and nowhere else.
+
+Type errors fell from 36 to **34** as a side effect of deleting the duplicated totals functions; the CI baseline has been lowered to match.
+
+**Verification:** 77 unit tests pass (up from 56), boundary lint clean, production build compiles.
+
+---
+
 ## 2026-09-01 — Alyssa (Phase 1 & 2: shared logic moved to core, section duck-typing removed)
 
 **Files changed:** `lib/core/types/capture.ts` (new), `lib/core/types/capture.test.ts` (new), `lib/production/section-kind-drift.test.ts` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/{OutputPicker,ShiftBagLog,HalfBagTopUpModal}.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/orders-kpis/route.ts`, `app/api/production/yield-analytics/route.ts`, `lib/production/shift-report-builder.ts`, `ARCHITECTURE.md`

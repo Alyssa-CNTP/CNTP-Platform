@@ -15,6 +15,8 @@ import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
 import { n } from '@/lib/core/num'
+import { refiningTotals } from '@/lib/core/mass-balance/refining'
+export { refiningTotals }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -76,17 +78,6 @@ function todayDelivery(): string {
   return `${dd}-${mm}-${yy}`
 }
 
-export function refiningTotals(d: RefiningData) {
-  const totalIn = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)
-  const groupKg = (g: RefiningOutputGroup | null) =>
-    (g?.bags ?? []).reduce((s, b) => s + n(b.weight), 0)
-  const totalA = groupKg(d.outputA)
-  const totalB = groupKg(d.outputB)
-  const totalC = groupKg(d.outputC)
-  const totalD = groupKg(d.outputD)
-  const balance = totalIn - totalA - totalB - totalC - totalD
-  return { totalIn, totalA, totalB, totalC, totalD, balance }
-}
 
 // ── Predefined outputs per section ───────────────────────────────────────────
 

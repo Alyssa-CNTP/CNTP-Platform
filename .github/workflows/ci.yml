@@ -46,7 +46,7 @@ jobs:
       # Lower the baseline whenever you clear some — never raise it.
       - name: Typecheck (no new errors)
         env:
-          TS_ERROR_BASELINE: '36'
+          TS_ERROR_BASELINE: '34'
         run: |
           COUNT=$(npx tsc --noEmit 2>&1 | grep -c "error TS" || true)
           echo "Type errors: $COUNT (baseline $TS_ERROR_BASELINE)"

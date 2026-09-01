@@ -122,12 +122,47 @@ by `eslint.config.mjs`, so the two entry points cannot drift.
 
 ---
 
-## 5. Serialization is core
+## 5. Serialization and mass balance are core
+
+### Serialization
 
 Serial numbers are generated **only** by `lib/core/serials.ts`. Never inline in a section
 component. Never by reading a max in app code — the sequence is allocated by the database
 (`next_bag_serial`, mirroring the existing `next_job_card_no` RPC pattern), because app-side
 allocation mints duplicates under concurrent use and reads a wrong max past `limit(4000)`.
+
+### Mass balance
+
+Lives in `lib/core/mass-balance/`, one module per section — they stay separate (see §4). The
+shared part is the vocabulary in `types.ts` and the single dispatch `productionTotals(kind,
+data, ctx)`. **Everything goes through it**: the capture screen, the persisted
+`prod_mass_balance` row, and the production-order summaries. Before that they disagreed — the
+screen ignored half-bag top-ups entirely while the persisted row counted them, and only for
+Sieving; Blender reached the persisted row through `sievingTotals` and was right by accident.
+
+**Total Output means finished product.**
+
+- It **includes** half-bag top-ups made from this shift's own loose production — the
+  increment only, never the whole bag, since the bag may have been created on an earlier day.
+  Pass only `mode === 'production'` events. A `mode === 'existing'` bag-to-bag transfer moves
+  mass already counted when the source bag was bagged; counting it again double-counts.
+- It **excludes** material left in the bucket elevator for tomorrow. That is work in progress.
+  It is reported as `carryOverOut` and gets its own column in `MassBalanceTable`, so the
+  variance stays honest instead of showing a shortfall every afternoon shift.
+
+**Total Input includes carry-over consumed from a previous day**, matched on **variant
+family** — conventional and organic are separate physical pools and never mix. Read it from
+`production.bucket_elevator_log` via `outstandingBucketElevator()`; the figure typed on the
+capture screen is only the fallback.
+
+So `balance = totalIn − totalOut − carryOverOut`. That is arithmetically identical to the
+older `totalIn − (product + leftover)` — what changed is that the leftover is no longer
+disguised as output.
+
+Top-ups are session-scoped, so they are added **once** after summing, via `withTopUp()`.
+Never inside a section's own totals, or a path can count them twice. `withTopUp` also knows
+which way each section's balance sign runs — Blender and Pasteuriser read `out − in`, so more
+output moves their balance *up*, the opposite of the other three.
 
 ---
 
@@ -188,7 +223,7 @@ and `NAV` in `components/layout/Sidebar.tsx`.
 | Typecheck | **Ratchet** — fails only if the count rises above the baseline. |
 | Lint (full) | **Ratchet** — same. |
 
-The two ratchets exist because the repo has ~3000 pre-existing lint errors and 36 type
+The two ratchets exist because the repo has ~3000 pre-existing lint errors and 34 type
 errors, and both `DISABLE_ESLINT_PLUGIN=true` and `typescript.ignoreBuildErrors: true` are
 set, which is how they accumulated unnoticed. Demanding zero would put CI permanently red
 and teach everyone to ignore it; demanding "no worse than today" stops the backlog growing

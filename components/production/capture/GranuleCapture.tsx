@@ -45,6 +45,8 @@ import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
 import { itemFromCode } from '@/lib/production/bom'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { n } from '@/lib/core/num'
+import { granuleColumnTotals, blendTotal, granuleTotals } from '@/lib/core/mass-balance/granule'
+export { granuleColumnTotals, blendTotal, granuleTotals }
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
 
@@ -60,6 +62,7 @@ const DUST_META: Record<string, DustMeta> = {
   other:      { label: 'Other',                  productType: 'Other',           color: '#a16207' },
 }
 export const DUST_COLUMNS = Object.entries(DUST_META).map(([key, m]) => ({ key, ...m }))
+const DUST_KEYS = DUST_COLUMNS.map(c => c.key)
 const DUST_LABEL   = (key: string) => DUST_META[key]?.label ?? key
 const DUST_COLOR   = (key: string) => DUST_META[key]?.color ?? '#78716c'
 /** Public: dust column key → Acumatica-style product type (used by the capture page). */
@@ -160,36 +163,8 @@ export function emptyGranuleData(): GranuleData {
 // ── Totals ────────────────────────────────────────────────────────────────────
 
 
-export function granuleColumnTotals(d: GranuleData) {
-  const cols: Record<string, number> = {}
-  DUST_COLUMNS.forEach(c => { cols[c.key] = 0 })
-  ;(d.blends ?? []).forEach(b => {
-    (b.rows ?? []).forEach(r => { cols[r.dustKey] = (cols[r.dustKey] ?? 0) + n(r.weight) })
-  })
-  const totalA = Object.values(cols).reduce((s, v) => s + v, 0)   // dust only (water excluded)
-  const water  = (d.blends ?? []).reduce((s, b) => s + n(b.water), 0)
-  return { cols, totalA, water }
-}
 
-/** Blend total = sum of that blend's dust weights (water excluded, per the paper). */
-export function blendTotal(b: GranuleBlend): number {
-  return (b.rows ?? []).reduce((s, r) => s + n(r.weight), 0)
-}
 
-export function granuleTotals(d: GranuleData) {
-  const { cols, totalA, water } = granuleColumnTotals(d)
-  const cStar   = (d.outputs ?? []).reduce((s, b) => s + n(b.weight), 0)       // bagging summary (C*)
-  const dustOut = (d.dustOutputs ?? []).reduce((s, r) => s + n(r.weight), 0)   // SG/SF dust by-product
-  const wasteF  = (d.waste ?? []).reduce((s, r) => s + n(r.weight), 0)         // F
-  const D = n(d.dustNotRefed)
-  const E = n(d.coarseNotFed)
-  const G = cStar + D + E + wasteF          // total produced
-  const H = totalA                          // total raw material used
-  const balance = H - G
-  const yieldPct = H > 0 ? (G / H) * 100 : 0
-  const runningHours = n(d.meterStop) - n(d.meterStart)
-  return { cols, totalA, water, cStar, dustOut, wasteF, D, E, G, H, balance, yieldPct, runningHours }
-}
 
 // ── Granule output serial ───────────────────────────────────────────────────────
 // The serial carries the shift LOT NUMBER as its stem, plus a per-lot bag
@@ -752,7 +727,7 @@ export function GranuleCapture({
   // kind of factor that should be system-derived, not hand-weighed and typed —
   // the bag itself is still real and still gets tagged/serialled.
   function computedDustWeight(): number {
-    const t2 = granuleTotals(value)
+    const t2 = granuleTotals(value, DUST_KEYS)
     return Math.max(0, t2.balance - t2.dustOut)
   }
   async function addDustOutput() {
@@ -836,7 +811,7 @@ export function GranuleCapture({
   }
 
   // ── Totals + derived ──────────────────────────────────────────────────────────
-  const t = granuleTotals(value)
+  const t = granuleTotals(value, DUST_KEYS)
   const inputCount = value.blends.reduce((s, b) => s + b.rows.length, 0)
   // Bagging summary — grouped by lot (one item per session, so effectively one row).
   const summaryByLot = value.outputs.reduce((acc, b) => {
