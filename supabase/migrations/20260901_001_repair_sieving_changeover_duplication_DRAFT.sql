@@ -229,15 +229,37 @@ COMMIT;
 -- and the later batches hold none. Batch records, variants, grades and output
 -- bags are all untouched.
 --
--- For reference: 2026-09-01 morning bagged 4 560 kg out of 17 bags. At ~350 kg a
--- farm bag that implies roughly 15-20 bags in, not 262. Batch 1's 13 is in that
--- range; the 249 rows after it are not.
+-- HOW TO PICK THE COUNT — do not guess it from the batch sizes.
+--   2026-09-01 morning bagged 4 560 kg across 17 output bags. At ~350 kg a farm
+--   bag, the input that implies:
+--
+--     13 bags = 4 550 kg in -> 100.2% yield   impossible
+--     14 bags = 4 900 kg in ->  93.1% yield   implausible
+--     15 bags = 5 250 kg in ->  86.9% yield
+--     16 bags = 5 600 kg in ->  81.4% yield
+--     17 bags = 5 950 kg in ->  76.6% yield
+--     22 bags = 7 700 kg in ->  59.2% yield   (batches 1+2 together)
+--
+--   So batch 1's 13 rows are NOT the whole genuine input — sieving always loses
+--   dust, spillage and elevator carry-over, and 100% yield cannot happen. Some
+--   of batch 2's 9 rows are real bags debagged after the changeover into
+--   RA-Conventional. Trimming to 13 would delete them.
+--
+--   Take the number off the paper debagging sheet or the physical bag count for
+--   that shift. The yield column above is a sanity check on it, not a source
+--   for it. Leave this unset and the script refuses to run.
 BEGIN;
 
--- ← EDIT THESE TWO VALUES, then run.
+-- ← SET true_bag_count TO THE CONFIRMED PHYSICAL COUNT. NULL by design.
 CREATE TEMP TABLE _trim AS
   SELECT '7b8774f2-5213-4c34-a687-10f86298df03'::uuid AS session_id,
-         13::int                                      AS true_bag_count;
+         NULL::int                                    AS true_bag_count;
+
+DO $$ BEGIN
+  IF (SELECT true_bag_count FROM _trim) IS NULL THEN
+    RAISE EXCEPTION 'Set true_bag_count to the confirmed physical bag count first — see the yield table above.';
+  END IF;
+END $$;
 
 -- draft_data: the first batch keeps the confirmed rows (plus any in-progress
 -- zero-weight rows), later batches keep their zero-weight rows only.
