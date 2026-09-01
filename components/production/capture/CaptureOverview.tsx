@@ -18,6 +18,8 @@ import { type BlenderData } from '@/components/production/capture/BlenderCapture
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
+import { n as num } from '@/lib/core/num'
+import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
 
 interface Production {
   id: string; variant: string; grade: string; lot: string
@@ -28,7 +30,6 @@ interface Production {
   shift?: string
 }
 
-const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
 const BAG_ORANGE  = '#d97706'
 
@@ -60,14 +61,14 @@ export interface BlenderRatioGroup {
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
-function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number } {
+function buildDebagLotGroups(prods: Production[], kind: SectionKind): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number } {
   const map = new Map<string, DebagLotGroup>()
   let bucketInKg = 0
   let bucketOutKg = 0
   let machineKg = 0
   prods.forEach(p => {
     const d = p.data as any
-    if ('bomId' in d) {
+    if (kind === 'blender') {
       // BlenderData: group by batch number (lot) — this is how mass balance is
       // actually read for a blend on the floor. Falls back to the ingredient's
       // material label for slots that don't carry a lot (sugar, flavour, etc.),
@@ -82,7 +83,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
         else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
       })
-    } else if ('inputs' in d) {
+    } else if (kind === 'refining') {
       // RefiningData: group by input product type (Coarse Leaf, Fine Leaf,
       // Sticks, …) — the same grouping the Capture tab already uses, and the
       // only one that actually consolidates anything: each bag's lot/serial
@@ -99,7 +100,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
         else map.set(type, { lot: type, rows: [row], totalKg: num(r.weight) })
       })
-    } else if ('blends' in d) {
+    } else if (kind === 'granule') {
       // GranuleData: group dust inputs by dust type — the plant reads dust totals first.
       ;(d.blends ?? []).forEach((bl: any) => {
         ;(bl.rows ?? []).forEach((r: any) => {
@@ -111,7 +112,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
           else map.set(label, { lot: label, rows: [row], totalKg: num(r.weight) })
         })
       })
-    } else if ('byProducts' in d) {
+    } else if (kind === 'pasteuriser') {
       // PasteuriserData: debagged blend bags (both streams) grouped by lot,
       // falling back to serial then a positional placeholder — merged, not
       // overwritten, for the same cross-shift reason as the branches above.
@@ -123,7 +124,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         if (g) { g.rows.push(row); g.totalKg += num(r.weight) }
         else map.set(lot, { lot, rows: [row], totalKg: num(r.weight) })
       })
-    } else {
+    } else if (kind === 'sieving') {
       // SievingData: debag + spillage. The bucket elevator (spillage[0]) means
       // opposite things depending on which shift this production belongs to —
       // the morning shift CONSUMES what last night's afternoon shift left
@@ -146,12 +147,12 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         if (g) { g.rows.push(row); g.totalKg += num(r.nett) }
         else map.set(lot, { lot, rows: [row], totalKg: num(r.nett) })
       })
-    }
+    } else { assertNever(kind, 'section kind') }
   })
   return { groups: Array.from(map.values()), bucketInKg, bucketOutKg, machineKg }
 }
 
-function buildProductGroups(prods: Production[]): ProductGroup[] {
+function buildProductGroups(prods: Production[], kind: SectionKind): ProductGroup[] {
   const prodMap = new Map<string, ProductGroup>()
 
   function addBag(p: Production, b: { productType: string; weight: string; batch?: string; destination?: string; serial: string; logged_at?: string; description?: string; code?: string | null }) {
@@ -172,7 +173,7 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
 
   prods.forEach((p) => {
     const d = p.data as any
-    if ('bomId' in d) {
+    if (kind === 'blender') {
       // BlenderData: the output is the blend itself — labeled "Blend {bomId}",
       // the same convention BlenderCapture uses when it upserts these bags to
       // bag_tags. productType/destination aren't per-bag on a BlenderOutputBag
@@ -185,7 +186,7 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
         productType: label, weight: b.weight, serial: b.serial,
         batch: b.lot || d.bomId || undefined, destination: p.variant, logged_at: b.logged_at,
       }))
-    } else if ('inputs' in d) {
+    } else if (kind === 'refining') {
       // RefiningData: outputA/B/C/D groups each have a bags array
       ;[d.outputA, d.outputB, d.outputC, d.outputD].forEach((grp: any) => {
         if (!grp) return
@@ -198,7 +199,7 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
           destination: p.variant, // no grade — show variant instead
         }))
       })
-    } else if ('blends' in d) {
+    } else if (kind === 'granule') {
       // GranuleData: granule bags + dust-from-granule-line by-products
       ;(d.outputs ?? []).forEach((b: any) => addBag(p, {
         productType: b.item, weight: b.weight, serial: b.serial, code: b.code,
@@ -208,7 +209,7 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
         productType: r.dustType, weight: r.weight, serial: r.serial, code: r.code,
         batch: p.lot, destination: p.variant, logged_at: r.logged_at,
       }))
-    } else if ('byProducts' in d) {
+    } else if (kind === 'pasteuriser') {
       // PasteuriserData: final-product pallet lines (kg = bags × kg/bag) + by-products.
       const perBag = num(d.weightPerBag) || 0
       ;(d.outputs ?? []).forEach((l: any) => addBag(p, {
@@ -220,10 +221,10 @@ function buildProductGroups(prods: Production[]): ProductGroup[] {
         productType: r.type, weight: r.weight, serial: r.serial || r.type,
         batch: d.batchNo, destination: p.variant,
       }))
-    } else {
+    } else if (kind === 'sieving') {
       // SievingData: flat outputs array
       ;(d.outputs ?? []).forEach((b: any) => addBag(p, b))
-    }
+    } else { assertNever(kind, 'section kind') }
   })
   return Array.from(prodMap.values())
 }
@@ -304,10 +305,15 @@ export function CaptureOverview({
   productions, sectionId, sectionName, sectionColor, date, shift, showSerials = false,
   productionOrders, locked = false, balanceRows, balanceNote, blenderRatios,
 }: {
-  productions: Production[]; sectionId?: string; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
+  productions: Production[]; sectionId: string; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
   balanceRows?: BalanceRow[]; balanceNote?: string; blenderRatios?: BlenderRatioGroup[]
 }) {
+  // Which section this screen is showing. Comes from the route, so it is
+  // authoritative — the five data shapes are never told apart by guessing at
+  // their fields any more. See ARCHITECTURE.md §4.
+  const kind = sectionKindFor(sectionId)
+
   const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
   const [expandedLots,      setExpandedLots]      = useState<Set<string>>(new Set())
@@ -317,8 +323,8 @@ export function CaptureOverview({
   const [filterGrade,   setFilterGrade]   = useState('')
   const [showFilters,   setShowFilters]   = useState(false)
 
-  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
-  const rawProductGroups = useMemo(() => buildProductGroups(productions), [productions])
+  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions, kind), [productions, kind])
+  const rawProductGroups = useMemo(() => buildProductGroups(productions, kind), [productions, kind])
 
   // Half-bag Top-up folded into each bag's own row here, rather than a
   // separate panel — a top-up is a side-channel write that never touches

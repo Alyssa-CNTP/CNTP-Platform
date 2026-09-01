@@ -2,6 +2,86 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Alyssa (Mass balance moved to core; Total Output redefined; capture page branching removed)
+
+**Files changed:** `lib/core/mass-balance/{types,sieving,refining,granule,blender,pasteuriser,index}.ts` (new), `lib/core/mass-balance/mass-balance.test.ts` (new), `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `ARCHITECTURE.md`, `.github/workflows/ci.yml`
+
+Mass balance is now a core feature with **one module per section**, kept deliberately separate because the five formulas mirror five different paper forms with different sign conventions. What is shared is the vocabulary and a single dispatch, `productionTotals(kind, data, ctx)`.
+
+**Everything now reads one balance.** The capture screen, the persisted `prod_mass_balance` row and the production-order summaries previously computed "what did this shift produce" three different ways. The screen ignored half-bag top-ups entirely while the persisted row counted them — and only for Sieving. Because the PO summaries read `total_output_b_kg` off the persisted row, correcting what `persist()` writes carries straight through to them.
+
+**Total Output now means finished product.**
+
+- **Includes half-bag top-ups** made from the shift's own loose production — the increment only, never the whole bag, since the bag it went into may have been created on an earlier day and so never appears in this session's outputs. Restricted to `mode === 'production'`; a `mode === 'existing'` bag-to-bag transfer moves mass already counted when the source bag was bagged, and counting it again would double-count.
+- **Excludes bucket-elevator material left for the next day.** That is work in progress, not product. It is reported as `carryOverOut` and now has its own "left in elevator" column in the mass-balance table, with the variance subtracting it — so the balance still reconciles to zero instead of showing a shortfall on every afternoon Sieving shift. The arithmetic of the variance is unchanged: `totalIn − totalOut − carryOverOut` is identical to the old `totalIn − (product + leftover)`.
+
+**Total Input includes carry-over consumed from a previous day**, matched on **variant family** — conventional and organic are separate physical pools that never mix. Read from `production.bucket_elevator_log` via the existing `outstandingBucketElevator()`; the figure typed on the capture screen is now only a fallback.
+
+Top-ups are session-scoped, so they are added **once** after summing, through a new `withTopUp()` that knows which way each section's balance sign runs — Blender and Pasteuriser follow their paper forms' `out − in`, so more output moves their balance *up*, the opposite of the other three. Getting that sign wrong would silently mis-state the variance, so it sits behind an exhaustive switch rather than being open-coded.
+
+**Latent bug fixed:** in the persisted-balance path, Blender fell through to `sievingTotals` and only produced the right number by accident, because both data shapes happen to have an `outputs` array keyed on `weight`. It now uses `blenderTotals`.
+
+**Capture page branching.** The empty-data factory and both `persist()` build chains (debag rows and bagging rows) now dispatch on the section kind and end in `assertNever`, replacing `sectionId.startsWith('refining')` / `isBlenderSection` / `isPasteuriser` chains that fell through to Sieving. Verified by temporarily adding a sixth section kind: the build then fails in **7 places across 3 files** — the capture page, `CaptureOverview`, and the core balance dispatch — and nowhere else.
+
+Type errors fell from 36 to **34** as a side effect of deleting the duplicated totals functions; the CI baseline has been lowered to match.
+
+**Verification:** 77 unit tests pass (up from 56), boundary lint clean, production build compiles.
+
+---
+
+## 2026-09-01 — Alyssa (Phase 1 & 2: shared logic moved to core, section duck-typing removed)
+
+**Files changed:** `lib/core/types/capture.ts` (new), `lib/core/types/capture.test.ts` (new), `lib/production/section-kind-drift.test.ts` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/{OutputPicker,ShiftBagLog,HalfBagTopUpModal}.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/orders-kpis/route.ts`, `app/api/production/yield-analytics/route.ts`, `lib/production/shift-report-builder.ts`, `ARCHITECTURE.md`
+
+Follows the Phase 0 guardrails. **No intended behaviour change** other than the one divergence noted below.
+
+**Phase 1 — call sites moved onto `lib/core`.**
+
+- The 10 byte-identical copies of `n()` now import `lib/core/num`. Call sites are untouched: where the local name was `num` the import is aliased, so the diff is the definition line only — 10 insertions, 14 deletions. Three files also shed a now-redundant comment about comma handling.
+- Left alone deliberately: `lib/production/granule-quality.ts` and `shift-report-builder.ts` have parsers with genuinely different semantics (`number | null`, and a `typeof v === 'number'` branch). They were never duplicates.
+- `round1` / `kgPerHour` / `yieldPct` now come from `lib/core/metrics` across the shift report, orders KPIs, yield analytics, the orders list, order detail and supervisor analytics. `round1` keeps other callers in each file, so its local definition became an import rather than being dropped.
+- **One deliberate behaviour difference:** order detail gated its yield on truthiness (`mb.total_input_kg`) rather than `> 0`. Identical for 0/null/undefined; differs only for a **negative** input, where the old code produced a negative percentage and the shared function returns null. Negative input kg is a data error and null is the more honest answer.
+- Left alone: `quality/granule`'s `Math.round((g/totalG)*1000)/10` is a sieve fraction, not a yield — different meaning, returns 0 rather than null.
+- Caught by the typecheck ratchet during this work: three files assign to a local `const yieldPct`, which shadowed the import and self-referenced. The count went 36 → 42 and back to 36 once the import was aliased. This is exactly what the ratchet is for.
+
+**Phase 2 — the section discriminant. This is the fix for "a change to one section breaks another".**
+
+- `CaptureOverview` told the five data shapes apart by guessing at their fields — `if ('bomId' in d)` / `else if ('inputs' in d)` / `else if ('blends' in d)` / `else if ('byProducts' in d)`, with Sieving as an unguarded `else`. Adding a field named `inputs` to any section silently rerouted it into Refining's branch, and anything unrecognised became Sieving. Both dispatches now switch on the section kind, which comes from the route.
+- Verified the premise before relying on it: the sibling-session and other-shift queries both filter `.eq('section_id', sectionId)`, so every production reaching Overview really is from one section.
+- Both chains end in `assertNever(kind)`, so **adding a section kind without handling it everywhere now fails the build**. Proven by temporarily adding a sixth kind: `tsc` errored at both dispatch sites and nowhere else.
+- `sectionId` on `CaptureOverview` was typed optional though its only caller always passes it; now required, so this is a compiler guarantee rather than a fallback.
+- **Found while doing this: `smallblender` was missing from the section map.** It is a real section (work centre `05-BLENDER SMALL`, added by `20260714_001_smallblender_section.sql` a month after the original capture migration) sharing Blender's data shape — which is why the existing `isBlenderSection()` accepts both ids. The map had been written from the original migration and was stale. Left uncorrected it would have routed Small Blender down the Sieving fallback: the very bug being removed.
+- Added `lib/production/section-kind-drift.test.ts`, which fails if `SECTION_KIND` and `SECTION_MODE` ever disagree, so that specific mistake cannot recur.
+
+**Verification:** 56 unit tests pass (up from 46), boundary lint clean, type errors unchanged at the 36 baseline.
+
+---
+
+## 2026-09-01 — Alyssa (Architecture guardrails: Core/Feature boundary, first tests, CI, schema-drift fix)
+
+**Files changed:** `ARCHITECTURE.md` (new), `CLAUDE.md`, `CODEOWNERS` (new), `eslint.config.mjs`, `vitest.config.mts` (new), `package.json`, `lib/core/num.ts` (new), `lib/core/num.test.ts` (new), `lib/core/metrics.ts` (new), `lib/core/metrics.test.ts` (new), `lib/config/flags.ts` (new), `components/shared/FeatureBoundary.tsx` (new), `.github/workflows/ci.yml` (new), `lib/core/serials.ts` (new), `lib/core/serials.test.ts` (new), `playwright.config.ts` (new), `e2e/fixtures.ts` (new), `e2e/capture-smoke.spec.ts` (new), `e2e/concurrent-save.spec.ts` (new), `.gitignore`, `supabase/migrations/20260901_001_prod_bagging_unique_index_drift.sql` (new, NOT yet applied)
+
+Phase 0 of the capture-module rework. No product behaviour changes — this is the safety net that the rest of the work depends on. Adding a feature to one capture section has repeatedly broken another, and there was nothing in place to catch it.
+
+- **`ARCHITECTURE.md`** now records the Core/Feature boundary, the "adding a feature" checklist, and the rules that exist because of a specific incident (the 44% Fine/Coarse Leaf bag loss, the day Sieving Tower's bagging rows emptied, the recurring hidden-field save failures). Imported from `CLAUDE.md` with `@ARCHITECTURE.md`, the same idiom already used for `@AGENTS.md`, so it loads as context in every session.
+- **ESLint now enforces the boundary.** `lib/core/**` cannot import from `features/**`, `app/**`, React, or the Supabase client; features cannot deep-import each other's internals. Verified against a deliberate violation — it errors with a pointer to the relevant section of `ARCHITECTURE.md`. Note `npm run build` runs with `DISABLE_ESLINT_PLUGIN=true`, so the build does **not** catch this; CI runs `npm run lint` as its own step for that reason.
+- **First tests in the repo.** There were none, and no runner installed. Added vitest plus characterisation tests over the first two extracted core modules — 21 tests, all green. These pin *current* behaviour so the extraction cannot silently change what a capture screen computes.
+- **`lib/core/num.ts`** — the `n()` numeric parser, previously byte-identical in **12 source files**, two of which were added recently, so the duplication was still spreading. Behaviour preserved exactly, including two quirks now pinned by tests rather than silently fixed: only the first comma is replaced (`n('1,234')` is `1.234`, not `1234`), and a genuine zero is indistinguishable from unparseable input.
+- **`lib/core/metrics.ts`** — `kgPerHour`, `yieldPct` and `round1`, previously hand-written in seven places across the shift report, orders KPIs, orders list, order detail and supervisor analytics. The two historic yield spellings (`round1((out/in)*100)` and `Math.round((out/in)*1000)/10`) are proven equivalent by test before any call site moves.
+- **`components/shared/FeatureBoundary.tsx`** — the app had **no error boundary anywhere**, so any component that threw during render blanked the whole route. Optional features now render inside one: the feature is replaced by a small notice and the operator's capture screen survives.
+- **`lib/config/flags.ts`** — build-time feature flags, deliberately plain booleans rather than a runtime slot/hook registry, so control flow stays visible to TypeScript.
+- **CI workflow** on PRs to `staging` and `main`, with a deliberate split between hard gates and ratchets. Hard gates: `npm run lint:boundaries` (the architecture rule) and `npm run test`. Ratchets: typecheck and full lint fail only if the error count **rises**. That split exists because the repo does **not** currently typecheck or lint clean — there are **36 type errors and 3,028 lint errors**, and `next.config.js` sets both `DISABLE_ESLINT_PLUGIN=true` and `typescript.ignoreBuildErrors: true`, which is how they accumulated unnoticed. Demanding zero would put CI permanently red and train everyone to ignore it; demanding "no worse than today" stops the backlog growing while it is paid down. None of the errors are in the new code. Baselines are in the workflow and should only ever be lowered.
+- **Schema drift caught:** `prod_bagging_session_bag_uidx` (unique over `session_id, bag_no`) exists in the live databases but in **no migration file**, while the capture save path is written against it — there is a comment in the capture page explaining that `bag_no` is handed out from free numbers precisely because that index rejects duplicates. Migration added so a database rebuilt from migrations alone matches production. **Not yet applied** — it needs the duplicate pre-flight check in the file run first.
+- **`lib/core/serials.ts`** — serialization pulled out as its own core module, since it is a core feature that must generate correctly. It now owns all four formats (`{CODE}-{DDMMYY}-{NNN}`, Sieving, Granule lot-or-GL stem, Blender run/bag, Pasteuriser range) plus the primitives that were duplicated between them — the `ddmmyy` derivation appeared three times and `seqOf` was byte-identical in two. Adds the parser that never existed. 25 tests.
+- **Two real defects found while pinning serial behaviour**, both inherited, both now documented and covered by tests rather than silently fixed:
+  - `seqOf` returns **0** for a five-digit sequence, not the number — the regex requires at most four digits before end-of-string. Because sequence seeding takes a max over that, a stem which ever reached 10000 bags would go invisible to the scan and the next bag would be numbered 001, **colliding with an existing bag**. Unreachable today (a stem is one lot or one section-day, and the scan is capped at `limit(4000)`); reachable the moment a stem's scope widens.
+  - `ddmmyy` only counts hyphen-separated parts without checking they are numeric, so a three-part non-date yields a garbage stem rather than the intended `000000` fallback. Harmless while the date always comes from the session record, not from operator input.
+- **Confirmed the concurrency defect in serial allocation.** Granule and Sieving both seed the next number by reading `bag_tags` with `ilike prefix%`, taking a local max and adding one. Two operators adding a bag in the same moment both read the same max and both mint it — a duplicate serial on two physical bags. The comment on `makeSerial` already said "Upgrade path: DB sequence"; the fix is a `next_bag_serial` function mirroring the `next_job_card_no` RPC already used by the job-card pages.
+- **Playwright set up** with a capture smoke spec across all six sections — asserts the screen loads, its tabs survive, and nothing threw during render, visiting the Overview tab explicitly because that is where the section union is duck-typed. Auth reuses a session state you capture yourself once; SSO is not scripted and no credentials are stored. Specs skip with an explanatory message when that file is absent, which is also why E2E is deliberately **not** wired into CI — with no session it would be a green tick proving nothing.
+- **`e2e/concurrent-save.spec.ts`** reproduces the two-operator save race and is marked `test.fixme` — expected to fail against the current save path. It is the acceptance test for the ledger cutover and must not be deleted to make a run clean.
+
+---
+
 ## 2026-08-31 — Gustav (Maintenance: originator verification step retired; QC-done notifications; production DB brought in line)
 
 **Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/notify/qc-done/route.ts` (new), `supabase/migrations/20260831_010_retire_originator_verify_step.sql` (new, applied to staging AND production)

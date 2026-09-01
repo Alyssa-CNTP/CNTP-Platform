@@ -9,7 +9,18 @@
 
 import { Scale, CheckCircle2, AlertTriangle, Info } from 'lucide-react'
 
-export interface BalanceRow { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number }
+export interface BalanceRow {
+  shift: 'Morning' | 'Afternoon'
+  totalIn: number
+  totalOut: number
+  /**
+   * Material left in the bucket elevator for the next day (Sieving only).
+   * Work in progress, NOT product — so it is deliberately absent from
+   * totalOut and shown in its own column, and the variance subtracts it.
+   * Without that it would read as an unexplained shortfall every afternoon.
+   */
+  carryOverOut?: number
+}
 
 // Single source of truth for how a mass-balance variance reads in plain
 // language. Every place on the capture page that shows "how far off are
@@ -46,7 +57,9 @@ export function MassBalanceTable({
 }) {
   const totalIn  = rows.reduce((s, r) => s + r.totalIn, 0)
   const totalOut = rows.reduce((s, r) => s + r.totalOut, 0)
-  const variance = totalIn - totalOut
+  const carryOut = rows.reduce((s, r) => s + (r.carryOverOut ?? 0), 0)
+  const variance = totalIn - totalOut - carryOut
+  const showCarry = carryOut > 0
   const multiShift = rows.length > 1
   const vClass = (v: number) => (Math.abs(v) <= tolerance ? 'text-ok' : 'text-warn')
   const sign = (v: number) => (v > 0 ? '+' : '')
@@ -67,18 +80,20 @@ export function MassBalanceTable({
               <th className="text-left  px-3 py-2 font-semibold">Shift</th>
               <th className="text-right px-3 py-2 font-semibold">kg in</th>
               <th className="text-right px-3 py-2 font-semibold">kg out</th>
+              {showCarry && <th className="text-right px-3 py-2 font-semibold">left in elevator</th>}
               <th className="text-right px-3 py-2 font-semibold">variance</th>
             </tr>
           </thead>
           {multiShift && (
             <tbody>
               {rows.map(r => {
-                const v = r.totalIn - r.totalOut
+                const v = r.totalIn - r.totalOut - (r.carryOverOut ?? 0)
                 return (
                   <tr key={r.shift} className="border-t border-stone-100">
                     <td className="px-3 py-2 text-stone-600">{r.shift}</td>
                     <td className="px-3 py-2 text-right font-mono text-text">{r.totalIn.toFixed(1)}</td>
                     <td className="px-3 py-2 text-right font-mono text-text">{r.totalOut.toFixed(1)}</td>
+                    {showCarry && <td className="px-3 py-2 text-right font-mono text-stone-500">{(r.carryOverOut ?? 0).toFixed(1)}</td>}
                     <td className={`px-3 py-2 text-right font-mono ${vClass(v)}`}>{sign(v)}{v.toFixed(1)}</td>
                   </tr>
                 )
@@ -90,6 +105,7 @@ export function MassBalanceTable({
               <td className="px-3 py-2.5 font-bold text-stone-800">{multiShift ? 'Whole run' : (rows[0]?.shift ?? 'This shift')}</td>
               <td className="px-3 py-2.5 text-right font-mono font-bold text-text">{totalIn.toFixed(1)}</td>
               <td className="px-3 py-2.5 text-right font-mono font-bold text-text">{totalOut.toFixed(1)}</td>
+              {showCarry && <td className="px-3 py-2.5 text-right font-mono font-bold text-stone-500">{carryOut.toFixed(1)}</td>}
               <td className={`px-3 py-2.5 text-right font-mono font-bold ${vClass(variance)}`}>{sign(variance)}{variance.toFixed(1)}</td>
             </tr>
           </tfoot>

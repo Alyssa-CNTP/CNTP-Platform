@@ -6,6 +6,7 @@ import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from
 import { LABEL_PRINTING_ENABLED, expectedBagWeightFor, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
 
 export interface PickedOutput {
   productType: string
@@ -17,8 +18,6 @@ export interface PickedOutput {
 }
 
 const INP = 'w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand'
-// Operators on SA devices type the decimal as a comma (1200,5) — normalise before parsing.
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 function standardWeight(label: string): string {
   return String(expectedBagWeightFor(label) ?? '')

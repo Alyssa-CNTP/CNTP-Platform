@@ -19,13 +19,13 @@ import type {
   AbsentPerson, ShiftReportAuditEntry,
 } from '@/lib/production/shift-report'
 import type { Shift } from '@/lib/supabase/database.types'
+import { round1, yieldPct, kgPerHour } from '@/lib/core/metrics'
 
 const num = (v: unknown): number => {
   if (v === null || v === undefined || v === '') return 0
   const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'))
   return Number.isFinite(n) ? n : 0
 }
-const round1 = (n: number) => Math.round(n * 10) / 10
 const nz = (n: number) => Math.round(n * 10) / 10
 
 /**
@@ -250,7 +250,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
         balanceKg: balance === null ? null : nz(balance),
         toleranceKg: tolerance,
         withinTolerance: balance === null ? null : Math.abs(balance) <= tolerance,
-        yieldPct: inputKg > 0 ? round1((outputKg / inputKg) * 100) : null,
+        yieldPct: yieldPct(outputKg, inputKg),
         bagsOut: bags.length,
         bagsIn: debags.filter(d => !d.is_spillage).length,
         spillageKg: nz(debags.filter(d => d.is_spillage).reduce((t, d) => t + num(d.kg_nett), 0)),
@@ -297,7 +297,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
       inputKg: l.inputKg,
       runMinutes: l.runMinutes,
       workedMinutes: worked,
-      kgPerHour: mins > 0 ? round1(l.outputKg / (mins / 60)) : null,
+      kgPerHour: kgPerHour(l.outputKg, mins),
       basis,
     }
   })
@@ -523,7 +523,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
     totalInputKg: nz(totalInputKg),
     totalOutputKg: nz(totalOutputKg),
     tonsOut: tons(totalOutputKg),
-    yieldPct: totalInputKg > 0 ? round1((totalOutputKg / totalInputKg) * 100) : null,
+    yieldPct: yieldPct(totalOutputKg, totalInputKg),
     sessionsSignedOff: lines.filter(l => l.status === 'approved').length,
     sessionsOutstanding: outstanding.length,
     balanceFlags: lines.filter(l => l.withinTolerance === false).length,

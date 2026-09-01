@@ -54,3 +54,9 @@ scripts/data/
 
 # ad-hoc session scratch files (temp working data, not app code)
 .scratch_*
+
+# Playwright saved session state — holds a live auth token, never commit
+e2e/.auth/
+test-results/
+playwright-report/
+eslint-report.json

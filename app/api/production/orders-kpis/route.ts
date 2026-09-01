@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
 import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { round1, kgPerHour } from '@/lib/core/metrics'
 
 export const runtime = 'nodejs'
 
@@ -23,7 +24,6 @@ const num = (v: unknown): number => {
   const n = typeof v === 'number' ? v : parseFloat(String(v))
   return Number.isFinite(n) ? n : 0
 }
-const round1 = (n: number) => Math.round(n * 10) / 10
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 /** Monday-start ISO week key for a yyyy-MM-dd date. */
@@ -198,7 +198,7 @@ export async function GET(req: NextRequest) {
         tons: round2(outputKg / 1000),
         yieldPct: inputKg > 0 ? round1((outputKg / inputKg) * 100) : null,
         runMinutes, workedMinutes,
-        kgPerHour: mins > 0 ? round1(outputKg / (mins / 60)) : null,
+        kgPerHour: kgPerHour(outputKg, mins),
         basis,
         flagged: mine.filter(s => s.flagged).length,
       }
@@ -277,7 +277,7 @@ export async function GET(req: NextRequest) {
       kgPerHour: (() => {
         const mins = bySection.reduce((t, s) => t + (s.basis === 'run' ? s.runMinutes : s.basis === 'worked' ? s.workedMinutes : 0), 0)
         const kg = bySection.filter(s => s.basis).reduce((t, s) => t + s.outputKg, 0)
-        return mins > 0 ? round1(kg / (mins / 60)) : null
+        return kgPerHour(kg, mins)
       })(),
     }
 

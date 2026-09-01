@@ -18,6 +18,9 @@ import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
+import { blenderTotals } from '@/lib/core/mass-balance/blender'
+export { blenderTotals }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -86,17 +89,7 @@ export function emptyBlenderData(): BlenderData {
   return { bomId: null, outputRunNo: null, inputs: [], outputs: [] }
 }
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
-export function blenderTotals(d: BlenderData) {
-  const totalIn  = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)
-  const totalOut = (d.outputs ?? []).reduce((s, r) => s + n(r.weight), 0)
-  // Paper form's sign convention: J = G (bagged out) − I (mixed in).
-  const balance = totalOut - totalIn
-  const byItem: Record<string, number> = {}
-  for (const r of d.inputs ?? []) byItem[r.itemKey] = (byItem[r.itemKey] ?? 0) + n(r.weight)
-  return { totalIn, totalOut, balance, byItem }
-}
 
 export interface CapturedCode { label: string; code: string; resolved: boolean }
 

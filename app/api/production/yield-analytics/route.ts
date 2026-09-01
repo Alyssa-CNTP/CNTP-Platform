@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { format, subDays } from 'date-fns'
+import { round1 } from '@/lib/core/metrics'
 
 export const runtime = 'nodejs'
 
@@ -19,7 +20,6 @@ function num(v: unknown): number | null {
   const n = typeof v === 'number' ? v : parseFloat(String(v))
   return Number.isFinite(n) ? n : null
 }
-const round1 = (n: number) => Math.round(n * 10) / 10
 
 export async function GET(req: NextRequest) {
   try {

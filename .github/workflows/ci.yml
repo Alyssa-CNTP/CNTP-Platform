@@ -1,0 +1,80 @@
+name: CI
+
+# Guards the core against regressions before anything reaches staging.
+#
+# Two of these steps are ratchets rather than pass/fail gates. That is
+# deliberate: this codebase has ~3000 pre-existing lint errors and 36 type
+# errors, and `next.config.js` sets both `DISABLE_ESLINT_PLUGIN=true` and
+# `typescript.ignoreBuildErrors: true`, which is why they went unnoticed.
+# Demanding zero would put CI permanently red and teach everyone to ignore it.
+# Demanding "no worse than today" stops the backlog growing while it is paid
+# down. See ARCHITECTURE.md §8.
+
+on:
+  pull_request:
+    branches: [staging, main]
+  push:
+    branches: [staging]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install
+        run: npm ci --legacy-peer-deps
+
+      # THE architecture gate — hard fail, no ratchet.
+      # Fast and targeted, so a violation is visible instead of being buried in
+      # the thousands of pre-existing findings a full lint reports.
+      - name: Core/Feature boundary
+        run: npm run lint:boundaries
+
+      # Unit tests over lib/core/**. These pin the behaviour of the shared
+      # capture logic — a failure means a refactor changed what a production
+      # screen computes.
+      - name: Unit tests
+        run: npm run test
+
+      # Ratchet: fails only if the type-error count goes UP.
+      # Lower the baseline whenever you clear some — never raise it.
+      - name: Typecheck (no new errors)
+        env:
+          TS_ERROR_BASELINE: '34'
+        run: |
+          COUNT=$(npx tsc --noEmit 2>&1 | grep -c "error TS" || true)
+          echo "Type errors: $COUNT (baseline $TS_ERROR_BASELINE)"
+          if [ "$COUNT" -gt "$TS_ERROR_BASELINE" ]; then
+            echo "::error::Type errors rose from $TS_ERROR_BASELINE to $COUNT. New code must be type-clean."
+            npx tsc --noEmit 2>&1 | grep "error TS" || true
+            exit 1
+          fi
+          if [ "$COUNT" -lt "$TS_ERROR_BASELINE" ]; then
+            echo "::notice::Type errors down to $COUNT — lower TS_ERROR_BASELINE in .github/workflows/ci.yml."
+          fi
+
+      # Ratchet: same idea for lint. Lower the baseline as it comes down.
+      - name: Lint (no new errors)
+        env:
+          LINT_ERROR_BASELINE: '3028'
+        run: |
+          npx eslint --format json --output-file eslint-report.json . || true
+          COUNT=$(node -e "const r=require('./eslint-report.json');console.log(r.reduce((t,f)=>t+f.errorCount,0))")
+          echo "Lint errors: $COUNT (baseline $LINT_ERROR_BASELINE)"
+          if [ "$COUNT" -gt "$LINT_ERROR_BASELINE" ]; then
+            echo "::error::Lint errors rose from $LINT_ERROR_BASELINE to $COUNT."
+            exit 1
+          fi
+          if [ "$COUNT" -lt "$LINT_ERROR_BASELINE" ]; then
+            echo "::notice::Lint errors down to $COUNT — lower LINT_ERROR_BASELINE in .github/workflows/ci.yml."
+          fi
+
+# Not run here: the Playwright suite. It needs a saved browser session (SSO is
+# not scriptable) and would skip every spec in CI — a green tick proving
+# nothing. Run it locally or against staging: see ARCHITECTURE.md §8.

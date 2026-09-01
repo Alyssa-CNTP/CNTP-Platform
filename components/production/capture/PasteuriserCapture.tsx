@@ -50,6 +50,9 @@ import { variantFromSuffix } from '@/lib/production/bom'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
+import { pasteuriserTotals } from '@/lib/core/mass-balance/pasteuriser'
+export { pasteuriserTotals }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -122,7 +125,6 @@ export function emptyPasteuriserData(): PasteuriserData {
   }
 }
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 /**
  * Mass-balance decomposition, matching the paper's letters:
@@ -130,17 +132,6 @@ const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
  *   A = final product bagged, B = by-products, C = floor waste → produced (A+B+C)
  *   balance = produced − used
  */
-export function pasteuriserTotals(d: PasteuriserData) {
-  const perBag = n(d.weightPerBag) || 0
-  const D = (d.debag ?? []).filter(r => r.stream === 'main').reduce((s, r) => s + n(r.weight), 0)
-  const E = (d.debag ?? []).filter(r => r.stream === 'postsieve').reduce((s, r) => s + n(r.weight), 0)
-  const A = (d.outputs ?? []).reduce((s, r) => s + n(r.bagCount) * (n(r.bagWeight) || perBag), 0)
-  const B = (d.byProducts ?? []).reduce((s, r) => s + n(r.weight), 0)
-  const C = n(d.floorWaste)
-  const rawUsed = D + E
-  const produced = A + B + C
-  return { D, E, A, B, C, rawUsed, produced, balance: produced - rawUsed }
-}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

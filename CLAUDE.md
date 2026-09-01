@@ -1,4 +1,5 @@
 @AGENTS.md
+@ARCHITECTURE.md
 
 ## Project
 

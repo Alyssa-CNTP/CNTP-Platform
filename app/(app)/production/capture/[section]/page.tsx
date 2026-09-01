@@ -37,6 +37,10 @@ import {
 import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
 import { HalfBagTopUpActivity } from '@/components/production/capture/HalfBagTopUpActivity'
 import { fetchTopUpEventsForSession } from '@/lib/production/scan-utils'
+import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
+import { productionTotals, sumProductionTotals, withTopUp,
+  type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
+import { outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -56,10 +60,9 @@ import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
 import { ShiftBagLog } from '@/components/production/capture/ShiftBagLog'
+import { n } from '@/lib/core/num'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
-// Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 // What the operator copies to IT when a structured row write fails. Postgres puts
 // the constraint name in `message` but the offending key in `details` ("Key
@@ -111,11 +114,21 @@ function productionMatchKey(p: Production, sectionId: string): string {
 // must pick them — capture never silently defaults to Export / Conventional.
 const emptyProduction = (sectionId: string, variant?: string | null, lot?: string | null, grade: string = ''): Production =>
   ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
-     data: sectionId.startsWith('refining') ? emptyRefiningData()
-       : sectionId === 'granule' ? emptyGranuleData()
-       : isBlenderSection(sectionId) ? emptyBlenderData()
-       : isPasteuriser(sectionId) ? emptyPasteuriserData()
-       : emptySievingData() })
+     data: emptyDataFor(sectionKindFor(sectionId)) })
+
+// The blank data shape for a section. Exhaustive on the section kind, so adding
+// a section without giving it a starting shape fails the build rather than
+// silently handing it Sieving's.
+function emptyDataFor(kind: SectionKind): Production['data'] {
+  switch (kind) {
+    case 'refining':    return emptyRefiningData()
+    case 'granule':     return emptyGranuleData()
+    case 'blender':     return emptyBlenderData()
+    case 'pasteuriser': return emptyPasteuriserData()
+    case 'sieving':     return emptySievingData()
+    default:            return assertNever(kind, 'section kind')
+  }
+}
 
 // True only when a production actually has weighed capture (any section type).
 // Used to gate session creation so opening a section — or starting a new batch
@@ -175,6 +188,9 @@ function CaptureScreen() {
   // Which shift the bucket elevator carryover belongs to (afternoon = output,
   // otherwise input), and the opposite shift whose capture we merge for the run.
   const shiftBal: Shift   = shift === 'afternoon' ? 'afternoon' : 'morning'
+  // Which kind of line this is. From the route, so it is authoritative — the
+  // five data shapes are never told apart by guessing at their fields.
+  const kind = sectionKindFor(sectionId)
   const otherShiftBal: Shift = shiftBal === 'morning' ? 'afternoon' : 'morning'
   const dateParam = sp.get('date')  ?? nowFallback.date
   const meta      = sectionMeta(sectionId)
@@ -231,6 +247,17 @@ function CaptureScreen() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [status, setStatus]       = useState<'new' | 'draft' | 'submitted' | 'approved'>('new')
   const [productions, setProductions] = useState<Production[]>([])
+  // Half-bag top-ups made from THIS shift's own loose production. They are a
+  // side-channel write (see HalfBagTopUpModal) that never reaches draft_data, so
+  // without this the material they came from is counted as input with nothing on
+  // the output side to balance it. Session-scoped, so added once — not per
+  // production, since a session can hold several runs.
+  const [sessionTopUpKg, setSessionTopUpKg] = useState(0)
+  // Bucket-elevator carry-over left by a previous day and consumed by this
+  // shift, read from the ledger and matched on VARIANT FAMILY — conventional
+  // and organic are separate physical pools and never mix. Undefined until
+  // loaded, which makes the balance fall back to the figure typed on screen.
+  const [carryOverInKg, setCarryOverInKg] = useState<number | undefined>(undefined)
   const [activeIdx, setActiveIdx]     = useState(0)
   const [otherShiftProductions, setOtherShiftProductions] = useState<Production[]>([])
   // Other prod_sessions rows for this EXACT section+date+shift — e.g. an earlier
@@ -585,6 +612,41 @@ function CaptureScreen() {
       .then(({ record }) => setChecksSigned(!!record && record.status !== 'in_progress'))
       .catch(() => {})
   }, [tab, sectionId, dateParam, shift])
+
+  // Half-bag top-ups made from THIS shift's own loose production. They are a
+  // side-channel write that never reaches draft_data, so without pulling them in
+  // the material they came from is counted as input with nothing on the output
+  // side to balance it. Restricted to mode==='production': a mode==='existing'
+  // bag-to-bag transfer moves weight out of a source bag already counted as
+  // output when IT was bagged, so counting it again would double-count.
+  useEffect(() => {
+    let cancelled = false
+    if (!sessionId) { setSessionTopUpKg(0); return }
+    fetchTopUpEventsForSession(sectionId, sessionId)
+      .then(map => {
+        const kg = Array.from(map.values()).flat()
+          .filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
+        if (!cancelled) setSessionTopUpKg(kg)
+      })
+      .catch(() => { /* best-effort — balance falls back to captured output only */ })
+    return () => { cancelled = true }
+  }, [sectionId, sessionId, tab])
+
+  // Bucket-elevator carry-over is Sieving-only, and only the shift that CONSUMES
+  // it counts it as input — the afternoon shift LEAVES a new one for tomorrow
+  // instead. Matched on variant FAMILY: conventional and organic are separate
+  // physical pools that never mix (see production.bucket_elevator_log).
+  useEffect(() => {
+    let cancelled = false
+    if (kind !== 'sieving' || shiftBal === 'afternoon') { setCarryOverInKg(undefined); return }
+    const variant = active?.variant ?? productions[0]?.variant ?? null
+    if (!variant) { setCarryOverInKg(undefined); return }
+    outstandingBucketElevator(sectionId, variantFamily(variant))
+      .then(kg => { if (!cancelled) setCarryOverInKg(kg) })
+      .catch(() => { /* leave undefined — falls back to the figure typed on screen */ })
+    return () => { cancelled = true }
+  }, [kind, sectionId, shiftBal, active?.variant, productions.length])
+
 
   // Reliable save — ensures a session exists (in case the open-time create
   // failed) then persists. Used by the debounce, the hide-flush, and the backstop.
@@ -1006,7 +1068,7 @@ function CaptureScreen() {
     const rows: any[] = []
     let bagNo = 1
     prods.forEach(prod => {
-      if (sectionId.startsWith('refining')) {
+      if (kind === 'refining') {
         const rd = prod.data as RefiningData
         ;(rd.inputs ?? []).forEach(r => {
           if (n(r.weight) === 0) return
@@ -1022,7 +1084,7 @@ function CaptureScreen() {
             delivery_date: r.deliveryDate || null, is_spillage: false,
           })
         })
-      } else if (sectionId === 'granule') {
+      } else if (kind === 'granule') {
         const gd = prod.data as GranuleData
         ;(gd.blends ?? []).forEach(bl => {
           (bl.rows ?? []).forEach(r => {
@@ -1039,7 +1101,7 @@ function CaptureScreen() {
             })
           })
         })
-      } else if (isBlenderSection(sectionId)) {
+      } else if (kind === 'blender') {
         const bd = prod.data as BlenderData
         ;(bd.inputs ?? []).forEach(r => {
           if (n(r.weight) === 0) return
@@ -1053,7 +1115,7 @@ function CaptureScreen() {
             kg_nett: n(r.weight), is_spillage: false,
           })
         })
-      } else if (isPasteuriser(sectionId)) {
+      } else if (kind === 'pasteuriser') {
         const pd = prod.data as PasteuriserData
         ;(pd.debag ?? []).forEach(r => {
           if (n(r.weight) === 0) return
@@ -1068,7 +1130,7 @@ function CaptureScreen() {
             kg_nett: n(r.weight), is_spillage: false,
           })
         })
-      } else {
+      } else if (kind === 'sieving') {
         const sd = prod.data as SievingData
         // spillage[0] is the bucket-elevator carry-over; spillage[1..] are
         // machine spillage — they're different inputs and must read as their
@@ -1097,7 +1159,7 @@ function CaptureScreen() {
             is_spillage: false,
           })
         })
-      }
+      } else { assertNever(kind, 'section kind') }
     })
     return rows
   }
@@ -1105,7 +1167,7 @@ function CaptureScreen() {
     const rows: any[] = []
     let bagNo = 1
     prods.forEach(prod => {
-      if (sectionId.startsWith('refining')) {
+      if (kind === 'refining') {
         const rd = prod.data as RefiningData
         const groups: Array<[string, typeof rd.outputB]> = [['A', rd.outputA], ['B', rd.outputB], ['C', rd.outputC], ['D', rd.outputD]]
         groups.forEach(([grp, g]) => {
@@ -1127,7 +1189,7 @@ function CaptureScreen() {
             })
           })
         })
-      } else if (sectionId === 'granule') {
+      } else if (kind === 'granule') {
         const gd = prod.data as GranuleData
         ;(gd.outputs ?? []).forEach(b => {
           if (n(b.weight) === 0) return
@@ -1147,7 +1209,7 @@ function CaptureScreen() {
             kg: n(r.weight),
           })
         })
-      } else if (isBlenderSection(sectionId)) {
+      } else if (kind === 'blender') {
         const bd = prod.data as BlenderData
         const bomId = bd.bomId
         ;(bd.outputs ?? []).forEach(b => {
@@ -1159,7 +1221,7 @@ function CaptureScreen() {
             kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
-      } else if (isPasteuriser(sectionId)) {
+      } else if (kind === 'pasteuriser') {
         const pd = prod.data as PasteuriserData
         const perBag = n(pd.weightPerBag) || 0
         // Final-product pallet lines (A): one bagging row per line, kg = bags × kg/bag.
@@ -1182,7 +1244,7 @@ function CaptureScreen() {
             product_type: r.type || null, variant: prod.variant, kg: n(r.weight),
           })
         })
-      } else {
+      } else if (kind === 'sieving') {
         const sd = prod.data as SievingData
         sd.outputs.forEach(b => {
           if (n(b.weight) === 0) return
@@ -1194,7 +1256,7 @@ function CaptureScreen() {
             bagging_time: b.logged_at || null,   // see bagging_time note above
           })
         })
-      }
+      } else { assertNever(kind, 'section kind') }
     })
     // Stamp the work centre (Sieving Tower / Refining 1 / … / Pasteuriser) on
     // every output bag so prod_bagging carries the producing line directly,
@@ -1205,33 +1267,18 @@ function CaptureScreen() {
   // Per-production totals — dispatches by section type. `sh` is the shift the
   // production belongs to; Sieving uses it to place the bucket elevator on the
   // input (morning) or output (afternoon) side of the balance.
-  function prodTotals(p: Production, sh: Shift = shiftBal): { totalIn: number; totalOut: number } {
-    if (sectionId.startsWith('refining')) {
-      const r = refiningTotals(p.data as RefiningData)
-      return { totalIn: r.totalIn, totalOut: r.totalA + r.totalB + r.totalC + r.totalD }
-    }
-    if (sectionId === 'granule') {
-      const g = granuleTotals(p.data as GranuleData)
-      // A (raw dust mixed) vs G (total produced) — mirrors the PR-FM-026/7 balance H − G.
-      return { totalIn: g.totalA, totalOut: g.G }
-    }
-    if (isBlenderSection(sectionId)) {
-      const b = blenderTotals(p.data as BlenderData)
-      return { totalIn: b.totalIn, totalOut: b.totalOut }
-    }
-    if (isPasteuriser(sectionId)) {
-      const pt = pasteuriserTotals(p.data as PasteuriserData)
-      // Raw material used (D+E) vs everything produced (A+B+C) — the paper's balance.
-      return { totalIn: pt.rawUsed, totalOut: pt.produced }
-    }
-    return sievingTotals(p.data as SievingData, sh)
+  // One balance, from lib/core/mass-balance. The screen, the persisted
+  // prod_mass_balance row and the production-order summaries all read it, so
+  // they can no longer disagree — and they did: the screen ignored half-bag
+  // top-ups entirely while the persisted row counted them, for Sieving only.
+  function prodTotals(p: Production, sh: Shift = shiftBal): ProductionTotals {
+    return productionTotals(kind, p.data as AnyBalanceData, { shift: sh, carryOverInKg })
   }
-  // Session totals — summed across all productions on one shift.
-  function sessionTotals(prods: Production[], sh: Shift = shiftBal) {
-    return prods.reduce((acc, p) => {
-      const t = prodTotals(p, sh)
-      return { totalIn: acc.totalIn + t.totalIn, totalOut: acc.totalOut + t.totalOut }
-    }, { totalIn: 0, totalOut: 0 })
+  // Session totals — summed across all productions on one shift, with the
+  // session half-bag top-ups added once at the end (withTopUp knows which way
+  // each section balance sign runs).
+  function sessionTotals(prods: Production[], sh: Shift = shiftBal): ProductionTotals {
+    return withTopUp(kind, sumProductionTotals(prods.map(p => prodTotals(p, sh))), sessionTopUpKg)
   }
 
   // Resolve canonical batch ids for a set of raw lot strings: upsert any new
@@ -1497,19 +1544,21 @@ function CaptureScreen() {
     }
 
     let mbA = 0, mbB = 0, mbC = 0, mbD = 0
-    if (sectionId.startsWith('refining')) {
+    if (kind === 'refining') {
+      // The only section reporting four separate output streams; everywhere else
+      // a single produced figure goes in B.
       prods.forEach(p => {
         const t = refiningTotals(p.data as RefiningData)
         mbA += t.totalA; mbB += t.totalB; mbC += t.totalC; mbD += t.totalD
       })
-    } else if (sectionId === 'granule') {
-      // Total produced (G) is the single output figure — balance = A − G matches PR-FM-026/7.
-      prods.forEach(p => { mbB += granuleTotals(p.data as GranuleData).G })
-    } else if (isPasteuriser(sectionId)) {
-      // Produced (A+B+C) is the single output figure — balance = (D+E) − produced.
-      prods.forEach(p => { mbB += pasteuriserTotals(p.data as PasteuriserData).produced })
     } else {
-      prods.forEach(p => { mbB += sievingTotals(p.data as SievingData, shiftBal).totalOut })
+      // Same core balance the screen uses, so the persisted row cannot drift
+      // from what the operator was looking at. Blender previously fell through
+      // to sievingTotals here and only produced the right number by accident,
+      // because both shapes happen to have an `outputs` array keyed on weight.
+      mbB += sumProductionTotals(
+        prods.map(p => productionTotals(kind, p.data as AnyBalanceData, { shift: shiftBal, carryOverInKg })),
+      ).totalOut
       // Half-bag Top-up weight added into an existing bag THIS session —
       // never in p.data.outputs (side-channel write, see HalfBagTopUpModal),
       // so it has to be pulled in here too or the debagged material it came
@@ -1724,7 +1773,7 @@ function CaptureScreen() {
   }
 
   const locked = status === 'approved'
-  const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0 }
+  const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0, carryOverIn: 0, carryOverOut: 0, balance: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
   // This shift's own contribution, and the other shift's (each with its own
   // bucket-elevator direction), so the balance can be shown per shift and totalled.
@@ -1736,17 +1785,18 @@ function CaptureScreen() {
   // The single mass balance everyone sees: the whole production run (07h00–01h00,
   // every shift + batch), so operators across shifts read one unified figure.
   // Falls back to this session when the run isn't linked across shifts yet.
-  const rt = runSpansShifts
-    ? { totalIn: st.totalIn + ot.totalIn, totalOut: st.totalOut + ot.totalOut }
-    : st
-  const rtVariance  = rt.totalIn - rt.totalOut
+  const rt = runSpansShifts ? sumProductionTotals([st, ot]) : st
+  // Material left in the elevator for tomorrow is work in progress, not a
+  // shortfall — it comes out of Total Output and off the variance, and is shown
+  // in its own column instead.
+  const rtVariance  = rt.balance
   const rtWithinTol = Math.abs(rtVariance) <= massBalanceToleranceFor(sectionId)
   const multi = productions.length > 1
   // Rows for the tabular balance — only shifts that actually captured material.
   const balanceRows = [
     (morningTotals.totalIn > 0 || morningTotals.totalOut > 0) ? { shift: 'Morning' as const, ...morningTotals } : null,
     (afternoonTotals.totalIn > 0 || afternoonTotals.totalOut > 0) ? { shift: 'Afternoon' as const, ...afternoonTotals } : null,
-  ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number }[]
+  ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number; carryOverOut: number }[]
   // The bucket-elevator note only applies to Sieving; Granule shows its custom
   // PR-FM-026/7 decomposition (G = C* + carry-over/waste, and % yield); other
   // lines get a generic run note.
