@@ -1,0 +1,40 @@
+name: CI
+
+# Guards the core against regressions before anything reaches staging.
+#
+# `npm run build` runs with DISABLE_ESLINT_PLUGIN=true, so the build does NOT
+# catch Core/Feature boundary violations. That is why lint runs here as its own
+# step. Do not remove it. See ARCHITECTURE.md §2.
+
+on:
+  pull_request:
+    branches: [staging, main]
+  push:
+    branches: [staging]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install
+        run: npm ci --legacy-peer-deps
+
+      # Enforces the Core/Feature import boundary.
+      - name: Lint
+        run: npm run lint
+
+      # Unit tests over lib/core/**. These pin the behaviour of the shared
+      # capture logic — a failure here means a refactor changed what a
+      # production screen computes.
+      - name: Unit tests
+        run: npm run test
+
+      - name: Typecheck
+        run: npx tsc --noEmit

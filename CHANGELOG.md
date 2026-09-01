@@ -2,6 +2,24 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Alyssa (Architecture guardrails: Core/Feature boundary, first tests, CI, schema-drift fix)
+
+**Files changed:** `ARCHITECTURE.md` (new), `CLAUDE.md`, `CODEOWNERS` (new), `eslint.config.mjs`, `vitest.config.mts` (new), `package.json`, `lib/core/num.ts` (new), `lib/core/num.test.ts` (new), `lib/core/metrics.ts` (new), `lib/core/metrics.test.ts` (new), `lib/config/flags.ts` (new), `components/shared/FeatureBoundary.tsx` (new), `.github/workflows/ci.yml` (new), `supabase/migrations/20260901_001_prod_bagging_unique_index_drift.sql` (new, NOT yet applied)
+
+Phase 0 of the capture-module rework. No product behaviour changes — this is the safety net that the rest of the work depends on. Adding a feature to one capture section has repeatedly broken another, and there was nothing in place to catch it.
+
+- **`ARCHITECTURE.md`** now records the Core/Feature boundary, the "adding a feature" checklist, and the rules that exist because of a specific incident (the 44% Fine/Coarse Leaf bag loss, the day Sieving Tower's bagging rows emptied, the recurring hidden-field save failures). Imported from `CLAUDE.md` with `@ARCHITECTURE.md`, the same idiom already used for `@AGENTS.md`, so it loads as context in every session.
+- **ESLint now enforces the boundary.** `lib/core/**` cannot import from `features/**`, `app/**`, React, or the Supabase client; features cannot deep-import each other's internals. Verified against a deliberate violation — it errors with a pointer to the relevant section of `ARCHITECTURE.md`. Note `npm run build` runs with `DISABLE_ESLINT_PLUGIN=true`, so the build does **not** catch this; CI runs `npm run lint` as its own step for that reason.
+- **First tests in the repo.** There were none, and no runner installed. Added vitest plus characterisation tests over the first two extracted core modules — 21 tests, all green. These pin *current* behaviour so the extraction cannot silently change what a capture screen computes.
+- **`lib/core/num.ts`** — the `n()` numeric parser, previously byte-identical in **12 source files**, two of which were added recently, so the duplication was still spreading. Behaviour preserved exactly, including two quirks now pinned by tests rather than silently fixed: only the first comma is replaced (`n('1,234')` is `1.234`, not `1234`), and a genuine zero is indistinguishable from unparseable input.
+- **`lib/core/metrics.ts`** — `kgPerHour`, `yieldPct` and `round1`, previously hand-written in seven places across the shift report, orders KPIs, orders list, order detail and supervisor analytics. The two historic yield spellings (`round1((out/in)*100)` and `Math.round((out/in)*1000)/10`) are proven equivalent by test before any call site moves.
+- **`components/shared/FeatureBoundary.tsx`** — the app had **no error boundary anywhere**, so any component that threw during render blanked the whole route. Optional features now render inside one: the feature is replaced by a small notice and the operator's capture screen survives.
+- **`lib/config/flags.ts`** — build-time feature flags, deliberately plain booleans rather than a runtime slot/hook registry, so control flow stays visible to TypeScript.
+- **CI workflow** running lint, unit tests and typecheck on PRs to `staging` and `main`. Typecheck currently passes clean.
+- **Schema drift caught:** `prod_bagging_session_bag_uidx` (unique over `session_id, bag_no`) exists in the live databases but in **no migration file**, while the capture save path is written against it — there is a comment in the capture page explaining that `bag_no` is handed out from free numbers precisely because that index rejects duplicates. Migration added so a database rebuilt from migrations alone matches production. **Not yet applied** — it needs the duplicate pre-flight check in the file run first.
+
+---
+
 ## 2026-08-31 — Gustav (Maintenance: originator verification step retired; QC-done notifications; production DB brought in line)
 
 **Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/notify/qc-done/route.ts` (new), `supabase/migrations/20260831_010_retire_originator_verify_step.sql` (new, applied to staging AND production)
