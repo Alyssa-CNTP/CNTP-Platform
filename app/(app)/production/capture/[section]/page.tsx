@@ -90,6 +90,16 @@ const isPasteuriser = (id: string) => id === 'pasteuriser'
 // persist()'s delete+reinsert (which restamps created_at on every save). The
 // SAST wall-clock conversion happens at read/display time, not here.
 
+// Derived production figures are HIDDEN — see SHOW_DERIVED_FIGURES in
+// CaptureOverview.tsx for the reasoning. A changeover bug was multiplying the
+// captured debagging rows, so the whole-shift roll-up, the per-batch breakdown
+// and the mass-balance tables all reported inflated totals (258 bags / 90 300 kg
+// on a shift that debagged 15). The debagging and bagging rows themselves are
+// correct and stay; only these aggregates of them are hidden.
+//
+// Flip to true to bring them back.
+const SHOW_DERIVED_FIGURES = false
+
 // A shift can contain several productions, each its own variant/destination/lot.
 interface Production { id: string; variant: string; grade: string; lot: string; data: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData }
 
@@ -2263,7 +2273,7 @@ function CaptureScreen() {
                     doesn't show a changeover ever happened. Each batch's own
                     numbers stay visible here so one can be sanity-checked
                     without waiting for the combined total to explain itself. */}
-                {multi && (
+                {SHOW_DERIVED_FIGURES && multi && (
                   <div className="pt-3 border-t border-stone-100 space-y-1.5">
                     <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Batches this run ({productions.length})</span>
                     {productions.map((p, i) => {
@@ -2289,7 +2299,7 @@ function CaptureScreen() {
 
                 {/* Granule's balance is custom and lives in one place only — the
                     Overview. Other sections show the quick balance here too. */}
-                {rt.totalIn > 0 && sectionId !== 'granule' && (
+                {SHOW_DERIVED_FIGURES && rt.totalIn > 0 && sectionId !== 'granule' && (
                   <div className="pt-3 border-t border-stone-100">
                     <MassBalanceTable rows={balanceRows} tolerance={massBalanceToleranceFor(sectionId)} note={balanceNote} />
                   </div>
@@ -2316,14 +2326,16 @@ function CaptureScreen() {
                   of what went in and what came out, across every batch record
                   it opened (the capture form below only ever shows the record
                   open on screen). Asked for by the afternoon shift. */}
-              <ShiftBagLog
-                sectionId={sectionId}
-                shiftLabel={SHIFT_LABEL[shiftBal]}
-                records={[
-                  ...productions.map((p, i) => ({ ...p, label: multi ? `P${i + 1}` : 'This record', current: true })),
-                  ...shiftOtherProductions.map((p, i) => ({ ...p, label: `Earlier record ${i + 1}`, current: false })),
-                ]}
-              />
+              {SHOW_DERIVED_FIGURES && (
+                <ShiftBagLog
+                  sectionId={sectionId}
+                  shiftLabel={SHIFT_LABEL[shiftBal]}
+                  records={[
+                    ...productions.map((p, i) => ({ ...p, label: multi ? `P${i + 1}` : 'This record', current: true })),
+                    ...shiftOtherProductions.map((p, i) => ({ ...p, label: `Earlier record ${i + 1}`, current: false })),
+                  ]}
+                />
+              )}
 
               {variantMismatch && (
                 <div className="flex items-start gap-2.5 px-4 py-3 bg-warn/8 border border-warn/30 rounded-2xl text-[13px] text-amber-800">
@@ -2561,9 +2573,11 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
       {/* Mass balance — same table as the Production tab, so sign-off never
           shows this figure in a different shape than what was already seen
           while capturing. */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4">
-        <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} />
-      </div>
+      {SHOW_DERIVED_FIGURES && (
+        <div className="bg-white border border-stone-200 rounded-2xl p-4">
+          <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} />
+        </div>
+      )}
 
       {/* Auto-derived timesheet — operator confirms (with light edits) at sign-off */}
       <TimesheetConfirm

@@ -28,6 +28,17 @@ interface Production {
 }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
+// Derived production figures — yield, tons, mass-balance variance — are HIDDEN.
+//
+// They are computed from the captured debagging rows, and a changeover bug was
+// multiplying those rows, so every one of these read confidently and wrongly:
+// 92 086 kg in against 5 160 kg out, 5.6% yield, +86 926 kg balance, on a shift
+// that debagged 15 bags and bagged 12. The debagging and bagging rows themselves
+// are correct and stay on screen; only the figures derived from them are hidden.
+//
+// Flip to true to bring them all back — that is the whole revert.
+const SHOW_DERIVED_FIGURES = false
+
 const DEBAG_BLUE  = '#1d4ed8'
 const BAG_ORANGE  = '#d97706'
 
@@ -342,7 +353,7 @@ export function CaptureOverview({
           how "yields are hiding" became true: the line that produced the figures
           couldn't see them. Computed here from the same totals the tables below
           show, so the strip can never disagree with the detail under it. */}
-      {hasData && (
+      {SHOW_DERIVED_FIGURES && hasData && (
         <YieldStrip
           sectionId={sectionId} inKg={totalIncl} outKg={totalOut} bags={totalBags}
           variance={variance} withinTol={withinTol} tolKg={balanceTolKg}
@@ -605,7 +616,7 @@ export function CaptureOverview({
 
             {/* Mass balance — tabular (Morning / Afternoon / whole run) when the
                 page supplies per-shift rows; otherwise a single-line fallback. */}
-            {balanceRows && balanceRows.length > 0 ? (
+            {SHOW_DERIVED_FIGURES && (balanceRows && balanceRows.length > 0 ? (
               <MassBalanceTable rows={balanceRows} tolerance={balanceTolKg} note={balanceNote} />
             ) : (
               <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
@@ -615,7 +626,7 @@ export function CaptureOverview({
                   {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
                 </span>
               </div>
-            )}
+            ))}
           </>
         )}
       </div>

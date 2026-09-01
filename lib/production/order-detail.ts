@@ -195,7 +195,8 @@ export interface OrderDay {
   bagsOutputKg: number              // excludes bornViaRebag rows, includes freshTopUps — see OrderBagRow/OrderFreshTopUpRow
   rebagRows: OrderRebagRow[]        // bags born via re-bag on this day, shift-tagged
   freshTopUps: OrderFreshTopUpRow[] // today's production added into an older bag, shift-tagged
-  debags: OrderDebagRow[]           // all shifts, morning first
+  debags: OrderDebagRow[]           // all shifts, morning first, changeover duplicates removed
+  debagDuplicatesHidden: number      // how many duplicate farm-bag rows were dropped
   massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
   reopenRequests: OrderReopenRequest[]   // union across shifts
   notes: OrderNote[]                // union across shifts, newest first
@@ -518,9 +519,45 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   // Debag inputs across the day, tagged with shift and sorted by time.
   const debagRows = (debagsRes.data as any[]) ?? []
-  const debags: OrderDebagRow[] = debagRows.map(d => ({
-    ...d, shift: shiftBySession.get(d.session_id) ?? '',
-  }))
+  // ── Drop the changeover's duplicate farm-bag rows ────────────────────────
+  // A mid-shift changeover (and a page reload) was copying a Sieving session's
+  // debagging rows into another batch of the same session, so prod_debagging
+  // holds the same physical bag many times over — 262 rows on 2026-09-01 morning
+  // for 15 bags actually debagged. Reporting straight off the row count reads
+  // 17x the real intake.
+  //
+  // A farm bag is a physical object and is debagged ONCE, so (session, lot, bag
+  // label) is its identity and a repeat is a copy. Confirmed against the floor's
+  // paper sheet for 31-08-2026: 41 bags, 41 distinct pairs.
+  //
+  // Deliberately narrow, so nothing real can collapse:
+  //   • Farm bags only. 'Farm Bag' is written by Sieving alone (buildDebag hard-
+  //     codes it); every other section's rows carry their own product_type and
+  //     pass through untouched.
+  //   • Spillage rows are skipped — bucket elevator and machine spillage have no
+  //     bag label and were never duplicated.
+  //   • A row with a BLANK bag label is never deduplicated. Two genuinely
+  //     different bags both captured without a label would otherwise collapse
+  //     into one and UNDER-count, which is worse than showing the copy.
+  //
+  // Rows arrive ordered by bag_no, so the survivor is the earliest captured.
+  // This is display/reporting only — nothing is written or deleted, and the copies
+  // stay in the table until the repair runs.
+  const FARM_BAG_TYPES = new Set(['Farm Bag', '500kg Farm Bag'])
+  const seenFarmBag = new Set<string>()
+  let debagDuplicatesHidden = 0
+  const debags: OrderDebagRow[] = debagRows
+    .filter((d: any) => {
+      const label = String(d.notes ?? '').trim()
+      if (d.is_spillage || !FARM_BAG_TYPES.has(d.product_type) || !label) return true
+      const key = `${d.session_id}|${String(d.lot_number ?? '').trim()}|${label}`
+      if (seenFarmBag.has(key)) { debagDuplicatesHidden++; return false }
+      seenFarmBag.add(key)
+      return true
+    })
+    .map(d => ({
+      ...d, shift: shiftBySession.get(d.session_id) ?? '',
+    }))
 
   // Fallback: when prod_debagging has no rows for a session (the insert can fail
   // silently — PGRST204 schema cache, FK violations, mid-production code changes
@@ -623,6 +660,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     rebagRows,
     freshTopUps,
     debags,
+    debagDuplicatesHidden,
     massBalance: sumMassBalance(shifts, section_id),
     reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],
     notes: ((notesRes.data as any[]) ?? []).map((n: any) => ({ ...n, shift: shiftBySession.get(n.session_id) ?? '' })) as OrderNote[],
