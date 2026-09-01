@@ -97,8 +97,18 @@ by `eslint.config.mjs`, so the two entry points cannot drift.
   → the 44% bag loss, and the day Sieving Tower's rows emptied.
 - **Never blanket-delete `scan_events`.** It is an append-only audit ledger. To undo an
   event, append a reversing event. → `live/capture/page.tsx` was bulk-replacing it.
-- **Never duck-type the section union.** Always `switch (d.kind)` with a `never` default.
-  → `CaptureOverview.tsx`.
+- **Never duck-type the section union.** Dispatch on the section kind, and end every chain
+  in `assertNever(kind)`. → `CaptureOverview.tsx`, now fixed.
+
+  Use `sectionKindFor(sectionId)` from `lib/core/types/capture.ts`. The section is already
+  known from the route and from `prod_sessions.section_id` — it never needed inferring.
+  Because both dispatches end in `assertNever`, **adding a section kind without handling it
+  everywhere fails the build**; that is the actual guarantee, not the runtime fallback.
+
+  When you add a section, add it to `SECTION_KIND` *and* `SECTION_MODE`. A drift guard
+  (`lib/production/section-kind-drift.test.ts`) fails if the two lists disagree — written
+  after `SECTION_KIND` was first built from the original migration and missed
+  `smallblender`, which had been added a month later.
 - **Never `as any` across a section boundary.** It is how Blender data reaches Refining code.
 - **Gate validation on the same condition as the render.** If a run type hides a field, the
   check for that field must sit behind the identical condition, or the operator hits a save

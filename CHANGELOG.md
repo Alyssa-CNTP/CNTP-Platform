@@ -2,6 +2,34 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Alyssa (Phase 1 & 2: shared logic moved to core, section duck-typing removed)
+
+**Files changed:** `lib/core/types/capture.ts` (new), `lib/core/types/capture.test.ts` (new), `lib/production/section-kind-drift.test.ts` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/{OutputPicker,ShiftBagLog,HalfBagTopUpModal}.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/orders-kpis/route.ts`, `app/api/production/yield-analytics/route.ts`, `lib/production/shift-report-builder.ts`, `ARCHITECTURE.md`
+
+Follows the Phase 0 guardrails. **No intended behaviour change** other than the one divergence noted below.
+
+**Phase 1 — call sites moved onto `lib/core`.**
+
+- The 10 byte-identical copies of `n()` now import `lib/core/num`. Call sites are untouched: where the local name was `num` the import is aliased, so the diff is the definition line only — 10 insertions, 14 deletions. Three files also shed a now-redundant comment about comma handling.
+- Left alone deliberately: `lib/production/granule-quality.ts` and `shift-report-builder.ts` have parsers with genuinely different semantics (`number | null`, and a `typeof v === 'number'` branch). They were never duplicates.
+- `round1` / `kgPerHour` / `yieldPct` now come from `lib/core/metrics` across the shift report, orders KPIs, yield analytics, the orders list, order detail and supervisor analytics. `round1` keeps other callers in each file, so its local definition became an import rather than being dropped.
+- **One deliberate behaviour difference:** order detail gated its yield on truthiness (`mb.total_input_kg`) rather than `> 0`. Identical for 0/null/undefined; differs only for a **negative** input, where the old code produced a negative percentage and the shared function returns null. Negative input kg is a data error and null is the more honest answer.
+- Left alone: `quality/granule`'s `Math.round((g/totalG)*1000)/10` is a sieve fraction, not a yield — different meaning, returns 0 rather than null.
+- Caught by the typecheck ratchet during this work: three files assign to a local `const yieldPct`, which shadowed the import and self-referenced. The count went 36 → 42 and back to 36 once the import was aliased. This is exactly what the ratchet is for.
+
+**Phase 2 — the section discriminant. This is the fix for "a change to one section breaks another".**
+
+- `CaptureOverview` told the five data shapes apart by guessing at their fields — `if ('bomId' in d)` / `else if ('inputs' in d)` / `else if ('blends' in d)` / `else if ('byProducts' in d)`, with Sieving as an unguarded `else`. Adding a field named `inputs` to any section silently rerouted it into Refining's branch, and anything unrecognised became Sieving. Both dispatches now switch on the section kind, which comes from the route.
+- Verified the premise before relying on it: the sibling-session and other-shift queries both filter `.eq('section_id', sectionId)`, so every production reaching Overview really is from one section.
+- Both chains end in `assertNever(kind)`, so **adding a section kind without handling it everywhere now fails the build**. Proven by temporarily adding a sixth kind: `tsc` errored at both dispatch sites and nowhere else.
+- `sectionId` on `CaptureOverview` was typed optional though its only caller always passes it; now required, so this is a compiler guarantee rather than a fallback.
+- **Found while doing this: `smallblender` was missing from the section map.** It is a real section (work centre `05-BLENDER SMALL`, added by `20260714_001_smallblender_section.sql` a month after the original capture migration) sharing Blender's data shape — which is why the existing `isBlenderSection()` accepts both ids. The map had been written from the original migration and was stale. Left uncorrected it would have routed Small Blender down the Sieving fallback: the very bug being removed.
+- Added `lib/production/section-kind-drift.test.ts`, which fails if `SECTION_KIND` and `SECTION_MODE` ever disagree, so that specific mistake cannot recur.
+
+**Verification:** 56 unit tests pass (up from 46), boundary lint clean, type errors unchanged at the 36 baseline.
+
+---
+
 ## 2026-09-01 — Alyssa (Architecture guardrails: Core/Feature boundary, first tests, CI, schema-drift fix)
 
 **Files changed:** `ARCHITECTURE.md` (new), `CLAUDE.md`, `CODEOWNERS` (new), `eslint.config.mjs`, `vitest.config.mts` (new), `package.json`, `lib/core/num.ts` (new), `lib/core/num.test.ts` (new), `lib/core/metrics.ts` (new), `lib/core/metrics.test.ts` (new), `lib/config/flags.ts` (new), `components/shared/FeatureBoundary.tsx` (new), `.github/workflows/ci.yml` (new), `lib/core/serials.ts` (new), `lib/core/serials.test.ts` (new), `playwright.config.ts` (new), `e2e/fixtures.ts` (new), `e2e/capture-smoke.spec.ts` (new), `e2e/concurrent-save.spec.ts` (new), `.gitignore`, `supabase/migrations/20260901_001_prod_bagging_unique_index_drift.sql` (new, NOT yet applied)
