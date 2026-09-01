@@ -45,6 +45,16 @@ const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 
 // number that reads as "material lost" at a glance, instead of an ambiguous
 // positive figure whichever way round it's framed. Flagged once it's outside
 // ±1% of total input — the tolerance a real run is expected to close within.
+// Derived production figures are HIDDEN — see SHOW_DERIVED_FIGURES in
+// CaptureOverview.tsx. A changeover bug was multiplying the captured debagging
+// rows, so this page's whole-run balance read 91 036 kg in against 4 704 kg out
+// and printed "-86 332 kg (-94.8%) material lost" beside it. The debagging and
+// bagging rows below are correct and stay; only the balance derived from them is
+// hidden.
+//
+// Flip to true to bring it back.
+const SHOW_DERIVED_FIGURES = false
+
 const MASS_BALANCE_TOLERANCE_PCT = 0.01
 function massBalanceInfo(totalOutput: number, totalInput: number) {
   const balance = totalOutput - totalInput
@@ -207,7 +217,7 @@ export default function ProductionOrderDetailPage() {
       </div>
 
       {/* Whole-run mass balance — computed from actual debag/bag rows */}
-      {(totalInput > 0 || totalOutput > 0) && (
+      {SHOW_DERIVED_FIGURES && (totalInput > 0 || totalOutput > 0) && (
         <Panel>
           <PanelHead title="Mass balance — full run (07h00–01h00)" />
           <PanelBody>
